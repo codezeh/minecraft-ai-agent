@@ -1,0 +1,64 @@
+.vscode/
+.idea/
+node_modules/
+package-lock.json
+code_records/
+scratch.js
+bots/**/action-code/**
+bots/**/
+keys.json
+services/viaproxy/jars/**
+services/viaproxy/logs/**
+services/viaproxy/plugins/**
+services/viaproxy/ViaLoader/**
+services/viaproxy/saves.json
+services/viaproxy/viaproxy.yml
+tmp/
+wandb/
+experiments/
+andy_*.json
+jill_*.json
+src/models/logs/*
+server_data/*
+results/*
+tasks/construction_tasks/test_multiagent_construction_tasks.json
+tasks/construction_tasks/train_multiagent_construction_tasks.json
+tasks/construction_tasks/test/**
+tasks/construction_tasks/train/**
+server_data*
+**/.DS_Store
+src/mindcraft-py/__pycache__/
+
+# runtime logs (mindcraft 运行日志，不进版本库)
+live.log
+live.err.log
+*.log
+
+# Windows 保留设备名（ssh UserKnownHostsFile=NUL 时误创建）
+NUL
+
+# DSH 工具临时锁文件
+.dsh-ops-update-*.lock
+
+# 临时调试脚本与日志（2026-10-28 清理时补上）
+# 起因：调试用的 tools/_*.mjs 用 `git add -A` 被误提交进仓库 6 个。
+# 约定：临时脚本一律用 tools/_ 前缀，日志一律 .log。
+tools/_*.mjs
+*.log
+live-*.log
+run-*.log
+
+# 私有模型配置：中转站 / 自建端点 / 私人人设 prompt，不进公开仓库
+# 仓库只保留通用的 profiles/*.json（走各家官方 API）
+profiles/llmgo.json
+profiles/*-private.json
+profiles/*-local.json
+
+# 私有部署记录（含本机路径、中转站细节），不进公开仓库
+docs/本地部署说明.md
+docs/部署与改造记录.md
+docs/部署指南.md
+docs/插件调研.md
+
+# 写提交信息用的临时文件（`git add -A` 容易把它带进去）
+tmp_cmsg.txt
