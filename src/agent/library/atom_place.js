@@ -1,0 +1,153 @@
+/**
+ * A4 放置：placeBlockAt。
+ *
+ * 与旧 placeBlock 的区别（都是踩过的坑）：
+ * - 绝不拆已有方块：目标被占就报 OCCUPIED，让它换地方
+ * - 不往自己身上放
+ * - 放完复核方块真的变了（幽灵方块）
+ * - 支撑面按「下 → 四侧 → 上」优先，且不依附箱子/门/床这类可交互方块
+ */
+import Vec3 from 'vec3';
+import { ok, fail, normalizeTarget } from './atom_contract.js';
+import { blockAt, canReach, reachDistanceTo } from './atom_perceive.js';
+import { findItem } from './atom_items.js';
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+const REPLACEABLE = new Set([
+    'air', 'cave_air', 'void_air', 'water', 'lava',
+    'grass', 'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush',
+    'snow', 'vine', 'seagrass', 'tall_seagrass',
+]);
+
+// 这些方块能放东西上去，但放上去会怪/会坏（箱子打不开、门挡住）
+const NO_PLACE_ON = /chest|door|bed|sign|banner|button|lever|trapdoor|fence_gate|anvil|bell|brewing_stand|enchanting_table/;
+
+const FACES = [
+    { d: [0, -1, 0], face: [0, 1, 0], name: 'bottom' },   // 放在下面方块上
+    { d: [0, 0, -1], face: [0, 0, 1], name: 'north' },
+    { d: [0, 0, 1], face: [0, 0, -1], name: 'south' },
+    { d: [-1, 0, 0], face: [1, 0, 0], name: 'west' },
+    { d: [1, 0, 0], face: [-1, 0, 0], name: 'east' },
+    { d: [0, 1, 0], face: [0, -1, 0], name: 'top' },
+];
+
+function floorPos(pos) {
+    return new Vec3(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
+}
+
+export { REPLACEABLE };
+
+/**
+ * 在 pos 放一个 item 方块。
+ * @returns ActionResult，data: { block, pos, support, existed? }
+ */
+export async function placeBlockAt(bot, pos, item, opts = {}) {
+    const { maxReach = 4.3, verifyMs = 900 } = opts;
+
+    if (bot.interrupt_code) return fail('INTERRUPTED', '被取消了');
+    // 归一化必须在 floorPos 之前：否则 v 拿到的是 {kind,pos} 对象而不是坐标
+    const _t = normalizeTarget(pos);
+    if (!_t || !_t.pos) return fail('NO_TARGET', '目标位置无效');
+    pos = _t.pos;
+    const v = floorPos(pos);
+
+    const target = blockAt(bot, v);
+    if (!target) return fail('NO_TARGET', '那个位置读不到方块');
+    // 幂等分支：字段集必须和正常成功路径一致（support 也要给），
+    // 否则上层用同一个读取路径会拿到 undefined（实测测试就挂在"返回 support"这条）
+    if (target.name === item) {
+        return ok({
+            existed: true,
+            placedBlock: item,
+            pos: { x: v.x, y: v.y, z: v.z },
+            support: target.name,
+        });
+    }
+    if (!REPLACEABLE.has(target.name)) {
+        return fail('OCCUPIED', `那里已经是 ${target.name} 了`, { occupiedBy: target.name, pos: { x: v.x, y: v.y, z: v.z } });
+    }
+
+    const itemStack = findItem(bot, item);
+    if (!itemStack) return fail('NO_ITEM', `背包里没有 ${item}`);
+
+    // 不往自己脚下/头上放
+    const feet = floorPos(bot.entity.position);
+    if (v.x === feet.x && v.z === feet.z && (v.y === feet.y || v.y === feet.y + 1)) {
+        return fail('OCCUPIED', '我就站在那儿，放不了');
+    }
+
+    // 选支撑面（必须在距离判定之前：目标格是空气，raycast 看不见空气，
+    // 所以「能否看见目标格」这条判据对放置不成立——要看支撑面）
+    let support = null;
+    let faceVec = null;
+    let supportName = null;
+    for (const f of FACES) {
+        const rp = v.offset(f.d[0], f.d[1], f.d[2]);
+        const b = blockAt(bot, rp);
+        if (!b || REPLACEABLE.has(b.name)) continue;
+        if (NO_PLACE_ON.test(b.name)) continue;
+        support = b;
+        faceVec = new Vec3(f.face[0], f.face[1], f.face[2]);
+        supportName = b.name;
+        break;
+    }
+    if (!support) {
+        return fail('NO_SUPPORT', '周围没有能依附的方块', { pos: { x: v.x, y: v.y, z: v.z } });
+    }
+
+    const dist = reachDistanceTo(bot, v);
+    if (dist > maxReach + 1) {
+        return fail('OUT_OF_REACH', `够不着，眼睛到目标 ${dist.toFixed(1)} 格`, { distEyeToBlock: dist });
+    }
+    // 注意：这里不查「能否看见支撑面」。canReach 的 raycast 是从眼到方块中心，
+    // 对脚下/身侧这种大角度目标经常误判（实测 3.1 格就判看不见）。
+    // 放置只需要距离够 —— 真正的判据是放完复核方块变没变。
+
+    let placeErr = null;
+    try {
+        await bot.equip(itemStack, 'hand');
+        await bot.lookAt(support.position.offset(0.5, 0.5, 0.5), true);
+        await bot.placeBlock(support, faceVec);
+    } catch (e) {
+        // placeBlock 有时在成功的情况下也会抛（实体挡了一下），先记下来，靠复核定性
+        placeErr = e;
+    }
+
+    const placed = await waitForBlock(bot, v, item, verifyMs);
+    if (placed) {
+        return ok({ placedBlock: item, pos: { x: v.x, y: v.y, z: v.z }, support: supportName });
+    }
+
+    if (placeErr) {
+        const msg = String(placeErr?.message ?? placeErr);
+        // 客户端等 blockUpdate 超时：可能是真没放上，也可能只是这个包丢了（已知竞态）。
+        // 先再读一次方块，读到了就算成功；没读到就报可重试的 BLOCKED，不判死。
+        if (/blockUpdate|did not fire within timeout/i.test(msg)) {
+            const late = blockAt(bot, v);
+            if (late?.name === item) {
+                return ok({ placedBlock: item, pos: { x: v.x, y: v.y, z: v.z }, support: supportName, lateUpdate: true });
+            }
+            return fail('BLOCKED', '客户端没收到方块更新（可能丢包），可以重试', { error: msg });
+        }
+        if (/entity|occupied|collide/i.test(msg)) {
+            return fail('OCCUPIED', '有东西挡着，放不进去', { error: msg });
+        }
+        return fail('INTERNAL', msg, { error: msg });
+    }
+
+    const now = blockAt(bot, v);
+    return fail('TIMEOUT', `放了但没变成 ${item}（现在是 ${now?.name ?? '空'}）`, {
+        occupantNow: now?.name ?? null, pos: { x: v.x, y: v.y, z: v.z },
+    });
+}
+
+async function waitForBlock(bot, v, item, ms) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        const b = blockAt(bot, v);
+        if (b && b.name === item) return true;
+        await sleep(80);
+    }
+    return false;
+}

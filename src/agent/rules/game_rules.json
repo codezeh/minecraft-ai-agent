@@ -1,0 +1,279 @@
+{
+  "meta": {
+    "mc_version": "1.21.8",
+    "updated_at": "2026-10-24",
+    "source_levels": {
+      "R1": "注册表（bot.registry / minecraft-data），运行时派生，不写死",
+      "R2": "运行库源码（node_modules 内），必须引用 文件:行号",
+      "R3": "探针实测（主服/测试服脚本 + 落盘日志），唯一可以推翻 R1/R2 的级别"
+    },
+    "status_values": [
+      "verified",
+      "unverified",
+      "defective"
+    ]
+  },
+  "rules": [
+    {
+      "id": "R1-01",
+      "claim": "oak_log 的 harvestTools 为 undefined，任何工具（含徒手）都能挖",
+      "source": "R1",
+      "ref": "registry.blocksByName.oak_log.harvestTools === undefined",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "node -e probe: {hardness:2, material:'mineable/axe', harvestTools:undefined}",
+      "usable_in": [
+        "digBlock",
+        "equipTool"
+      ],
+      "note": "交接文档 §3.5 写作「为空」，实际是 undefined。语义上都能挖，但表述要改：不是空对象。"
+    },
+    {
+      "id": "R1-02",
+      "claim": "stone 必须用镐；harvestTools = 877,882,887,892,897,902（六种镐）",
+      "source": "R1",
+      "ref": "registry.blocksByName.stone.harvestTools",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "node -e probe: {\"877\":true,\"882\":true,\"887\":true,\"892\":true,\"897\":true,\"902\":true}",
+      "usable_in": [
+        "digBlock",
+        "equipTool"
+      ]
+    },
+    {
+      "id": "R1-03",
+      "claim": "oak_leaves 有 distance 状态，取值 1..7",
+      "source": "R1",
+      "ref": "registry.blocksByName.oak_leaves.states[0] = {name:'distance', num_values:7, values:['1'..'7']}",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "node -e probe",
+      "usable_in": [
+        "collectLeaves"
+      ],
+      "note": "「原木砍光后 >6 格的叶子自动枯萎」是机制描述，不是注册表事实，需 wiki 或探针另立条目。"
+    },
+    {
+      "id": "R1-04",
+      "claim": "player 实体宽 0.6、高 1.8",
+      "source": "R1",
+      "ref": "registry.entitiesByName.player.{width,height}",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "node -e probe: {w:0.6,h:1.8}",
+      "usable_in": [
+        "standableAt",
+        "findStandSpot"
+      ]
+    },
+    {
+      "id": "R1-05",
+      "claim": "受重力影响的方块只有 sand / gravel / anvil / concrete_powder 一类",
+      "source": "R1",
+      "ref": "由 registry 派生：block.material 与 falling 行为，见 rules.runtime.js isGravityBlock()",
+      "status": "unverified",
+      "verified_at": null,
+      "evidence": null,
+      "usable_in": [
+        "digBlock",
+        "safeToBreak"
+      ],
+      "note": "白名单要用注册表/源码验证，不许靠记忆。P1 前必须跑一次探针或查 minecraft-data 的 block 定义。"
+    },
+    {
+      "id": "R2-01",
+      "claim": "玩家眼高 = 1.62（蹲下 1.27）",
+      "source": "R2",
+      "ref": "mineflayer/lib/plugins/entities.js:8 PLAYER_EYEHEIGHT = 1.62",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "grep 源码；注意 tools/test_reach_boundary.mjs 里写死 1.65，属缺陷",
+      "usable_in": [
+        "reachDistanceTo",
+        "findStandSpot"
+      ]
+    },
+    {
+      "id": "R2-02",
+      "claim": "pathfinder GoalLookAtBlock 默认 reach 4.5，但可传 options.reach 覆盖",
+      "source": "R2",
+      "ref": "mineflayer-pathfinder/lib/goals.js:158-162 this.reach = options.reach || 4.5",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "源码",
+      "usable_in": [
+        "planRoute",
+        "positionForDig"
+      ],
+      "note": "isEnd() 还要求射线命中目标方块面（goals.js:180-200），这是它比 dig() 更严的地方。"
+    },
+    {
+      "id": "R2-03",
+      "claim": "mineflayer-collectblock 的 collectAll 未给 GoalLookAtBlock 传 reach，因此受 4.5 + 射线限制",
+      "source": "R2",
+      "ref": "mineflayer-collectblock/lib/CollectBlock.js:30",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "源码 + tmp/official3.log（1 格后 Timeout）",
+      "usable_in": [
+        "decideReuse"
+      ],
+      "note": "这是「不能整体替换成官方 collect」的直接依据。"
+    },
+    {
+      "id": "R2-04",
+      "claim": "mineflayer-collectblock 依赖 bot.tool（mineflayer-tool），且会在 plugin() 里 setTimeout(0) 自动加载",
+      "source": "R2",
+      "ref": "collectblock/lib/index.js loadToolPlugin() + lib/CollectBlock.js:189",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "源码",
+      "usable_in": [
+        "decideReuse"
+      ],
+      "note": "bot.tool 在下一个 tick 才存在；同步调用 collect() 会抛 UnresolvedDependency。"
+    },
+    {
+      "id": "R3-01",
+      "claim": "Paper 服务端基本不校验挖方块距离：实测 6.10 格仍成功",
+      "source": "R3",
+      "ref": "tools/test_reach_boundary.mjs（2026-10-24 改为非破坏性：不再 fill 平台，只在站位旁悬空放原木）",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "tmp/reach2.log（12/12 成功，最远 6.10 格，眼高按 R2-01 的 1.62 计算）",
+      "usable_in": [
+        "digBlock"
+      ],
+      "note": "旧证据 tmp/reach.log 用 1.65 算眼高，距离整体偏大 0.01~0.03；重测后结论不变。原 25×25 fill 平台会破坏地形，已移除。"
+    },
+    {
+      "id": "R3-02",
+      "claim": "挖方块不需要视线：中间挡一层 oak_leaves，bot.dig 仍能挖到后面的原木",
+      "source": "R3",
+      "ref": "tools/test_raycast_block.mjs",
+      "status": "verified",
+      "verified_at": "2026-10-23",
+      "evidence": "tmp/ray.log（场景 B：raycast 命中 leaves，dig 仍 OK）",
+      "usable_in": [
+        "digBlock"
+      ],
+      "note": "与 pathfinder 的 GoalLookAtBlock 相反：那个要求射线命中，所以不能拿它替代 dig 的距离判定。"
+    },
+    {
+      "id": "R3-03",
+      "claim": "pathfinder 单次 goto 约 13~15 秒，且与距离关系不大",
+      "source": "R3",
+      "ref": "交接文档 §3.6",
+      "status": "unverified",
+      "verified_at": null,
+      "evidence": null,
+      "usable_in": [
+        "timeout tuning"
+      ],
+      "note": "没有落盘日志支撑，属待验证。P1 的超时值不能引用这条，除非补测。"
+    },
+    {
+      "id": "R3-05",
+      "claim": "spreadplayers 之后 bot 一移动就会被踢 invalid_player_movement",
+      "source": "R3",
+      "ref": "tools/bench_s2_main.mjs 实测（v2 版本用 spreadplayers 落点）",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "tmp/bench/run2.log：落地 -288,95,-344，进入 collect 后 25 秒被踢，原因是客户端位置与服务端不一致",
+      "usable_in": [
+        "teleport",
+        "bench"
+      ],
+      "note": "交接文档 §7.2 说「用 spreadplayers 代替 tp 更安全」。只在「传过去只读方块、不乱走」时成立（tools/probe_forest_anchor.mjs 连传 3 次没事）；一旦寻路移动就会被踢。要位移就用 pathfinder 自己走。"
+    },
+    {
+      "id": "R3-06",
+      "claim": "spigot.yml 的 moved-wrongly-threshold = 0.0625（Paper 默认），主线程卡顿时会把正常移动判成 moved wrongly 并踢人",
+      "source": "R2",
+      "ref": "server/spigot.yml:35-36（moved-too-quickly-multiplier: 10.0, moved-wrongly-threshold: 0.0625）",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "配置原文 + tmp/dct3.log、tmp/bench/run3.log、run4.log 的 KICKED 记录",
+      "usable_in": [
+        "bench",
+        "stability"
+      ],
+      "note": "这是服务端参数，不是代码 bug。要稳定跑基线要么调宽容一点，要么减少同机并发（bot + 上一轮残留进程）。"
+    },
+    {
+      "id": "R3-07",
+      "claim": "世界出生点附近不是可用森林：48 格内有 66~71 根 oak_log 但基本全被判为「不像天然树」",
+      "source": "R3",
+      "ref": "tmp/bench/2026-10-24T02-24-31-s2-main.jsonl 第 2~6 轮",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "collect 返回 NO_TARGET「找到 6 个，已跳过 6 个不像天然树」，每轮空转约 57 秒",
+      "usable_in": [
+        "bench",
+        "acceptance"
+      ],
+      "note": "最近的真森林在 (-272,69,-352)，181 格远（locate biome minecraft:forest 查得），32 格内 242 根原木。主服验收锚点应改到这里。"
+    },
+    {
+      "id": "R3-04",
+      "claim": "掉落物拾取偶发漏 1 个（约 1/3 单格）",
+      "source": "R3",
+      "ref": "验收记录.md + tmp/pick.log",
+      "status": "unverified",
+      "verified_at": null,
+      "evidence": "验收记录：测试服 9 轮中 4 轮丢 1 个",
+      "usable_in": [
+        "collectDrops"
+      ],
+      "note": "统计口径未固定（样本 9 轮），P1 用 bench 重测后再定。"
+    },
+    {
+      "id": "R3-08",
+      "claim": "站在树叶上、树叶消失 → bot 从高处坠落 → 服务端判 invalid_player_movement 踢人（4 格落差即触发）",
+      "source": "R3",
+      "ref": "tools/diag_leaf_stand.mjs（造 1 格树叶站台，tp 上去，RCON 挖掉叶子）",
+      "status": "verified",
+      "verified_at": "2026-10-24",
+      "evidence": "实验输出：站立 y=68.00 → 挖掉叶子 → 被踢 multiplayer.disconnect.invalid_player_movement，落地 (NaN,64,NaN)，高差 4 格",
+      "usable_in": [
+        "collectCleanup",
+        "taskHygiene"
+      ],
+      "note": "**机制已验证，对策不是「禁止站树叶」。** 树叶可以站，这是合法的支撑面。真正的问题是：砍完树之后 she 还留在树冠上，树干没了 → 树叶自然枯萎 → 摔下去 → 摔落伤害 + 位移判瞬移被踢。这也解释了用户观察到的「一受伤就退出服务器（被踢后自动重连）」。修法在任务层：一棵树砍完（order 耗尽）或任务收尾时，先撤到地面再待机，不要停在高处。"
+    },
+    {
+      "id": "R3-09",
+      "claim": "藤蔓攀爬：只按跳跃键（jump）就能沿藤蔓上升，不需要贴着方块；碰撞箱为 empty 可穿过",
+      "source": "R3",
+      "ref": "tools/vine_climb_cond.mjs（悬空藤蔓柱 7 格，四周无支撑）",
+      "status": "verified",
+      "verified_at": "2026-10-25",
+      "evidence": "A组纯悬空：只按 jump 升高 5.20 格（能爬）；只按 forward 升高 0.00 格；forward+jump 升 1.25 格。B组贴墙：forward+jump 升 1.25 格（该组藤蔓柱只建成 1 格，数据不可用于对比）。",
+      "note": "依据 prismarine-physics/index.js:593 —— isOnLadder(pos) && (isCollidedHorizontally || (climbUsingJump && jump))。climbUsingJump 特性表写的是 1.21，但 1.21.8 通过 majorVersion 匹配生效（实测能爬 5.2 格）。教训：先实测再下结论，不要凭特性表缺失就断言不支持。"
+    }
+  ],
+  "derived": {
+    "dig_reach_usable": {
+      "value": 5.1,
+      "rule": "R3-01",
+      "why": "实测 6.11 仍成功，但取保守值 5.1 留余量；不许写成「游戏上限 5.1」"
+    },
+    "goal_look_at_block_default_reach": {
+      "value": 4.5,
+      "rule": "R2-02"
+    },
+    "eye_height": {
+      "value": 1.62,
+      "rule": "R2-01"
+    },
+    "player_height": {
+      "value": 1.8,
+      "rule": "R1-04"
+    },
+    "player_width": {
+      "value": 0.6,
+      "rule": "R1-04"
+    }
+  }
+}

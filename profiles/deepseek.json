@@ -1,0 +1,9 @@
+{
+    "name": "deepseek",
+
+    "api": "openai",
+    "model": "deepseek-chat",
+    "url": "https://api.deepseek.com",
+
+    "cooldown": 1200
+}
