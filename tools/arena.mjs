@@ -22,6 +22,7 @@ const ARENA_SLOTS = {
     escape: { x: 6000, z: 6000 },
     trapped: { x: 6000, z: 7000 },
     move: { x: 8000, z: 6000 },
+    actions: { x: 10000, z: 6000 },
     default: { x: 6000, z: 8000 },
 };
 
@@ -29,6 +30,34 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /** 把世界坐标换成 chunk 坐标（forceload 用） */
 const chunkOf = (v) => Math.floor(v / 16);
+
+/**
+ * 安全 fill：把大范围切成小块再发。
+ *
+ * ★ 踩过的坑（2026-11-01）：Minecraft 的 /fill 单次上限是 **32768 格**，
+ *   超过就直接失败（我们这里还是静默的）。arena halfSize=28 的清空是 57×57×129
+ *   ≈ 419,000 格 → 命令全部失败 → 场地从没被清过 → 上一次测试的残留石头还在，
+ *   人 tp 进去站在实心方块里，plan3D 一律 NO_START，看起来像"导航坏了"。
+ *
+ * 切块后每块 ≤ 16×16×16 = 4096 格，远低于上限。
+ */
+const FILL_MAX = 16;
+
+export async function fillSafe(RC, x0, y0, z0, x1, y1, z1, block) {
+    const ax = Math.min(x0, x1), bx = Math.max(x0, x1);
+    const ay = Math.min(y0, y1), by = Math.max(y0, y1);
+    const az = Math.min(z0, z1), bz = Math.max(z0, z1);
+    for (let x = ax; x <= bx; x += FILL_MAX) {
+        for (let y = ay; y <= by; y += FILL_MAX) {
+            for (let z = az; z <= bz; z += FILL_MAX) {
+                const ex = Math.min(x + FILL_MAX - 1, bx);
+                const ey = Math.min(y + FILL_MAX - 1, by);
+                const ez = Math.min(z + FILL_MAX - 1, bz);
+                try { await RC(`fill ${x} ${y} ${z} ${ex} ${ey} ${ez} ${block}`); } catch { /* 跳过失败块 */ }
+            }
+        }
+    }
+}
 
 /**
  * 租一块远处的场地。
@@ -53,9 +82,9 @@ export async function rentArena(RC, slot = 'default', opts = {}) {
     }
     await sleep(600);   // 等区块真的加载
 
-    // 清空 + 铺地
-    await RC(`fill ${x - halfSize} ${y0} ${z - halfSize} ${x + halfSize} ${y1} ${z + halfSize} air`);
-    await RC(`fill ${x - halfSize} ${groundY} ${z - halfSize} ${x + halfSize} ${groundY} ${z + halfSize} stone`);
+    // 清空 + 铺地（必须切块，否则超过 /fill 的 32768 上限会静默失败）
+    await fillSafe(RC, x - halfSize, y0, z - halfSize, x + halfSize, y1, z + halfSize, 'air');
+    await fillSafe(RC, x - halfSize, groundY, z - halfSize, x + halfSize, groundY, z + halfSize, 'stone');
     await sleep(600);
 
     return {
@@ -63,8 +92,8 @@ export async function rentArena(RC, slot = 'default', opts = {}) {
         /** 收尾：填回空气（留一层地）并取消 forceload */
         async release() {
             try {
-                await RC(`fill ${x - halfSize} ${y0 + 1} ${z - halfSize} ${x + halfSize} ${y1} ${z + halfSize} air`);
-                await RC(`fill ${x - halfSize} ${groundY} ${z - halfSize} ${x + halfSize} ${groundY} ${z + halfSize} stone`);
+                await fillSafe(RC, x - halfSize, y0 + 1, z - halfSize, x + halfSize, y1, z + halfSize, 'air');
+                await fillSafe(RC, x - halfSize, groundY, z - halfSize, x + halfSize, groundY, z + halfSize, 'stone');
             } catch { /* 清不掉不影响结论 */ }
             for (let cx = c0x; cx <= c1x; cx++) {
                 for (let cz = c0z; cz <= c1z; cz++) {
