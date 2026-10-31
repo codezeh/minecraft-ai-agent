@@ -26,6 +26,7 @@ const UNITS = [
     'detect_trapped_unit',       // 被困判据（面积/封顶/出口/地表）
     'exec_step_dig_unit',        // D2 挖邻列 / 液体不假成功
     'exec_step_y_unit',          // D1 y 语义（脚位 vs 面位）
+    'nav_core_unit',             // 导航入口的坐标归一与前置
     'scaffold_tracker_unit',     // D7 只清自己放的方块
     'task_pickup_unit',          // 掉落物回收搬到复合层后语义不变
     'terrain3d_unit',            // 连接复用 / fail 表 TTL / prune
