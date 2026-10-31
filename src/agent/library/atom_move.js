@@ -248,14 +248,18 @@ export async function moveTo(bot, target, opts = {}) {
         if (Date.now() - t0 > timeout) {
             try { bot.pathfinder.stop(); } catch { /* ignore */ }
             const p = progress();
+            // ★ 2026-11-01：失败返回也要带落脚状态。
+            // 契约（tools/atom_move_landing.mjs 的断言）是"任何返回都要能看出她停在哪、站稳没有"，
+            // 但原来只有 STUCK 分支 `...landingReport(bot)`，TIMEOUT / INTERRUPTED 分支漏了 →
+            // 调用方拿到 TIMEOUT 时 standable=undefined，判断不了"该补垫脚还是该换路"。
             return fail('TIMEOUT', `走了 ${Math.round((Date.now() - t0) / 1000)} 秒还没到（只前进 ${p.advanced.toFixed(1)} 格）`,
-                { pos: { x, y, z }, distFeetToPoint: p.now, advanced: p.advanced });
+                { pos: { x, y, z }, distFeetToPoint: p.now, advanced: p.advanced, ...landingReport(bot) });
         }
         await sleep(100);
     }
 
     if (bot.interrupt_code) {
-        return fail('INTERRUPTED', '你让我停下', { pos: { x, y, z } });
+        return fail('INTERRUPTED', '你让我停下', { pos: { x, y, z }, ...landingReport(bot) });
     }
 
     if (err) {
@@ -406,7 +410,7 @@ export async function moveToXZ(bot, target, opts = {}) {
             try { bot.pathfinder.stop(); } catch { /* ignore */ }
             const p = progress();
             return fail('STUCK', `连续 ${Math.round(stallMs / 1000)} 秒没靠近（还差 ${p.now.toFixed(1)} 格）`,
-                { posXZ: { x, z }, distFeetToPoint: p.now, advanced: p.advanced });
+                { posXZ: { x, z }, distFeetToPoint: p.now, advanced: p.advanced, ...landingReport(bot) });
         }
 
         // 兜底：防止真的死循环。正常情况下进展判定会先命中。
@@ -415,7 +419,7 @@ export async function moveToXZ(bot, target, opts = {}) {
             const p = partialOk();
             if (p) return p;
             return fail('TIMEOUT', `走了 ${Math.round((Date.now() - t0) / 1000)} 秒还没到`,
-                { posXZ: { x, z } });
+                { posXZ: { x, z }, ...landingReport(bot) });
         }
         await sleep(100);
     }
@@ -424,9 +428,9 @@ export async function moveToXZ(bot, target, opts = {}) {
         const msg = String(err?.message ?? err);
         const p = partialOk();
         if (p) return p;
-        if (/nopath|no path|unreachable/i.test(msg)) return fail('NO_PATH', '没有可走的路', { posXZ: { x, z } });
-        if (/goalchanged|goal changed/i.test(msg)) return fail('BLOCKED', '目标被别的动作改掉了', { posXZ: { x, z } });
-        return fail('INTERNAL', msg, { error: msg, posXZ: { x, z } });
+        if (/nopath|no path|unreachable/i.test(msg)) return fail('NO_PATH', '没有可走的路', { posXZ: { x, z }, ...landingReport(bot) });
+        if (/goalchanged|goal changed/i.test(msg)) return fail('BLOCKED', '目标被别的动作改掉了', { posXZ: { x, z }, ...landingReport(bot) });
+        return fail('INTERNAL', msg, { error: msg, posXZ: { x, z }, ...landingReport(bot) });
     }
 
     const dx = bot.entity.position.x - x;
