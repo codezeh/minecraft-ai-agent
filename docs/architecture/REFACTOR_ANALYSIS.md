@@ -372,10 +372,15 @@ async function skillName(bot, goal, context = {}) {
 **目标**: 所有原子遵守契约，移除复合逻辑
 
 #### 2.1 拆分违规原子
-- [ ] atom_drops.js → 删除循环，只返回最近掉落物坐标
-- [ ] atom_tunnel.js → 只做单步tunnelStep，删除tunnelAlong循环
-- [ ] atom_dig.js → 移除直接按键，改为参数控制bot.dig行为
-- [ ] atom_classify.js → landmarks读写改为参数传递
+- [x] atom_drops.js → 删除循环，只返回最近掉落物坐标
+      — 实际做法：整个 `collectDrops` 上移到复合层 `task_pickup.js`（原子已由
+        `atom_find_drops` / `atom_wait_item` / `atom_stand` 提供零件），原文件删除
+- [x] atom_tunnel.js → 只做单步tunnelStep，删除tunnelAlong循环
+      — 循环改由调用方 `skills.digTunnel` 用 `runSteps` + `tunnelStep` 处理器表达
+- [x] atom_dig.js → 移除直接按键，改为参数控制bot.dig行为
+      — 删掉"蹬一下"的 setControlState 兜底，悬空时如实返回 BLOCKED
+- [x] atom_classify.js → landmarks读写改为参数传递
+      — `isProtected(pos, { spots })` 变纯函数；加载+缓存移到数据层 `landmarks.protectedPlaces(bot)`（WeakMap 按 bot 隔离）
 
 #### 2.2 新增缺失基础原子（优先级排序）
 **P0（核心移动）**

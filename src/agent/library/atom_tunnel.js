@@ -303,37 +303,6 @@ export async function tunnelStep(bot, dir, opts = {}) {
  * @param {{onEvent?:Function, deadlineMs?:number}} opts
  * @returns {Promise<ActionResult>} data: { steps, dug, to }
  */
-export async function tunnelAlong(bot, dir, steps, opts = {}) {
-    const { onEvent = () => { }, deadlineMs = 60000 } = opts;
-    const t0 = Date.now();
-    let done = 0, dugTotal = 0;
-    const start = { x: Math.floor(bot.entity.position.x), y: Math.floor(bot.entity.position.y), z: Math.floor(bot.entity.position.z) };
-
-    while (done < steps) {
-        if (bot.interrupt_code) {
-            return fail('INTERRUPTED', `停了，掘进 ${done} 步`, { steps: done, dug: dugTotal });
-        }
-        if (Date.now() - t0 > deadlineMs) {
-            return fail('TIMEOUT', `时间到，掘进 ${done} 步`, { steps: done, dug: dugTotal });
-        }
-
-        // 每步重新算安全范围（她可能已经移动了）
-        const zone = computeSafeZone(bot, { radius: 4, up: 3, down: 3 });
-        const r = await tunnelStep(bot, dir, { zone, onEvent });
-        if (!r.ok) {
-            return fail(r.code ?? 'TUNNEL_FAIL',
-                `掘进到第 ${done + 1} 步失败：${r.message ?? ''}`,
-                { steps: done, dug: dugTotal });
-        }
-        done++;
-        dugTotal += r.data?.dug?.length ?? 0;
-    }
-
-    const to = { x: Math.floor(bot.entity.position.x), y: Math.floor(bot.entity.position.y), z: Math.floor(bot.entity.position.z) };
-    onEvent({ type: 'tunnel-done', steps: done, dug: dugTotal, from: start, to });
-    return ok({ steps: done, dug: dugTotal, to });
-}
-
 /**
  * 找一个**干燥的可爬升列**：从她当前高度往上，这一列没有液体。
  *

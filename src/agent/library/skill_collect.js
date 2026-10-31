@@ -24,7 +24,7 @@ import { blockAt } from './atom_perceive.js';
 import { digBlock } from './atom_dig.js';
 import { moveTo } from './atom_move.js';
 import { walkTo } from './executor.js';
-import { collectDrops } from './atom_drops.js';
+import { collectDrops } from './task_pickup.js';
 import { query } from './atom_query.js';
 import { planClearObstacles } from './skill_clear.js';
 import { ok, fail } from './atom_contract.js';

@@ -10,7 +10,7 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
-import { collectDrops } from '../src/agent/library/atom_drops.js';
+import { collectDrops } from '../src/agent/library/task_pickup.js';
 import { digBlock } from '../src/agent/library/atom_dig.js';
 import { countItem, blockAt } from '../src/agent/library/atom_perceive.js';
 import Vec3 from 'vec3';

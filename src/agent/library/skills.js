@@ -5,7 +5,10 @@ import * as store from "./memory_store.js";   // dangers / tasks 命名空间直
 // 攀爬能力（原子层）与实体跟随（任务层）
 import { climbUp, climbDown, isClimbable, climbableUp, climbableDown } from './atom_climb.js';
 // 掘进与树体（2026-10-29 新增能力，要暴露给模型）
-import { tunnelAlong } from './atom_tunnel.js';
+// ★ 2026-10-31：原来 import 的是 tunnelAlong（循环长在原子层里）。
+// 原子层规范化后原子只做单步，多步循环交回复合层用 runSteps 表达。
+import { tunnelStep, computeSafeZone } from './atom_tunnel.js';
+import { runSteps } from './step_runner.js';
 import { scanTree, judgeTree, planFelling } from './atom_tree.js';
 import { followEntity as followEntityTask } from './task_follow.js';
 import pf from 'mineflayer-pathfinder';
@@ -5772,9 +5775,41 @@ export async function digTunnel(bot, dx, dz, steps, opts = {}) {
      * await skills.digTunnel(bot, 1, 0, 3);   // dig 3 cells toward +x
      **/
     const { deadlineMs = 60000 } = opts;
-    const r = await tunnelAlong(bot, { dx, dz }, Math.max(1, Number(steps) || 1),
-        { deadlineMs, onEvent: opts.onEvent ?? (() => { }) });
-    return r;
+    const onEvent = opts.onEvent ?? (() => { });
+    const n = Math.max(1, Number(steps) || 1);
+
+    // 原来这里是 tunnelAlong（原子层里的 while 循环）。原子层规范化后：
+    //   - 原子只做**一步**（tunnelStep）
+    //   - "做 N 步 + 中断 + 时限 + 报第几步失败" 交回复合层的 runSteps
+    // 语义等价：每步都重算安全区（她可能已经移动），失败带上第几步。
+    const stepsArr = Array.from({ length: n }, () => ({ atom: 'tunnelStep' }));
+    const start = {
+        x: Math.floor(bot.entity.position.x),
+        y: Math.floor(bot.entity.position.y),
+        z: Math.floor(bot.entity.position.z),
+    };
+
+    const run = await runSteps(bot, stepsArr, {
+        deadlineMs,
+        onStep: (e) => { if (e?.type === 'step-failed') onEvent({ type: 'tunnel-step-failed', ...e }); },
+        handlers: {
+            tunnelStep: async (b) => {
+                // 每步重新算安全范围（她可能已经移动了）
+                const zone = computeSafeZone(b, { radius: 4, up: 3, down: 3 });
+                return tunnelStep(b, { dx, dz }, { zone, onEvent });
+            },
+        },
+    });
+
+    if (!run.ok) return run;
+
+    const to = {
+        x: Math.floor(bot.entity.position.x),
+        y: Math.floor(bot.entity.position.y),
+        z: Math.floor(bot.entity.position.z),
+    };
+    onEvent({ type: 'tunnel-done', steps: n, from: start, to });
+    return ok({ steps: n, to });
 }
 
 export function scanTreeAt(bot, x, y, z) {

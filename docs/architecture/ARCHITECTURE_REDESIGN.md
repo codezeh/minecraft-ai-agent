@@ -710,3 +710,15 @@ async function atomName(bot, target, opts = {}) {
 | 原子内不许 `for` / `while` | AST 检查（策略循环归上层） |
 | 原子内不许 `setControlState` | 正则扫（按键必须经原子封装） |
 | 所有移动必须走 `nav_core.goTo` | 调用图 / 测试时 mock |
+
+> ⚠️ **"原子内不许 for/while"这条不能照字面实现**（2026-10-31 核对）：
+> 现状 22 个原子里 **19 个都有循环**，绝大多数是**合法的遍历查询**
+> （例如 `atom_classify` 扫 11×11×13 找树叶、`atom_tree` 走连通原木、`atom_wait` 轮询判据）。
+> 真正违禁的是**重复动作/重试**那类循环（同一动作做 N 次、失败再试），
+> 例如原来的 `atom_tunnel.tunnelAlong`、`atom_drops.collectDrops`。
+>
+> 所以机器检查要查的是：
+> 1. 循环体里是否**再次调用动作类原子**（`digBlock` / `placeBlockAt` / `moveTo` …）——那是重试，违禁；
+> 2. 纯查询循环（只读 `bot.blockAt` / 遍历实体 / 等待判据）**允许**。
+>
+> 光扫 `for|while` 会把这 19 个文件一起判红，属于规则写得比事实粗。
