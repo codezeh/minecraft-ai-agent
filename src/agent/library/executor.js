@@ -31,6 +31,7 @@ import { scanSphere, stats3d, columnSurfaces, T } from './terrain3d.js';
 import { plan3D } from './path_3d.js';
 import { collectSilent as tracePush } from './trace_bus.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
+import { movedEnough, realMove } from './atom_stuck_detect.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -673,9 +674,10 @@ export async function walkTo(bot, dest, opts = {}) {
         // 之前只算 Math.hypot(dx, dz)，于是"挖上去 1 格"被判成"没动"，
         // 连续 3 次就误判 NO_REACH —— 而她明明在往上爬（实测 y 55→70 全靠这个）。
         if (round > 0) {
-            const stepMoved = Math.hypot(p.x - lastPos.x, p.z - lastPos.z)
-                + Math.abs(p.y - lastPos.y) * 1.5;      // 垂直给更高权重（1 格 = 1.5）
-            if (stepMoved < 2) {
+            // 卡住判据改用原子（refactor §5 Phase 2.2）：垂直权重等魔数不再藏在这里
+            const mvInfo = movedEnough(lastPos, p);
+            const stepMoved = mvInfo.data?.gap ?? 0;
+            if (stepMoved < (mvInfo.data?.minMove ?? 2)) {
                 stalled++;
                 if (stalled >= 3) {
                     return fail('NO_REACH',
@@ -684,8 +686,8 @@ export async function walkTo(bot, dest, opts = {}) {
                 }
             } else {
                 stalled = 0;
-                // 只把**真实位移**计入"走了多少"（垂直按 1:1 记，不算权重）
-                distMoved += Math.hypot(p.x - lastPos.x, p.z - lastPos.z) + Math.abs(p.y - lastPos.y);
+                // 累计"走了多少"用**真实**位移（不做垂直加权），否则日志数字会虚高
+                distMoved += realMove(lastPos, p);
             }
         }
         lastPos = { x: p.x, y: p.y, z: p.z };
