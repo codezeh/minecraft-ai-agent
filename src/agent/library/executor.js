@@ -92,7 +92,23 @@ export async function execStep(bot, step, opts = {}) {
         try { userOnEvent(e); } catch { /* ignore */ }
     };
     const p = bot.entity.position;
-    const dy = step.y - Math.floor(p.y);
+    // ★ D1 修复（2026-10-31）：**y 语义统一为「目标格的脚位」**。
+    //
+    // 两个不同的 y 一直混着用：
+    //   step.y      = 可站立面的 y = **实心方块自己那一格**（terrain3d 存的就是它，
+    //                 见 scanSphere 里 `s.ins.run(wx, wz, y, t)`，y 是实心块的 y）
+    //   position.y  = 实体脚的高度 = **她脚所在的那格空气**，站在 y=63 的草上时是 64
+    //   所以：站在某个面上时  floor(position.y) === step.y + 1
+    //
+    // 本文件原来两种写法都有：下面"走完校验高度"那段早就用了 `step.y + 1`，
+    // 但 dy 计算、垫高判据、攀爬和挖掘分支用的是裸 `step.y`。
+    // 后果（都是实测症状）：
+    //   - 真的要上 2 格时 dy 被算成 1 → 不进"垫方块"分支 → pathfinder 跳不上 → NO_PATH
+    //   - 挖掘循环以 step.y 为终点 → 少挖一格，到不了目标高度
+    // 方案 B（见 ARCHITECTURE_REDESIGN §3.4）定的是"以实心方块为准"，
+    // 所以统一在**这里做一次换算**，其余一律用 targetFeetY 与身体比。
+    const targetFeetY = step.y + 1;
+    const dy = targetFeetY - Math.floor(p.y);   // 真实高差（正数=要往上）
     const dxz = Math.hypot(step.x + 0.5 - p.x, step.z + 0.5 - p.z);
 
     // ---- 挖通（向上）----
@@ -127,16 +143,16 @@ export async function execStep(bot, step, opts = {}) {
         }
 
         // 要先落进柱子才能爬：若当前格不是藤蔓而是下方才有，先往下挪一格。
-        if (!isClimbable(bot, pNow) && step.y < pNow.y - 0.5) {
+        if (!isClimbable(bot, pNow) && targetFeetY < pNow.y - 0.5) {
             const stepDown = await moveToXZ(bot, { kind: 'point', posXZ: { x: step.x, z: step.z } },
                 { tol: 0.8, timeout: 8000 });
             if (!stepDown.ok) return stepDown;
         }
 
-        // 上下由目标 y 决定
+        // 上下由目标脚位决定
         const curY2 = bot.entity.position.y;
-        if (step.y > curY2 + 0.5) {
-            const r = await climbUp(bot, { steps: Math.max(1, Math.round(step.y - curY2)), onEvent });
+        if (targetFeetY > curY2 + 0.5) {
+            const r = await climbUp(bot, { steps: Math.max(1, Math.round(targetFeetY - curY2)), onEvent });
             if (!r.ok) return r;
             // 爬到顶后可能还要再走一小段（藤蔓顶端是平台）
             const p2 = bot.entity.position;
@@ -146,8 +162,8 @@ export async function execStep(bot, step, opts = {}) {
             }
             return ok({ climbed: r.data?.climbed ?? 0 });
         }
-        if (step.y < curY2 - 0.5) {
-            const r = await climbDown(bot, { maxSteps: Math.max(1, Math.round(curY2 - step.y)), onEvent });
+        if (targetFeetY < curY2 - 0.5) {
+            const r = await climbDown(bot, { maxSteps: Math.max(1, Math.round(curY2 - targetFeetY)), onEvent });
             if (!r.ok) return r;
             return ok({ dropped: r.data?.dropped ?? 0 });
         }
@@ -182,7 +198,7 @@ export async function execStep(bot, step, opts = {}) {
         const sameColumn = (bx === curX && bz === curZ);
 
         let y = Math.floor(p.y);
-        const targetY = step.y;
+        const targetY = targetFeetY;   // D1：以脚位为终点，不是方块 y
         let dug = 0;
         let liquidBlocked = false;
         while (y < targetY && dug < 32) {
@@ -242,7 +258,7 @@ export async function execStep(bot, step, opts = {}) {
     if (step.action === 'digdown' || (dy < -1 && dxz < 1.5 && needDigDown)) {
         const bx = Math.floor(p.x), bz = Math.floor(p.z);
         let y = Math.floor(p.y);
-        const targetY = step.y;
+        const targetY = targetFeetY;   // D1：以脚位为终点，不是方块 y
         let dug = 0;
         while (y > targetY && dug < 32) {
             const below = blockAt(bot, bx, y - 1, bz);
@@ -281,7 +297,8 @@ export async function execStep(bot, step, opts = {}) {
     // 这种情况必须用"垫一块再跳"（stepUp），也就是她挖上去时用的同一套动作。
     if (dy >= 2 && dxz < 1.5) {
         let guard = 0;
-        while (Math.floor(bot.entity.position.y) < step.y && guard++ < 6) {
+        // D1：dy 已是真实高差（脚位口径），这里同样按脚位比
+        while (Math.floor(bot.entity.position.y) < targetFeetY && guard++ < 6) {
             const up = await stepUp(bot, { onEvent });
             if (!up.ok) return up;
         }
@@ -337,9 +354,9 @@ export async function execStep(bot, step, opts = {}) {
     // 结果：路径上所有 down 步骤都"假成功"，她一直在高处横向滑动，
     //       规划层看到还差很远，就一直重规划 → 38 秒只走 17 格。
     const nowY = Math.floor(bot.entity.position.y);
-    if (r.ok && nowY > step.y + 1) {
+    if (r.ok && nowY > targetFeetY) {
         // 该往下但没下去：走到目标 x/z 之后主动往下走几步（让 pathfinder 找落点）
-        for (let guard = 0; guard < 4 && Math.floor(bot.entity.position.y) > step.y + 1; guard++) {
+        for (let guard = 0; guard < 4 && Math.floor(bot.entity.position.y) > targetFeetY; guard++) {
             const below = blockAt(bot, Math.floor(bot.entity.position.x),
                 Math.floor(bot.entity.position.y) - 1, Math.floor(bot.entity.position.z));
             if (below && IS_LIQUID.test(below.name)) {
@@ -364,7 +381,7 @@ export async function execStep(bot, step, opts = {}) {
                 // ★ 关键：**等待时间必须按高差算，不能写死 6 秒**。
                 // 原来固定 6 秒，而速度是 1 格/秒 —— 高差超过 6 格就永远沉不到，
                 // 于是每轮都 break 掉、报 `HEIGHT_MISS 该降到 y=58，实际停在 y=62`。
-                const needDrop = Math.floor(bot.entity.position.y) - (step.y + 1);
+                const needDrop = Math.floor(bot.entity.position.y) - targetFeetY;
                 const diveMs = Math.min(30000, Math.max(4000, needDrop * 1000 + 2500));
                 try { bot.setControlState('sneak', true); } catch { /* ignore */ }
                 try { bot.setControlState('forward', false); } catch { /* ignore */ }
@@ -372,7 +389,7 @@ export async function execStep(bot, step, opts = {}) {
                 while (Date.now() - t0 < diveMs) {
                     await sleep(200);
                     const ny = Math.floor(bot.entity.position.y);
-                    if (ny <= step.y + 1) break;                       // 降到目标附近
+                    if (ny <= targetFeetY) break;                       // 降到目标附近
                     const nb = blockAt(bot, Math.floor(bot.entity.position.x), ny - 1, Math.floor(bot.entity.position.z));
                     if (nb && !IS_LIQUID.test(nb.name) && !IS_AIR.has(nb.name)) break;   // 着底
                 }
@@ -380,7 +397,7 @@ export async function execStep(bot, step, opts = {}) {
                 await sleep(150);
                 // 如果沉到底了但还差高度，说明下方是实心：挖下去继续
                 const afterDive = Math.floor(bot.entity.position.y);
-                if (afterDive > step.y + 1) {
+                if (afterDive > targetFeetY) {
                     const nb2 = blockAt(bot, Math.floor(bot.entity.position.x), afterDive - 1, Math.floor(bot.entity.position.z));
                     if (nb2 && IS_LIQUID.test(nb2.name)) break;         // 还在水里但没沉动 → 放弃这轮
                     if (nb2 && !isDiggable(nb2)) break;
@@ -405,7 +422,7 @@ export async function execStep(bot, step, opts = {}) {
             }
         }
         const after = bot.entity.position;
-        if (Math.floor(after.y) > step.y + 2) {
+        if (Math.floor(after.y) > targetFeetY + 1) {   // 容差 1 格
             // 诊断：报错时把周围环境和物理状态记下来（定位"为什么下不去"）
             const fx = Math.floor(after.x), fy = Math.floor(after.y), fz = Math.floor(after.z);
             const bBelow = blockAt(bot, fx, fy - 1, fz);
@@ -418,10 +435,11 @@ export async function execStep(bot, step, opts = {}) {
         }
     }
 
-    // 走完还差 2 格以上高度 → 再补垫高（pathfinder 只管水平，不管垂直）
-    if (r.ok && Math.floor(bot.entity.position.y) < step.y - 1) {
+    // 走完还差高度 → 再补垫高（pathfinder 只管水平，不管垂直）
+    // D1：判据与循环都按脚位（targetFeetY），旧代码用裸 step.y 会少上一格
+    if (r.ok && Math.floor(bot.entity.position.y) < targetFeetY - 1) {
         let guard = 0;
-        while (Math.floor(bot.entity.position.y) < step.y && guard++ < 6) {
+        while (Math.floor(bot.entity.position.y) < targetFeetY && guard++ < 6) {
             const up = await stepUp(bot, { onEvent });
             if (!up.ok) break;
         }
@@ -691,9 +709,22 @@ export async function walkTo(bot, dest, opts = {}) {
             z: p.z + (dest.z - p.z) / len * LOOK_AHEAD,
         };
 
+        // ★ D1（2026-10-31）：**传给 plan3D 的 y 必须是「面位」，不是脚位**。
+        //
+        // path_3d 整个模块工作在"面位"坐标系里：surf 表存的就是实心方块自己的 y
+        // （terrain3d.scanSphere 里 s.ins.run(wx, wz, y, t) 的 y），
+        // 它自己的 bench 脚本也按 surf 的 y 传参。
+        //
+        // 但 walkTo 以前传的是 p.y（脚位 = 面位 + 1）：
+        //   surf.has(key(tx, ty, tz)) 因此永远命中不了 → 落到"目标附近 4 格找面"的吸附分支。
+        // 吸附恰好把 1 格差吸收了，所以"看起来能用"，但实际上：
+        //   - 终点是碰巧找对的，列里若同时有 63/65 两个面就可能吸错层
+        //   - 启发式里的 |y - ty| 一直带着 1 格固定偏移（h 权重 0.25）
+        // 现在显式换算，吸附只作兜底。
+        const surfY = Math.floor(p.y) - 1;
         let plan = null;
         try {
-            plan = plan3D(mapDir, { x: p.x, y: p.y, z: p.z }, { x: aim.x, y: p.y, z: aim.z },
+            plan = plan3D(mapDir, { x: p.x, y: surfY, z: p.z }, { x: aim.x, y: surfY, z: aim.z },
                 { maxNodes: 80000, margin: 24 });
         } catch (e) {
             console.log('[walkTo] 3D 规划异常:', String(e?.message ?? e).slice(0, 80));
@@ -710,7 +741,7 @@ export async function walkTo(bot, dest, opts = {}) {
                     scans++;
                 } catch { /* ignore */ }
                 try {
-                    plan = plan3D(mapDir, { x: p.x, y: p.y, z: p.z }, { x: aim.x, y: p.y, z: aim.z },
+                    plan = plan3D(mapDir, { x: p.x, y: surfY, z: p.z }, { x: aim.x, y: surfY, z: aim.z },
                         { maxNodes: 80000, margin: 24 });
                 } catch { /* ignore */ }
             }
