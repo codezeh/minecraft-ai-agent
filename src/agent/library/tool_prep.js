@@ -156,7 +156,16 @@ export async function ensureScaffold(bot, opts = {}) {
         }
 
         try {
-            await bot.dig(target);
+            // D12：挖也可能永不返回（服务端不回确认/被实体卡住），给个上限。
+            const dug = await withTimeout(bot.dig(target), 8000);
+            if (dug.timedOut) {
+                onEvent({ type: 'scaffold-dig-fail', block: target.name, message: 'dig 超时 8000ms' });
+                if (got === 0) {
+                    return { ok: false, have: countScaffold(bot), got, why: `挖 ${target.name} 超时` };
+                }
+                break;
+            }
+            if (dug.error) throw dug.error;
             got++;
             // ★ 2026-10-29 修：**挖完要走过去把掉落物捡起来**。
             //
@@ -176,8 +185,10 @@ export async function ensureScaffold(bot, opts = {}) {
                     const drop = bot.nearestEntity?.(e =>
                         e.name === 'item' && e.position && bot.entity.position.distanceTo(e.position) < 4);
                     if (drop) {
-                        await bot.pathfinder.goto(new pf.goals.GoalNear(
-                            drop.position.x, drop.position.y, drop.position.z, 1));
+                        // D12：捡掉落物的 goto 原来没有上限，会挂死整条链路。
+                        const walked = await withTimeout(bot.pathfinder.goto(new pf.goals.GoalNear(
+                            drop.position.x, drop.position.y, drop.position.z, 1)), 4000);
+                        if (walked.timedOut) stopPathfinder(bot);   // 不复位的话下次 goto 直接报错
                         for (let w = 0; w < 8; w++) {
                             await new Promise(r => setTimeout(r, 200));
                             if (countScaffold(bot) > haveBefore) break;
@@ -204,6 +215,38 @@ export async function ensureScaffold(bot, opts = {}) {
     };
 }
 
+/**
+ * 给任意 Promise 套一个上限时间（D12）。
+ *
+ * 为什么需要：`bot.pathfinder.goto()` 和 `bot.dig()` 都可能**永不返回**——
+ * 目标被别的实体挡住、区块卸载、服务端不回 `dig` 确认……都会挂在那里。
+ * 原来的代码两个都直接 await，于是 `ensureScaffold` 有可能永远不返回，
+ * 连带砍树任务整条链卡死（外层只有 deadline，进不到循环里就没人检查）。
+ *
+ * 超时后**必须**调 `pathfinder.stop()`：pathfinder 被中途打断时不会自己复位，
+ * 下一次 `goto` 会直接报 "Path was stopped"。
+ *
+ * @param {Promise} p 要等的 Promise
+ * @param {number} ms 上限（毫秒）
+ * @returns {Promise<{timedOut:boolean, value?:any, error?:Error}>}
+ */
+function withTimeout(p, ms) {
+    let timer = null;
+    const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ timedOut: true }), ms);
+    });
+    const wrapped = Promise.resolve(p).then(
+        (value) => ({ timedOut: false, value }),
+        (error) => ({ timedOut: false, error }),
+    );
+    return Promise.race([wrapped, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** 让 pathfinder 停下来并复位（超时/中断后必须调，否则下次 goto 报 "Path was stopped"）。 */
+function stopPathfinder(bot) {
+    try { bot.pathfinder?.stop?.(); } catch { /* 没有 pathfinder 就算了 */ }
+}
+
 function findAnyPlank(bot) {
     const kinds = ['oak_planks', 'birch_planks', 'spruce_planks', 'jungle_planks',
         'acacia_planks', 'dark_oak_planks', 'mangrove_planks', 'cherry_planks'];
@@ -222,7 +265,9 @@ async function tryCraft(bot, itemName, count = 1) {
         let recipes = bot.recipesFor ? bot.recipesFor(item.id, null, 1, null) : [];
         if (recipes.length) {
             try {
-                await bot.craft(recipes[0], count, null);
+                // D12：craft 同样可能永不返回（窗口没开完/服务端不回包）
+                const c = await withTimeout(bot.craft(recipes[0], count, null), 6000);
+                if (c.timedOut) throw new Error('craft 超时 6000ms');
                 return true;
             } catch { /* 落下去试工作台 */ }
         }
@@ -235,8 +280,8 @@ async function tryCraft(bot, itemName, count = 1) {
         if (table) {
             recipes = bot.recipesFor(item.id, null, 1, table);
             if (recipes.length) {
-                await bot.craft(recipes[0], count, table);
-                return true;
+                const c = await withTimeout(bot.craft(recipes[0], count, table), 6000);
+                if (!c.timedOut && !c.error) return true;
             }
         }
 
