@@ -28,6 +28,7 @@ const UNITS = [
     'scaffold_tracker_unit',     // D7 只清自己放的方块
     'task_pickup_unit',          // 掉落物回收搬到复合层后语义不变
     'terrain3d_unit',            // 连接复用 / fail 表 TTL / prune
+    'test_escape',               // skill_escape 规划（假 bot，纯读世界）
     'tool_prep_timeout_unit',    // D12 goto/dig/craft 有上限
     'verify_y_semantics',        // 在真机录的地图库上量化 y 语义
 ];

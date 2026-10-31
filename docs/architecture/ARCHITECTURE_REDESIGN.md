@@ -211,7 +211,7 @@
 | tool_prep | 直接dig/craft/goto | :88+ | 职责混乱 | 改用atom_craft+nav.goTo |
 | task_follow | 直接setGoal/setMovements | :321-433 | 绕过导航层 | 移交nav_core |
 | executor | 直接按键 | :100+ | 绕过原子 | 调用atom_pillar |
-| skill_escape | 自定义返回值 | 全文 | 契约不统一 | 统一ok/fail |
+| skill_escape | 自定义返回值、直接按键 | 全文 | 契约不统一 | ✅ 已修（2026-11-01）：改 `ok()/fail()` 信封、`code` 限 31 条白名单、跳垫改调 `atom_pillar.pillarUpOnce`、删自建 `UNBREAKABLE` 清单 |
 
 #### C. 导航层管策略
 - executor自带mode暂停列表 (:530-541) → 移交task_modes统一管理

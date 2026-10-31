@@ -53,7 +53,7 @@
 
 **技能**
 - ✅ skill_collect.js - 采集规划+处理器链
-- ✅ skill_escape.js - 垂直自救（**直接按键、自定义返回值**）
+- ✅ skill_escape.js - 垂直自救（~~直接按键、自定义返回值~~ **已于 2026-11-01 整改**：改 ok/fail 信封、按键与垫脚交给 atom_pillar、挖不动判定交给 atom_dig.isDiggable）
 - ✅ skill_clear.js - 清理障碍物步骤生成
 
 **支持**
@@ -81,9 +81,9 @@
 ### 2.1 核心原子缺失
 
 #### A. 移动与导航基础
-- ❌ **atom_pillar.js** - 跳垫垫高（统一executor:stepUp和skill_escape的跳垫逻辑）
+- ✅ **atom_pillar.js** - 跳垫垫高（2026-11-01 新增 `pillarUpOnce`；executor.stepUp 与 skill_escape 都改用它）
 - ❌ **atom_pathfind.js** - 原生pathfinder封装（统一goto/setGoal/setMovements调用）
-- ❌ **atom_stuck_detect.js** - 被困检测（从task_follow:321-433提取）
+- ✅ **atom_stuck_detect.js** - 卡住判据（2026-11-01 提取 movedEnough/weightedMove/realMove；task_follow 的 BFS 仍未迁移，见 §5 Phase4）
 
 #### B. 合成与工具准备
 - ❌ **atom_craft.js** - 合成单个物品（替代tool_prep直接craft，含工作台放置）

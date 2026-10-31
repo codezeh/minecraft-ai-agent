@@ -8,38 +8,34 @@
  *   我一直在调 pathfinder 的参数（digCost / allow1by1towers / maxDropDown），
  *   指望它的内部实现替我挖出一条向上的通道。那是自造轮子，而且造得很差。
  *
- * 正确做法：**用已有的 7 个原子组合**。这个文件一行底层能力都不新增：
- *   digBlock(头顶)          → 挖开
- *   equipItem(垫脚方块)      → 拿在手上
- *   placeBlockAt(脚下偏移)   → 垫一块
- *   setControlState('jump')  → 跳上去（物理按键，同 atom_dig:70 的既有做法）
- *   canStand(某格)          → 判断能不能站
+ * 正确做法：**用已有的原子组合**。这个文件一行底层能力都不新增。
  *
- * 它的分工（同 skill_collect）：
+ * 分工（同 skill_collect）：
  *   planEscape()  只读世界，产出步骤序列 —— 可打印、可单测、不改世界
  *   runEscape()   按序列调原子执行，报「第几步/哪个原子/什么码」
  *
  * 什么时候用：原地检测到自己被围住（头顶/四周实心、或长时间没位移）。
+ *
+ * ═══ 2026-11-01 严格按规范整改（REFACTOR_ANALYSIS §3.1 / ARCHITECTURE_REDESIGN §6）═══
+ * 1) **删掉重复的跳垫实现**：原来这里手写"起跳→等顶点→换手→placeBlockAt"，
+ *    与 executor.stepUp 是两份（等 0.95 vs 0.9、沉降 450 vs 300）。
+ *    现在统一走原子 `atom_pillar.pillarUpOnce`（单次尝试），
+ *    **重试 3 次留在本层**（复合层才允许重试，§6.1）。
+ * 2) **返回契约改用 ok()/fail()**：原来手搓 `{ ok, code, why, fromY, doneSteps, failedStep }`，
+ *    还出现 `code: undefined` 这种逃过码表的写法。现在统一信封，
+ *    code 只能取自 31 条白名单，计划/进度放 data。
+ * 3) **删掉自建的「挖不动」清单**：原来 `UNBREAKABLE` 又列了一遍基岩/黑曜石，
+ *    与 `atom_dig.isDiggable` 是第二个真相。现在统一用 isDiggable + canDigWithInventory。
  */
 import { ok, fail } from './atom_contract.js';
 import { digBlock, isDiggable } from './atom_dig.js';
-import { placeBlockAt } from './atom_place.js';
-import { equipItem } from './atom_items.js';
-import { canStand } from './atom_stand.js';
-import { moveTo } from './atom_move.js';
 import { blockAt } from './atom_perceive.js';
+import { pillarUpOnce } from './atom_pillar.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
-
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /** 可以拿来垫脚的方块见 scaffold_blocks.js（D8：清单原来散在 4 处且互不一致）。 */
 
-/** 挖不动的（别白试）。 */
-const UNBREAKABLE = new Set([
-    'bedrock', 'barrier', 'command_block', 'end_portal_frame', 'obsidian', 'reinforced_deepslate',
-]);
-
-/** pos 那格是不是空的（能穿过去）。 */
+/** pos 那格是不是空的（能穿过去）。水/草也算"能穿"，但不算"有支撑"。 */
 function isAirAt(bot, pos) {
     const b = blockAt(bot, pos);
     return !!b && (b.name === 'air' || b.name === 'cave_air' || b.name === 'void_air'
@@ -52,27 +48,28 @@ function isAirAt(bot, pos) {
  * 策略（最省的那种）：
  *   站在洞底，一格一格往上「挖头顶 → 垫脚下 → 跳上去」。
  *   为什么不做螺旋楼梯：垂直挖 1×2 最简单、步数最少、也最容易验证。
- *   为什么每层要垫脚：her 跳高 1.25 格，挖掉头顶那格后脚下没有支撑，必须先垫一块。
+ *   为什么每层要垫脚：她跳高 1.25 格，挖掉头顶那格后脚下没有支撑，必须先垫一块。
  *
  * @param {object} bot
  * @param {{targetY?:number, maxBlocks?:number}} opts
- * @returns {{ok:boolean, code?:string, steps:Array, fromY:number, planToY:number, why:string}}
+ * @returns ActionResult
+ *   ok  → data: { steps, fromY, planToY, digCount, pillarCount }
+ *   fail(BLOCKED) → 头顶第一格挖不动
+ *   data.steps 里每步：{ act:'dig', pos, name } 或 { act:'pillar', at }
  */
 export function planEscape(bot, opts = {}) {
     const { targetY = null, maxBlocks = 24 } = opts;
 
     const p = bot.entity.position;
     const fy = Math.floor(p.y);
-    let fx = Math.floor(p.x), fz = Math.floor(p.z);   // 斜向楼梯会移动，必须可变
+    const fx = Math.floor(p.x), fz = Math.floor(p.z);
 
-    // 已经在地表以上就别挖了
+    // 已经在地表以上就别挖了 —— 空计划是**成功**，不是失败
     if (targetY != null && fy >= targetY) {
-        return { ok: true, steps: [], fromY: fy, planToY: fy, why: '已经到目标高度了' };
+        return ok({ steps: [], fromY: fy, planToY: fy, digCount: 0, pillarCount: 0 });
     }
 
-
     // 垂直挖上去（用户定的做法，2026-10-27 第三次改）：
-    //
     //   1. 挖掉头顶那格      (x, y+1, z)
     //   2. 跳起来
     //   3. **在半空中**往脚下垫方块   (x, y, z) ← 她跳起来后脚下这格是空的，能放
@@ -81,10 +78,8 @@ export function planEscape(bot, opts = {}) {
     // 之前我把这条判断错了：我以为"站着她把方块"放不进 y+1（她的碰撞箱）。
     // 对，但她根本不需要放在 y+1 —— **她放在 y（自己原来站的脚下）**，
     // 而 y 在她跳起来的那一刻是空的，所以放得进去。
-    // 这就解释了为什么之前斜向楼梯绕了一大圈还走不上去。
-    //
-    // 每层 3 步：dig(y+1) → jump → place(y)
     const steps = [];
+    const scaffoldItem = findScaffoldItem(bot);
 
     for (let i = 0; i < maxBlocks; i++) {
         const y = fy + i;
@@ -95,47 +90,53 @@ export function planEscape(bot, opts = {}) {
         // 原因（实测日志）：在 y=64 连续 3 次「没离地」，跳不起来。
         //   她身高 1.8、跳跃 1.25 → 跳起来头顶要够到 y+3 附近，
         //   只挖 y+1 的话，y+2 的方块正好卡住她的头，jump 被顶回来。
-        //   所以每次挖 y+1 和 y+2 两格，保证有足够空间起跳。
         for (const dy of [1, 2]) {
             const at = { x: fx, y: y + dy, z: fz };
             if (isAirAt(bot, at)) continue;
             const b = blockAt(bot, at);
-            if (!b || !isDiggable(b) || UNBREAKABLE.has(b.name)) {
+            // 「挖不挖得动」只有一处真相：atom_dig.isDiggable（方块层面：基岩/水/岩浆等）。
+            // ⚠️ 这里**不查**"背包有没有合适的工具"——那是原子的前置断言
+            //   （digBlock 会返回 NO_TOOL），规划层复制一遍会让"没带镐"直接规划不出计划，
+            //   而规划本身是只读世界的，不该依赖背包此刻的状态。
+            const unbreakable = !b || !isDiggable(b);
+            if (unbreakable) {
                 // 第二格挖不动不致命（只是空间矮一点），第一格挖不动才必须停
                 if (dy === 1) {
-                    return {
-                        ok: false, code: 'BLOCKED',
-                        steps, fromY: fy, planToY: y,
-                        why: `头顶是 ${b?.name ?? '未知'}，挖不动`,
-                    };
+                    return fail('BLOCKED', `头顶 y=${at.y} 是 ${b?.name ?? '未知'}，挖不动`, {
+                        fromY: fy, pos: at, steps,
+                    });
                 }
                 break;
             }
             steps.push({ act: 'dig', pos: at, name: b.name });
         }
 
-        // 2) 跳 + 半空垫脚下
-        steps.push({ act: 'jumpPlace', at: { x: fx, y, z: fz }, item: 'scaffold' });
+        // 2) 跳 + 半空垫脚下（执行时调 atom_pillar.pillarUpOnce）
+        steps.push({ act: 'pillar', at: { x: fx, y, z: fz }, item: scaffoldItem });
     }
 
-    const planToY = fy + steps.filter(s => s.act === 'jumpPlace').length;
-    return {
-        ok: steps.length > 0,
-        code: steps.length ? undefined : 'BLOCKED',
-        steps, fromY: fy, planToY,
-        why: steps.length ? `计划挖 ${steps.filter(s => s.act === 'dig').length} 格、垫 ${steps.filter(s => s.act === 'jumpPlace').length} 格，上到 y≈${planToY}` : '没有可执行的步骤',
-    };
+    const pillarCount = steps.filter(s => s.act === 'pillar').length;
+    const digCount = steps.filter(s => s.act === 'dig').length;
+    if (!steps.length) {
+        return fail('BLOCKED', '没有可执行的步骤', { fromY: fy, steps: [], digCount, pillarCount });
+    }
+    return ok({ steps, fromY: fy, planToY: fy + pillarCount, digCount, pillarCount });
 }
 
 /**
  * 执行 planEscape 产出的步骤。
  * 每一步都调**现有原子**，不写任何新底层逻辑。
  *
- * @returns {{ok:boolean, code?:string, doneSteps:number, failedStep:number|null, fromY:number, toY:number, message:string}}
+ * @returns ActionResult
+ *   ok  → data: { doneSteps, step, fromY, toY, climbed }
+ *   fail → data: { doneSteps, step, failed:[{pos,code,message}], fromY, toY }
+ *          code ∈ NO_ITEM / INTERRUPTED / BLOCKED / STUCK / 原子透传的码
  */
 export async function runEscape(bot, plan, opts = {}) {
     const { onEvent = () => { }, targetY = null, maxLayers = 40 } = opts;
+    const t0 = Date.now();
     const fromY = bot.entity.position.y;
+    const failed = [];
 
     // ★ 2026-10-27 第十四次修：**每升一格就重新规划**，不再一次性算完所有层。
     //
@@ -146,18 +147,22 @@ export async function runEscape(bot, plan, opts = {}) {
     //   日志就是「没离地（y=49.00）」连续 3 次
     //
     // 所以改成滚动式：每次只规划"当前这一层"，执行完再规划下一层。
-    // 这也是用户早先定的滚动窗口思路在技能层的同一应用。
     const scaffold = findScaffoldItem(bot);
     if (!scaffold) {
-        return { ok: false, code: 'NO_ITEM', doneSteps: 0, failedStep: null, fromY, toY: fromY, message: '没有可垫脚的方块（需要泥土/圆石/木板）' };
+        return fail('NO_ITEM', '没有可垫脚的方块（需要泥土/圆石/木板）', {
+            doneSteps: 0, step: 0, fromY, toY: fromY, costMs: Date.now() - t0,
+        });
     }
 
     let done = 0;
-    let failed = null;
+    let lastCode = null;
 
     for (let layer = 0; layer < maxLayers; layer++) {
         if (bot.interrupt_code) {
-            return { ok: false, code: 'INTERRUPTED', doneSteps: done, failedStep: failed, fromY, toY: bot.entity.position.y, message: '被取消了' };
+            return fail('INTERRUPTED', '被取消了', {
+                doneSteps: done, step: done + 1, failed,
+                fromY, toY: bot.entity.position.y, costMs: Date.now() - t0,
+            });
         }
 
         const y0 = bot.entity.position.y;
@@ -165,97 +170,94 @@ export async function runEscape(bot, plan, opts = {}) {
 
         // 只规划当前这一层（maxBlocks=1）
         const one = planEscape(bot, { targetY: targetY ?? undefined, maxBlocks: 1 });
-        if (!one.ok && !one.steps.length) {
-            failed = one.code ?? 'BLOCKED';
-            onEvent({ type: 'escape-blocked', code: failed, why: one.why });
+        if (!one.ok) {
+            lastCode = one.code;
+            onEvent({ type: 'escape-blocked', code: one.code, message: one.message });
             break;
         }
 
-        let lifted = false;
-        let placed = false;
+        let layerFailed = null;
 
-        for (const st of one.steps) {
+        for (const st of one.data.steps) {
             if (bot.interrupt_code) break;
 
             if (st.act === 'dig') {
                 const r = await digBlock(bot, { kind: 'block', pos: st.pos });
                 const already = /air/i.test(String(r.message ?? ''));
-                console.log(`[escape] 挖 (${st.pos.x},${st.pos.y},${st.pos.z}) ${st.name} -> ${r.ok ? 'OK' : (already ? '已是空气' : r.code)}`);
-                if (!r.ok && !already) { failed = r.code; break; }
-                onEvent({ type: 'escape-dig', y: st.pos.y, done });
-
-            } else if (st.act === 'jumpPlace') {
-                // 以下实际位置为准，不用规划值
-                const yBefore = bot.entity.position.y;
-                const feet = {
-                    x: Math.floor(bot.entity.position.x),
-                    y: Math.floor(bot.entity.position.y),
-                    z: Math.floor(bot.entity.position.z),
-                };
-
-                for (let attempt = 0; attempt < 3; attempt++) {
-                    bot.setControlState('jump', true);
-                    // 等接近跳跃顶点（脚要抬过 y+1，方块那格才真空出来）
-                    for (let w = 0; w < 16; w++) {
-                        await sleep(25);
-                        if (bot.entity.position.y > yBefore + 0.95) { lifted = true; break; }
-                    }
-                    if (lifted) {
-                        const eq = await equipItem(bot, scaffold);
-                        if (eq.ok) {
-                            const pr = await placeBlockAt(bot, { kind: 'block', pos: feet }, scaffold);
-                            console.log(`[escape] 跳垫(第${attempt + 1}次): 起跳y=${yBefore.toFixed(2)} 放${scaffold}到(${feet.x},${feet.y},${feet.z}) -> ${pr.ok ? 'OK' : pr.code}`);
-                            placed = pr.ok;
-                        }
-                    } else {
-                        console.log(`[escape] 跳垫(第${attempt + 1}次): 没离地（y=${bot.entity.position.y.toFixed(2)}）`);
-                    }
-                    bot.setControlState('jump', false);
-                    await sleep(450);
-                    if (planted2(bot, yBefore)) break;
-                }
-
-                const yAfter = bot.entity.position.y;
-                console.log(`[escape] 本层结果: ${yBefore.toFixed(2)} -> ${yAfter.toFixed(2)}（离地=${lifted} 垫成=${placed}）`);
-                onEvent({ type: 'escape-jump', from: +yBefore.toFixed(1), to: +yAfter.toFixed(1), lifted, placed });
-
-                if (yAfter < yBefore + 0.7) {
-                    failed = 'STUCK';
+                if (!r.ok && !already) {
+                    layerFailed = { pos: st.pos, code: r.code, message: r.message };
                     break;
+                }
+                onEvent({ type: 'escape-dig', y: st.pos.y, code: r.code });
+
+            } else if (st.act === 'pillar') {
+                // ★ 重试归复合层（原子只做一次）。3 次沿用实测值。
+                let attemptOk = false;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    const r = await pillarUpOnce(bot, { item: scaffold, settleMs: 450 });
+                    onEvent({
+                        type: 'escape-pillar', attempt, ok: r.ok, code: r.code,
+                        from: +(r.data?.fromY ?? y0).toFixed(1),
+                        to: +(r.data?.toY ?? bot.entity.position.y).toFixed(1),
+                    });
+                    if (r.ok) { attemptOk = true; break; }
+                    if (r.code === 'INTERRUPTED') {
+                        return fail('INTERRUPTED', '被取消了', {
+                            doneSteps: done, step: done + 1, failed,
+                            fromY, toY: bot.entity.position.y, costMs: Date.now() - t0,
+                        });
+                    }
+                    lastCode = r.code;
+                }
+                if (!attemptOk) {
+                    layerFailed = {
+                        pos: st.at, code: 'STUCK',
+                        message: `跳垫 3 次没上去（停在 y=${bot.entity.position.y.toFixed(1)}）`,
+                    };
                 }
             }
         }
 
-        if (failed) break;
+        if (layerFailed) {
+            failed.push(layerFailed);
+            lastCode = layerFailed.code;
+            break;
+        }
         done++;
     }
 
     const toY = bot.entity.position.y;
     const climbed = toY - fromY;
+    const data = {
+        doneSteps: done, step: done + 1, fromY, toY, climbed,
+        failed, costMs: Date.now() - t0,
+    };
+
     if (climbed < 1) {
-        return { ok: false, code: failed ?? 'STUCK', doneSteps: done, failedStep: failed, fromY, toY, message: `一步都没上去（y ${fromY.toFixed(1)} → ${toY.toFixed(1)}）` };
+        return fail(lastCode ?? 'STUCK', `一步都没上去（y ${fromY.toFixed(1)} → ${toY.toFixed(1)}）`, data);
     }
-    return { ok: true, doneSteps: done, failedStep: null, fromY, toY, message: `上去了 ${climbed.toFixed(1)} 格（y ${fromY.toFixed(0)} → ${toY.toFixed(0)}${failed ? '，中途 ' + failed : ''}）` };
+    return ok(data);
 }
-
-/** 已经比起点高了 0.7 格就算这一层成功。 */
-function planted2(bot, y0) {
-    return bot.entity.position.y > y0 + 0.7;
-}
-
 
 /**
  * 一步到位：规划 + 执行。天花板是"被围住时的自救"。
  *
- * @returns 同 runEscape，外加 code 用于区分 BLOCKED / NO_ITEM / STUCK
+ * @returns ActionResult（同 runEscape；code 可区分 BLOCKED / NO_ITEM / STUCK / INTERRUPTED）
  */
 export async function escapeUp(bot, opts = {}) {
     const { onEvent = () => { }, targetY = null, maxBlocks = 24 } = opts;
     const plan = planEscape(bot, { targetY, maxBlocks });
-    onEvent({ type: 'escape-plan', ok: plan.ok, code: plan.code, steps: plan.steps.length, why: plan.why });
+    onEvent({
+        type: 'escape-plan', ok: plan.ok, code: plan.code,
+        steps: plan.data?.steps?.length ?? 0, message: plan.message,
+    });
 
-    if (!plan.ok && !plan.steps.length) {
-        return fail(plan.code ?? 'BLOCKED', plan.why, { fromY: plan.fromY });
+    if (!plan.ok) {
+        return fail(plan.code, plan.message, { ...plan.data, doneSteps: 0, step: 0 });
+    }
+    if (!plan.data.steps.length) {
+        // 已经够高：不是失败
+        return ok({ doneSteps: 0, step: 0, fromY: plan.data.fromY, toY: bot.entity.position.y, climbed: 0, failed: [] });
     }
     // 把 targetY 传下去：runEscape 现在自己按层重规划，必须知道要挖到哪
     return runEscape(bot, plan, { onEvent, targetY, maxLayers: maxBlocks });
