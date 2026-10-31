@@ -385,12 +385,12 @@ async function skillName(bot, goal, context = {}) {
 
 #### 2.2 新增缺失基础原子（优先级排序）
 **P0（核心移动）**
-- [ ] atom_pillar.js - 统一跳垫逻辑
-      — **未做**：`executor.stepUp` 是经过真机验证的砍树关键路径，
-        拆"单次尝试(原子) + 3 次重试(复合)"必须配真机回归，服务器没开时不动
+- [x] atom_pillar.js - 统一跳垫逻辑
+      — `pillarUpOnce`（单次：起跳→等顶点→垫脚下）；重试/清头顶留在 `executor.stepUp`。
+        真机 `verify_d1_live` [3][8] 两条走这条路，全过
 - [ ] atom_pathfind.js - 封装原生pathfinder
-      — **未做，且需先确认是否重复**：`atom_move` 已经在封装 `pathfinder.goto`
-        （moveTo / moveToXZ 都走它），再包一层可能只是换个名字（C4 复用优先）
+      — **建议不做**：`atom_move` 已经在封装 `pathfinder.goto`（moveTo / moveToXZ 都走它），
+        再包一层只是改名，违反 C4 复用优先。除非有新需求（如 GoalFollow 统一入口）再议
 - [x] atom_stuck_detect.js - 被困检测提取
       — 已提取为纯函数原子（movedEnough / weightedMove / realMove），
         executor 改为调用它，判据与阈值原值不变（2 / 1.5）
