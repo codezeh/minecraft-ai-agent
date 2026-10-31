@@ -53,6 +53,15 @@ export async function collect(bot, name, want, opts = {}) {
     const scaffolder = new ScaffoldTracker(bot);
     scaffolder.start();
 
+    // ★ D6（2026-10-31）：try 从**这里**开始，不是从主循环开始。
+    //
+    // 原来 try 在主循环前（旧 :104），而"走到你旁边"里的 `return fail('INTERRUPTED')`
+    // 在 try 之前 → 那条路径上 `restoreGoalModes` 和 `scaffolder.stop()` **都不会执行**：
+    // item_collecting/unstuck 的 goal 一直暂停着（后续所有任务都不捡东西、不脱困），
+    // blockUpdate 监听器也一直挂着。中断恰恰是最容易走到的那条路。
+    // 现在凡是"已经改了全局状态"之后的任何退出，都要经过 finally。
+    try {
+
     // 砍树前先准备工具（没有斧头就造一把）
     const isWood = names.some(n => /_log$|_stem$/.test(n));
     if (isWood) {
@@ -101,8 +110,7 @@ export async function collect(bot, name, want, opts = {}) {
         }
     }
 
-    try {
-        // ---- L3 主循环：只管"还差多少、还剩多少时间"，不碰具体动作 ----
+    // ---- L3 主循环：只管"还差多少、还剩多少时间"，不碰具体动作 ----
         let rounds = 0;
         const MAX_ROUNDS = 40;      // 防止 plan 一直产出同一批目标导致死循环
 
