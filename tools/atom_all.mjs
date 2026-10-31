@@ -13,8 +13,34 @@
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
+import net from 'node:net';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
+
+/**
+ * 开跑前先确认测试服在。
+ *
+ * ★ 2026-10-31 修：**服务器没开时这里原来会"全绿通过"**。
+ * 实测：25566 关掉后 `node tools/atom_drops.mjs` 打 ECONNREFUSED 却**退出码 0**
+ * （各脚本里 `bot.on('error', () => {})` 把连接错误吞了），于是 atom_all 照样打 ✅。
+ * 这是最坏的一种假绿——什么都没测，却说通过了。
+ * 现在连不上就直接判失败，不许它冒充通过。
+ */
+function serverUp(host, port, timeoutMs = 1500) {
+    return new Promise((resolve) => {
+        const s = net.connect({ host, port, timeout: timeoutMs });
+        const done = (v) => { try { s.destroy(); } catch { } resolve(v); };
+        s.on('connect', () => done(true));
+        s.on('timeout', () => done(false));
+        s.on('error', () => done(false));
+    });
+}
+
+if (!(await serverUp('127.0.0.1', 25566))) {
+    console.log('✗ 测试服 127.0.0.1:25566 连不上 —— 原子测试**没有执行**（这不等于通过）。');
+    console.log('  请先起测试服（超平坦，RCON 25576），再跑本脚本。');
+    process.exit(1);
+}
 
 /** 原子层测试（单文件前缀 atom_） */
 const ATOM_ORDER = ['move', 'dig', 'place', 'items', 'container', 'use', 'attack', 'stand', 'drops', 'look', 'safe', 'query', 'wait'];
@@ -35,11 +61,25 @@ for (const name of list) {
     const script = join(HERE, `${name}.mjs`);
     process.stdout.write(`\n===== ${name} =====\n`);
     try {
-        // 直接继承 stdio，让每个测试的输出实时可见
-        execFileSync(process.execPath, [script], { stdio: 'inherit', timeout: 180000 });
-        results.push({ name, ok: true });
+        // 用 pipe 而不是 inherit：要检查"到底有没有真的跑用例"
+        const out = execFileSync(process.execPath, [script], {
+            encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const printed = String(out);
+        process.stdout.write(printed);
+        // ★ 防假绿：一个用例都没 PASS 就说明脚本中途放弃（最常见是连不上服务器后静默退出）
+        const passCount = (printed.match(/\bPASS\b/g) || []).length;
+        if (passCount === 0) {
+            console.log(`  ✗ ${name} 一条 PASS 都没有 —— 视为失败（可能没连上服务器）`);
+            results.push({ name, ok: false, code: 'NO_CASES_RAN' });
+            failed++;
+        } else {
+            results.push({ name, ok: true, cases: passCount });
+        }
     } catch (e) {
         // 测试失败时 execFileSync 会抛；退出码 1 就是"有用例失败"
+        const printed = `${e.stdout ?? ''}`;
+        if (printed.trim()) process.stdout.write(printed);
         results.push({ name, ok: false, code: e.status ?? 'error' });
         failed++;
     }
@@ -47,7 +87,7 @@ for (const name of list) {
 
 console.log('\n================ 原子层总览 ================');
 for (const r of results) {
-    console.log(`  ${r.ok ? '✅' : '❌'} ${r.name}${r.ok ? '' : `  (exit ${r.code})`}`);
+    console.log(`  ${r.ok ? '✅' : '❌'} ${r.name}${r.ok ? `  (${r.cases} 个用例)` : `  (exit ${r.code})`}`);
 }
 console.log(`  ${results.length - failed}/${results.length} 个测试通过`);
 console.log('============================================');
