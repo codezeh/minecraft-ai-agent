@@ -412,7 +412,19 @@ async function skillName(bot, goal, context = {}) {
 **目标**: 单一移动入口，消除pathfinder vs walkTo分裂
 
 #### 3.1 核心重构
-- [ ] 新增 nav_core.js - goTo统一入口
+
+> **2026-11-01 进度**：`nav_core.goTo` 已落地并有基线对比；`executor` 拆 `steps/` 尚未做
+> （风险最高的一块，需另立基线再动）。
+>
+> **移动基线（改前 X，测试服真机，5 地形 × 10 轮 = 50/50 全成功）**：
+> flat 7652ms / stairs 8486ms / wall 6414ms / gap 6768ms / long 18014ms，
+> 明细 `tmp/bench/2026-10-31-move-walkto.jsonl`。
+> **改后 Y（同一套 bench 走 goTo，5 轮）**：25/25，耗时全在噪声内（±10%）。
+
+- [x] 新增 nav_core.js - goTo统一入口
+      — 三引擎按输入选：有 mapDir→walkTo(3D)、给了 y→moveTo、只有 x/z→moveToXZ。
+        `task_hop.hopTo` 改为转调它，对外契约与行为未变；
+        实体跟随仍走 task_follow（目标失效/重定位是另一套语义）
   ```javascript
   export async function goTo(bot, dest, options) {
     // 自动选择引擎：
@@ -431,7 +443,7 @@ async function skillName(bot, goal, context = {}) {
 - [ ] 删除 path_short.js + moveToXZEx
 
 #### 3.2 统一调用
-- [ ] task_hop.js 并入 nav_core
+- [x] task_hop.js 并入 nav_core（2026-11-01：hopTo 转调 goTo，签名与行为不变）
 - [ ] actions.js 所有移动命令改调 goTo
 - [ ] skills.js 移动函数改为薄包装
 
