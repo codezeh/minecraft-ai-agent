@@ -349,15 +349,20 @@ async function skillName(bot, goal, context = {}) {
 ### Phase 1: 基础设施修复（高风险bug）
 **目标**: 修复D1-D13缺陷，统一y语义，防止数据竞态
 
-- [ ] 1.1 统一y语义（terrain3d + path_3d + executor）
-- [ ] 1.2 修复terrain3d连接复用、fail表查询优化
-- [ ] 1.3 修复executor挖邻列逻辑（D2）
-- [ ] 1.4 修复task_collect mode泄漏+scaffolder泄漏（D6）
-- [ ] 1.5 修复ScaffoldTracker只清自己放的块（D7）
-- [ ] 1.6 统一垫脚块清单为一份（D8）
-- [ ] 1.7 修复tool_prep goto超时问题（D12）
+> ✅ **2026-10-31 全部完成**。每项都有离线回归测试；D1 另有真机地图库上的量化验证。
+> ⚠️ 但 D1 的"真机 10 场景回归"**尚未执行**（当时 25565/25566 都没开）——
+> 离线证据证明的是语义与逻辑正确，不等于真机行为已验证。
+
+- [x] 1.1 统一y语义（terrain3d + path_3d + executor）— 结论：terrain3d 本来就存面位、path_3d 也按面位工作，**只有 executor 内部混用**（已在 execStep 换算 targetFeetY，并修掉 walkTo 传错面位的问题）
+- [x] 1.2 修复terrain3d连接复用、fail表查询优化 — 连接按目录复用（实测 0.41ms→0.003ms/次）；fail 表 TTL 从未生效的真因是 SQL 没取 last_at（NaN 判据），已下推到 SQL + 加索引 + pruneFails
+- [x] 1.3 修复executor挖邻列逻辑（D2）— 按 step.x/z 取列；同列才垫高；液体头顶不再假成功
+- [x] 1.4 修复task_collect mode泄漏+scaffolder泄漏（D6）— try 起点提前到"改过全局状态之后"
+- [x] 1.5 修复ScaffoldTracker只清自己放的块（D7）— 改记 bot.placeBlock 真正放成功的那格
+- [x] 1.6 统一垫脚块清单为一份（D8）— 新增 scaffold_blocks.js，4 处调用点归一
+- [x] 1.7 修复tool_prep goto超时问题（D12）— goto/dig/craft 全部加上限 + 超时后 pathfinder.stop()
 
 **交付物**: 补丁版本 mindcraft-v0.1-hotfix
+**回归脚本**: `tools/{scaffold_tracker,tool_prep_timeout,exec_step_dig,terrain3d,exec_step_y}_unit.mjs`、`tools/verify_y_semantics.mjs`
 
 ---
 
