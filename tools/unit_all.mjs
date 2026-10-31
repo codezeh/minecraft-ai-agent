@@ -23,6 +23,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 const UNITS = [
     'atom_classify_unit',        // 原子纯函数化 + 地标缓存按 bot 隔离
     'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）
+    'detect_trapped_unit',       // 被困判据（面积/封顶/出口/地表）
     'exec_step_dig_unit',        // D2 挖邻列 / 液体不假成功
     'exec_step_y_unit',          // D1 y 语义（脚位 vs 面位）
     'scaffold_tracker_unit',     // D7 只清自己放的方块

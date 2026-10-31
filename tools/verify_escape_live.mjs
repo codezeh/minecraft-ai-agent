@@ -19,6 +19,7 @@ import Vec3 from 'vec3';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { escapeUp } from '../src/agent/library/skill_escape.js';
+import { rentArena } from './arena.mjs';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });
@@ -47,24 +48,26 @@ bot.once('spawn', async () => {
     const base = bot.entity.position.floored();
     // ★ 必须造在**已加载区块**里：远处的 /fill 会静默失败，
     //   第一版放在 +50 格处，坑没造出来，她直接掉到 y=-99。
-    const BX = base.x + 5, BZ = base.z + 5;
-    // ★ 世界底部在 y≈-64（超平坦 bedrock 层），**不能往下挖坑**：
-    //   第一版挖到 -70 属于世界外，/fill 静默失败，她直接掉到 y≈-96。
-    //   改成"往上砌石笼"：站在地面，头顶堆石头，四周砌墙 —— 这才是真正的被困。
-    const SURF = -60;                  // 脚位（实心方块在 -61）
-    const TOP = SURF + 12;             // 石笼顶（她要挖到 SURF+10 以上）
+    // ★ 场地租在远处 + forceload：不在出生点附近造石笼，
+    //   否则会污染其它 live 测试（实测把 vine_physics_test 搞挂过）。
+    const arena = await rentArena(RC, 'escape', { halfSize: 10 });
+    const BX = arena.x, BZ = arena.z;
+    // ★ 世界底部就在 groundY 附近，**不能往下挖坑**（第一版挖到 -70 属世界外，
+    //   /fill 静默失败，她直接掉到 y≈-96）。改成"往上砌石笼"。
+    const SURF = arena.groundY + 1;     // 脚位（实心在 groundY）
+    const TOP = SURF + 12;              // 石笼顶
 
-    // 1) 先把她放到地面上的目标位置
+    // 1) 把她放到场地中心
     await RC(`tp ${NAME} ${BX + 0.5} ${SURF} ${BZ + 0.5}`);
     await sleep(1200);
 
-    // 2) 砌 5×5 的实心石笼，从她脚下一层一直堆到 TOP
+    // 2) 砌 5×5 实心石笼
     await RC(`fill ${BX - 2} ${SURF - 1} ${BZ - 2} ${BX + 2} ${TOP} ${BZ + 2} stone`);
-    // 3) 把她那一格挖出 1×2 的空腔（脚格 + 头格），其余全是石头
+    // 3) 挖出 1×2 空腔
     await RC(`fill ${BX} ${SURF} ${BZ} ${BX} ${SURF + 1} ${BZ} air`);
     await sleep(900);
 
-    // 造完必须验：脚下实心、身上是空、头顶是实心 —— 否则后面全是假失败
+    // 造完必须验
     const bFloor = bot.blockAt(new Vec3(BX, SURF - 1, BZ));
     const bFeet = bot.blockAt(new Vec3(BX, SURF, BZ));
     const bHead = bot.blockAt(new Vec3(BX, SURF + 2, BZ));
@@ -115,12 +118,8 @@ bot.once('spawn', async () => {
 
     check('escapeUp 报成功', esc.ok === true, `code=${esc.code} msg=${esc.message ?? ''}`);
 
-    // ★ 收尾清场：live 测试共享同一个世界，别把石笼留给后面的测试。
-    //   （实测踩过：残留方块让 vine_physics_test 的"爬模式"测出升高 0 格）
-    try {
-        await RC(`fill ${BX - 3} ${SURF - 2} ${BZ - 3} ${BX + 3} ${TOP + 2} ${BZ + 3} air`);
-        await RC(`fill ${BX - 3} ${SURF - 1} ${BZ - 3} ${BX + 3} ${SURF - 1} ${BZ + 3} stone`);
-    } catch { /* 清不掉不影响结论 */ }
+    // 收尾：清空场地 + 取消 forceload
+    await arena.release();
 
     console.log('');
     console.log(`skill_escape 真机：${pass} PASS / ${fail_} FAIL`);

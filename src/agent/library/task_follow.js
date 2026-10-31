@@ -20,6 +20,7 @@ import { pauseGoalModes, restoreGoalModes } from './task_modes.js';
 import Vec3 from 'vec3';
 import { PlayerTracker, ensureTracking, query, queryPlayerExact } from './atom_query.js';
 import { ensureScaffold, countScaffold } from './tool_prep.js';
+import { detectTrapped } from './atom_stuck_detect.js';
 
 export { PlayerTracker, ensureTracking };
 
@@ -306,135 +307,24 @@ export async function goToPlayer(bot, name, opts = {}) {
         if (stuck && attempt >= 1) {
             try {
                 const yBefore = bot.entity.position.y;
-                // ★ 2026-10-27 第九次修：判据从「头顶有没有遮挡」换成「洪泛能走多远」。
+                // ★ 2026-11-01：判据抽成原子（atom_stuck_detect.detectTrapped）。
                 //
-                // 前两次判据都错在"看单点"：
-                //   第七次：从 yBefore+64 往下扫第一个实心当"地表" → 扫到的是她头顶的天花板
-                //   第八次：头顶 24 格有实心才算被困 → **大溶洞里头顶也是无遮挡的**
-                //          实测日志：「我在 y=50，头顶 24 格无遮挡 —— 没被困，跳过自救」
-                //          但她其实在一个走不出去的洞穴里，5 轮 0 位移。
+                // 这一段原来是就地写的 110 行：walkable() + 泛洪 + 扫地表 + 探 8 向。
+                // 全是**只读**的查询，却被埋在决策里，于是历史上为了改判据在这里动了 5 次
+                // （第十二~十七次修），每次都要看这 600 行的文件；而且 walkable 与
+                // atom_stand.canStand 是同一件事的两套实现。
                 //
-                // 真正的判据只有一个：**从这个位置出发，水平方向能到达多远？**
-                // 用有限步数的洪泛（4 方向 + 上下 1 格），看最远能离起点多少格。
-                // 走不出 20 格 = 被围住了，该往上挖。
-                // 代价：最多扩 1500 格位，实测几毫秒，只在"已经走不动"时才跑。
-                const walkable = (x, y, z) => {
-                    try {
-                        const feet = bot.blockAt(new Vec3(x, y, z));
-                        const head = bot.blockAt(new Vec3(x, y + 1, z));
-                        const below = bot.blockAt(new Vec3(x, y - 1, z));
-                        if (!feet || !head || !below) return false;
-                        const airOk = (b) => ['air', 'cave_air', 'void_air'].includes(b.name);
-                        if (!airOk(feet) || !airOk(head)) return false;
-                        // 脚下要有支撑（水/岩浆不算）
-                        if (airOk(below) || below.name === 'water' || below.name === 'lava') return false;
-                        return true;
-                    } catch { return false; }
-                };
-
-                const px = Math.floor(bot.entity.position.x);
-                const pz = Math.floor(bot.entity.position.z);
-                const py = Math.floor(yBefore);
-
-                let reach = 0;
-                const seen = new Set([`${px},${py},${pz}`]);
-                {
-                    const queue = [{ x: px, y: py, z: pz }];
-                    let steps = 0;
-                    while (queue.length && seen.size < 1500 && steps < 6000) {
-                        const c = queue.shift();
-                        steps++;
-                        const d = Math.hypot(c.x - px, c.z - pz);
-                        if (d > reach) reach = d;
-                        for (const [dx, dz, dy] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
-                            const nx = c.x + dx, ny = c.y + dy, nz = c.z + dz;
-                            const k = `${nx},${ny},${nz}`;
-                            if (seen.has(k)) continue;
-                            if (!walkable(nx, ny, nz)) continue;
-                            seen.add(k);
-                            queue.push({ x: nx, y: ny, z: nz });
-                        }
-                    }
-                }
-
-                // ★ 2026-10-27 第十五次修：找的是**地表**，不是"头顶第一格实心"。
-                //
-                // 实测：她在 y=58，头顶 59 空、60~67 是 stone、68~70 是土/草、71 草、72+ 天空。
-                // 旧代码把"头顶第一个实心"= y=60 当成天花板，于是 goalY = 62，
-                // 挖 2 层就"到目标高度"停下 —— 她永远只挖 4 格就停，然后重新判困，死循环。
-                //
-                // 正确：从她往上找**第一段连续 3 格以上的空气**（= 真正的地表/天空），
-                // 那才是该挖到的高度。
-                let ceilingAt = null;      // 头顶第一个实心（用来判"有没有被盖住"）
-                let surfaceY = null;       // 真正的地表高度（连续 3 格空气的第一个）
-                try {
-                    let airRun = 0;
-                    for (let dy = 1; dy <= 96; dy++) {
-                        const b = bot.blockAt(new Vec3(px, py + dy, pz));
-                        if (!b) break;
-                        const isAir = ['air', 'cave_air', 'void_air'].includes(b.name);
-                        if (!isAir) {
-                            if (ceilingAt == null) ceilingAt = py + dy;
-                            airRun = 0;
-                        } else {
-                            airRun++;
-                            if (airRun >= 3 && surfaceY == null) {
-                                surfaceY = py + dy - airRun + 1;   // 这段空气的起点
-                                break;
-                            }
-                        }
-                    }
-                } catch { /* ignore */ }
-
-                // ★ 2026-10-27 第十二次修：判"被困"不能用"水平能走多远"。
-                //
-                // 实测（她真实处境）：她在一个约 5×7 的封闭小房间里，
-                //   洪泛可达 25 格、最远水平距离约 5 格、头顶 y=50~53 是 diorite。
-                // 旧判据 `reach < 20` 判的是**最远水平距离**，25 格 > 20 → 判"能走开，不挖"
-                // → 她永远不挖 → 永远出不来。
-                //
-                // 正确判据：**可达面积小 且 头顶有遮挡 = 被困**。
-                //   面积小（< 300 格）说明"能去的地方就这么点"
-                //   头顶有遮挡说明"上面是封的"
-                // 两个条件都满足才是真被困 —— 站在开阔草原上即使面积很大也不会误判。
-                // ★ 2026-10-27 第十六次修：判被困**只看可达面积**，不看头顶有没有遮挡。
-                //
-                // 实测：她挖到 y=68，头顶已经"开阔"了（挖穿了石层），
-                // 但可达面积仍然只有 2 格 —— 她还困在 1×1 的竖井里，离地表还差 2 格。
-                // 旧判据 `isCapped && area < 300` 因为 isCapped=false 直接返回 false
-                // → 判"能走开，不挖" → 她停在离地表 2 格的地方再也不动。
-                //
-                // 面积才是唯一可靠的判据：能站的地方就这么几格，那就一定是被困，
-                // 不管头顶是石头还是天空。
-                // ★ 2026-10-27 第十七次修：判被困 = **面积小 且 四周被封**。
-                //
-                // 只看面积会误判：站在地表一块 3×3 的平台上（面积 9），
-                // 上方开阔、四周能跳下去 —— 那不算被困，判成被困就会让她原地往上挖空气。
-                // 只看头顶遮挡也会误判：挖穿石层后头顶"开阔"了，但人还在 1×1 竖井里（实测）。
-                //
-                // 两个都要看：
-                //   area 小（< 300）         = 能站的地方就这么点
-                //   walled（水平 8 格全堵）  = 没有水平出口
-                const area = seen.size;
-                const isCapped = ceilingAt != null;
-                // 水平方向探一圈：8 格内有没有"能站且比现在不高"的位置（= 有出口）
-                let openDirs = 0;
-                try {
-                    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1],
-                                            [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-                        for (let r = 1; r <= 8; r++) {
-                            const nx = px + dx * r, nz = pz + dz * r;
-                            if (walkable(nx, py, nz) || walkable(nx, py - 1, nz) || walkable(nx, py - 2, nz)) {
-                                openDirs++;
-                                break;
-                            }
-                        }
-                    }
-                } catch { /* 读不到就当封闭 */ }
-                const walled = openDirs === 0;
-                const trapped = area < 300 && (walled || isCapped);
-                // 目标高度：地表之上 2 格；找不到地表就至少往上 12 格
-                const goalY = surfaceY != null ? surfaceY + 2 : py + 12;
+                // 现在：只读部分归原子，决策留在这里。判据沿用实测演进出来的那套
+                // （面积小 且（四周封死 或 头顶遮挡）），细节与踩坑记录见原子的注释。
+                const diag = detectTrapped(bot, { maxCells: 1500, maxSteps: 6000, trappedArea: 300 });
+                const area = diag.data?.area ?? 0;
+                const reach = diag.data?.reach ?? 0;
+                const ceilingAt = diag.data?.ceilingAt ?? null;
+                const surfaceY = diag.data?.surfaceY ?? null;
+                const openDirs = diag.data?.openDirs ?? 0;
+                const isCapped = diag.data?.capped ?? false;
+                const trapped = diag.data?.trapped ?? false;
+                const goalY = diag.data?.goalY ?? (Math.floor(yBefore) + 12);
 
                 console.log(`[goToPlayer] 走不动了（${r.code}）：可达 ${area} 格（最远 ${reach.toFixed(0)} 格）、`
                     + `头顶${isCapped ? 'y=' + ceilingAt + ' 有遮挡' : '开阔'}、地表y=${surfaceY ?? '?'}、出口方向${openDirs}/8 → ${trapped ? '判定被困，往上挖' : '能走开，不挖'}`);
