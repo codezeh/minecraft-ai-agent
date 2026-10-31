@@ -444,8 +444,8 @@ async function skillName(bot, goal, context = {}) {
 
 #### 4.1 任务层重构
 - [ ] task_follow.js
-  - [ ] 被困BFS提取到atom_stuck_detect
-  - [ ] 自救交给skill_escape
+  - [x] 被困BFS提取到atom_stuck_detect（2026-11-01：`detectTrapped` 纯查询；task_follow 净删 111 行；判据原样保留，两条已知弱点写进原子注释）
+  - [x] 自救交给skill_escape（已在 2026-10-27 就是这么做的；2026-11-01 又按契约整改了 skill_escape 本身）
   - [ ] 删除直接setGoal/setMovements
 
 - [ ] task_collect.js + skill_collect.js
