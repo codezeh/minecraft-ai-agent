@@ -21,6 +21,7 @@
 const ARENA_SLOTS = {
     escape: { x: 6000, z: 6000 },
     trapped: { x: 6000, z: 7000 },
+    move: { x: 8000, z: 6000 },
     default: { x: 6000, z: 8000 },
 };
 

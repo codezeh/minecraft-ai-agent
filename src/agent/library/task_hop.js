@@ -1,20 +1,18 @@
 /**
- * 复合：走到目标 —— **薄适配层**（2026-10-27 架构重写）。
+ * 复合：走到目标 —— **薄适配层**（2026-10-27 架构重写，2026-11-01 改为转调 nav_core）。
  *
- * 真正的执行逻辑全在 `executor.walkTo`（唯一任务层）。
- * 这里只做两件事：
- *   ① 保持对外的 `hopTo` 契约不变（goToPlayer / walkTo 都调它）
- *   ② 校验参数、转调 executor
+ * 历史：这一层原来直接转 `executor.walkTo`。Phase 3 之后，"走哪条引擎"这件事
+ * 统一收进 `nav_core.goTo`（3D 库优先、没有就退原生 pathfinder），
+ * 所以这里改成转调它 —— **对外契约一行没变**，3 处调用方（!walkTo / task_follow 两处）
+ * 都不用改。
  *
- * 为什么保留这一层而不是直接让调用方调 executor：
- *   外面还有 3 处调用 `hopTo`（task_follow 两处、actions.js 一处），
- *   保留同名入口可以把"导航实现换掉了"这件事**限制在一个文件里**，
- *   调用方一行都不用改。
- *
- * 旧实现（567 行、四条互相兜底的链路）已删，备份在分支 nav-legacy-backup。
+ * 为什么还留着这个文件而不是让调用方直接调 nav_core：
+ *   ① `hopTo` 这个名字在 3 个调用点里已经稳定，改名只是制造 diff
+ *   ② 它是一处**收口**：以后换导航实现，改这一个文件就够
  */
 import { ok, fail } from './atom_contract.js';
-import { walkTo, describeStore } from './executor.js';
+import { goTo } from './nav_core.js';
+import { describeStore } from './executor.js';
 
 /**
  * 走到目标。
@@ -33,7 +31,8 @@ export async function hopTo(bot, dest, opts = {}) {
     }
     if (bot.interrupt_code) return fail('INTERRUPTED', '被取消了');
 
-    return walkTo(bot, { x: dest.x, z: dest.z }, { mapDir, onEvent, deadlineMs, arriveTol, rescan });
+    // 引擎选择交给 nav_core（给了 mapDir → 走 3D walkTo，与改造前完全一致）
+    return goTo(bot, { x: dest.x, z: dest.z }, { mapDir, onEvent, deadlineMs, arriveTol, rescan });
 }
 
 /** 3D 库概况（诊断用）。 */
