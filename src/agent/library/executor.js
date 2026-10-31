@@ -31,6 +31,7 @@ import { collectSilent as tracePush } from './trace_bus.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
 import { movedEnough, realMove } from './atom_stuck_detect.js';
 import { pillarUpOnce } from './atom_pillar.js';
+import { pauseGoalModes, restoreGoalModes } from './task_modes.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -555,29 +556,19 @@ export async function walkTo(bot, dest, opts = {}) {
     // 而她"走不动"这件事 walkTo 本来就会处理：重规划、recordFail 记失败点、
     // 振荡检测换路。unstuck 在上面再插一脚纯属重复，代价是丢掉全部进度。
     //
-    // GOAL_MODES 里本来就含 unstuck / elbow_room（task_modes.js 注释写着
-    // "会 moveAway，是跟随失败的直接原因"），只是 executor 一直没调用。
-    // 现在补上，结束后恢复原状。
-    const pausedModes = (() => {
-        try {
-            const mod = bot?.modes;
-            if (!mod?.pause) return null;
-            const prev = {};
-            for (const name of ['item_collecting', 'torch_placing', 'idle_staring', 'hunting', 'unstuck', 'elbow_room']) {
-                prev[name] = mod.isPaused?.(name) ?? false;
-                mod.pause?.(name);
-            }
-            return prev;
-        } catch { return null; }      // 裸 bot（测试脚本）没有 modes
-    })();
-    const restoreModes = () => {
-        if (!pausedModes) return;
-        try {
-            for (const [name, wasPaused] of Object.entries(pausedModes)) {
-                if (!wasPaused) bot.modes.unpause?.(name);
-            }
-        } catch { /* ignore */ }
-    };
+    // ★ 2026-11-01：mode 清单不再在这里写第二份。
+    //
+    // 这一段原来硬编码了 6 个 mode 名（item_collecting / torch_placing / idle_staring /
+    // hunting / unstuck / elbow_room），而 `task_modes.GOAL_MODES` 里就是同一份清单 ——
+    // 正是 §3.2 记的「mode 列表三套」的残留。现在只留一个真相：
+    // pauseGoalModes / restoreGoalModes（task_modes.js）。
+    //
+    // 为什么要暂停它们（原注释保留）：实测长规划第 1~7 轮稳定推进 64 格，随后 unstuck
+    // 判定"20 秒内移动 <2 格"，直接 interrupts:['all'] 打断任务，还 moveAway(5) 把她挪走
+    // —— 结果 hopTo 返回 INTERRUPTED，走了 103 格的前功尽弃。而"走不动"walkTo 本来就会
+    // 处理（重规划 / recordFail / 振荡检测换路），unstuck 在上面再插一脚纯属重复。
+    const pausedModes = pauseGoalModes(bot);
+    const restoreModes = () => restoreGoalModes(bot, pausedModes);
 
     let rounds = 0, scans = 0, stepsDone = 0, distMoved = 0;
     let lastPos = { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z };
