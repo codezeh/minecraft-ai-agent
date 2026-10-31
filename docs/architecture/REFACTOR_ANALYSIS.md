@@ -420,6 +420,29 @@ async function skillName(bot, goal, context = {}) {
 > flat 7652ms / stairs 8486ms / wall 6414ms / gap 6768ms / long 18014ms，
 > 明细 `tmp/bench/2026-10-31-move-walkto.jsonl`。
 > **改后 Y（同一套 bench 走 goTo，5 轮）**：25/25，耗时全在噪声内（±10%）。
+>
+> **逐 action 基线（拆 executor 的对照基准，11 场景 × 10 轮 = 99/110）**：
+>
+> | 场景 | 成功率 | 平均耗时 | 动作 |
+> |---|---|---|---|
+> | walk-flat | 10/10 | 7666ms | walk |
+> | jump-up1 | 10/10 | 6587ms | walk |
+> | pillar-up2 | 10/10 | 8674ms | walk+jump |
+> | down1 | 10/10 | 6741ms | walk+down |
+> | **down5** | **0/10** | 2778ms | walk —— **稳定 NO_PATH，maxDrop=4 的能力边界** |
+> | **dig-through** | **9/10** | 6332ms | walk+dig |
+> | digdown | 10/10 | 12969ms | walk+jump+down |
+> | climb-ladder | 10/10 | 21958ms | walk+dig+climb |
+> | climb-vine | 10/10 | 2256ms | walk+dig+climb |
+> | water-cross | 10/10 | 27304ms（16~57s 波动大） | walk+down |
+> | gap-bridge | 10/10 | 8048ms | walk+down |
+>
+> 明细 `tmp/bench/2026-10-31-move-actions.jsonl`。
+> 失败码仅 `NO_PATH`×11。**拆 executor 之后必须逐行对比这张表。**
+>
+> 基线暴露、属于 Phase 3 要修的：`climb-ladder` 每次都是 22s，且日志必然出现一次
+> `步7 walk 失败: STUCK 连续 20 秒没靠近（还差 0.7 格）` —— 规划先给了一个走不到的
+> walk 步，白等 20 秒才重规划（walk 分支对垂直目标处理不当）。
 
 - [x] 新增 nav_core.js - goTo统一入口
       — 三引擎按输入选：有 mapDir→walkTo(3D)、给了 y→moveTo、只有 x/z→moveToXZ。
