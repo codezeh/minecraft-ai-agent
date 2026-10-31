@@ -78,7 +78,13 @@ const IS_LIQUID = /^(water|kelp|seagrass|bubble_column|lava)$/;
  * @param {{x,y,z,action}} step 路径点
  * @returns {Promise<{ok:boolean, code?:string, message?:string}>}
  */
-async function execStep(bot, step, opts = {}) {
+/**
+ * 执行单步。
+ *
+ * 导出是为了能单测：D2（挖邻列忽略 x/z）只能在这一层验证——
+ * 规划层给出 step.x/z，执行层是否照做，中间没有别的可观察点。
+ */
+export async function execStep(bot, step, opts = {}) {
     const { onEvent: userOnEvent = () => { } } = opts;
     // 同 walkTo：替身转发，保证原子层事件也进 trace_bus
     const onEvent = (e) => {
@@ -155,23 +161,38 @@ async function execStep(bot, step, opts = {}) {
     // 那条路本来就不可能走通。现在直接判死，让上层立刻换路。
     if (step.action === 'dig' || step.action === 'digdown') {
         const probeB = blockAt(bot, Math.floor(step.x), Math.floor(step.y), Math.floor(step.z));
-        if (probeB && !canDigWithInventory(bot, probeB)) {
+        // 目标格已经是空气 → 没有"挖不动"这回事，别报 NO_TOOL
+        // （旧代码对空气也做工具检查，于是 air → canDigWithInventory=false → NO_TOOL「挖不动 air」）
+        if (probeB && !IS_AIR.has(probeB.name) && !canDigWithInventory(bot, probeB)) {
             return { ok: false, code: 'NO_TOOL',
                 message: `挖不动 ${probeB.name}（背包里没有合适的工具）` };
         }
     }
 
     if (step.action === 'dig') {
-        // 需要先挖掉头顶的方块才能上去
-        const bx = Math.floor(p.x), bz = Math.floor(p.z);
+        // ★ D2 修复（2026-10-31）：**按步骤自己的列挖，不是按当前列挖**。
+        //
+        // path_3d 会生成"挖邻列"的 dig 边（path_3d.js:427-452，相邻 4 向、落差 ≤40），
+        // 但这些步骤的 (step.x, step.z) 是**目标列**。旧代码用的是
+        // `Math.floor(p.x) / Math.floor(p.z)`（当前位置 = 自己这一列），
+        // 于是：规划要挖邻列 → 实际挖的是自己头顶 → 邻列根本没通，
+        // 下一轮又规划同一条边，表现为反复挖同一处、原地不动。
+        const bx = Math.floor(step.x), bz = Math.floor(step.z);
+        const curX = Math.floor(p.x), curZ = Math.floor(p.z);
+        const sameColumn = (bx === curX && bz === curZ);
+
         let y = Math.floor(p.y);
         const targetY = step.y;
         let dug = 0;
+        let liquidBlocked = false;
         while (y < targetY && dug < 32) {
             const above = blockAt(bot, bx, y + 1, bz);
             if (!above) break;
             if (IS_LIQUID.test(above.name)) {
-                // 头顶是水：不要去"挖"，跳上去就行
+                // 头顶是液体：不该"挖"，该"穿过"。但**不能因此报成功**——
+                // 旧代码在这里 break 后照样 return ok({dug})，
+                // 上层以为她已经上去了，实际停在原地（"液体头顶假成功"）。
+                liquidBlocked = true;
                 break;
             }
             if (!IS_AIR.has(above.name)) {
@@ -184,15 +205,28 @@ async function execStep(bot, step, opts = {}) {
                     return { ok: false, code: r.code ?? 'DIG_FAIL', message: `挖 ${above.name} 失败` };
                 }
                 dug++;
-                onEvent({ type: 'dig', y: y + 1, name: above.name });
+                onEvent({ type: 'dig', x: bx, z: bz, y: y + 1, name: above.name });
+            }
+            if (!sameColumn) {
+                // 邻列：只负责把那一列挖通，站位交给后续的 walk 步骤。
+                // 在这里 stepUp 会把她垫到**自己**这一列上，反而离目标更远。
+                y += 1;
+                continue;
             }
             // 跳上一层（脚下垫方块）
             const moved = await stepUp(bot, { onEvent });
             if (!moved.ok) return moved;
             y = Math.floor(bot.entity.position.y);
-            if (dug > 0 && y < targetY - 1 && dug >= 32) break;
         }
-        return ok({ dug });
+
+        if (sameColumn && y < targetY) {
+            // 没到目标高度就别说 ok（假成功会让上层停止重规划并原地卡住）
+            if (liquidBlocked) {
+                return { ok: false, code: 'BLOCKED', message: `头顶是液体，挖不上去（目标 y=${targetY}，当前 y=${y}）` };
+            }
+            return { ok: false, code: 'NO_REACH', message: `只挖到 y=${y}（目标 y=${targetY}）` };
+        }
+        return ok({ dug, column: { x: bx, z: bz } });
     }
 
     // ---- 向下（挖下去）----
