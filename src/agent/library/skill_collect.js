@@ -18,6 +18,7 @@ import { surveyTrees } from './collect_planner.js';
 import { scanTree, judgeTree, planFelling } from './atom_tree.js';
 import { tunnelStep, findDryClimbColumn } from './atom_tunnel.js';
 import { classifyLog, isProtected } from './atom_classify.js';
+import { protectedPlaces } from './landmarks.js';
 import { findStandSpot } from './atom_stand.js';
 import { blockAt } from './atom_perceive.js';
 import { digBlock } from './atom_dig.js';
@@ -108,12 +109,14 @@ export function planCollect(bot, opts = {}) {
         }
 
         // 逐格过闸门（保护判定 + 跳过已挖的）
+        // 地标只取一次（加载 + 60s 缓存都在数据层 landmarks.protectedPlaces）
+        const guardSpots = protectedPlaces(bot);
         const cells = [];
         for (const pos of ordered) {
             const k = `${pos.x},${pos.y},${pos.z}`;
             if (skip.has(k)) continue;
 
-            const guard = isProtected(bot, pos);
+            const guard = isProtected(pos, { spots: guardSpots });
             if (guard.ok && guard.data.protectedBy) {
                 skipped.push({ pos, why: 'protected' });
                 continue;

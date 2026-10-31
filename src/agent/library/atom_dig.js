@@ -63,22 +63,20 @@ export async function digBlock(bot, pos, opts = {}) {
         if (supported) {
             bot.entity.onGround = true;   // 修正标志，让 bot.dig 能开始
         } else {
-            // 真的悬空：蹬一下触发落地，再判一次
-            let grounded = false;
-            for (let attempt = 0; attempt < 3 && !grounded; attempt++) {
-                try {
-                    bot.setControlState('forward', true);
-                    await sleep(120);
-                    bot.setControlState('forward', false);
-                    await sleep(200);
-                } catch { /* ignore */ }
-                grounded = bot.entity?.onGround === true;
-            }
-            if (!grounded) {
-                return fail('BLOCKED', '现在悬空，先落地再挖', {
-                    block: block.name, pos: { x: v.x, y: v.y, z: v.z },
-                });
-            }
+            // ★ 原子层规范化（2026-10-31）：**不再按键去"蹬一下"**。
+            //
+            // 旧代码在这里 for 循环 3 次 `setControlState('forward')`，指望物理引擎
+            // 把她抖落到地面。两个问题：
+            //   1. 契约不允许原子直接按键（按键必须经原子封装，见
+            //      ARCHITECTURE_REDESIGN §6.6）；换位置/落地是移动原子的事。
+            //   2. 真的悬空（脚下是空气/水/岩浆）时按"前进"并不能救人，
+            //      它只是把"我挖不了"这件事拖成 960ms 的副作用。
+            //
+            // 该走的路是老实返回 BLOCKED，让上层（executor / skill_escape）决定
+            // 是挖上去、垫下去还是换目标 —— 那才是它们的信息与职责。
+            return fail('BLOCKED', '现在悬空（脚下没有可站立的方块），先落地再挖', {
+                block: block.name, pos: { x: v.x, y: v.y, z: v.z },
+            });
         }
     }
 

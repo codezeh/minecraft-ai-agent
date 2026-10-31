@@ -50,6 +50,46 @@ export function loadLandmarks(bot) {
     };
 }
 
+/**
+ * 受保护地点列表（家 / 仓库 / 箱子）。
+ *
+ * 为什么放在这一层：这是**读盘 + 缓存**，属于数据层的事。
+ * 原来它埋在 `atom_classify.isProtected` 里，用一个模块级可变变量
+ * `landmarkCache` 缓存 —— 既违反"原子不读写全局状态"（ARCHITECTURE_REDESIGN §6.1），
+ * 又会让多个 bot 共用同一份缓存（谁先读谁的数据就是谁的）。
+ *
+ * 现在：按 bot 分别缓存（WeakMap），原子只接收算好的列表。
+ *
+ * @param {object} bot
+ * @param {{ttlMs?:number}} opts
+ * @returns {Array<{x:number,y:number,z:number}>}
+ */
+const PROTECTED_CACHE = new WeakMap();   // bot -> { at, spots }
+
+export function protectedPlaces(bot, opts = {}) {
+    const { ttlMs = 60000 } = opts;
+    const now = Date.now();
+    const hit = PROTECTED_CACHE.get(bot);
+    if (hit && now - hit.at < ttlMs) return hit.spots;
+
+    const spots = [];
+    try {
+        const lm = loadLandmarks(bot);
+        for (const c of lm.chests || []) if (c?.pos) spots.push(c.pos);
+        for (const s of lm.sites || []) if (s?.pos) spots.push(s.pos);
+        if (lm.storage?.pos) spots.push(lm.storage.pos);
+    } catch { /* 没有地标数据就不保护（新存档常见） */ }
+
+    PROTECTED_CACHE.set(bot, { at: now, spots });
+    return spots;
+}
+
+/** 测试用：清掉某个 bot 的地标缓存（不传就清不了弱引用，只能等 GC） */
+export function resetProtectedCache(bot) {
+    if (bot) PROTECTED_CACHE.delete(bot);
+}
+
+
 function saveLandmarks(bot, data) {
     ensureMigrated(bot);
     let ok = true;

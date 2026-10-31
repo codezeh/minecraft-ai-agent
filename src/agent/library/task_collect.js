@@ -17,8 +17,9 @@ import { runSteps } from './step_runner.js';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const key = (p) => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
 
-// classifyLog / isProtected / protectedSpots 已上提到 atom_classify.js
-// （它们是纯查询判断，能单独跑、能单独测 → 属于原子层，规划 §6）
+// classifyLog / isProtected 已上提到 atom_classify.js（纯查询判断，能单独跑、能单独测）
+// 注意：地标"加载 + 缓存"在数据层 landmarks.protectedPlaces(bot)，
+// 原子只接收算好的列表（原子不许读全局状态/读盘，见 ARCHITECTURE_REDESIGN §6.1）
 
 export async function collect(bot, name, want, opts = {}) {
     const {

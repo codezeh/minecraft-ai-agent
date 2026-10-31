@@ -10,7 +10,6 @@
  */
 import { ok, fail } from './atom_contract.js';
 import { blockAt } from './atom_perceive.js';
-import { loadLandmarks } from './landmarks.js';
 
 // ---------------------------------------------------------------------------
 // 「这是天然树还是房子」
@@ -91,49 +90,30 @@ export function classifyLog(bot, pos, opts = {}) {
 
 const withinBox = (a, b, r) => Math.abs(a.x - b.x) <= r && Math.abs(a.y - b.y) <= r && Math.abs(a.z - b.z) <= r;
 
-/** 缓存 60 秒：地标数据不常变，但每次判断都读盘会拖慢扫描 */
-let landmarkCache = null;
-let landmarkCacheAt = 0;
-
-/** 记住的地点列表（缓存）。 */
-export function protectedSpots(bot, opts = {}) {
-    const { ttlMs = 60000 } = opts;
-    const now = Date.now();
-    if (landmarkCache && now - landmarkCacheAt < ttlMs) return landmarkCache;
-
-    const spots = [];
-    try {
-        const lm = loadLandmarks(bot);
-        for (const c of lm.chests || []) if (c?.pos) spots.push(c.pos);
-        for (const s of lm.sites || []) if (s?.pos) spots.push(s.pos);
-        if (lm.storage?.pos) spots.push(lm.storage.pos);
-    } catch { /* 没有地标数据就不保护（新存档常见） */ }
-
-    landmarkCache = spots;
-    landmarkCacheAt = now;
-    return spots;
-}
-
-/** 测试用：清掉地标缓存 */
-export function resetLandmarkCache() {
-    landmarkCache = null;
-    landmarkCacheAt = 0;
-}
-
 /**
  * 这个坐标是否在受保护的地标附近。
  *
+ * ★ 原子层规范化（2026-10-31）：**本函数不再读盘、不再持有缓存**。
+ *
+ * 原来它自己 `loadLandmarks(bot)` 并用模块级变量 `landmarkCache` 缓存 60 秒。
+ * 两个毛病（ARCHITECTURE_REDESIGN §6.1 明令禁止）：
+ *   1. 原子读写全局状态 —— 模块级缓存就是全局状态，测试之间会互相污染；
+ *   2. 缓存不区分 bot —— 多 Bot 时后连的那个会读到前一个的地标。
+ * 现在"加载 + 缓存"归数据层 `landmarks.protectedPlaces(bot)`，
+ * 本函数只接收算好的地标列表，是纯判断。
+ *
+ * @param {{x:number,y:number,z:number}} pos
+ * @param {{spots?:Array<{x,y,z}>, radius?:number}} opts
  * @returns ActionResult
  *   ok → data: { protectedBy, radius, spot }（不在受保护范围时 protectedBy 为 null）
  */
-export function isProtected(bot, pos, opts = {}) {
-    const { radius = 6 } = opts;
+export function isProtected(pos, opts = {}) {
+    const { spots = [], radius = 6 } = opts;
     const p = floor(pos);
     if (!p) return fail('INTERNAL', '坐标无效');
 
-    const spots = protectedSpots(bot);
     for (const s of spots) {
-        if (withinBox(s, p, radius)) {
+        if (s && withinBox(s, p, radius)) {
             return ok({ protectedBy: 'landmark', radius, spot: { x: s.x, y: s.y, z: s.z }, pos: p });
         }
     }
