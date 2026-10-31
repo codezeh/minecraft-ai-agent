@@ -32,10 +32,10 @@
 
 本仓库带一套比较完整的工程记录，写的是**为什么这么设计、试过哪些不行的方案、踩了什么坑**：
 
-- [`docs/交接文档.md`](docs/交接文档.md) —— 现状、能力清单、遗留问题（**接手请先读这个**）
-- [`docs/自研申报.md`](docs/自研申报.md) —— 每个自研模块的申报：问题、检索过的候选方案、为什么选它
-- [`docs/经验教训.md`](docs/经验教训.md) —— 踩过的坑与实测数据
-- [`docs/README.md`](docs/README.md) —— 文档索引
+- [`docs/交接文档.md`](../交接文档.md) —— 现状、能力清单、遗留问题（**接手请先读这个**）
+- [`docs/自研申报.md`](../自研申报.md) —— 每个自研模块的申报：问题、检索过的候选方案、为什么选它
+- [`docs/经验教训.md`](./经验教训.md) —— 踩过的坑与实测数据
+- [`docs/README.md`](../README.md) —— 文档索引
 
 ### 本地私有配置不在此仓库
 
@@ -69,7 +69,7 @@ Do not connect this bot to public servers with coding enabled. This project allo
 > [!Important]
 > If installing node on windows, ensure you check `Automatically install the necessary tools`
 >
-> If you encounter `npm install` errors on macOS, see the [FAQ](FAQ.md#common-issues) for troubleshooting native module build issues
+> If you encounter `npm install` errors on macOS, see the [FAQ](../../FAQ.md#common-issues) for troubleshooting native module build issues
 
 ## Install and Run
 
@@ -85,7 +85,7 @@ Do not connect this bot to public servers with coding enabled. This project allo
 
 6. Run `node main.js` from the installed directory
 
-If you encounter issues, check the [FAQ](https://github.com/mindcraft-bots/mindcraft/blob/main/FAQ.md) or find support on [discord](https://discord.gg/mp73p35dzC). We are currently not very responsive to github issues. To run tasks please refer to [Minecollab Instructions](minecollab.md#installation)
+If you encounter issues, check the [FAQ](https://github.com/mindcraft-bots/mindcraft/blob/main/FAQ.md) or find support on [discord](https://discord.gg/mp73p35dzC). We are currently not very responsive to github issues. To run tasks please refer to [Minecollab Instructions](../../minecollab.md#installation)
 
 
 # Configuration
@@ -178,7 +178,7 @@ Here is an example task json format:
 
 The `initial_inventory` is what the bot will have at the start of the episode, `target` refers to the target item and `number_of_target` refers to the number of target items the agent needs to collect to successfully complete the task. 
 
-If you want more optimization and automatic launching of the minecraft world, you will need to follow the instructions in [Minecollab Instructions](minecollab.md#installation)
+If you want more optimization and automatic launching of the minecraft world, you will need to follow the instructions in [Minecollab Instructions](../../minecollab.md#installation)
 
 ## Docker Container
 
@@ -198,7 +198,7 @@ When running in docker, if you want the bot to join your local minecraft server,
 "host": "host.docker.internal", // instead of "localhost", to join your local minecraft from inside the docker container
 ```
 
-To connect to an unsupported minecraft version, you can try to use [viaproxy](services/viaproxy/README.md)
+To connect to an unsupported minecraft version, you can try to use [viaproxy](../README.md)
 
 # Bot Profiles
 
