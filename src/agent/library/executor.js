@@ -24,14 +24,13 @@ import Vec3 from 'vec3';
 import { ok, fail } from './atom_contract.js';
 import { moveToXZ } from './atom_move.js';
 import { digBlock, isDiggable, canDigWithInventory } from './atom_dig.js';
-import { equipItem } from './atom_items.js';
-import { placeBlockAt } from './atom_place.js';
 import { climbUp, climbDown, isClimbable } from './atom_climb.js';
 import { scanSphere, stats3d, columnSurfaces, T } from './terrain3d.js';
 import { plan3D } from './path_3d.js';
 import { collectSilent as tracePush } from './trace_bus.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
 import { movedEnough, realMove } from './atom_stuck_detect.js';
+import { pillarUpOnce } from './atom_pillar.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -498,33 +497,23 @@ async function stepUp(bot, opts = {}) {
     }
 
 
+    // 重试 3 次：每次是一次**原子尝试**（atom_pillar.pillarUpOnce）。
+    // 原来这里的起跳/换手/放方块是手写的，而 skill_escape 又抄了一份
+    // （等 0.9 格、放完 300ms）——两处细节已经开始不一样。现在只有原子那一份。
+    let lastFail = null;
     for (let attempt = 0; attempt < 3; attempt++) {
-        // 起跳
-        try { bot.setControlState('jump', true); } catch { /* ignore */ }
-
-        // 等接近跳跃顶点（脚要抬过 y+1，方块那格才真空出来）
-        let lifted = false;
-        for (let w = 0; w < 16; w++) {
-            await sleep(25);
-            if (bot.entity.position.y > y0 + 0.95) { lifted = true; break; }
+        const r = await pillarUpOnce(bot, { item: scaffold, settleMs: 450 });
+        onEvent({ type: 'pillar-attempt', attempt: attempt + 1, ok: r.ok, code: r.code, placeResult: r.data?.placeResult });
+        if (r.ok) {
+            return ok({ fromY: r.data?.fromY ?? y0, toY: r.data?.toY ?? bot.entity.position.y, attempts: attempt + 1 });
         }
-
-        if (lifted) {
-            const eq = await equipItem(bot, scaffold);
-            if (eq.ok) {
-                const pr = await placeBlockAt(bot, { kind: 'block', pos: feet }, scaffold);
-                onEvent({ type: 'place', ok: pr.ok, code: pr.code, y: feet.y });
-            }
-        }
-        try { bot.setControlState('jump', false); } catch { /* ignore */ }
-        await sleep(450);
-
-        if (bot.entity.position.y > y0 + 0.7) {
-            return ok({ fromY: y0, toY: bot.entity.position.y });
-        }
+        lastFail = r;
+        if (r.code === 'INTERRUPTED') return r;
     }
 
-    return fail('STUCK', `跳上 y=${feet.y + 1} 失败（停在 ${bot.entity.position.y.toFixed(1)}）`);
+    return fail('STUCK', `跳上 y=${feet.y + 1} 失败（停在 ${bot.entity.position.y.toFixed(1)}）`, {
+        attempts: 3, lastCode: lastFail?.code, lastMessage: lastFail?.message,
+    });
 }
 
 /**
