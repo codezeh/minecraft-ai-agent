@@ -60,6 +60,33 @@ export async function fillSafe(RC, x0, y0, z0, x1, y1, z1, block) {
 }
 
 /**
+ * 传送 + **读回校验**。
+ *
+ * ★ 踩过的坑（2026-11-01）：`tp` 偶发不生效（实测约 1/20），
+ *   表现是"目标还剩 5737 格"——看起来像导航崩了，其实是人没过去。
+ *   这种噪声会直接污染基线数据，所以必须校验：
+ *   发完 tp 轮询她的真实位置，3 次不对就明确返回 false，让调用方跳过这条。
+ *
+ * @returns {Promise<boolean>} 是否确认到位
+ */
+export async function tpSafe(RC, bot, name, x, y, z, opts = {}) {
+    const { tol = 2.0, tries = 3, waitMs = 1200 } = opts;
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < tries; i++) {
+        try { await RC(`tp ${name} ${x + 0.5} ${y} ${z + 0.5}`); } catch { /* 下轮再试 */ }
+        const t0 = Date.now();
+        while (Date.now() - t0 < waitMs) {
+            await sleep(150);
+            const p = bot.entity?.position;
+            if (p && Math.abs(p.x - (x + 0.5)) < tol && Math.abs(p.y - y) < tol + 1 && Math.abs(p.z - (z + 0.5)) < tol) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * 租一块远处的场地。
  *
  * @param {(cmd:string)=>Promise<any>} RC rcon 调用函数

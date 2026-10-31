@@ -37,7 +37,7 @@ import Vec3 from 'vec3';
 import { mkdirSync, appendFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { rcon } from './rcon.mjs';
-import { rentArena, fillSafe } from './arena.mjs';
+import { rentArena, fillSafe, tpSafe } from './arena.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { walkTo } from '../src/agent/library/executor.js';
 import { scanSphere, closeDb3d } from '../src/agent/library/terrain3d.js';
@@ -143,7 +143,7 @@ bot.once('spawn', async () => {
         },
         // ── down（高处往下 5 格）────────────────────────────────────────
         {
-            name: 'down5', want: ['down', 'walk'],
+            name: 'down5', want: ['down', 'walk'], deadlineMs: 120000,
             build: async () => {
                 await reset();
                 // 5 格高台，往下跳到地面
@@ -198,7 +198,7 @@ bot.once('spawn', async () => {
         },
         // ── 水（游泳横渡）──────────────────────────────────────────────
         {
-            name: 'water-cross', want: ['walk'],
+            name: 'water-cross', want: ['walk'], deadlineMs: 120000,
             build: async () => {
                 await reset();
                 // 5 格宽、2 格深的水池
@@ -235,10 +235,11 @@ bot.once('spawn', async () => {
         //   （第一版就是先扫后传，前 5 个场景全假失败。）
         const sx0 = AX + sc.start.dx, sz0 = AZ + sc.start.dz;
         const sy0 = S + (sc.start.up ?? 0);
-        await RC(`tp ${NAME} ${sx0 + 0.5} ${sy0} ${sz0 + 0.5}`);
+        const tpOk0 = await tpSafe(RC, bot, NAME, sx0, sy0, sz0);
         const loaded = await waitLoaded(sx0, sy0, sz0);
-        if (!loaded) {
-            console.log(`  SKIP ${sc.name}: 场地区块没加载（tp 可能没生效）`);
+        if (!tpOk0 || !loaded) {
+            console.log(`  SKIP ${sc.name}: 传送未确认（tpOk=${tpOk0} loaded=${loaded}）`);
+            continue;   // 不污染基线：传送没确认就整条跳过
         }
         // 起点合法性：脚下要实心、身上要是空。不合法就直接说清，别甩 NO_START 让人猜
         const bBelow = bot.blockAt(new Vec3(sx0, sy0 - 1, sz0));
@@ -277,7 +278,11 @@ bot.once('spawn', async () => {
         for (let round = 1; round <= ROUNDS; round++) {
             const sx = AX + sc.start.dx, sz = AZ + sc.start.dz;
             const dx = AX + sc.dest.dx, dz = AZ + sc.dest.dz;
-            await RC(`tp ${NAME} ${sx + 0.5} ${S + (sc.start.up ?? 0)} ${sz + 0.5}`);
+            const tpOk = await tpSafe(RC, bot, NAME, sx, S + (sc.start.up ?? 0), sz);
+            if (!tpOk) {
+                console.log(`  SKIP ${sc.name} #${round}: 传送未确认`);
+                continue;
+            }
             await waitLoaded(sx, S + (sc.start.up ?? 0), sz);
             await sleep(400);
             const before = here();
@@ -285,7 +290,7 @@ bot.once('spawn', async () => {
             // 每个场景用自己的库（避免上一个场景的地形数据串味）
             const liveMapDir = join('tmp', 'bench-actions-map', sc.name);
             const t0 = Date.now();
-            const r = await walkTo(bot, { x: dx, z: dz }, { mapDir: liveMapDir, deadlineMs: 60000, arriveTol: 2 });
+            const r = await walkTo(bot, { x: dx, z: dz }, { mapDir: liveMapDir, deadlineMs: sc.deadlineMs ?? 60000, arriveTol: 2 });
             const ms = Date.now() - t0;
             const after = here();
             const remain = Math.hypot(dx - after.x, dz - after.z);
