@@ -28,28 +28,16 @@ import { equipItem } from './atom_items.js';
 import { canStand } from './atom_stand.js';
 import { moveTo } from './atom_move.js';
 import { blockAt } from './atom_perceive.js';
+import { findScaffoldItem } from './scaffold_blocks.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-/** 可以拿来垫脚的方块（与 atom_move.makeMovements 的清单一致）。 */
-const SCAFFOLD = [
-    'dirt', 'cobblestone', 'oak_planks', 'spruce_planks', 'birch_planks',
-    'stone', 'andesite', 'diorite', 'granite', 'deepslate', 'sand', 'gravel', 'netherrack',
-];
+/** 可以拿来垫脚的方块见 scaffold_blocks.js（D8：清单原来散在 4 处且互不一致）。 */
 
 /** 挖不动的（别白试）。 */
 const UNBREAKABLE = new Set([
     'bedrock', 'barrier', 'command_block', 'end_portal_frame', 'obsidian', 'reinforced_deepslate',
 ]);
-
-/** 背包里第一个可用的垫脚方块名，没有返回 null。 */
-export function findScaffoldItem(bot) {
-    for (const it of bot.inventory?.items?.() ?? []) {
-        if (!it || !(it.count > 0)) continue;
-        if (SCAFFOLD.includes(it.name)) return it.name;
-    }
-    return null;
-}
 
 /** pos 那格是不是空的（能穿过去）。 */
 function isAirAt(bot, pos) {

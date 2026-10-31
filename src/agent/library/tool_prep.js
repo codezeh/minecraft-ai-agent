@@ -12,6 +12,9 @@
 import { countItem } from './atom_perceive.js';
 import Vec3 from 'vec3';                 // bot.blockAt 必须传 Vec3（交接文档 §7.2 记过）
 import pf from 'mineflayer-pathfinder';  // 捡掉落物时要用 GoalNear
+import { countScaffold } from './scaffold_blocks.js';
+
+export { countScaffold };
 
 const AXE_PRIORITY = [
     'diamond_axe', 'iron_axe', 'stone_axe', 'golden_axe', 'wooden_axe', 'netherite_axe',
@@ -84,17 +87,7 @@ export async function ensureAxe(bot, opts = {}) {
 // 她有铁镐，挖石头是最擅长的事 —— 这比"放弃"合理得多。
 // ---------------------------------------------------------------------------
 
-/** 可以拿来垫脚的方块（与 atom_move.makeMovements 的清单保持一致）。 */
-const SCAFFOLD_RE = /^(dirt|grass_block|cobblestone|stone|andesite|diorite|granite|deepslate|sand|gravel|netherrack)$|(_planks|_log)$/;
-
-/** 现在背包里有多少可垫脚的方块。 */
-export function countScaffold(bot) {
-    let n = 0;
-    for (const it of bot.inventory?.items?.() ?? []) {
-        if (it && it.count > 0 && SCAFFOLD_RE.test(it.name)) n += it.count;
-    }
-    return n;
-}
+/** 可以拿来垫脚的方块见 scaffold_blocks.js（D8：清单原来散在 4 处且互不一致）。 */
 
 /**
  * 保证背包里有至少 need 个可垫脚方块；不够就**就地挖**。

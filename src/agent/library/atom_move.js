@@ -9,6 +9,7 @@
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import { ok, fail, normalizeTarget } from './atom_contract.js';
+import { scaffoldBlockIds } from './scaffold_blocks.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -73,14 +74,7 @@ export function makeMovements(bot, { canDig = false, scaffold = false, allowVine
     // skills.js 的 buildMovements 早就按背包实际方块建清单了，这套（path_short/hopTo 走的）
     // 一直漏着 —— 又是「同一件事两个真相」。
     if (scaffold) {
-        const GOOD_SCAFFOLD = /^(dirt|grass_block|cobblestone|stone|andesite|diorite|granite|deepslate|sand|gravel|netherrack)$|(_planks|_log)$/;
-        const items = bot.inventory?.items?.() ?? [];
-        const ids = [];
-        for (const it of items) {
-            if (!it || !(it.count > 0) || !GOOD_SCAFFOLD.test(it.name)) continue;
-            const id = bot.registry?.blocksByName?.[it.name]?.id;
-            if (id != null && !ids.includes(id)) ids.push(id);
-        }
+        const ids = scaffoldBlockIds(bot);
         if (ids.length) {
             m.scafoldingBlocks = ids;
         } else {

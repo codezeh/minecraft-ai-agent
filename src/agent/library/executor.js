@@ -30,6 +30,7 @@ import { climbUp, climbDown, isClimbable } from './atom_climb.js';
 import { scanSphere, stats3d, columnSurfaces, T } from './terrain3d.js';
 import { plan3D } from './path_3d.js';
 import { collectSilent as tracePush } from './trace_bus.js';
+import { findScaffoldItem } from './scaffold_blocks.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -59,19 +60,7 @@ const LOOK_AHEAD = 16;
 /** 最多重规划轮数。 */
 const MAX_ROUNDS = 120;
 
-/** 可以拿来垫脚的方块。 */
-const SCAFFOLD = [
-    'dirt', 'cobblestone', 'oak_planks', 'spruce_planks', 'birch_planks',
-    'stone', 'andesite', 'diorite', 'granite', 'deepslate', 'sand', 'gravel',
-];
-
-/** 背包里第一个可用垫脚方块。 */
-function findScaffold(bot) {
-    for (const it of bot.inventory?.items?.() ?? []) {
-        if (it && it.count > 0 && SCAFFOLD.includes(it.name)) return it.name;
-    }
-    return null;
-}
+/** 可以拿来垫脚的方块见 scaffold_blocks.js（D8：清单原来散在 4 处且互不一致）。 */
 
 /** 读某格方块（读不到返回 null）。 */
 function blockAt(bot, x, y, z) {
@@ -412,7 +401,7 @@ async function execStep(bot, step, opts = {}) {
  */
 async function stepUp(bot, opts = {}) {
     const { onEvent = () => { } } = opts;
-    const scaffold = findScaffold(bot);
+    const scaffold = findScaffoldItem(bot);
     if (!scaffold) return fail('NO_ITEM', '没有可垫脚的方块');
 
     const y0 = bot.entity.position.y;
