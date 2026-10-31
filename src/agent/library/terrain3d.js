@@ -131,6 +131,10 @@ export function openDb3d(baseDir) {
             PRIMARY KEY (x, z, y)
         ) WITHOUT ROWID;
 
+        -- ★ 2026-10-31：fail 表按 last_at 做 TTL 过滤，必须有索引，
+        -- 否则 readFails 每次都全表扫（越跑越慢）。
+        CREATE INDEX IF NOT EXISTS idx_fail_last_at ON fail(last_at);
+
         -- 区块登记：**只有长宽**（四个角的 x/z），不含高度。
         -- 区块是 16×16 的平面网格，y 不参与区块归属 ——
         -- y 只是"这一列上有哪些面"，属于 surf 表的事。
@@ -151,6 +155,47 @@ export function openDb3d(baseDir) {
 
 /** 语句缓存（WeakMap，避免每次 prepare） */
 const STMTS = new WeakMap();
+
+/**
+ * 连接缓存：**每个库目录只开一次**。
+ *
+ * 改之前每个函数各自 `openDb3d()` → 干活 → `db.close()`：
+ * 一次 `DatabaseSync` 构造 + WAL + 3 条 PRAGMA + 开关文件，
+ * 实测单次查询约 50ms，而游走时每秒要查几十次。
+ *
+ * 现在按「库目录」缓存句柄复用同一连接。语句缓存 `STMTS`（WeakMap，键是 db 实例）
+ * 也因此真正命中了 —— 以前每次都是新 db，`prepare` 一个都没省下来。
+ *
+ * 注意：缓存意味着**进程内不再自动关库**。需要释放/换文件时调 `closeDb3d(baseDir)`。
+ */
+const DB_CACHE = new Map();
+
+/**
+ * 取（或建立）某个库目录的连接。**不要 close 它**。
+ * @param {string} baseDir
+ * @returns {any} DatabaseSync
+ */
+export function dbFor(baseDir) {
+    const key = String(baseDir);
+    const hit = DB_CACHE.get(key);
+    if (hit) return hit;
+    const db = openDb3d(baseDir);
+    DB_CACHE.set(key, db);
+    return db;
+}
+
+/**
+ * 关掉并移除某个库目录的缓存连接（测试/清理用；不影响别的目录）。
+ * @param {string} baseDir
+ */
+export function closeDb3d(baseDir) {
+    const key = String(baseDir);
+    const db = DB_CACHE.get(key);
+    if (!db) return;
+    DB_CACHE.delete(key);
+    try { db.close(); } catch { /* 已关就算了 */ }
+}
+
 function stmts(db) {
     let s = STMTS.get(db);
     if (s) return s;
@@ -166,7 +211,13 @@ function stmts(db) {
         cnt: db.prepare('SELECT COUNT(*) AS n FROM surf'),
         failIns: db.prepare(`INSERT INTO fail (x, z, y, hits, last_at) VALUES (?, ?, ?, 1, ?)
             ON CONFLICT(x, z, y) DO UPDATE SET hits = hits + 1, last_at = excluded.last_at`),
-        failAll: db.prepare('SELECT x, z, y, hits FROM fail'),
+        // ★ 2026-10-31 修：**必须 SELECT last_at，并在 SQL 里做 TTL 过滤**。
+        // 旧语句是 `SELECT x, z, y, hits FROM fail` —— 根本没取 last_at，
+        // 于是 readFails 里的 `now - r.last_at` 恒为 NaN，
+        // `NaN > ttlMs` 恒为 false → **TTL 从来没生效过**，过期记录永久参与加价，
+        // 而且每次都把整表捞出来（"fail 表从不清理"的真正原因）。
+        failLive: db.prepare('SELECT x, z, y, hits, last_at FROM fail WHERE last_at >= ?'),
+        failPrune: db.prepare('DELETE FROM fail WHERE last_at < ?'),
         failClear: db.prepare('DELETE FROM fail WHERE x = ? AND z = ? AND y = ?'),
         chunks: db.prepare('SELECT COUNT(*) AS n FROM chunk_index'),
     };
@@ -209,7 +260,7 @@ export function classifyBlock(name) {
  */
 export function scanSphere(bot, baseDir, center, radius = 32) {
     const t0 = Date.now();
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     const s = stmts(db);
 
     const cx = Math.floor(center.x);
@@ -362,11 +413,9 @@ export function scanSphere(bot, baseDir, center, radius = 32) {
         db.exec('COMMIT');
     } catch (e) {
         try { db.exec('ROLLBACK'); } catch { /* ignore */ }
-        db.close();
         return { cells: 0, columns: 0, ms: Date.now() - t0, chunks: 0, error: e.message };
     }
 
-    db.close();
     return { cells, columns, ms: Date.now() - t0, chunks: touched.size };
 }
 
@@ -375,9 +424,8 @@ export function scanSphere(bot, baseDir, center, radius = 32) {
  * @returns {Array<{y:number, t:number}>}
  */
 export function columnSurfaces(baseDir, x, z) {
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     const rows = stmts(db).col.all(Math.floor(x), Math.floor(z));
-    db.close();
     return rows.map(r => ({ y: r.y, t: r.t }));
 }
 
@@ -386,29 +434,26 @@ export function columnSurfaces(baseDir, x, z) {
  * @returns {Array<{x:number,z:number,y:number,t:number}>}
  */
 export function boxSurfaces(baseDir, x0, z0, x1, z1, yMin = Y_MIN, yMax = Y_MAX) {
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     const rows = stmts(db).box.all(
         Math.floor(Math.min(x0, x1)), Math.floor(Math.max(x0, x1)),
         Math.floor(Math.min(z0, z1)), Math.floor(Math.max(z0, z1)),
         yMin, yMax);
-    db.close();
     return rows;
 }
 
 /** 某格有没有表面记录（= 那个位置有可站立面）。 */
 export function hasSurface(baseDir, x, y, z) {
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     const hit = stmts(db).at.get(Math.floor(x), Math.floor(z), Math.floor(y));
-    db.close();
     return !!hit;
 }
 
 /** 统计（给诊断用）。 */
 export function stats3d(baseDir) {
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     const s = stmts(db);
     const out = { cells: s.cnt.get().n, chunks: s.chunks.get().n };
-    db.close();
     return out;
 }
 
@@ -425,7 +470,7 @@ export function stats3d(baseDir) {
  */
 export function saveSurfaces(baseDir, cells, opts = {}) {
     if (!cells || !cells.length) return { cells: 0, chunks: 0 };
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     const s = stmts(db);
     const touched = new Map();
 
@@ -443,11 +488,9 @@ export function saveSurfaces(baseDir, cells, opts = {}) {
         db.exec('COMMIT');
     } catch (e) {
         try { db.exec('ROLLBACK'); } catch { /* ignore */ }
-        db.close();
         return { cells: 0, chunks: 0, error: e.message };
     }
 
-    db.close();
     return { cells: cells.length, chunks: touched.size };
 }
 
@@ -455,11 +498,10 @@ export function saveSurfaces(baseDir, cells, opts = {}) {
  * 只清一个区块在本库里的面（重导入前用，避免旧数据残留）。
  */
 export function clearChunk(baseDir, cx, cz) {
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     db.prepare('DELETE FROM surf WHERE x BETWEEN ? AND ? AND z BETWEEN ? AND ?')
         .run(cx * 16, cx * 16 + 15, cz * 16, cz * 16 + 15);
     db.prepare('DELETE FROM chunk_index WHERE cx = ? AND cz = ?').run(cx, cz);
-    db.close();
 }
 
 /**
@@ -474,9 +516,8 @@ export function clearChunk(baseDir, cx, cz) {
  * @param {{now?:number}} opts
  */
 export function recordFail(baseDir, x, y, z, opts = {}) {
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     stmts(db).failIns.run(Math.floor(x), Math.floor(z), Math.floor(y), opts.now ?? Date.now());
-    db.close();
 }
 
 /**
@@ -491,20 +532,37 @@ export function recordFail(baseDir, x, y, z, opts = {}) {
 export function readFails(baseDir, opts = {}) {
     const ttlMs = opts.ttlMs ?? 10 * 60 * 1000;
     const now = opts.now ?? Date.now();
-    const db = openDb3d(baseDir);
-    const rows = stmts(db).failAll.all();
-    db.close();
+    const db = dbFor(baseDir);
+    // TTL 在 SQL 里过滤（走 idx_fail_last_at），不再整表捞出来在内存里筛
+    const rows = stmts(db).failLive.all(now - ttlMs);
     const out = new Map();
     for (const r of rows) {
-        if (now - r.last_at > ttlMs) continue;
+        if (now - r.last_at > ttlMs) continue;   // 双保险：时钟漂移时仍以内存判断为准
         out.set(`${r.x},${r.y},${r.z}`, r.hits);
     }
     return out;
 }
 
+/**
+ * 清掉过期的失败记忆（防止 fail 表无限增长）。
+ *
+ * 为什么需要显式清理：TTL 只在**读**的时候过滤，行本身一直在表里，
+ * 表越大 `failLive` 的扫描代价越高。规划每轮都会 readFails，所以定期删一次。
+ *
+ * @param {string} baseDir
+ * @param {{ttlMs?:number, now?:number}} opts
+ * @returns {number} 删掉的行数
+ */
+export function pruneFails(baseDir, opts = {}) {
+    const ttlMs = opts.ttlMs ?? 10 * 60 * 1000;
+    const now = opts.now ?? Date.now();
+    const db = dbFor(baseDir);
+    const r = stmts(db).failPrune.run(now - ttlMs);
+    return Number(r?.changes ?? 0);
+}
+
 /** 清掉一条失败记忆（成功走到之后调用，避免误封锁）。 */
 export function clearFail(baseDir, x, y, z) {
-    const db = openDb3d(baseDir);
+    const db = dbFor(baseDir);
     stmts(db).failClear.run(Math.floor(x), Math.floor(z), Math.floor(y));
-    db.close();
 }
