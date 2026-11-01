@@ -342,6 +342,27 @@ export async function execStep(bot, step, opts = {}) {
     // 0.8 的含义：只要水平距离进到 0.8 格内就算到位（玩家碰撞箱宽 0.6，
     // 中心差 0.8 格时身体已经盖住目标格）；同时不会像 tol:1 那样"还没走就说到"。
     // 高度校验在后面单独做（不受这个容差影响）。
+    // ★ 2026-11-01 修（基线里 climb-ladder 每次白等 20 秒的根因）：
+    // **已经站在目标格旁边、高度也对了，就直接算到位，不要再交给 pathfinder。**
+    //
+    // 实测（10 轮全复现）：爬梯场景规划出一条 walk 步落到梯子脚下那一格，
+    // 她本来就在 0.7 格外、高度也对，但 `moveToXZ` 的 `GoalNearXZ(tol=0.8)`
+    // 在这个"目标格被梯子占着/进不去"的情形下始终不 resolve →
+    // `isStalled` 等满 20 秒 → 返回 STUCK → 才重规划走 climb。
+    // 于是整个爬梯场景固定 22 秒，其中 20 秒纯粹是空等。
+    //
+    // 判据：水平距离 ≤ 1.0 格（站在目标格内或紧邻）且脚位高度已等于目标。
+    // 1.0 的来历：目标格中心到相邻格中心正好 1.0，所以"≤1.0"就是"不在目标格里就在旁边格"，
+    // 逐格执行时这已经算到位（与 tol:0.8 的意图一致，只是提前判、不必等 pathfinder）。
+    {
+        const nowFeet = Math.floor(bot.entity.position.y);
+        const dXZ = Math.hypot(bot.entity.position.x - step.x, bot.entity.position.z - step.z);
+        if (dXZ <= 1.0 && nowFeet === targetFeetY) {
+            onEvent({ type: 'walk-already-there', x: step.x, y: step.y, z: step.z, dXZ: +dXZ.toFixed(2) });
+            return ok({ walked: 0, alreadyThere: true, distXZ: +dXZ.toFixed(2) });
+        }
+    }
+
     const r = await moveToXZ(bot, { kind: 'point', posXZ: { x: step.x, z: step.z } },
         { tol: 0.8, timeout: 30000 });
 
