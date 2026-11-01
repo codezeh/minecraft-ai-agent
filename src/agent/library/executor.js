@@ -343,22 +343,31 @@ export async function execStep(bot, step, opts = {}) {
     // 中心差 0.8 格时身体已经盖住目标格）；同时不会像 tol:1 那样"还没走就说到"。
     // 高度校验在后面单独做（不受这个容差影响）。
     // ★ 2026-11-01 修（基线里 climb-ladder 每次白等 20 秒的根因）：
-    // **已经站在目标格旁边、高度也对了，就直接算到位，不要再交给 pathfinder。**
+    // **目标格是可攀爬方块（梯子/藤蔓）时，人已经在格里就直接算到位，别交给 pathfinder。**
     //
     // 实测（10 轮全复现）：爬梯场景规划出一条 walk 步落到梯子脚下那一格，
-    // 她本来就在 0.7 格外、高度也对，但 `moveToXZ` 的 `GoalNearXZ(tol=0.8)`
-    // 在这个"目标格被梯子占着/进不去"的情形下始终不 resolve →
-    // `isStalled` 等满 20 秒 → 返回 STUCK → 才重规划走 climb。
+    // 她本来就在 0.7 格外、高度也对，但 moveToXZ 的 GoalNearXZ(tol=0.8)
+    // 在这个"目标格被梯子占着、物理上走不进去"的情形下始终不 resolve →
+    // isStalled 等满 20 秒 → STUCK → 才重规划走 climb。
     // 于是整个爬梯场景固定 22 秒，其中 20 秒纯粹是空等。
     //
-    // 判据：水平距离 ≤ 1.0 格（站在目标格内或紧邻）且脚位高度已等于目标。
-    // 1.0 的来历：目标格中心到相邻格中心正好 1.0，所以"≤1.0"就是"不在目标格里就在旁边格"，
-    // 逐格执行时这已经算到位（与 tol:0.8 的意图一致，只是提前判、不必等 pathfinder）。
+    // ★★ 触发条件必须**窄**——只看距离会伤到别的场景（血泪教训，已 A/B 验证）：
+    //   第一版写成"水平 ≤1.0 就算到位"（相邻格也放行）。结果她没走到目标格就开始
+    //   下一步 jump → 跳不上去 → NO_PATH → 白等 20 秒重规划。同一套基线实测：
+    //     pillar-up2  无守卫 8369ms → 有守卫 14490~20352ms（双峰：7s×6 / 27s×4）
+    //     gap-bridge  出现过"提前到位 → 跳跃落空 → 掉到 y=-181.5（NO_DATA）"
+    //   收紧到 0.8 仍复现（该场景她确实会进到 0.8 内）。
+    //   → 判据必须限定在"**pathfinder 永远解决不了**"的情形：目标格本身走不进去。
+    //     条件 = 目标格可攀爬 + 水平已在格里(≤1.0) + 高度已对。
+    //     普通 walk 目标一律照旧交给 pathfinder，行为零变化。
     {
         const nowFeet = Math.floor(bot.entity.position.y);
         const dXZ = Math.hypot(bot.entity.position.x - step.x, bot.entity.position.z - step.z);
-        if (dXZ <= 1.0 && nowFeet === targetFeetY) {
-            onEvent({ type: 'walk-already-there', x: step.x, y: step.y, z: step.z, dXZ: +dXZ.toFixed(2) });
+        const cellPos = { x: Math.floor(step.x), y: targetFeetY, z: Math.floor(step.z) };
+        const cellBlock = blockAt(bot, cellPos.x, cellPos.y, cellPos.z);
+        const cellClimbable = !!cellBlock && isClimbable(bot, cellPos);
+        if (cellClimbable && dXZ <= 1.0 && nowFeet === targetFeetY) {
+            onEvent({ type: 'walk-already-there', x: step.x, y: step.y, z: step.z, dXZ: +dXZ.toFixed(2), why: 'climbable-cell' });
             return ok({ walked: 0, alreadyThere: true, distXZ: +dXZ.toFixed(2) });
         }
     }
