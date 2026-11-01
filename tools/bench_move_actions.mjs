@@ -48,6 +48,20 @@
  *      plan3D 产出的动作（start/walk/jump/down/dig/climb）。像 `digdown` 这种
  *      **executor 执行期的派生分支**（executor.js:261）必须数执行期事件：
  *      本脚本已把 `onEvent` 接进 walkTo，每行 jsonl 记 `execActions` / `digdownSeen`。
+ *
+ *   4) **传送噪声（tpFlake）单列，不计入通过率分母。**
+ *      `tpSafe` 三次重试后仍可能没把她送到起点（实测过一次：`moved 11456 格 /
+ *      60s TIMEOUT / scan3d×10`，跑的是"从出生点横跨一万格"）。本脚本在**开跑那一刻**
+ *      再核一次起点（偏 >5 格或 Δy >4 即判 tpFlake），跳过该轮并单独计数。
+ *      把它算成失败会稀释基准，让真正的回归看不出来。
+ *
+ * ═══════════════════════════════════════════════════════════════════
+ * ★ 跑之前必做（纪律，2026-11-01 两人各犯过一次）：**先归档上一次的 jsonl**。
+ *
+ *     mv tmp/bench/<日期>-move-actions.jsonl tmp/bench/archive/<日期>-<用途>.jsonl
+ *
+ *   为什么：本脚本是 `appendFileSync` 追加写。不归档就会把上一轮的基线和新数据
+ *   混进同一个文件（实测出现过 110 行 = 两轮各 55 行混在一起，"基线"从此不可信）。
  * ═══════════════════════════════════════════════════════════════════
  *
  * 用法：node tools/bench_move_actions.mjs [每场景轮数]
@@ -256,7 +270,19 @@ bot.once('spawn', async () => {
             name: 'gap-bridge', want: ['dig', 'jump', 'walk'],
             build: async () => {
                 await reset();
+                // ★ 2026-11-01（captain 实测修复）：**沟底必须有地板，否则她会掉出世界**。
+                //
+                // 实测日志：`[23:48:12] ma67453 fell out of the world` —— 原来的沟
+                // 直接挖到 G，而 G 下面是虚空；她搭不过去就掉下去摔死，重生在出生点，
+                // 然后 walkTo 从出生点往 10000 格外走 → 那一轮变成
+                // `moved 11456 格 / 60s TIMEOUT`。
+                //
+                // 这个现象之前被 atoms 和 verify 都归因成"tpFlake（传送没生效）"，
+                // **是错的**：tp 明明生效了，是她在跑的过程中死亡重生。
+                // 场景层修掉：沟底铺一层实心（G-3），掉下去只是"困在坑里"这种正常失败，
+                // 不会死、不会重生、不会产生 1 万格的假位移。
                 await fillSafe(RC, AX - 2, G, AZ - 6, AX + 2, G, AZ + 6, 'air');
+                await fillSafe(RC, AX - 2, G - 3, AZ - 6, AX + 2, G - 3, AZ + 6, 'stone');
             },
             start: { dx: -10, dz: 0 }, dest: { dx: 10, dz: 0 },
         },
@@ -268,6 +294,10 @@ bot.once('spawn', async () => {
     const outFile = join(outDir, `${stamp}-move-actions.jsonl`);
 
     const rows = [];
+    // ★ 2026-11-01：tpFlake 单列，**不计入通过率分母**。
+    // 起因：gap-bridge 出现过 `moved 11456 格 / 60s TIMEOUT`，她根本没被传到起点，
+    // 跑的是"从出生点横跨一万格"。把它算成一次失败会稀释基准，让真正的回归看不出来。
+    const tpFlakes = [];
     for (const sc of scenarios) {
         await sc.build();
         await sleep(700);
@@ -337,11 +367,31 @@ bot.once('spawn', async () => {
             const tpOk = await tpSafe(RC, bot, NAME, sx, S + (sc.start.up ?? 0), sz);
             if (!tpOk) {
                 console.log(`  SKIP ${sc.name} #${round}: 传送未确认`);
+                tpFlakes.push({ scenario: sc.name, round, why: 'tpSafe 返回 false' });
                 continue;
             }
             await waitLoaded(sx, S + (sc.start.up ?? 0), sz);
             await sleep(400);
             const before = here();
+
+            // ★ 2026-11-01（t10 报告 tpFlake 后修）：**开跑前最后一道起点校验**。
+            //
+            // 为什么 tpSafe 不够：`tpSafe` 只判"位置是否落在目标 ±2 格内"，
+            // 但实测出现过一次 `tpSafe` 返回 true、她实际却不在起点的情况
+            // （gap-bridge #1：`moved 11456 格 / 60s TIMEOUT / scan3d×10`，
+            //  后 4 轮同场景全过 `moved 19.8 / 7.7s`）。那一轮跑的是"从出生点横跨一万格"，
+            // 不是 gap-bridge —— 假失败。
+            //
+            // 所以不管什么原因让她不在起点（tp 部分生效 / 物理把她弹走 / 位置守卫回位），
+            // 一律在**开跑那一刻**再核一次。差得远就标 `tpFlake` 并跳过，
+            // **不计入通过率分母**（否则基准会被这种噪声稀释，看不出真正的回归）。
+            const startExpect = { x: sx + 0.5, y: S + (sc.start.up ?? 0), z: sz + 0.5 };
+            const dStart = Math.hypot(before.x - startExpect.x, before.z - startExpect.z);
+            if (dStart > 5 || Math.abs(before.y - startExpect.y) > 4) {
+                tpFlakes.push({ scenario: sc.name, round, dStart: +dStart.toFixed(1), dy: +(before.y - startExpect.y).toFixed(1), at: before });
+                console.log(`  ⊘ TPFLAKE ${sc.name} #${round}: 起点不对（偏 ${dStart.toFixed(1)} 格 / Δy ${(before.y - startExpect.y).toFixed(1)}）—— 本轮跳过，不计入分母`);
+                continue;
+            }
 
             // 每个场景用自己的库（避免上一个场景的地形数据串味）
             const liveMapDir = join('tmp', 'bench-actions-map', sc.name);
@@ -361,6 +411,26 @@ bot.once('spawn', async () => {
             const after = here();
             const remain = Math.hypot(dx - after.x, dz - after.z);
             const moved = Math.hypot(after.x - before.x, after.z - before.z);
+
+            // ★ 2026-11-01（captain 实测定性的真凶）：**死亡重生检测**。
+            //
+            // `tpSafe` 只保证"开跑时她在起点"，管不了"跑到一半死掉"。
+            // 实测：`[23:48:12] ma67453 fell out of the world` —— 掉进虚空摔死，
+            // 重生在出生点（0,0），于是 after 离起点 11456 格，看起来像"她横跨了一万格"。
+            //
+            // 这种轮次跑的不是被测场景，必须**单列、不计入分母**：
+            // 位移 > 200 格 = 不可能是场景内的正常移动（本场地最大跨度 ~56 格）。
+            const DIED_RADIUS = 200;
+            if (moved > DIED_RADIUS || remain > DIED_RADIUS + 56) {
+                tpFlakes.push({
+                    scenario: sc.name, round, why: '疑似死亡重生（位移/剩余远超场地跨度）',
+                    moved: +moved.toFixed(0), remain: +remain.toFixed(0),
+                    at: { x: Math.round(after.x), y: Math.round(after.y), z: Math.round(after.z) },
+                });
+                console.log(`  ⊘ 死亡/重生 ${sc.name} #${round}: 位移 ${moved.toFixed(0)} 格、剩 ${remain.toFixed(0)} 格 `
+                    + `（场地跨度 ~56，这不可能是正常移动）→ 本轮作废，不计入分母`);
+                continue;
+            }
 
             const row = {
                 scenario: sc.name, round,
@@ -397,7 +467,16 @@ bot.once('spawn', async () => {
     const okAll = rows.filter(r => r.ok).length;
     const codes = {};
     for (const r of rows) if (!r.ok) codes[r.code] = (codes[r.code] ?? 0) + 1;
-    console.log(`  总计 成功 ${okAll}/${rows.length}  失败码 ${JSON.stringify(codes)}`);
+    const denom = rows.length;
+    console.log(`  总计 成功 ${okAll}/${denom}${denom ? ` (${(okAll / denom * 100).toFixed(1)}%)` : ''}  失败码 ${JSON.stringify(codes)}`);
+    // tpFlake 单列：分母只算"真正跑了的轮次"，被传送噪声废掉的轮不计入
+    if (tpFlakes.length) {
+        console.log(`  ⊘ tpFlake ${tpFlakes.length} 轮（已排除出分母，不计失败）:`);
+        for (const f of tpFlakes) {
+            console.log(`      ${f.scenario} #${f.round}  ${f.why ?? `起点偏 ${f.dStart} 格 / Δy ${f.dy}`}`);
+        }
+        console.log(`    → 期望总轮次 ${denom + tpFlakes.length}，实跑 ${denom}；比较基准时请用 ${okAll}/${denom}`);
+    }
     console.log(`  明细: ${outFile}`);
 
     await arena.release();
