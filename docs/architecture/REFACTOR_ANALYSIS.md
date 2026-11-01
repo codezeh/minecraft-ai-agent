@@ -974,6 +974,59 @@ async function skillName(bot, goal, context = {}) {
 **核对结果（t10 独立复核）**：`export * from` 转发 **0 处**；28 个旧名逐个 grep **0 悬空 import**；
 `preflight` **94/94 模块导入成功**；`nav_core`/`nav_hop`/`nav_pathfinder` 三件齐全。
 
+**转发文件删除点**：转发行是 t9 分 5 批加的，**在同一提交 `071fc74` 内一次性删净**（`library/` 92 → 65 个文件）。
+判据：`grep -rn "^export \* from" src/agent/library/` = **0**（t10 复核）。另 `audit_rules.mjs` 已改成
+「只有 `export *` 的转发文件不算新模块」，免得删干净后仍按旧规则报"未申报"。
+
+**仍用旧名 / 无前缀的文件与理由**（逐个核过，不是漏改）：
+
+| 文件 | 为什么不动 |
+|---|---|
+| `skill_library.js` | **上游已占名**（[`04_skills.md:173`](04_skills.md)），改名会和上游冲突 |
+| `skills.js` | **上游原函数库**（mindcraft 自带），不属于本次分层重构范围；Phase 5 才逐步退役 |
+| `nav_core` `executor` `path_3d` `terrain3d` | t9 任务书**明确批准保留原名**（导航/基础设施的中枢，改名收益低、风险高） |
+| `contract` `step_runner` `trace_bus` `modes` | 02 §5「不带前缀」那一行的基础设施（`contract`/`modes` 是本次改出来的新名） |
+
+**偏离映射表的地方（t10 列出，供后续收口）** —— 下面这些**无前缀但不是纯基础设施**，
+02 §5 的「…」给了口子，但严格说该有前缀：
+
+| 文件 | 实际层 | 建议 | 归属 |
+|---|---|---|---|
+| `path_short.js` | 导航（短规划） | **死代码**（REFACTOR §附录「死代码」列为整文件删除）→ 直接删，不必改名 | Phase R 收尾 |
+| `map_query.js` | 查询（`!map` 的地形查询） | 应 → `query_map` | Phase R 收尾 |
+| `collect_targets.js` | 查询（`resolveCollectTarget` 是解析/查询） | 应 → `query_collect_targets` | Phase R 收尾 |
+| `collect_planner.js` | 流程（采集前的侦察与规划） | 应 → `flow_collect_planner`（与 `flow_collect` 合并时一并处理） | Phase R 收尾 / M7 |
+| `tool_prep.js` `scaffold_blocks.js` `scaffold_cleanup.js` | 动作/流程辅助 | 建议随「垫脚」链路整体挪进 `flow_*` | Phase R 收尾 |
+| `control.js` | M2 控制层（07 control） | 02 §5 表里没有这一层；**建议在 02 §5 补一行 `control_*` 或明确归基础设施** | 规范补齐 |
+
+> 以上都不是 M4 的验收缺陷：t9 的任务范围是「旧前缀退役 + 转发删除 + import 规矩」，
+> 这些文件**本来就不带旧前缀**（`task_`/`skill_`/`atom_`），所以不违反「旧前缀退役」这条。
+
+#### M4 验收结论（t10 / 2026-11-01，真机实测）
+
+| 项 | 结果 |
+|---|---|
+| 旧前缀退役 | ✅ `library/` 里 `task_*` / `skill_*` 只剩 `skill_library`（上游占名）；`atom_*` 剩 9 个，全部是 02 §5 明列的原子层名字 |
+| 转发文件 | ✅ `export * from` **0 处**（删除点 `071fc74`） |
+| 悬空 import | ✅ 28 个旧名逐个 grep 0 处；`preflight` **94/94 模块导入成功** |
+| 新名合规 | ✅ `query_*` 8 / `act_*` 8 / `flow_*` 7 / `nav_*` 3，全部对上 02 §5；6 处无前缀偏离已列上表 |
+| `commands/` 不许碰动作与原子 | ⚠️ **1 处豁免**：`commands/actions.js:8 → act_place.placeBlockAt`（Phase 5.4 销账，见「已知前缀违规 5 处」#1）。grep `src/agent/commands/` 里 `act_`/`atom_` 的真实 import **仅此 1 条** |
+| 前缀规矩能抓违规 | ✅ 五次注入实测（见「前缀规矩」节）：同层副作用**红**、同层纯工具**绿**、跨层**红**、注释**绿**、字符串**绿** |
+| `unit_all` | ✅ 19/19 + 1 跳过，exit 0 |
+| `preflight` 三模式 | ✅ 默认 **exit 0**（5 处违规）/ `--strict-api` **exit 1**（第 5 处新暴露判失败）/ `--report-api` **exit 0** —— 与台账口径一致 |
+| `atom_all` | ✅ **18/18，244 条真实用例 0 FAIL**，无 `NO_CASES_RAN`。`skill_collect`（=`flow_collect_plan`）**22 PASS / 0 FAIL**；`atom_attack`（=`act_attack`）**10 PASS / 0 FAIL**；`skill_clear`（=`flow_clear`）**11 PASS / 0 FAIL** —— 改名后真机链路通 |
+| `bench 5` | ✅ **48/55**，与 t8 干净基线 48/55 持平；`climb-ladder` 中位 **1956ms**（基线 1945ms，+0.6%）；`digdown` 5/5 `execActions={"digdown":1}`、`y −57→−60` |
+| `task_collect`+`skill_collect` 合并 | ❌ **未合并**（只改名成 `flow_collect` + `flow_collect_plan`）。合并待办见「待办 4」：`flow_collect` 内部化 `planCollect`/`makeHandlers` |
+
+**bench 待修：tpFlake 会产出一轮假失败**（t10 独立复现，**不算回归**）
+
+`gap-bridge #1`：`moved 11456.7` 格、`remain 11473.1`、`60364ms TIMEOUT`、`execActions {"scan3d":10,"plan3d":10}`
+（重规划 10 轮 = 一直在远离起点）；同场景 #2–#5 全部 `moved 19.8 / remain 0.5 / ~7.7s`。
+→ 判定：**不是行为回归，是 `arena.tpSafe()` 有洞** —— 3 次重试后仍未确认传送成功就放行，人还在原地/被弹飞，
+于是这一轮测的是"从 1.1 万格外走回来"。t9 的 M4 跑也出现过同一形态。
+**修法（待办）**：`tpSafe` 失败的那一轮应 `skip` 并标记 `tpFlake`，而不是硬跑成 TIMEOUT；
+bench 汇总里把 `tpFlake` 单独计数、不计入通过率分母。**归属：Phase R 收尾 / bench 维护者。**
+
 #### 前缀规矩：判据与白名单（t10 实现，2026-11-01）
 
 **判据**（`tools/preflight.mjs` 的 `[5/5]`，两层）：
@@ -1013,7 +1066,7 @@ async function skillName(bot, goal, context = {}) {
 为什么这么分：那 1 处是**真问题**，不能塞进白名单（塞进去规则就又是纸做的），
 但也不该让日常开机天天红着、红久了就会有人顺手加白名单。所以**默认只报告、strict 判失败**。
 
-**三次注入自证（t10 实测，在独立 worktree 做，不污染主仓 src）**
+**五次注入自证（t10 实测，在独立 worktree 做，不污染主仓 src；全部在 HEAD `ad5956f` 上重跑过）**
 
 | # | 注入 | 期望 | 实测 |
 |---|---|---|---|
@@ -1021,6 +1074,7 @@ async function skillName(bot, goal, context = {}) {
 | 2 | 同层纯工具：`act_pillar.js` 加 `import { findItem } from './act_items.js'` | 绿 | ✅ 无新违规，**exit 0** |
 | 3 | 跨层：`commands/actions.js` 加 `import { digBlock } from '../library/act_dig.js'` | 仍红 | ✅ `✗ 新违规 commands → act`，**exit 1** |
 | 4 | 注释干扰：`act_pillar.js` 注释里写同一条 import | 绿（不误判） | ✅ **exit 0** |
+| 5 | 字符串干扰：`const MSG = "import { digBlock } from './act_dig.js'"` | 绿（剥字符串） | ✅ **exit 0** |
 
 **改动前**（`071fc74` 里的旧判据）同一条 #1 注入是 **exit 0**（检查条数 256→257 扫到了，违规数不变）——
 即「同层一律放过」，那条规矩等于纸做的。根因就一行 `if (targetLayer === selfLayer) { checked++; return; }`。
