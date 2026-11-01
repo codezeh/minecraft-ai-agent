@@ -57,6 +57,8 @@
   assignee: 'deepseek' | null,      // 个人单必填；多人单领取后填
   requires: { roles: ['miner'], items: ['stone_pickaxe'] },  // 多人单的领取资格
   claims: ['area:120,64,-30:16'],   // 开工前要预约的资源（§9.2）
+  repeat: null,                     // { everyMs }：周期单（§13）
+  notBefore: null,                  // 这之前不领（周期单的下一轮）
   dependsOn: ['j_..._0011'],
   state: 'pending' | 'ready' | 'claimed' | 'running' | 'paused' | 'blocked' | 'done' | 'failed' | 'cancelled',
   attempts: 0, maxAttempts: 3,
@@ -168,8 +170,8 @@ B3 起改为"生成一张 priority 8 的个人单"，所有入口走同一条路
 
 | 命令 | 作用 |
 |---|---|
-| `!addJob(skill, argsJson, priority?)` | 给自己加一张个人单 |
-| `!addSharedJob(skill, argsJson, priority?)` | 加一张多人单，谁合适谁领 |
+| `!addJob(skill, args, priority?)` | 给自己加一张个人单；`args` 是 `key=value` 串（04 §4.5） |
+| `!addSharedJob(skill, args, priority?)` | 加一张多人单，谁合适谁领 |
 | `!jobs()` | 列出自己的单和可领的多人单：状态、进度、卡在哪 |
 | `!cancelJob(id)` / `!pauseJob(id)` / `!resumeJob(id)` | 取消 / 暂停 / 继续 |
 
@@ -197,3 +199,34 @@ B0 不依赖任务板，可以和 Phase A 并行。
 
 - **离线**：`board_store` 用临时 sqlite 文件测状态机的全部转移、租约过期（假时钟）、两个客户端抢同一张单只有一个成功、预约冲突、重启后恢复。接进 `tools/unit_all.mjs`。
 - **真机**：用 `tools/arena.mjs` 租场地跑 §11 的验收用例，结果记进 `legacy/验收记录.md`。
+
+## 13. 周期单
+
+`flow_farm` 一次只收一轮（04 §6.1）；"每 20 分钟收一次"不靠流程自己循环，靠单子上的 `repeat`：
+- `repeat: { everyMs }` 的单完成后不归档，回 `pending`；`notBefore = 完成时间 + everyMs`；`attempts` 清零
+- 调度器领单时跳过 `notBefore` 还没到的
+- 失败照 `maxAttempts` 处理；连续失败到上限 → `blocked`，不再重复，通知来源
+- 取消周期单 = 取消以后所有轮次
+
+## 14. agent 和 mindserver 之间的消息
+
+走现有的 socket（`mindserver_proxy`）。事件名前缀 `board:`，都带 ack；ack 5 秒没回算失败。
+
+| 事件（agent → mindserver） | 参数 | ack |
+|---|---|---|
+| `board:hello` | `{ bot, skills: [注册名], roles }` | `{ ok }` |
+| `board:add` | 任务单（不含 `id` / `state`） | `{ ok, id }` 或 `{ ok: false, reason }` |
+| `board:list` | `{ mine?, state? }` | `{ jobs }` |
+| `board:claim` | `{ bot }` | `{ job }` 或 `{ job: null }`（原子 UPDATE，06 §6） |
+| `board:heartbeat` | `{ id, progress }` | `{ ok }` 或 `{ ok: false, code: 'LEASE_LOST' }` |
+| `board:checkpoint` | `{ id, checkpoint }` | `{ ok }` |
+| `board:finish` | `{ id, result }` | `{ ok }` |
+| `board:set-state` | `{ id, state, reason }` | `{ ok }`（cancel / pause / resume、被抢占后退回） |
+| `board:reserve` / `board:release` | `{ id, keys }` | `{ ok, conflicts }` |
+
+mindserver → agent 只推一个 `board:changed`（`{ id, state, priority }`）：有单新建或状态变了，agent 自己的调度器决定要不要领、要不要抢占（07 §4）。
+`board:hello` 报上来的 `skills` 用来校验 `add` 的 `skill`，并决定谁能领哪张多人单。
+
+- mindserver 连不上：不领新单；正在跑的单接着跑，但超过租约时长（30 秒）没心跳成功就自己停下。那时服务端的租约已经过期，单可能已经派给别人，再跑就是两个 bot 做同一张单
+- 只有 mindserver 写 `board.sqlite`；参数在服务端再校验一遍
+- 单 bot 也走这一套，不分单机、多机两条路径

@@ -148,13 +148,41 @@ export async function run(bot, args, ctx) { /* plan + runSteps；返回 ActionRe
 | 9 | 离线单测进 `tools/unit_all.mjs`；真机用例用 `tools/arena.mjs` 租场地 | 人工 |
 | 10 | 在 `docs/自研申报.md` 登记 | ✅（`tools/audit_rules.mjs`） |
 
+### 4.5 `params` 写法
+
+```js
+params: {
+    block: 'block',            // 方块名，按 minecraft-data 查，不认识的直接拒
+    item: 'item',              // 物品名，同上
+    count: 'int 1..64 = 1',    // 整数、范围、默认值
+    fuel: 'item?',             // ? = 可选
+    dir: 'enum(n,s,e,w)',
+    at: 'pos',                 // 方块坐标，面位（00 §4）
+    area: 'area',              // 中心 + 半径
+    target: 'entity',          // 实体类型或 uuid
+},
+```
+
+- 命令里怎么传：`!do("collect", "block=oak_log count=16")`，**一个 `key=value` 串，空格分隔**；`pos` 写 `at=120,64,-30`，`area` 写 `area=120,64,-30:16`
+- 不能传 JSON：`commands/index.js:57` 的解析器只认数字、`true/false` 和不含双引号的 `"…"`，JSON 里的双引号传不进去
+- 校验不过就不执行，回模型一句"参数错：count 要 1..64"；不进任务板，也不产生 code
+- §4.1 例子里的 `'string'` 是旧写法；新代码用 `item` / `block`，多一道名字校验
+
+### 4.6 注册表与 `ctx` 工厂
+
+`src/agent/library/composite_registry.js`（基础设施，不带前缀；`skill_library.js` 这个名字上游已经占了）：
+- 显式 import 每个 `flow_*` / `strat_*`，不扫目录：顺序确定，preflight 能逐个检查
+- 启动时校验每个 manifest（§4.4 第 1、2 条，加上 `params` 能解析），不合格就启动失败，不等到运行时
+- `makeCtx(agent, job)`：`mapDir` 由 helpers 统一拼（Phase 5.3）；`deadline` = 单子的 deadline，没有就 `now + manifest.timeoutMs`；`onEvent` = 唯一写 trace_bus 的那一层，自动带 `jobId` / `skill`（09 §2）；`checkpoint` / `save` 有单走 `board_client`，没单存在内存里；`reserve` / `release` 没有任务板时恒成功
+- `!do` 的路径：校验参数 → 有任务板就建一张 9 级个人单交给调度器；还没任务板（B1 之前）就直接在 `runAction` 里跑，`timeout` 按 deadline 传（07 §8）
+
 ## 5. 怎么暴露给模型
 
 **不给每个复合技能单开命令**（命令文档会撑爆上下文），只加两条：
 
 | 命令 | 作用 |
 |---|---|
-| `!do(name, argsJson)` | 按注册名执行复合技能；参数按 `manifest.params` 校验；回给模型 `code + count/want + failed 摘要` |
+| `!do(name, args)` | 按注册名执行复合技能；`args` 是 `key=value` 串（§4.5），按 `manifest.params` 校验；回给模型 `code + count/want + failed 摘要`（格式见 08 §4） |
 | `!listSkills()` | 列出所有复合技能：从 `manifest.summary` + `params` **自动生成**，不再从函数体截 JSDoc（D24） |
 
 现有的 `!collectBlocks` / `!followPlayer` 等保留（模型已经会用），内部改调对应的 flow。

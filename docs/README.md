@@ -31,7 +31,9 @@
 > 恢复动作层 [`02_actions.md`](architecture/02_actions.md)；新增 [`04_skills.md`](architecture/04_skills.md)（复合技能规范）
 > 和 [`06_task_board.md`](architecture/06_task_board.md)（个人 / 多人任务板，吸收了原计划的 `06_task_queue` / `07_multi_bot`）。
 > 先前"不补新规范、多 Bot 后续再搭"的决定撤回：规范现在写，多 Bot 按 06 §11 分期落地。
-> `ARCHITECTURE_REDESIGN.md` §7 配置 / §8 错误恢复仍未单独成节：配置的一部分见 `04_skills.md §4.2` 的 `ctx`，错误恢复见 `04 §3.3`。
+> 同日再补三份：[`07_control.md`](architecture/07_control.md)（谁在动身体、打断与恢复、死亡 / 断线，即原来缺的 §8 错误恢复）、
+> [`08_interface.md`](architecture/08_interface.md)（接驳层：模型、命令去向、结果回传、权限、陪玩默认行为）、
+> [`09_crosscut.md`](architecture/09_crosscut.md)（数据归属、事件、配置（原来缺的 §7）、安全、测试、版本）。实施顺序见 `00_overview.md §10`。
 >
 > 要改哪一层，先看 [architecture/00_overview.md](architecture/00_overview.md) §1 的分层图，再读对应的 01 / 02 / 04 / 05 / 06。
 

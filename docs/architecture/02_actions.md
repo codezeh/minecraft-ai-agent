@@ -160,6 +160,8 @@ switch (r.code) {
 | `CLAIM_CONFLICT` | 资源被别的 bot 预约了 | `OCCUPIED` | 换一个目标；`OCCUPIED` 是那格本身有东西 |
 | `LEASE_LOST` | 任务单租约过期，被收回 | `TIMEOUT` | **立刻停**，不写结果（别人可能已经接手） |
 
+`PREEMPTED` 只由调度器写进任务单结果；流程不管被谁打断，一律返回 `INTERRUPTED`（[07 §4](07_control.md)）。
+
 ## 5. 改名与 import 规矩（Phase R）
 
 前缀就是层级：看文件名就知道它能调谁。

@@ -807,6 +807,8 @@ src/agent/library/
 
 ## 10. 下一步行动
 
+> 2026-11-01：按依赖排好的实施顺序（M0–M11）见 [`00_overview.md §10`](00_overview.md)。
+
 ### 立即可做（无依赖）
 1. **补丁D7-D8**（1天）
    - 修复ScaffoldTracker只清自己放的块

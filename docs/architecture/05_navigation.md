@@ -653,6 +653,13 @@ describe('Navigation Integration', () => {
 - [ ] 编写测试
 - [ ] 性能测试与优化
 
+## 待定：水面过河（2026-11-01）
+
+- **现状**：`path_3d` 把水面（`T.WATER`）当能走的面；深水底（`SUBMERGED`）代价很高，规划宁可走水面也不潜水底（`test_tunnel` 用例 13）。executor 用普通 `walk` 走过去；落点检查只拦 `T.LAVA`（D14 修复时有意收窄）
+- **问题**：10-28 的事故是在深水面上一脚沉到底、反复下坠卡死。现在没有专门处理"在水面上移动"，全靠 pathfinder
+- **建议**：给水面单独一种步骤 `swim`。`path_3d` 对 `T.WATER` 只生成 `swim` 边；executor 的 `swim` 分支按住跳（`holdKey('jump')`）浮在水面，同时 `moveToXZ`；落点检查改成"`walk` 落到 `T.WATER` 就拒，`swim` 照放"
+- **验收**：逐 action 基线加一个"过 6 格宽的河"场景，`walk` 和 `swim` 各跑 10 轮，比成功率和耗时。定之前维持现状
+
 ## 相关文档
 
 - [00_overview.md](./00_overview.md) - 整体架构
