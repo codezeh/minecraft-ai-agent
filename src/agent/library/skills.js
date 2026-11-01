@@ -3,6 +3,7 @@ import * as world from "./world.js";
 import * as landmarks from "./landmarks.js";
 import * as store from "./memory_store.js";   // dangers / tasks 命名空间直读
 // 攀爬能力（原子层）与实体跟随（任务层）
+import { mapDirOf } from './bot_paths.js';
 import { climbUp, climbDown, isClimbable, climbableUp, climbableDown } from './act_climb.js';
 // 掘进与树体（2026-10-29 新增能力，要暴露给模型）
 // ★ 2026-10-31：原来 import 的是 tunnelAlong（循环长在原子层里）。
@@ -5510,7 +5511,7 @@ export function surveyArea(bot, radius = 64, opts = {}) {
     //   旧 heatmap = 实时扫方块（半径 128 约 1 秒），数据新但慢、且只在身边
     //   现在       = 先按需扫一次球（27ms/区块），再从库渲染，能看见多层空间
     const p = bot.entity.position;
-    const mapDir = `./bots/${bot.username || bot.entity?.name || 'agent'}/map`;
+    const mapDir = mapDirOf(bot);
 
     // 扫一次球，保证数据新鲜（用户定的"走到哪扫到哪"）
     let scanInfo = null;
@@ -5567,7 +5568,7 @@ export function planRoute(bot, x, z, opts = {}) {
      * const p = skills.planRoute(bot, 100, -200);
      */
     const from = bot.entity.position;
-    const mapDir = `./bots/${bot.username || bot.entity?.name || 'agent'}/map`;
+    const mapDir = mapDirOf(bot);
     const dist = Math.hypot(x - from.x, z - from.z);
 
     if (dist < 3) {

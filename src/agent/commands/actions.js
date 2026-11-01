@@ -1,6 +1,7 @@
 import * as skills from '../library/skills.js';
 // 复合技能注册表（基础设施，不带前缀）。commands 层只许 import 流程/查询/基础设施 ——
 // 这条 import 合规；**严禁**在 commands 里 import act_* / atom_*（M4 前缀规矩会拦）。
+import { mapDirOf } from '../library/bot_paths.js';
 import { getSkill, runSkill } from '../library/composite_registry.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
@@ -174,7 +175,7 @@ export const actionsList = [
             //   可以直接把它当成"浮在水上的路标"接近。
             //
             // 与 !goToPlayer 的分工：那个跟玩家（可能要问 RCON），这个跟实体（纯客户端）。
-            const mapDir = `./bots/${agent.bot.username || agent.bot.entity?.name || 'agent'}/map`;
+            const mapDir = mapDirOf(agent);
             console.log(`[!followEntity] 跟随 ${entity_name}（距离 ${distance}），mapDir=${mapDir}`);
             // 路径注意：本文件在 src/agent/commands/，库在 src/agent/library/
             const { followEntity } = await import('../library/flow_follow.js');
@@ -209,7 +210,7 @@ export const actionsList = [
             //
             // 只接 !goToPlayer 一个命令（不动 !followPlayer / !collectBlocks 等），
             // 把行为变化控制在"走过来"这一件事上。
-            const mapDir = `./bots/${agent.bot.username || agent.bot.entity?.name || 'agent'}/map`;
+            const mapDir = mapDirOf(agent);
             console.log(`[!goToPlayer] 走 goToPlayerTask（mapDir=${mapDir}）`);
             return await goToPlayerTask(agent.bot, player_name, {
                 distance: closeness ?? 3,
@@ -228,7 +229,7 @@ export const actionsList = [
             if (settings.companion_mode) {
                 return await followTask(agent.bot, player_name, {
                     distance: follow_dist ?? 3,
-                    mapDir: `./bots/${agent.bot.username || agent.bot.entity?.name || 'agent'}/map`,
+                    mapDir: mapDirOf(agent),
                 });
             }
             await skills.followPlayer(agent.bot, player_name, follow_dist);
@@ -266,7 +267,7 @@ export const actionsList = [
             //
             // 顺带解决了测试难题：探针没法可靠传到远处（/tp 会被服务端拉回、
             // spreadplayers 在未生成区放不下去），而 !walkTo 给坐标就能测长距离。
-            const mapDir = `./bots/${agent.bot.username || agent.bot.entity?.name || 'agent'}/map`;
+            const mapDir = mapDirOf(agent);
             console.log(`[!walkTo] 走 hopTo 到 (${x}, ${z})，mapDir=${mapDir}`);
             const { hopTo } = await import('../library/nav_hop.js');
             const r = await hopTo(agent.bot, { x: Number(x), z: Number(z) }, { mapDir, deadlineMs: 420000 });
@@ -456,7 +457,7 @@ export const actionsList = [
                 // ★ 2026-10-29：补 mapDir —— 没有它，collect 内部的接近动作会退回
                 // 原生 pathfinder，而目标常在树上（高差 9~10 格），爬不上去 → 卡死。
                 // 实测：不传 mapDir 时她站在原地一动不动；传了之后能爬树砍到木头。
-                const mapDir = `./bots/${agent.bot.username || agent.bot.entity?.name || 'agent'}/map`;
+                const mapDir = mapDirOf(agent);
                 return await collectTask(agent.bot, t.names, num ?? 1,
                     {
                         label: t.echo, near: anchor, mapDir,
@@ -474,7 +475,7 @@ export const actionsList = [
             // 而 target 常在树上（高差 9~10 格），pathfinder 爬不上去 →
             // `!collectBlocks("木头",4)` 卡死不动。
             // collectTask 能接收 mapDir，从而让接近动作走 3D 链路（见 skill_collect.makeHandlers）。
-            const mapDir = `./bots/${agent.bot.username || agent.bot.entity?.name || 'agent'}/map`;
+            const mapDir = mapDirOf(agent);
             return await collectTask(agent.bot, resolved.names, num ?? 1,
                 {
                     label: resolved.echo, near: null, mapDir,

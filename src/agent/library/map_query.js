@@ -14,10 +14,12 @@
  * 不重扫是刻意的：!map 要能被频繁调用而不卡住主线程。
  * 需要刷新时用 `!map refresh`（会扫一次球）。
  */
+import { mapDirOf } from './bot_paths.js';
 import { scanSphere, boxSurfaces, columnSurfaces, stats3d, T } from './terrain3d.js';
 import { loadLandmarks } from './landmarks.js';
 
-const BASE_DIR = (bot) => `./bots/${bot.username || bot.entity?.name || 'agent'}/map`;
+// 2026-11-02：不再自己拼路径，统一走 bot_paths.mapDirOf（零依赖 infra）
+const BASE_DIR = (bot) => mapDirOf(bot);
 
 const TYPE_NAME = { [T.SOLID]: '实心', [T.WATER]: '水', [T.LAVA]: '岩浆', [T.BUILT]: '建筑', [T.LEAVES]: '树叶' };
 

@@ -17,6 +17,9 @@
  */
 import { CODES } from './contract.js';
 import { collectSilent } from './trace_bus.js';
+// 本地绑定：`export { x } from './y.js'` 只转发、**不在本模块作用域建绑定**，
+// 而 makeCtx 里要直接调 mapDirOf，所以必须单独 import 一次（2026-11-02 踩过）。
+import { mapDirOf } from './bot_paths.js';
 
 import { manifest as manifestCollect, collect as runCollect } from './flow_collect.js';
 import { manifest as manifestFollow, follow as runFollow } from './flow_follow.js';
@@ -276,17 +279,16 @@ function coerceParam(name, desc, raw) {
 // ── ctx 工厂（§4.6）────────────────────────────────────────────────────────
 
 /**
- * 拼 3D 地图目录。
+ * 拼 3D 地图目录 —— **2026-11-02 下沉**，实现搬到 `bot_paths.js`，这里只转发。
  *
- * 为什么要有这个函数（§3.2「mapDir 路径拼接 8 处」）：`actions.js` 里同一行
- * `` `./bots/${agent.bot.username || ...}/map` `` 抄了 6 遍，谁改了目录结构就得改 8 个地方。
- * 现在只留这一个真相，流程**不许自己拼**（§4.2「流程不许自己拼路径」）。
+ * 为什么要下沉：本文件显式 import 了 `flow_*`，而流程会 import `skills.js`；
+ * 若 `skills.js` 反过来 import 本文件就是**循环依赖**，所以实现不能住在这里。
+ *
+ * 历史：`actions.js` 里同一行 `` `./bots/${...}/map` `` 曾抄 6 遍（全仓 11 处），
+ * 谁改目录结构就得改 11 个地方。现在只留 `bot_paths.mapDirOf` 一个真相，
+ * 流程与命令层**都不许自己拼**。
  */
-export function mapDirOf(agentOrBot) {
-    const bot = agentOrBot?.bot ?? agentOrBot;
-    const name = bot?.username || bot?.entity?.name || 'agent';
-    return `./bots/${name}/map`;
-}
+export { mapDirOf, botDirOf, botNameOf } from './bot_paths.js';
 
 /**
  * 造一份 ctx 交给流程用（§4.6）。

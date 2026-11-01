@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client';
 import convoManager from './conversation.js';
+import { mapDirOf } from './library/bot_paths.js';
 import { setSettings } from './settings.js';
 import { getFullState } from './library/full_state.js';
 import { since as traceSince, stats as traceStats, clear as traceClear, onPush as traceOnPush } from './library/trace_bus.js';
@@ -153,7 +154,7 @@ class MindServerProxy {
                 if (!bot?.entity) { callback({ ok: false, reason: 'bot_not_spawned' }); return; }
 
                 const { boxSurfaces, readFails } = await import('./library/terrain3d.js');
-                const mapDir = `./bots/${bot.username || bot.entity?.name || 'agent'}/map`;
+                const mapDir = mapDirOf(bot);
                 const p = bot.entity.position;
                 const mode = opts?.mode === 'full' ? 'full' : 'around';
                 const lod = Math.min(Math.max(Number(opts?.lod) || 1, 1), 8);
@@ -276,7 +277,7 @@ class MindServerProxy {
                 const agent = this.agent;
                 const bot = agent?.bot;
                 if (!bot?.entity) { callback({ ok: false, reason: 'bot_not_spawned' }); return; }
-                const mapDir = `./bots/${bot.username || bot.entity?.name || 'agent'}/map`;
+                const mapDir = mapDirOf(bot);
 
                 let store = null;
                 let activeFails = 0;
