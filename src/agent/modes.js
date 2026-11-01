@@ -5,6 +5,58 @@ import settings from './settings.js'
 import convoManager from './conversation.js';
 // 控制层（M2，07 §4）：停的原因 + 被打断的是任务单时不叫模型
 import { STOP_REASONS, isJobLabel, noteJobInterrupted } from './library/control.js';
+// 输入原子（M2 残项，01 §2）：按键只有这一条路 —— 按下去必有人松
+import { holdKey } from './library/atom_input_move.js';
+
+/**
+ * 水里"按住跳跃"的保持上限（毫秒）。
+ *
+ * 为什么要上限：`update()` 每 tick（300ms）看一次，到点后下一 tick 会自己续；
+ * 不设上限就是"按下去没人松"——那正是 01 §2 要消灭的残留按键。
+ */
+const SWIM_JUMP_HOLD_MS = 3000;
+
+/**
+ * bot → 正在进行的"保持跳跃"。
+ *
+ * 存模块作用域而不是挂到 mode 对象 / ModeController 上：
+ * 后者对 LLM 生成的代码可达（见本文件 ModeController 的 SECURITY WARNING），
+ * 而 Promise 的闭包里握着 `bot` —— 不该让那条路摸到。
+ */
+const swimHolds = new WeakMap();
+
+/** 头顶那格是不是水（读不到就当作不是）。 */
+function waterAbove(bot) {
+    try {
+        return bot.blockAt(bot.entity.position.offset(0, 1, 0))?.name === 'water';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * 在水里按住跳跃（自保：浮上去）。
+ *
+ * ★ 2026-11-01（M2 残项）：原来这里是裸的 `bot.setControlState('jump', true)` ——
+ * 全系统唯一绕开 `atom_input_move` 的按键，而且**按下去没人松**（只在别的分支
+ * `clearControlStates()` 时才顺带清掉）。现在走 `holdKey`：
+ *   - `until`：出水即松（出事最早收敛）
+ *   - `timeout`：SWIM_JUMP_HOLD_MS 到点原子自己松，下一 tick 再续（等价于"一直按着"）
+ *   - `interrupt_code`：被中断时原子自己松（A3/A7），不会喊停还在跳
+ * **不 await**：`update()` 是每 tick 调一次的热路径，不许在这里阻塞（见文件头注释）。
+ * 同一个 bot 同时只允许一个保持（WeakMap 去重），否则每 tick 都会叠一层按下/松开。
+ */
+export function holdSwimJump(bot) {
+    if (!bot || swimHolds.has(bot)) return;
+    const p = holdKey(bot, 'jump', {
+        until: () => !waterAbove(bot),
+        timeout: SWIM_JUMP_HOLD_MS,
+    })
+        .catch(() => null)   // 原子不抛；保险起见不把异常冒到 tick 循环
+        .finally(() => { swimHolds.delete(bot); });
+    swimHolds.set(bot, p);
+}
+
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -40,7 +92,8 @@ const modes_list = [
             if (blockAbove.name === 'water') {
                 // does not call execute so does not interrupt other actions
                 if (!bot.pathfinder.goal) {
-                    bot.setControlState('jump', true);
+                    // 走 atom_input_move（01 §2 按键唯一出口）；出水/超时/中断都会自己松
+                    holdSwimJump(bot);
                 }
             }
             else if (this.fall_blocks.some(name => blockAbove.name.includes(name))) {

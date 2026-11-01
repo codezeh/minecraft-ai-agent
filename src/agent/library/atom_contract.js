@@ -24,7 +24,9 @@ export const CODES = [
     'NO_MOVE',      // 挖通了但走不过去
     // 规划层（path_3d）的错误码 —— 之前没注册，靠"直接返回对象字面量"逃过去
     'NO_START',     // 起点周围找不到可站立面（数据缺失或她悬空）
-    // 载具（atom_boat）的错误码
+    // 载具的错误码（08 / 02 §3 的 mount·dismount 动作契约）
+    //   原实现 atom_boat.js 已于 2026-11-01 删除（零调用方）；输入侧现由
+    //   atom_input_misc.mountEntity / dismount 承接，动作层补 mount/dismount 时仍用这套码。
     'NO_VEHICLE',   // 附近没有可骑的船/矿车
     'RIDE_FAILED',  // 发了 /ride 但服务器没让她上船
     'NO_PERMISSION',// /ride 被拒（需要 op）

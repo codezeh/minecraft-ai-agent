@@ -7,7 +7,8 @@ import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { CODES, isResult } from '../src/agent/library/atom_contract.js';
 import { blockAt, findBlocks, canReach, countItem, playerPos, reachDistanceTo } from '../src/agent/library/atom_perceive.js';
-import { moveTo, lookAt } from '../src/agent/library/atom_move.js';
+import { moveTo } from '../src/agent/library/atom_move.js';
+import { lookAtPoint } from '../src/agent/library/atom_input_mouse.js';
 import { digBlock } from '../src/agent/library/atom_dig.js';
 import { equipItem, dropItem } from '../src/agent/library/atom_items.js';
 import { collect } from '../src/agent/library/task_collect.js';
@@ -134,7 +135,8 @@ bot.once('spawn', async () => {
     expectResult('digBlock 成功', await digBlock(bot, { x: 2, y: -60, z: 0 }));
 
     expectResult('moveTo 成功', await moveTo(bot, 6, -60, 6, { tol: 1, timeout: 15000 }));
-    expectResult('lookAt 成功', await lookAt(bot, { x: 6, y: -60, z: 6 }));
+    // 原来是 atom_move.lookAt（内部 +0.5 看方块中心）；该重复实现已于 t6 删除，改调输入原子。
+    expectResult('lookAt 成功', await lookAtPoint(bot, { x: 6.5, y: -59.5, z: 6.5 }));
 
     await RC('give probe dirt 8');
     await sleep(500);

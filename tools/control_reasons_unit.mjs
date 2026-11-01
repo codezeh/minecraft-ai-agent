@@ -33,7 +33,7 @@ import {
 import { ensureTraced, isTraced, since, lastSeq } from '../src/agent/library/trace_bus.js';
 import { execStep } from '../src/agent/library/executor.js';
 import { saveSurfaces, closeDb3d, T } from '../src/agent/library/terrain3d.js';
-import { execute as executeMode } from '../src/agent/modes.js';
+import { execute as executeMode, holdSwimJump } from '../src/agent/modes.js';
 import { SelfPrompter } from '../src/agent/self_prompter.js';
 import { stay } from '../src/agent/library/skills.js';
 import { follow } from '../src/agent/library/task_follow.js';
@@ -563,6 +563,58 @@ async function stopRunningJob(reason, { job = {}, board = null } = {}) {
         try { rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// 13. modes.js 自保跳跃走 atom_input_move（M2 残项）：按下必松、出水即松、不叠层
+// ───────────────────────────────────────────────────────────────────────────
+{
+    // 她站在 (0,64,0)，头顶 (0,65,0) 是水 → 应该按住 jump
+    const bot = makeFakeBot({
+        world: worldOf([[0, 63, 0, 'stone'], [0, 65, 0, 'water']]),
+        feet: { x: 0, y: 64, z: 0 }, posOffset: 0.5,
+        unloaded: 'air', registry: REG,
+    });
+
+    holdSwimJump(bot);
+    await sleep(20);
+    const pressed = bot.getControlState('jump');
+
+    // 再调一次：不许叠第二层（否则每 tick 都按一遍/松一遍）
+    holdSwimJump(bot);
+    await sleep(20);
+    const stillPressed = bot.getControlState('jump');
+
+    check('modes 自保跳跃：在水里按住 jump（走 atom_input_move）且重复调用不叠层',
+        pressed === true && stillPressed === true,
+        `pressed=${pressed} stillPressed=${stillPressed}`);
+
+    // 出水（头顶变空气）→ 原子自己松键（A7：按下必有松）
+    bot.setBlock(0, 65, 0, 'air');
+    let released = false;
+    for (let i = 0; i < 40; i++) {          // 最多等 ~600ms（轮询 100ms）
+        if (bot.getControlState('jump') !== true) { released = true; break; }
+        await sleep(15);
+    }
+    check('modes 自保跳跃：出水后自己松键（不留残留按键）',
+        released === true,
+        `jump=${bot.getControlState('jump')}`);
+
+    // 源码守卫：modes.js 里不许再有裸的 setControlState。
+    // 判据要**先去掉注释**——注释里为了说明"原来长什么样"会引用那段代码，
+    // 直接 grep 源码会把自己的说明文字当成违规（D19 那条就踩过一次这个坑）。
+    const src = readFileSync(new URL('../src/agent/modes.js', import.meta.url), 'utf8');
+    const codeOnly = src
+        .split('\n')
+        .filter((l) => !/^\s*(\*|\/\/)/.test(l))   // 整行注释（含块注释的 * 续行）
+        .map((l) => l.replace(/\/\/.*$/, ''))       // 行尾注释
+        .join('\n');
+    check('modes.js 不再直接 setControlState（按键收口到 atom_input_move）',
+        !/\.setControlState\s*\(/.test(codeOnly),
+        '已无裸按键调用（注释里引用的旧代码不算）',
+        '仍存在 bot.setControlState(...)');
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 
 // ───────────────────────────────────────────────────────────────────────────
 console.log(`\n控制层离线：${pass} passed, ${fail} failed`);

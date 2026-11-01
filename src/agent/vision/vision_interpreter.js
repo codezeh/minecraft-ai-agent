@@ -1,5 +1,7 @@
 import { Vec3 } from 'vec3';
 import { Camera } from "./camera.js";
+// 2026-11-01（t6）：转头/看坐标改走输入原子（bot.look* 的唯一出口）。
+import { setLook, lookAtPoint } from "../library/atom_input_mouse.js";
 import fs from 'fs';
 
 export class VisionInterpreter {
@@ -25,11 +27,16 @@ export class VisionInterpreter {
 
         let filename;
         if (direction === 'with') {
-            await bot.look(player.yaw, player.pitch);
+            // 原来 bot.look(yaw, pitch)（force 默认 false）；setLook 默认 force=true，这里显式给 false 保持一致
+            await setLook(bot, player.yaw, player.pitch, { force: false });
             result = `Looking in the same direction as ${player_name}\n`;
             filename = await this.camera.capture();
         } else {
-            await bot.lookAt(new Vec3(player.position.x, player.position.y + player.height, player.position.z));
+            await lookAtPoint(bot, {
+                x: player.position.x,
+                y: player.position.y + player.height,
+                z: player.position.z,
+            }, { force: false });
             result = `Looking at player ${player_name}\n`;
             filename = await this.camera.capture();
 
@@ -44,7 +51,7 @@ export class VisionInterpreter {
         }
         let result = "";
         const bot = this.agent.bot;
-        await bot.lookAt(new Vec3(x, y + 2, z));
+        await lookAtPoint(bot, { x, y: y + 2, z }, { force: false });
         result = `Looking at coordinate ${x}, ${y}, ${z}\n`;
 
         let filename = await this.camera.capture();

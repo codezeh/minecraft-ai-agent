@@ -268,7 +268,6 @@ const API_SCAN_RULES = [
         files: ['src/agent/**/*.js'],
         allow: [
             'src/agent/library/atom_input_move.js',
-            'src/agent/library/atom_boat.js',   // 冻结文件（src 里没人 import），Phase R 一并删/迁
             'src/agent/modes.js',               // M2（t3）负责：自保跳一下，属于控制层
         ],
         pattern: /\bsetControlState\s*\(/,
@@ -282,21 +281,14 @@ const API_SCAN_RULES = [
         files: ['src/agent/**/*.js'],
         allow: [
             'src/agent/library/atom_input_mouse.js',
+            'src/agent/library/atom_input_inventory.js',   // 切快捷栏 / 点窗口格子（clickWindow、setQuickBarSlot）
             'src/agent/library/atom_look.js',
-            // 待迁（Phase R / 动作补齐时一并搬，搬完删掉对应行）：
-            //   skills.js / tool_prep.js / atom_attack.js 仍是「动作层直接发鼠标输入」的存量，行为没变，只是还没搬。
-            //   （skill_clear.js / scaffold_cleanup.js 原本也列过，实测真实命中 0——只在注释里提到，已删。）
-            'src/agent/library/skills.js',
-            'src/agent/library/tool_prep.js',
-            'src/agent/library/atom_attack.js',
-            'src/agent/library/atom_boat.js',   // 冻结文件（src 里没人 import），Phase R 一并删/迁
-            // ── bot.look* 的具名残余（2026-11-01 补齐扫描后逐条列明，**不是为了消灭违规，是让缺口可见**）──
-            //   这些地方仍可直接转头；Phase R / M2 收尾时逐条销账，迁一个删一行。
-            'src/agent/modes.js',                      // bot.look* ×6（295/296/298/310/311/313）—— M2 残项
-            'src/agent/vision/vision_interpreter.js',  // bot.look/lookAt ×3（28/32/47）—— 视觉解释器，跟随玩家视角
-            'src/agent/library/task_follow.js',        // bot.lookAt ×1（384）—— 跟随时看人
-            'src/agent/library/atom_move.js',          // bot.lookAt ×1（507，lookAt 函数）—— 与 atom_look.lookAt 重复实现，Phase R 收敛
-            'src/agent/agent.js',               // this.bot.stopDigging()：停任务时的收尾清理
+            // 2026-11-01（t6 遗留清理）已销账：skills.js（14 处鼠标输入 + 6 处 bot.lookAt）、
+            //   tool_prep.js（2 处）、atom_attack.js（1 处挥击）、vision_interpreter.js（3 处）、
+            //   task_follow.js（1 处）、atom_move.js（重复的 lookAt 实现已删）—— 全部改调 atom_input_mouse。
+            //   空豁免 skill_clear.js / scaffold_cleanup.js 也已删（真实命中 0）。
+            'src/agent/modes.js',               // bot.look* ×4（296/298/311/313）—— M2 残项，control 负责
+            'src/agent/agent.js',               // this.bot.stopDigging()：停任务时的收尾清理（M1 文件）
         ],
         // 必须带上"谁在调"：`skills.placeBlock(bot, …)` 是库函数的**名字**，不是鼠标输入，
         // 只匹配 `.placeBlock(` 会把调用库的地方全判成违规（第一版就踩了，7 处里 5 处是假阳性）。
@@ -311,7 +303,6 @@ const API_SCAN_RULES = [
         allow: [
             'src/agent/library/atom_input_misc.js',
             // 冻结文件（src 里没人 import），Phase R 一并删/迁
-            'src/agent/library/atom_boat.js',
             // 开发用任务脚本（造场景/烹饪测试），不是运行时链路；后续并入 command()
             'src/agent/tasks/**/*.js',
         ],
@@ -328,7 +319,6 @@ const API_SCAN_RULES = [
             // 待迁：模型回复之外的直发（任务脚本 / 语音 / 模式提示），尚未接 openChat
             'src/agent/speak.js',
             'src/agent/library/skills.js',
-            'src/agent/library/atom_boat.js',
             'src/agent/modes.js',
             'src/agent/permissions.js',
             'src/agent/library/task_follow.js',
@@ -400,8 +390,8 @@ function collectApiScanSources() {
  * 把 JS 源码的注释（以及可选的字符串内容）换成空格，**保留所有字符偏移与换行**。
  *
  * 为什么必须有这一步（t1 骨架留下的坑，A.4 补上）：
- *   骨架版直接对原文做正则，于是 `atom_boat` 的文档注释里提到 setControlState 也算命中、
- *   `atom_dig` 里「契约不允许原子直接按键」那句注释同理。
+ *   骨架版直接对原文做正则，于是文档注释里提到 setControlState 也算命中
+ *   （当时 `atom_boat` 的注释、`atom_dig` 里「契约不允许原子直接按键」那句都是）。
  *   不清掉注释，唯一的出路就是给注释加豁免 —— 豁免名单立刻变脏，以后真违规也看不出来。
  *
  * @param {string} text

@@ -28,6 +28,28 @@
  * 另外：**walkTo 只按水平距离判到达**（climb 场景里她本来就在目标列上，
  *   于是 0ms 就报成功、根本没爬），所以 climb 场景的起点要离柱子远一点。
  *
+ * ═══════════════════════════════════════════════════════════════════
+ * ★ 场景设计规约（两条，都是踩过两次才写的，造新场景前先读）
+ *
+ *   1) **想逼出某个 action，障碍物就必须封死所有绕行方向。**
+ *      反例：dig-through 的墙只铺 ±12（她从两端绕过去，"通过"了但直方图里没有 dig）；
+ *            digdown 的台子只铺 AZ±6（她从南北走过去，直方图纯 {"walk":32}）。
+ *      做法：横贯场地（AZ±26），或直接铺满。
+ *
+ *   2) **终点不能落在"水平上已经算到达"的位置。**
+ *      `walkTo` 只按**水平**距离判到达（arriveTol，默认 2 格），完全不看 y。
+ *      反例一（climb-ladder）：起点本来就在柱子那一列 → 0ms 报成功、根本没爬。
+ *      反例二（digdown v1）：终点放在盖板正下方 → 她站在盖顶、水平距离已进 arriveTol
+ *             → 判到达，规划里那步 `down` 压根没执行（y 全程不变）。
+ *      做法：让终点与"她能站的那一面"在**水平**上至少隔开 arriveTol 以上，
+ *            使最后那段垂直移动成为到达的必要条件。
+ *
+ *   3) 想验证"某个派生分支被执行到"，别只看干跑直方图 —— 干跑直方图只含
+ *      plan3D 产出的动作（start/walk/jump/down/dig/climb）。像 `digdown` 这种
+ *      **executor 执行期的派生分支**（executor.js:261）必须数执行期事件：
+ *      本脚本已把 `onEvent` 接进 walkTo，每行 jsonl 记 `execActions` / `digdownSeen`。
+ * ═══════════════════════════════════════════════════════════════════
+ *
  * 用法：node tools/bench_move_actions.mjs [每场景轮数]
  * 输出：tmp/bench/<日期>-move-actions.jsonl + 控制台按 action 汇总
  */
@@ -161,20 +183,38 @@ bot.once('spawn', async () => {
             },
             start: { dx: -8, dz: 0 }, dest: { dx: 8, dz: 0 },
         },
-        // ── digdown（往下挖穿一层地板）──────────────────────────────────
+        // ── digdown（站在顶盖上，目标在同列的下层地面 → 必须往下挖穿）──────
+        //
+        // ★ 2026-11-01（t6 专项）：改了三处，目标只有一个 —— 让 executor 的
+        //   **digdown 派生分支**（`dy < -1 && dxz < 1.5 && 脚下实心`）真的被走到。
+        //
+        //   ① 删掉原来 `AX+8` 那条竖空气槽：它把顶盖打通了，她直接从槽里走下去，
+        //      永远不需要挖。
+        //   ② 顶盖铺满整个场地（AX/AZ 都是 ±26）：原来只铺 X∈[AX-4,AX+12]，
+        //      她可以从 X 边缘走下去、再在地面层绕到目标点下方（G+1 那层是通的）。
+        //      铺满之后**没有任何绕行方向**，下去的唯一办法就是挖穿顶盖。
+        //   ③ 目标点与起点**同一列**（dx 只差 7 格、同一 dz），且比起点低 3 格 ——
+        //      这样规划出的那一步一定是"同列往下掉 3 格"，正是 digdown 的触发条件。
+        //      同时两点距离 7 格 < scanSphere 半径 24，扫描能同时看到上下两层地面。
+        //
+        //   为什么起点要 `up: 3`：顶盖在 G+3，站在盖上的脚位是 G+4 = S+3。
         {
             name: 'digdown', want: ['digdown', 'dig', 'down'],
             build: async () => {
                 await reset();
-                // ★ 2026-11-01：台子必须**横贯整个场地**（AZ±26），否则她会从南北两侧绕过去。
-                //   上一版只铺 AZ-6..AZ+6，实测动作直方图是纯 {"walk":32}（wantHit=false）——
-                //   她压根没往下挖，在台上走过去了。dig-through 的墙当初也犯过同一个错
-                //   （墙只有 ±12 宽，于是"通过"了但动作里一个 dig 都没有）。
-                //   教训：只要场景想逼出某个 action，障碍物就必须封死**所有**绕行方向。
-                await fillSafe(RC, AX - 4, G, AZ - 26, AX + 12, G + 3, AZ + 26, 'stone');
-                await RC(`fill ${AX + 8} ${G + 1} ${AZ - 3} ${AX + 8} ${G + 3} ${AZ + 3} air`);
+                // 顶盖：1 格厚，Z 方向铺满全场（封死南北绕行），X 方向止于 AX+8（见下面 ④）。
+                // 下面 G+1~G+2 是空气（reset 清出来的），于是有盖的列都有**两个可站立面**：
+                // 盖顶(G+4) 与 地面(G+1)。
+                await fillSafe(RC, AX - 8, G + 3, AZ - 26, AX + 8, G + 3, AZ + 26, 'stone');
             },
-            start: { dx: -10, dz: 0 }, dest: { dx: 16, dz: 0 },
+            //   ④ **盖板必须止于目标之前**：第一版把盖铺满全场、目标在盖的正下方，
+            //      结果她站在盖顶、水平距离已在 arriveTol(2) 内 → walkTo 直接判到达，
+            //      规划的 `down` 那一步根本没被执行（实测 执行={"scan3d":1,"plan3d":1}、
+            //      y 全程 -57 不变）。walkTo 只按**水平**距离判到达，所以终点不能待在盖正下方。
+            //      现在盖只铺到 AX+8，目标在 AX+16：她在盖沿必须下降 3 格才走得完剩下的 8 格。
+            //      离线用 terrain3d.saveSurfaces + plan3D 验过：直方图 {"walk":19,"down":1}，
+            //      其中那步 down 是 dy=-3 / dxz=1（正是 executor.js:261 的触发条件）。
+            start: { dx: -4, dz: 0, up: 3 }, dest: { dx: 16, dz: 0 },
         },
         // ── climb（梯子）───────────────────────────────────────────────
         {
@@ -306,7 +346,17 @@ bot.once('spawn', async () => {
             // 每个场景用自己的库（避免上一个场景的地形数据串味）
             const liveMapDir = join('tmp', 'bench-actions-map', sc.name);
             const t0 = Date.now();
-            const r = await walkTo(bot, { x: dx, z: dz }, { mapDir: liveMapDir, deadlineMs: sc.deadlineMs ?? 60000, arriveTol: 2 });
+            // ★ 2026-11-01（t6）：**执行期动作计数**。
+            //   干跑直方图来自 plan3D，而 plan3D 的动作只有 start/walk/jump/down/dig/climb ——
+            //   `digdown` 根本不是规划出来的动作，它是 executor 里的派生分支
+            //   （executor.js:261：dy<-1 且同列且脚下实心）。所以"直方图里出现 digdown"
+            //   在原理上不可能，只能从执行期事件里数（executor.js:287 会发 {type:'digdown'}）。
+            const execActions = {};
+            const countEvent = (e) => {
+                if (!e || !e.type) return;
+                execActions[e.type] = (execActions[e.type] ?? 0) + 1;
+            };
+            const r = await walkTo(bot, { x: dx, z: dz }, { mapDir: liveMapDir, deadlineMs: sc.deadlineMs ?? 60000, arriveTol: 2, onEvent: countEvent });
             const ms = Date.now() - t0;
             const after = here();
             const remain = Math.hypot(dx - after.x, dz - after.z);
@@ -318,11 +368,14 @@ bot.once('spawn', async () => {
                 ok: !!r.ok, code: r.code ?? 'OK',
                 ms, moved: +moved.toFixed(1), remain: +remain.toFixed(1),
                 fromY: +before.y.toFixed(1), toY: +after.y.toFixed(1),
+                execActions,
+                digdownSeen: (execActions.digdown ?? 0) > 0,
                 msg: String(r.message ?? '').slice(0, 60),
             };
             rows.push(row);
             appendFileSync(outFile, JSON.stringify(row) + '\n', 'utf8');
-            console.log(`  ${row.ok ? 'PASS' : 'FAIL'} ${sc.name.padEnd(14)} #${round} code=${row.code} ${ms}ms 走${row.moved} 剩${row.remain} y ${row.fromY}->${row.toY}  动作=${JSON.stringify(actionHist)}`);
+            console.log(`  ${row.ok ? 'PASS' : 'FAIL'} ${sc.name.padEnd(14)} #${round} code=${row.code} ${ms}ms 走${row.moved} 剩${row.remain} y ${row.fromY}->${row.toY}  动作=${JSON.stringify(actionHist)}` +
+                `  执行=${JSON.stringify(execActions)}${row.digdownSeen ? ' ★digdown' : ''}`);
         }
         closeDb3d(mapDir);
     }

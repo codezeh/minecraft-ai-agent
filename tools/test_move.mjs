@@ -2,7 +2,8 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { moveTo, stopMove, lookAt } from '../src/agent/library/atom_move.js';
+import { moveTo, stopMove } from '../src/agent/library/atom_move.js';
+import { lookAtPoint } from '../src/agent/library/atom_input_mouse.js';
 import { blockAt } from '../src/agent/library/atom_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -94,7 +95,7 @@ bot.once('spawn', async () => {
     bot.interrupt_code = false;
 
     // 5) lookAt 不抛
-    const la = await lookAt(bot, { x: 3, y: -60, z: 0 });
+    const la = await lookAtPoint(bot, { x: 3.5, y: -59.5, z: 0.5 });
     check('lookAt 返回 ok', la.ok === true);
 
     await reset();

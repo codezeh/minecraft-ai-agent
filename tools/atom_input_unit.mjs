@@ -15,6 +15,7 @@ import { makeFakeBot, worldOf } from './fixtures/fake_bot.mjs';
 import { holdKey, pressKey, releaseAll, setSneak } from '../src/agent/library/atom_input_move.js';
 import { holdDig, useOnBlock, placeAgainst, attackOnce } from '../src/agent/library/atom_input_mouse.js';
 import { command, say, checkCommand } from '../src/agent/library/atom_input_misc.js';
+import { selectSlot, clickSlot, dropSlot, closeWindow, HOTBAR_SLOTS } from '../src/agent/library/atom_input_inventory.js';
 import { blockAt, pose, inventory, isEmptyName } from '../src/agent/library/atom_read.js';
 import { climbUp } from '../src/agent/library/atom_climb.js';
 import { pillarUpOnce } from '../src/agent/library/atom_pillar.js';
@@ -328,6 +329,63 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         okCase('pillarUpOnce 失败路径松键', `code=${r.code}`);
     } else {
         badCase('pillarUpOnce 失败路径松键', JSON.stringify({ code: r.code, released, controls: [...bot.__controls.keys()] }));
+    }
+}
+
+// ── 19. atom_input_inventory：切格越界拒绝 / 正常切格 ────────────────────
+{
+    let setTo = null;
+    const bot = makeFakeBot({ stubs: { setQuickBarSlot: (i) => { setTo = i; } } });
+    const bad = await selectSlot(bot, HOTBAR_SLOTS);      // 越界
+    const neg = await selectSlot(bot, -1);
+    const good = await selectSlot(bot, 3);
+    if (!bad.ok && bad.code === 'NO_TARGET' && !neg.ok && good.ok && setTo === 3) {
+        okCase('selectSlot 越界拒绝 / 正常切格', `slot=${good.data.slot}`);
+    } else {
+        badCase('selectSlot 越界拒绝 / 正常切格', JSON.stringify({ bad: bad.code, neg: neg.code, good: good.ok, setTo }));
+    }
+}
+
+// ── 20. atom_input_inventory：没窗口时报 WINDOW_CLOSED；有窗口按参数点击 ──
+{
+    const bot = makeFakeBot({});
+    bot.currentWindow = null;
+    const r = await clickSlot(bot, 5);
+    const calls = [];
+    const bot2 = makeFakeBot({ stubs: { clickWindow: async (slot, button, mode) => { calls.push([slot, button, mode]); } } });
+    bot2.currentWindow = { slots: [] };
+    const ok2 = await clickSlot(bot2, 5, { button: 1, mode: 2 });
+    if (!r.ok && r.code === 'WINDOW_CLOSED' && ok2.ok && calls.length === 1
+        && calls[0][0] === 5 && calls[0][1] === 1 && calls[0][2] === 2) {
+        okCase('clickSlot 无窗口报 WINDOW_CLOSED、有窗口按参数点击', `calls=${JSON.stringify(calls)}`);
+    } else {
+        badCase('clickSlot 无窗口报 WINDOW_CLOSED、有窗口按参数点击', JSON.stringify({ code: r.code, ok2: ok2.ok, calls }));
+    }
+}
+
+// ── 21. atom_input_inventory：dropSlot = clickWindow(slot, all?1:0, 4) ──
+{
+    const calls = [];
+    const bot = makeFakeBot({ stubs: { clickWindow: async (slot, button, mode) => { calls.push([slot, button, mode]); } } });
+    bot.currentWindow = { slots: [] };
+    await dropSlot(bot, 7, false);
+    await dropSlot(bot, 7, true);
+    const okShape = calls.length === 2 && calls[0].join(',') === '7,0,4' && calls[1].join(',') === '7,1,4';
+    if (okShape) okCase('dropSlot 的 button/mode 组合（Q 键语义）', JSON.stringify(calls));
+    else badCase('dropSlot 的 button/mode 组合（Q 键语义）', JSON.stringify(calls));
+}
+
+// ── 22. atom_input_inventory：closeWindow 幂等且转出 closeContainer ──
+{
+    let closed = 0;
+    const bot = makeFakeBot({ stubs: { closeWindow: () => { closed++; } } });
+    const none = await closeWindow(bot);
+    bot.currentWindow = { slots: [] };
+    const some = await closeWindow(bot);
+    if (none.ok && none.data.closed === false && some.ok && some.data.closed === true && closed === 1) {
+        okCase('closeWindow 幂等且转出 closeContainer', `closed调用=${closed}`);
+    } else {
+        badCase('closeWindow 幂等且转出 closeContainer', JSON.stringify({ none: none.data, some: some.data, closed }));
     }
 }
 

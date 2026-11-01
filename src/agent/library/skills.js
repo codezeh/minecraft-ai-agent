@@ -12,6 +12,9 @@ import { runSteps } from './step_runner.js';
 // ★ 2026-11-01（Phase A.3 / A1）：斜杠命令与按键只许从输入原子出去，本文件不再自己拼 bot.chat('/…')。
 import { command } from './atom_input_misc.js';
 import { pressKey } from './atom_input_move.js';
+// 2026-11-01（t6 遗留清理）：挖/放/右键/挥击/停止挖掘全部改走 atom_input_mouse，本文件不再裸调 bot.* 输入。
+import { holdDig, placeAgainst, useOnBlock, useHeld, attackOnce, lookAtPoint, stopDig } from './atom_input_mouse.js';
+import { closeWindow as closeWindowAtom } from './atom_input_inventory.js';
 import { scanTree, judgeTree, planFelling } from './atom_tree.js';
 import { followEntity as followEntityTask } from './task_follow.js';
 import pf from 'mineflayer-pathfinder';
@@ -575,13 +578,15 @@ export async function smeltItem(bot, itemName, num=1) {
         }
     }
     modesPause(bot, 'unstuck');
-    await bot.lookAt(furnaceBlock.position);
+    // 转头走输入原子（一次性，无后置校验，与改前 bot.lookAt 默认 force=false 一致）
+    await lookAtPoint(bot, { x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z }, { force: false });
 
     const furnace = await bot.openFurnace(furnaceBlock);
 
     // 关窗收尾：不碰里面的东西（别人正在用的东西不能顺走）
     const closeOnly = async () => {
-        try { await bot.closeWindow(furnace); } catch (e) { /* ignore */ }
+        // 关窗也是界面输入，走 atom_input_inventory（内部转出 atom_container.closeContainer）
+        try { await closeWindowAtom(bot); } catch (e) { /* ignore */ }
         if (placedFurnace) {
             try { await collectBlock(bot, 'furnace', 1); } catch (e) { /* ignore */ }
         }
@@ -729,7 +734,8 @@ export async function attackEntity(bot, entity, kill=true) {
             await goToPosition(bot, pos.x, pos.y, pos.z);
         }
         console.log('attacking mob...')
-        await bot.attack(entity);
+        // 挥击 = 鼠标输入，走 atom_input_mouse（旧代码是裸 bot.attack，返回值本来也不用）
+        await attackOnce(bot, entity);
     }
     else {
         bot.pvp.attack(entity);
@@ -905,7 +911,10 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
                         `（眼高 ${(bot.entity.eyeHeight ?? 1.62).toFixed(2)}），需要先挖过去/垫上去。`);
                     break;
                 }
-                await bot.dig(block);
+                // 挖掘走 holdDig（自带超时/中断/stopDigging）。失败就抛出去，由外层 catch 记一条
+                // 「Failed to collect …」再 continue —— 与改前 bot.dig 抛错时的行为一致。
+                const dug = await holdDig(bot, block, { timeout: 8000 });
+                if (!dug.ok) throw new Error(`${dug.code}: ${dug.message}`);
                 await pickupNearbyItems(bot);
                 success = true;
             }
@@ -1054,7 +1063,14 @@ export async function breakBlockAt(bot, x, y, z) {
                 return false;
             }
         }
-        await bot.dig(block, true);
+        // 挖掘走 holdDig；挖不动/超时就按本函数既有的失败样式报 FAILED 并返回 false
+        //（旧代码是裸 bot.dig，失败会抛，函数直接炸 — 这里给出同样的"失败"结论但可归因）
+        const dug = await holdDig(bot, block, { timeout: 8000 });
+        if (!dug.ok) {
+            log(bot, `Failed to break ${block.name}: ${dug.code}.`);
+            log(bot, `FAILED`);
+            return false;
+        }
         log(bot, `Broke ${block.name} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
     else {
@@ -1253,8 +1269,11 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
         }
         else {
             await bot.equip(block_item, 'hand');
-            await bot.lookAt(buildOffBlock.position.offset(0.5, 0.5, 0.5));
-            await bot.placeBlock(buildOffBlock, faceVec);
+            // 扭头 + 放置都走输入原子；放置失败要抛，让下面的 catch 照旧报 PLACE_FAILED
+            const eye = buildOffBlock.position.offset(0.5, 0.5, 0.5);
+            await lookAtPoint(bot, { x: eye.x, y: eye.y, z: eye.z }, { force: true });
+            const placed = await placeAgainst(bot, buildOffBlock, faceVec);
+            if (!placed.ok) throw new Error(placed.message);
             log(bot, `Placed ${blockType} at ${target_dest}.`);
             await new Promise(resolve => setTimeout(resolve, 200));
         return true;
@@ -1582,7 +1601,7 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
         }
     }
 
-    await bot.lookAt(player.position);
+    await lookAtPoint(bot, { x: player.position.x, y: player.position.y, z: player.position.z }, { force: false });
     if (await discard(bot, itemType, num)) {
         let given = false;
         bot.once('playerCollect', (collector, collected) => {
@@ -1855,7 +1874,8 @@ function startDoorInterval(bot) {
                      block.name.includes('fence_gate') ||
                      block.name.includes('trapdoor'))) 
                 {
-                    bot.activateBlock(block);
+                    // 定时器里不 await（改前也是裸调不 await）；用 useOnBlock 保证仍只有一个出口
+                    void useOnBlock(bot, block);
                     break;
                 }
             }
@@ -1930,7 +1950,7 @@ export async function goToPosition(bot, x, y, z, min_distance = 2) {
             if (!targetBlock.canHarvest(itemId)) {
                 log(bot, `Pathfinding stopped: Cannot break ${targetBlock.name} with current tools.`);
                 bot.pathfinder.stop();
-                bot.stopDigging();
+                void stopDig(bot);
             }
         }
     };
@@ -2072,7 +2092,7 @@ export async function goToPlayer(bot, username, distance=3) {
             // 转身看向玩家，这样她抬头就能看到（lookAt 无返回值）
             try {
                 const headHeight = cur.height ? cur.height * 0.9 : 1.6;
-                await bot.lookAt(pp.offset(0, headHeight, 0));
+                await lookAtPoint(bot, { x: pp.x, y: pp.y + headHeight, z: pp.z }, { force: false });
             } catch (err) { /* 看向失败不影响结果 */ }
             log(bot, `Reached ${username} at (${Math.floor(pp.x)},${Math.floor(pp.y)},${Math.floor(pp.z)}), ` +
                 `horizontal ${dxz.toFixed(1)} blocks away, height diff ${dy.toFixed(1)}.`);
@@ -2338,7 +2358,7 @@ export async function useDoor(bot, door_pos=null) {
     // door_block 可能是 null：门被拆了、坐标给错了、或者区块未加载。
     // 直接 ._properties 会抛 TypeError（和上面 getNearestBlock 那个是同一类 null 解引用）。
     let door_block = bot.blockAt(door_pos);
-    await bot.lookAt(door_pos);
+    await lookAtPoint(bot, { x: door_pos.x, y: door_pos.y, z: door_pos.z }, { force: false });
     if (!door_block) {
         log(bot, `这里 (${Math.floor(door_pos.x)},${Math.floor(door_pos.y)},${Math.floor(door_pos.z)}) 没有方块，用不了门。`);
         return false;
@@ -2349,7 +2369,7 @@ export async function useDoor(bot, door_pos=null) {
     }
 
     const wasOpen = !!(door_block._properties && door_block._properties.open);
-    if (!wasOpen) await bot.activateBlock(door_block);
+    if (!wasOpen) await useOnBlock(bot, door_block);
 
     // 穿过去
     // 2026-11-01（Phase A.1）：按键走 atom_input_move.pressKey（到时必松，try/finally）
@@ -2365,7 +2385,7 @@ export async function useDoor(bot, door_pos=null) {
     }
     const reach = bot.entity.position.distanceTo(door_pos);
     if (reach <= 4) {
-        await bot.activateBlock(still);
+        await useOnBlock(bot, still);
         // 关完等一会儿再回读：服务端的方块更新不是同步到达的，
         // 立刻读会拿到旧的 open 状态，从而误报"关门没成功"。
         await new Promise((r) => setTimeout(r, 300));
@@ -2470,7 +2490,7 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
             log(bot, `Cannot till, no hoes.`);
             return false;
         }
-        await bot.activateBlock(block);
+        await useOnBlock(bot, block);
         log(bot, `Tilled block x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
     
@@ -2483,7 +2503,7 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
             return false;
         }
 
-        await bot.activateBlock(block);
+        await useOnBlock(bot, block);
         log(bot, `Planted ${seedType} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
     }
     return true;
@@ -2508,7 +2528,7 @@ export async function activateNearestBlock(bot, type) {
         bot.pathfinder.setMovements(new pf.Movements(bot));
         await goToGoal(bot, new pf.goals.GoalNear(pos.x, pos.y, pos.z, 4));
     }
-    await bot.activateBlock(block);
+    await useOnBlock(bot, block);
     log(bot, `Activated ${type} at x:${block.position.x.toFixed(1)}, y:${block.position.y.toFixed(1)}, z:${block.position.z.toFixed(1)}.`);
     return true;
 }
@@ -2839,7 +2859,7 @@ export async function useToolOn(bot, toolName, targetName) {
         if (!equipped) {
             return false;
         }
-        await bot.activateItem();
+        await useHeld(bot);
         log(bot, `Used ${toolName}.`);
     } else if (world.isEntityType(targetName)) {
         const entity = world.getNearestEntityWhere(bot, e => e.name === targetName, 64);
@@ -2893,7 +2913,7 @@ export async function useToolOn(bot, toolName, targetName) {
 
     const distance = toolName === 'water_bucket' && block.name !== 'lava' ? 1.5 : 2;
     await goToPosition(bot, block.position.x, block.position.y, block.position.z, distance);
-    await bot.lookAt(block.position.offset(0.5, 0.5, 0.5));
+    await lookAtPoint(bot, { x: block.position.x + 0.5, y: block.position.y + 0.5, z: block.position.z + 0.5 }, { force: false });
 
     // if block in view is closer than the target block, it is in our way. try to move closer
     const viewBlocked = () => {
@@ -2909,7 +2929,7 @@ export async function useToolOn(bot, toolName, targetName) {
         // choose random block next to target block, go to it
         const nearbyPos = block.position.offset(Math.random() * 2 - 1, 0, Math.random() * 2 - 1);
         await goToPosition(bot, nearbyPos.x, nearbyPos.y, nearbyPos.z, 1);
-        await bot.lookAt(block.position.offset(0.5, 0.5, 0.5));
+        await lookAtPoint(bot, { x: block.position.x + 0.5, y: block.position.y + 0.5, z: block.position.z + 0.5 }, { force: false });
         if (viewBlocked()) {
             const blockInView = bot.blockAtCursor(5);
             log(bot, `Block ${blockInView.name} is in the way, not using ${toolName}.`);
@@ -2924,10 +2944,10 @@ export async function useToolOn(bot, toolName, targetName) {
         return false;
     }
     if (toolName.includes('bucket')) {
-        await bot.activateItem();
+        await useHeld(bot);
     }
     else {
-        await bot.activateBlock(block);
+        await useOnBlock(bot, block);
     }
     log(bot, `Used ${toolName} on ${block.name}.`);
     return true;

@@ -499,14 +499,7 @@ export async function stopMove(bot) {
     return ok({ pos: { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } });
 }
 
-/** 看向某个方块/坐标（眼睛高度补正）。 */
-export async function lookAt(bot, pos) {
-    const v = pos instanceof Vec3 ? pos : new Vec3(pos.x, pos.y, pos.z);
-    const target = new Vec3(v.x + 0.5, v.y + 0.5, v.z + 0.5);
-    try {
-        await bot.lookAt(target, true);
-    } catch (e) {
-        return fail('INTERNAL', String(e?.message ?? e));
-    }
-    return ok({ target: { x: target.x, y: target.y, z: target.z } });
-}
+// ★ 2026-11-01（t6）：这里原有一个 lookAt，与 atom_look.lookAt 是**同一能力的第二份实现**
+//   （本文件那份只看坐标、不做 yaw/pitch 后置校验）。转头属于鼠标输入，唯一出口是
+//   `atom_input_mouse`（lookAt 转出 atom_look / lookAtPoint 一次性转头），所以删掉这份。
+//   原调用方只有两个测试脚本，已改调 atom_input_mouse.lookAtPoint。

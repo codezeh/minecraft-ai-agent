@@ -21,6 +21,8 @@ import Vec3 from 'vec3';
 import { PlayerTracker, ensureTracking, query, queryPlayerExact } from './atom_query.js';
 import { ensureScaffold, countScaffold } from './tool_prep.js';
 import { detectTrapped } from './atom_stuck_detect.js';
+// 2026-11-01（t6）：转头改走输入原子（bot.look* 的唯一出口）。
+import { lookAtPoint } from './atom_input_mouse.js';
 
 export { PlayerTracker, ensureTracking };
 
@@ -381,7 +383,7 @@ export async function goToPlayer(bot, name, opts = {}) {
             try {
                 const ent = bot.players?.[name]?.entity;
                 const head = ent?.height ? ent.height * 0.9 : 1.6;
-                await bot.lookAt(new Vec3(now.x, now.y + head, now.z), true);
+                await lookAtPoint(bot, { x: now.x, y: now.y + head, z: now.z }, { force: true });
             } catch { /* 看向失败不影响结果 */ }
             return ok({ distFeetToEntity: dxz, dy, source: q2.data.source });
         }

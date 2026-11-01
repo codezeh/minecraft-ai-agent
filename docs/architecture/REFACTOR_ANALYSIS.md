@@ -636,7 +636,7 @@ async function skillName(bot, goal, context = {}) {
   | `library/skills.js` | 鼠标输入 ×14（attack 732；dig 908/1057；placeBlock 1257；activateBlock 1858/2352/2368/2473/2486/2511/2930；activateItem 2842/2927；stopDigging 1933） | 运行路径（采集/建造/开关门），量最大、风险最高 | **Phase R**（按前缀重排时一起搬）。注意：这 14 处是**既定的直发行为**，Phase A 没有让它们变得更差，窗口期可接受 |
   | ~~`library/tool_prep.js`~~ | ~~×2（dig 160；placeBlock 298）~~ | **已于 2026-11-01 本轮改掉**：改调 `holdDig`（保留 D12 的 withTimeout 兜底，并按 ActionResult 判成败）与 `placeAgainst` | ✅ 已销账 |
   | ~~`library/atom_attack.js`~~ | ~~×1（bot.attack 143）~~ | **已于 2026-11-01 本轮改掉**：`bareAttack` 改调 `atom_input_mouse.attackOnce` + `lookAtPoint`（挥击与扭头同一个出口） | ✅ 已销账 |
-  | `agent.js` | ×1（`this.bot.stopDigging()` 342） | 停任务时的收尾清理；agent.js 属 M1 | M1 或 Phase R：改调 `stopDig` |
+  | `agent.js` | ×1（`this.bot.stopDigging()` 342） | 停任务时的收尾清理，agent.js 属 M1（t2 交付）。**2026-11-01 决定：明留到此表，留到 Phase R 改调 `stopDig`** —— 不是隐形豁免，本条就是它的销账依据 | **Phase R** |
   | ~~`library/skill_clear.js`、`library/scaffold_cleanup.js`~~ | **0**（当初把注释里的提及也算进去了） | — | ✅ 2026-11-01 已从 `allow` 删除（空豁免比没有更坏：让人以为「确实违规但我们原谅了」） |
 
   **扫描覆盖缺口（必须记下，别当成「没发现」）**
@@ -763,16 +763,30 @@ async function skillName(bot, goal, context = {}) {
 
 1. **「全场景一致偏慢」需要一次同环境 A/B**（同一会话内先跑基线代码 3 轮、再跑现码 3 轮），否则不能排除环境。
    本轮只能给「失败结构与动作直方图未变」这个定性结论。
-2. A.1 的 `bot.look*` 一半**不在扫描覆盖内**（`mouse-input-owner` 的 pattern 不含 look）：
-   实际调用方 `modes.js` 6 / `vision_interpreter.js` 3 / `skills.js` 2 / `task_follow.js` 1 /
-   `atom_move.lookAt` / `atom_boat` 2 —— 「look 只从 `atom_input_mouse` 出去」**当前不成立**，只是没被扫出来。
-   不能按「0 命中」判这一半完成。
-3. `atom_input_inventory` 的 4 个原子（selectSlot / clickSlot / closeWindow / dropSlot）**尚未建**
-   （当前无绕过口：`clickWindow` 0 处、`setQuickBarSlot` 0 处）。
-4. `modes.js:43` 仍有 1 处 `setControlState('jump')`（M2 收尾或 Phase R 销账）。
-5. `atom_all.mjs:71` 的 PASS 计数 +1（见第 3 条内注），修法：只数行首 `^\s*PASS\b`，或先剔除 `N PASS / M FAIL` 汇总行。
-6. M2 的 `control.js` 只有离线覆盖（`control_reasons_unit` 35 例）；真机部分（僵尸动作 10 秒自杀并重新拉起、
-   死亡捡单、任务单 deadline）**尚未在真机上触发过**，需一次人工真机演练。
+2. ~~A.1 的 `bot.look*` 一半**不在扫描覆盖内**（pattern 不含 look）~~
+   **⚠️ 2026-11-01 captain 核实纠正：这条说错了。** `tools/preflight.mjs:295` 的 pattern
+   `…|lookAt|look)\s*\(/` **已含 look**（t6 补的）—— look 是**被扫到的**，不是漏扫。
+   真实情况是 `modes.js`（4 处）与 `agent.js`（1 处 `stopDigging`）属**具名豁免**，
+   规则绿是因为豁免，不是因为没查。**结论仍然成立：不能按「0 命中」判这一半完成**，
+   但理由必须改成"有具名豁免"，不是"pattern 不含 look"。
+   其余调用方（`vision_interpreter` 3 / `skills.js` 6 / `task_follow` 1 / `atom_move` 的重复 `lookAt`）已在 t6 全部销账。
+3. ~~`atom_input_inventory` 的 4 个原子（selectSlot / clickSlot / closeWindow / dropSlot）**尚未建**~~
+   → **已销账（t6，2026-11-01）**：`src/agent/library/atom_input_inventory.js` 新建 4 个原子，申报 40 已写；
+   `closeWindow` 转出既有 `atom_container.closeContainer`（不重写）。建前 grep 确认无存量行为
+   （`clickWindow` 0 处、`setQuickBarSlot` 0 处），所以这是「补缺口」不是「改行为」。
+   t8 复核：preflight 字段标准通过、错误码审计 31 个全合法、申报 1 个新增全部已批准；
+   `atom_input_unit` 19 → **23 用例**（新增 4 条 inventory 用例）。
+4. ~~`modes.js:43` 仍有 1 处 `setControlState('jump')`（M2 收尾或 Phase R 销账）~~
+   → **已销账（t7，2026-11-01）**：改走 `atom_input_move.holdKey`。但 `modes.js` 里还有
+   **4 处 `bot.look*`**（现 `:349/:351/:364/:366`）仍属 M2 残项，见「遗留清理 B」§3。
+5. ~~`atom_all.mjs:71` 的 PASS 计数 +1（见第 3 条内注）~~
+   → **已销账（t6，2026-11-01）**：改成只数行首 `^\s*PASS\s`，注释里写明「实测后果：显示 262 / 真实 244」。
+   t8 复核：18 项显示数 = 真实数（`atom_move 10`、`skill_collect 22`、`skill_clear 11`…），
+   总 **244 条真实用例、0 FAIL**。**从本轮起引用显示数不再虚高。**
+6. ~~M2 的 `control.js` 只有离线覆盖（`control_reasons_unit` 35 例）；真机部分（僵尸动作 10 秒自杀并重新拉起、
+   死亡捡单、任务单 deadline）**尚未在真机上触发过**，需一次人工真机演练。~~
+   → **僵尸动作已真机演练（t7，2026-11-01）**：`tools/control_zombie_live.mjs` 21 条断言全过，见「遗留清理 B」§1–§2。
+   **死亡捡单与任务单 deadline 仍只有离线覆盖**（依赖 M8 任务板/调度器，接上后才能真机验）。
 
 **文档-代码不一致（只列不改，由 captain 统一收口）**
 
@@ -784,6 +798,151 @@ async function skillName(bot, goal, context = {}) {
 3. ~~t3 报 `control_reasons_unit` 34 条，`unit_all` 实跑 **35 用例**~~ → **已核实 35 为准**（t3 报告少报 1）。
 
 ---
+
+### 遗留清理 B：modes.js 按键收口 + D18 真机演练（2026-11-01，t7）
+**目标**: 清掉 M2 的两项遗留 —— ① `modes.js` 最后一处绕开输入原子的按键；② `control.js` 的真机空白（D18）
+
+#### 1) D18 真机演练：实测证据（`tools/control_zombie_live.mjs`，21 条断言全过）
+
+跑法：`node tools/control_zombie_live.mjs`（父进程 spawn 子进程、自己收尸；真 mineflayer bot + 真 `ActionManager`
++ 真 `Agent`（只跳过 `start()`，于是 `requestInterrupt`/`clearBotLogs`/`cleanKill`/`isIdle` 都是生产代码）。
+子进程往 stdout 打 `#EV {json}`，父进程逐条解析成断言。原始日志：`mindcraft/tmp/zombie-live.log`。
+
+| 断言 | 实测值 |
+|---|---|
+| 等满 `stopWaitMs` 才动身体 | `zombie-action` 事件 `{label:"job:zombie", reason:"timeout", waitedMs:10015}`；探针 `clearControlStates` **@11955ms**（>9000 才动手，排除"秒退但恰好也调了"） |
+| 松键完成 | 退出时 7 个移动键**全 false**；stop 之前 `forward=true`（"松键"不是空集） |
+| `cleanKill(msg,1)` → **退出码 1** | 子进程 `exit code=1, signal=null`（不是 SIGINT/0/>1）；且必须同时满足 `reachedZombiePath`（动作在跑 + stop 被调用 + history 收到 msg）——**因为崩溃也给 1**，第一版就被这个假阳性坑过 |
+| 存活 >10 秒 | `uptime=11956ms`（不撞 `agent_process.js:44-47` 的"太快不重启"保护） |
+| 拉起后能干活 | 新进程 `after-alive uptime=10609ms`；跑完两条命令 `ok=true`、`executing=false` |
+| 没连主服 25565 | 仪表记录的实际远端端口 `[25566]`，活 socket `remotePort=25566`；`net.Socket.prototype.connect` 钩子在 `createBot` **之前**装 |
+| 收尸自证 | 演练后 `rcon list` 无 `zb*`；演练前后快照 diff 无缺失（没误踢任何人）；r1 `exit=1` / r2 `exit=0` 都收到；源码里无 `kick`/`stop` 调用 |
+
+> **诚实边界（原文保留，别被以后读成"已完整验证"）**：本演练**没有**真的跑 `AgentProcess` 的重启循环
+> （它只会 spawn `init_agent.js`，而 init_agent 依赖 mindserver + profile，本演练明确不碰 mindserver）。
+> 所以「被重新拉起」是**三段事实合成**，不是观察到拉起日志：
+> **(a)** 真代码产出 exit 1（演练实测）+ **(b)** 真 `agent_process.js` 对 code 1 走重启分支（源码契约断言：
+> `code > 1 → process.exit` 结束任务 / `code !== 0 && signal !== 'SIGINT' → this.start(true,'Agent process restarted.')` /
+> `Date.now() - last_restart < 10000` 保护）+ **(c)** 新进程能连服跑命令（实测）。
+> **要变成实测，需要把 AgentProcess 真跑起来（依赖 mindserver + profile），需另行授权。**
+
+#### 2) `modes.js` 按键收口（M2 残项销账）
+- `modes.js` 自保分支里最后一处裸按键 `bot.setControlState('jump', true)` → `atom_input_move.holdKey(bot,'jump',{...})`：
+  `until: 出水即松` / `timeout: 3000ms 后原子自己松、下一 tick 续（等价"一直按着"）` / `interrupt_code → 原子自己松`
+  （与 D16 的 `finally` 松键同一套保证）/ WeakMap 去重（每 tick 不叠层）/ Promise 存模块作用域（不挂到 LLM 可达对象）。
+- 离线用例 3 条（`control_reasons_unit` §13）：在水里按住 ✅ / 出水后自动松 ✅ / 源码里再无裸 `setControlState` ✅
+  （判据**先剥注释**，否则说明文字里引用的旧代码会被当成违规）。`control_reasons_unit` 现 **38 用例**。
+
+#### 3) 仍在的正经残项（不是遗漏，是排期）
+- **`modes.js` 的 4 处 `bot.look*`**（`:349/:351/:364/:366`，`idle_staring` 的看人/随机转头）仍直调 mineflayer，
+  未走 `atom_input_mouse`。`preflight` 的 `mouse-input-owner` 规则里已把 `modes.js` 列为**具名豁免**（归属 M2），
+  所以扫描是绿的、但债还在。
+- ~~该规则的 pattern 不含 look（只查挖/放/右键/挥击）~~ → **2026-11-01 captain 核实纠正：说错了。**
+  `tools/preflight.mjs:295` 的 pattern 已含 `lookAt|look`（t6 补的）。look **是被扫到的**；
+  `modes.js` 这 4 处绿是因为它在 `allow` 里具名豁免，不是因为没查。
+  **结论不变：别按"0 命中"判完成** —— 理由改成"有具名豁免"，与上面 t5 §未覆盖项 2 是同一条。
+
+### 遗留清理 C：干净基线重建 + 收口验收（2026-11-01，t8）
+
+**为什么要重做基线**：`baseline-m2.jsonl` 是 `appendFileSync` 跨多次运行**累积**的混合物（297 行 = 27 轮，
+来自今晚多个不同代码状态）。证据：`climb-ladder` 27 行里只有 r1–r3 是三行 21840/21947/21825ms（守卫收窄前），
+其余 24 行 1371–1840ms → 中位 1532、**平均 3862**、max 21947（双峰）；`pillar-up2` 8 行 >12s（max 34976）、
+`gap-bridge` 2 行 TIMEOUT（60.9/63.1s）。**这种文件不能当干净对照**：用平均数会得出「改后快 10 倍」的假结论。
+
+**做法**：把 `tmp/bench/` 下 12 个旧 jsonl 全部移入 `tmp/bench/archive/`（原名 + 用途后缀，
+其中混杂基线特意标成 `baseline-m2-ACCUMULATED-MIX.jsonl`），然后在**当前代码**上重跑
+`node tools/bench_move_actions.mjs 5` 作为新基线。
+
+> **基线口径（本文件今后一律按这个）**：**基线 = 新单会话 5 轮、单一代码状态、取中位数**。
+> 文件：`tmp/bench/2026-11-01-move-actions.jsonl`（55 行）；控制台：`tmp/t8_baseline5.log`。
+
+**新基线逐场景（5 轮，中位数）**
+
+| 场景 | 通过 | 中位 ms | 范围 ms | 失败码 | 动作直方图 |
+|---|---|---|---|---|---|
+| walk-flat | 5/5 | 7732 | 7372–7781 | — | walk 55 |
+| jump-up1 | 5/5 | 6716 | 6547–6762 | — | walk 110 |
+| pillar-up2 | 5/5 | 8476 | 7518–10368 | — | walk 105, jump 5 |
+| down1 | 5/5 | 6734 | 6531–6863 | — | walk 105, down 5 |
+| down5 | **0/5** | 2804 | 2575–2884 | NO_PATH×5 | walk 40 |
+| dig-through | 4/5 | 5628 | 5200–18846 | NO_PATH×1 | walk 40, dig 5 |
+| digdown | 5/5 | 7214 | 7103–7367 | — | walk 95, down 5 |
+| climb-ladder | 5/5 | 1945 | 1773–1968 | — | walk 40, dig 5, climb 5 |
+| climb-vine | 5/5 | 1863 | 1721–1959 | — | walk 40, dig 5, climb 5 |
+| water-cross | 5/5 | 33033 | 16803–57503 | — | walk 95, down 5 |
+| gap-bridge | 4/5 | 7695 | 3967–8030 | NO_PATH×1 | walk 95, down 5 |
+
+合计 **48/55 = 87.3%**，失败 **全部 NO_PATH ×7**（`down5` 5 + `dig-through` 1 + `gap-bridge` 1），
+**无其它类失败**。与旧混杂基线（261/297 = 87.9%，同口径 5 轮期望 48.4/55）**同一水位** ——
+差异在噪声内，不构成回归。`down5` 依旧是 `maxDrop=4` 的已知边界。`climb-ladder` 中位 **1945ms**（1.5–2s 内）。
+
+**收口验收（本轮机跑，全部 exit 0）**
+
+| 项 | 结果 |
+|---|---|
+| `unit_all` | **19/19 脚本通过、1 跳过、exit 0**（atom_input_unit 23、control_reasons_unit 38、permissions_unit 64、server_props_unit 29、test_escape 24、test_tunnel 38…） |
+| `preflight` 默认 / `--strict-api` / `--report-api` | 三模式 **exit 0**；5 条规则各 **0 命中**；扫 **233** 文件（-`atom_boat` +`atom_input_inventory`）；申报 1 个新增全批准；字段标准通过；错误码 31 个合法；`npm test` exit 0 |
+| `atom_all` 18 项 | **18/18，0 FAIL，无 `NO_CASES_RAN`**；真实 **244 条**用例（显示数已等于真实数） |
+| `bench 5` | **48/55**，失败全 NO_PATH（见上表） |
+
+**逐条复核（captain 指定的五项）**
+
+1. **`atom_boat.js` 删除后无残留 import** ✅：文件不存在；`grep -rn atom_boat src/ tools/` 只剩 3 处**注释**
+   （`atom_contract.js:28` 说明载具错误码归属、`atom_input_misc.js:9-10` 说明历史、`preflight.mjs:394` 说明判据由来），
+   **零 import、零调用**。preflight 里该文件的 4 条豁免已清零。
+2. **`atom_input_inventory` 字段标准与错误码合规** ✅：4 个原子都返回标准 `ActionResult`
+   （`ok(data)` / `fail(code)`），错误码用已注册的 `NO_TARGET` / `WINDOW_CLOSED` / `INTERRUPTED` / `INTERNAL`，
+   入口处查 `bot.interrupt_code`；preflight「字段标准：通过」「错误码审计：31 个已注册，全部合法」。
+3. **`skills.js` 14 处改完后 `skill_collect` 仍 0 FAIL** ✅：`skill_collect：22 PASS / 0 FAIL`（真实 22 条）。
+   另 `atom_attack：10 PASS / 0 FAIL`、`skill_clear：11 PASS / 0 FAIL`。
+4. **`digdown` 的执行期证据** ✅（口径按 t6 纠正后）：干跑直方图里**本来就不该**出现 `digdown`
+   —— `path_3d` 从不产出这个 key，它是 `executor.js` 的**执行期派生分支**。所以判据改成数执行期事件：
+   本轮 5 轮 `execActions` 全部 `{"scan3d":2,"plan3d":2,"digdown":1}`、`digdownSeen = 5/5 = true`、
+   `y −57 → −60`。**场景确实封死了**（旧场地她是绕过去的）。
+5. **`control_zombie_live` 的退出码与拉起证据** ✅（引用 t7 实测，本轮未复跑）：
+   `tmp/zombie-live.log` 尾部 `21 passed, 0 failed`；关键行 `子进程 exit code=1 signal=null`、
+   `zombie-action {label:"job:zombie",reason:"timeout",waitedMs:10015}`、`clearControlStates@11955ms`、
+   7 个移动键全 false、`r1 exit=1 / r2 exit=0`、演练后 `rcon list` 无残留。
+   **诚实边界不变**：这是「退出码实测 + 源码契约 + 新进程能干活」三段合成，**不是**观察到 `AgentProcess` 拉起日志。
+
+**三类台账（收口后）**
+
+**A. 已销账（本轮或近期，可划掉）**
+
+| 事项 | 销账依据 |
+|---|---|
+| `atom_boat.js` 冻结/豁免 | t6 直接删（零调用方），preflight 4 条豁免清零 |
+| `skills.js` 14 处鼠标输入 + 6 处 `bot.look*` | t6 全部改调 `atom_input_mouse`；`skill_collect` 22/0 为回归证据 |
+| `vision_interpreter` 3 / `task_follow` 1 / `atom_move` 重复 `lookAt` | t6 收口（`atom_move` 的重复实现已删，2 个测试脚本改调 `lookAtPoint`） |
+| `atom_input_inventory` 缺口 | t6 新建 4 原子 + 申报 40 + 4 条单测 |
+| `modes.js` 最后一处裸按键 | t7 改 `holdKey`，3 条离线用例，源码里再无裸 `setControlState` |
+| `atom_all` 用例计数 +1 | t6 改 `^\s*PASS\s`，本轮复核显示数 = 真实数（244 条） |
+| 僵尸动作（D18）真机空白 | t7 `control_zombie_live` 21/21（见「遗留清理 B」§1） |
+| `digdown` 场景"测的是走路" | t6 修场地几何 + t8 用 `execActions`/`digdownSeen` 复核 5/5 |
+| 混杂基线 double-peak 陷阱 | t8 归档旧 12 份 jsonl、重跑单会话 5 轮，口径固定为“中位数” |
+
+**B. 待 M8（结构性阻塞，不是遗漏 —— 依赖任务板与调度器）**
+
+| 事项 | 为什么只能等 M8 |
+|---|---|
+| `requeueStaleBrief()` **无生产调用方** | 全仓只有 `tools/control_reasons_unit.mjs` 调它；它要回收的是**任务板上** 60 秒内没被认领的 brief 单，板子不存在就无处可回收 |
+| `applyStop()` 在 `board=null` 时空操作 | `const board = agent?.board ?? null`，写操作全在 `if (board && …)` 里；没有板子时它只算 `planStop()` 然后返回，一行都不落库 |
+| 死亡捡单（`onDeath` → 8 级单） | 捡单要 `board.add(job)`；`board=null` 时只 `trace` 不落库 |
+| 任务单 deadline（`jobDeadlineTimeoutMinutes` / `runJobAction`） | 计时依赖单子本身与调度器派单，无板无单可计 |
+| 死亡捡单 / deadline 的**真机**覆盖 | 需先有板才能真机触发；当前只有 `control_reasons_unit` 离线覆盖 |
+
+**C. 仍需真机（本轮做不了或没做）**
+
+| 事项 | 现状 / 怎么补 |
+|---|---|
+| 「全场景一致偏慢」定量 | 本轮新基线 48/55 与旧混杂基线 87.9% 同水位、失败结构一致 → **本轮不再支持"回归"结论**；但 t5 观察到的 +8%~37% 偏慢仍需**同环境 A/B**（同会话先 3 轮旧码再 3 轮现码）才能定量 |
+| `AgentProcess` 真拉起 | t7 演练明确不碰 mindserver；要变实测需跑 `AgentProcess`（依赖 mindserver + profile），**需另行授权** |
+| `modes.js` 4 处 `bot.look*` | M2 残项（`idle_staring` 看人/随机转头）；`preflight` 具名豁免，扫描绿≠债已清 |
+| 死亡捡单 / 任务单 deadline | 见 B 表：等 M8 有板后真机验 |
+| 水/岩浆/虚空等边界地形 | `water-cross` 方差极大（16.8–57.5s），仍属不稳定场景，需要专项 |
+
+---
+
 
 ### Phase R: 按层改前缀（2026-11-01 新增；时间已确认：Phase A 之后、补动作之前）
 **目标**: 文件名就是层级（[`02_actions.md §5`](02_actions.md)）
