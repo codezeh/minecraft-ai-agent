@@ -33,6 +33,22 @@ import { blockAt } from './query_perceive.js';
 import { pillarUpOnce } from './act_pillar.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
 
+/** 复合技能 manifest（04 §4.1）：垂直自救（被埋/掉坑里往上脱困）。 */
+export const manifest = {
+    name: 'escape',
+    level: 'flow',
+    summary: '被埋住或掉进坑里时，往上挖/垫脱困',
+    params: {
+        timeoutMs: 'int 1000..600000 = 120000',
+    },
+    needs: { items: [], near: [] },
+    claims: [],
+    codes: ['NO_TARGET', 'NO_TOOL', 'STUCK', 'NO_ITEM', 'TIMEOUT', 'INTERRUPTED'],
+    resumable: false,
+    timeoutMs: 2 * 60 * 1000,
+};
+
+
 /** 可以拿来垫脚的方块见 scaffold_blocks.js（D8：清单原来散在 4 处且互不一致）。 */
 
 /** pos 那格是不是空的（能穿过去）。水/草也算"能穿"，但不算"有支撑"。 */

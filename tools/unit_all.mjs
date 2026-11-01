@@ -24,6 +24,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 const UNITS = [
     'atom_classify_unit',        // 原子纯函数化 + 地标缓存按 bot 隔离
     'atom_input_unit',           // Phase A：输入原子唯一出口 + A3/A7（中断/松键）+ 白名单
+    'composite_registry_unit',   // M5：注册表启动校验 / params 解析 / ctx 工厂 / listSkills（D24 正解）
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
     'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）
     'control_reasons_unit',      // M2：停的原因 → 任务单去哪 + D17/D18/D19/D10（控制层）

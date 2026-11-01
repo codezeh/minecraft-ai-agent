@@ -1,4 +1,7 @@
 import * as skills from '../library/skills.js';
+// 复合技能注册表（基础设施，不带前缀）。commands 层只许 import 流程/查询/基础设施 ——
+// 这条 import 合规；**严禁**在 commands 里 import act_* / atom_*（M4 前缀规矩会拦）。
+import { getSkill, runSkill } from '../library/composite_registry.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
 import { formatActionResult } from '../library/contract.js';
@@ -65,6 +68,29 @@ function runAsAction (actionFn, resume = false, timeout = -1, stopReason = null)
     }
 
     return wrappedAction;
+}
+
+/**
+ * 把复合技能的返回值压成**一行**给模型（08 §4：不超过 200 字，含 code + count/want + 失败摘要）。
+ *
+ * 为什么不直接 JSON.stringify：模型会照着它编下一步，长 JSON 既费上下文又容易被截断。
+ */
+export function formatActionOutcome(name, codeReturn, result) {
+    const data = (result && typeof result === 'object' && result.data) ? result.data : {};
+    const code = (result && result.code) || (codeReturn?.timedout ? 'TIMEOUT' : (codeReturn?.interrupted ? 'INTERRUPTED' : 'OK'));
+    const bits = [];
+    if (Number.isFinite(data.count) || Number.isFinite(data.want)) {
+        bits.push(`完成 ${data.count ?? 0}/${data.want ?? '?'}`);
+    }
+    if (Array.isArray(data.failed) && data.failed.length) {
+        const first = data.failed[0];
+        bits.push(`失败 ${data.failed.length} 处（首个 ${first?.code ?? '?'}）`);
+    }
+    if (result && result.ok === false && result.message) bits.push(result.message);
+    if (codeReturn?.timedout) bits.push('超时');
+    const tail = bits.length ? `：${bits.join('，')}` : '';
+    const line = `[!do ${name}] ${result?.ok === false ? '失败 ' : ''}${code}${tail}`;
+    return line.length > 200 ? `${line.slice(0, 197)}...` : line;
 }
 
 export const actionsList = [
@@ -722,5 +748,43 @@ export const actionsList = [
         perform: runAsAction(async (agent, tool_name, target) => {
             await skills.useToolOn(agent.bot, tool_name, target);
         })
+    },
+    {
+        // 04 §5：复合技能统一走这一条命令（不给每个技能单开命令，命令文档会撑爆上下文）。
+        // 参数按 04 §4.5 写成一个 key=value 串：
+        //     !do("collect", "block=oak_log count=16")
+        // 校验不过**不执行**，只回一句"参数错"（不产生错误码）。
+        name: '!do',
+        description: 'Run a composite skill (multi-step ability) by name. Get names/params from !listSkills. Args are a key=value string, e.g. "block=oak_log count=16".',
+        params: {
+            'name': { type: 'string', description: 'Composite skill name, e.g. collect / follow / pickup / platform / escape. See !listSkills.' },
+            'args': { type: 'string', description: 'Parameters as a key=value string, space separated, e.g. "block=oak_log count=16".' },
+        },
+        perform: async function (agent, name, args) {
+            const entry = getSkill(name);
+            if (!entry) {
+                return `!do: 没有叫 ${name} 的复合技能。先 !listSkills 看有哪些。`;
+            }
+
+            // 07 §8：runAction 的 timeout 要按任务单/流程 deadline 换算成分钟，不能用默认 10 分钟，
+            // 否则 30 分钟的长流程会被中途砍掉。没有任务板（M8 之前）就按 manifest.timeoutMs 算。
+            const timeoutMin = Math.max(1, Math.ceil((entry.manifest.timeoutMs ?? 600000) / 60000));
+
+            let result = null;
+            const run = async () => { result = await runSkill(agent, name, args); };
+            const codeReturn = await agent.actions.runAction(`action:do:${name}`, run, { timeout: timeoutMin });
+
+            // 参数错/技能名错：**没执行**，直接回一句人话。
+            // 不能走下面按 code 渲染的那条路 —— 那会印出 code，模型会当成"运行失败"去重试。
+            if (result?.data?.paramError) {
+                return `!do ${name} 没执行：${result.message}`;
+            }
+
+            if (codeReturn.interrupted && !codeReturn.timedout) {
+                return `!do ${name}: INTERRUPTED —— 被打断了，没做完`;
+            }
+            // 08 §4 的一行式回报：code + count/want + failed 摘要
+            return formatActionOutcome(name, codeReturn, result);
+        }
     },
 ];

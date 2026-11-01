@@ -14,6 +14,29 @@ import { ScaffoldTracker } from './scaffold_cleanup.js';
 import { planCollect, makeHandlers } from './flow_collect_plan.js';
 import { runSteps } from './step_runner.js';
 
+/**
+ * 复合技能 manifest（04 §4.1 / §4.4）。
+ * 注册表启动时校验它；给模型看的说明也由它生成（不再从函数体截 JSDoc，D24）。
+ */
+export const manifest = {
+    name: 'collect',
+    level: 'flow',
+    summary: '采 N 个某种方块（会自己挑最近的目标、走过去、挖掉、捡起来）',
+    params: {
+        block: 'block',
+        count: 'int 1..64 = 1',
+        radius: 'int 4..128 = 48',
+    },
+    needs: { items: [], near: [] },
+    claims: [],
+    // 只用已在 CODES 注册的码。INVENTORY_FULL 是 02 §4 列的 7 个新码之一，**M6 才加**，
+    // 现在写进来会让启动校验直接崩（这是校验器该有的行为：宁可启动失败，也不要运行时才发现）。
+    codes: ['NO_TARGET', 'NO_TOOL', 'NO_PATH', 'NO_REACH', 'OUT_OF_REACH', 'STUCK', 'TIMEOUT', 'INTERRUPTED'],
+    resumable: false,
+    timeoutMs: 8 * 60 * 1000,
+};
+
+
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const key = (p) => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
 

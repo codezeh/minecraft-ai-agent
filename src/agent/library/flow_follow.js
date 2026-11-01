@@ -24,6 +24,23 @@ import { detectTrapped } from './query_stuck.js';
 // 2026-11-01（t6）：转头改走输入原子（bot.look* 的唯一出口）。
 import { lookAtPoint } from './atom_input_mouse.js';
 
+/** 复合技能 manifest（04 §4.1）：跟随玩家。 */
+export const manifest = {
+    name: 'follow',
+    level: 'flow',
+    summary: '跟着某个玩家走（会自己重规划、必要时挖/垫）',
+    params: {
+        player: 'string',
+        distance: 'int 1..16 = 3',
+    },
+    needs: { items: [], near: [] },
+    claims: [],
+    codes: ['NO_TARGET', 'NO_PATH', 'NO_REACH', 'STUCK', 'TIMEOUT', 'INTERRUPTED'],
+    resumable: false,
+    timeoutMs: 30 * 60 * 1000,
+};
+
+
 export { PlayerTracker, ensureTracking };
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

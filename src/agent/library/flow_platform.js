@@ -14,6 +14,23 @@ import { placeBlockAt } from './act_place.js';
 import { moveTo } from './nav_pathfinder.js';
 import { pauseGoalModes, restoreGoalModes } from './modes.js';
 
+/** 复合技能 manifest（04 §4.1）：铺 3×3 平台。 */
+export const manifest = {
+    name: 'platform',
+    level: 'flow',
+    summary: '在某一格周围铺一个 3×3 平台（要先有垫脚方块）',
+    params: {
+        item: 'item',
+        at: 'pos',
+    },
+    needs: { items: ['<item>'], near: [] },
+    claims: [],
+    codes: ['NO_ITEM', 'NO_TARGET', 'OCCUPIED', 'OUT_OF_REACH', 'NO_SUPPORT', 'TIMEOUT', 'INTERRUPTED'],
+    resumable: false,
+    timeoutMs: 10 * 60 * 1000,
+};
+
+
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /** 3×3 的九个格子（含中心）。 */

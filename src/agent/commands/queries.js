@@ -8,6 +8,9 @@ import convoManager from '../conversation.js';
 import { checkLevelBlueprint, checkBlueprint } from '../tasks/construction_tasks.js';
 import { mapSummary } from '../library/map_query.js';
 import { load } from 'cheerio';
+// 复合技能注册表（基础设施，不带前缀）。commands 只许 import 流程/查询/基础设施，
+// 所以这里 import 注册表是合规的；**不许**在这里 import act_* / atom_*。
+import { listSkills } from '../library/composite_registry.js';
 
 const pad = (str) => {
     return '\n' + str + '\n';
@@ -554,6 +557,22 @@ ${s.ascii}`);
         perform: function (agent, refresh, x, z) {
             const goal = (Number.isFinite(x) && Number.isFinite(z)) ? { x, z } : null;
             return mapSummary(agent.bot, { refresh: !!refresh, goal });
+        }
+    },
+    {
+        // 04 §5：复合技能**不单开命令**（命令文档会撑爆上下文），只留 !do + !listSkills 两条。
+        name: '!listSkills',
+        description: 'List the composite skills (multi-step abilities) you can run with !do, with their parameters. Read-only.',
+        perform: function () {
+            // 从 manifest 自动生成（D24 的正解：不再从函数体截 JSDoc）
+            const lines = listSkills();
+            if (!lines.length) return '没有注册任何复合技能。';
+            return [
+                'COMPOSITE SKILLS（用 !do 执行，参数写 key=value，空格分隔）',
+                '例：!do("collect", "block=oak_log count=16")',
+                '',
+                ...lines,
+            ].join('\n');
         }
     },
 ];

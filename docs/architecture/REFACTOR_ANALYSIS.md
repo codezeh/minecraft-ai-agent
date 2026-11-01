@@ -1152,10 +1152,125 @@ async function skillName(bot, goal, context = {}) {
 ### 复合技能（2026-11-01 新增）
 **目标**: 24 个流程 + 6 个策略，另有 4 个 P2 策略（[`04_skills.md`](04_skills.md)）
 
-- [ ] 现有 6 个流程补 manifest 和 ctx
-- [ ] 注册表 + `!do` / `!listSkills`（顺手修 D24）
+- [x] 现有 6 个流程补 manifest 和 ctx —— **M5 完成（2026-11-02，t11）**：5 个流程有 `manifest` + 走 `makeCtx`；
+  `flow_collect_plan` / `flow_clear` 不补 manifest（见下「为什么只登记 5 个」）
+- [x] 注册表 + `!do` / `!listSkills`（顺手修 D24）—— **M5 完成（2026-11-02，t11）**，t12 逐条实测见下
 - [ ] P0 流程：craft → smelt → store/fetch → eat → mine（D15 已修）→ farm → fight → build
+  - ⚠️ **M6 第一件事：先把 `02 §4` 的 7 个新错误码加进 `contract.js` 的 `CODES`**（见下「M6 阻塞前置」）
 - [ ] 策略：`strat_obtain` → `strat_tool_tier` → `strat_first_night`；其余等任务板 B2
+
+#### M5 验收记录（t12 / 2026-11-02，全部实测，不读码猜）
+
+**① 注册的技能名清单（5 个，不是任务书的 6 个）**
+
+`collect` / `follow` / `pickup` / `platform` / `escape`。
+各自 manifest 的关键字段（实测读出来）：
+
+| 技能 | level | timeoutMs | params | codes |
+|---|---|---|---|---|
+| collect | flow | 480000（→8 分钟） | block / count / radius | NO_TARGET NO_TOOL NO_PATH NO_REACH OUT_OF_REACH STUCK TIMEOUT INTERRUPTED |
+| follow | flow | 1800000（→30 分钟） | player / distance | NO_TARGET NO_PATH NO_REACH STUCK TIMEOUT INTERRUPTED |
+| pickup | flow | 180000 | at / radius | NO_TARGET NO_PATH TIMEOUT INTERRUPTED |
+| platform | flow | 600000 | item / at | NO_ITEM NO_TARGET OCCUPIED OUT_OF_REACH NO_SUPPORT TIMEOUT INTERRUPTED |
+| escape | flow | 120000 | timeoutMs | NO_TARGET NO_TOOL STUCK NO_ITEM TIMEOUT INTERRUPTED |
+
+**为什么只登记 5 个**（不是漏了 `flow_collect_plan` / `flow_clear`）：按 §4.4，
+manifest 描述的必须是「能执行并返回 ActionResult 的技能」。
+`flow_collect_plan` 只导出 `planCollect` / `makeHandlers`（纯规划），`flow_clear` 只产出"清障碍"的步骤序列、
+由 `flow_collect` 拼进自己的 plan —— **两者都没有 `run()`，也没有独立执行入口**。
+把它们登记进表 = 把内部实现当能力暴露给模型（模型会 `!do collect_plan` 去打一个只返回计划的函数）。
+补 `run()` 属于**新能力**，不在 M5（改名/注册表）范围。文件里 39–40 行已把这个理由写成注释。
+
+**② manifest 校验行为：模块加载即 throw（实测四种坏法，逐个隔离测）**
+
+| 坏法 | 实测结果 |
+|---|---|
+| 删掉 `summary` | ✅ 加载即抛 `[pickup] summary 缺失（给模型看的一句话，不能空）` |
+| `params` 改成字符串 `"nope"` | ✅ `[pickup] params 缺失或不是对象` |
+| `params.radius` 区间写反 `int 32..1` | ✅ `params.radius 的区间写反了或读不出` |
+| `codes` 加未注册的 `INVENTORY_FULL` | ✅ `codes 里的 INVENTORY_FULL 没在 CODES 注册` |
+
+注册表级（同一条 `validateRegistry` 路径）：缺 `run()` / `run:42` / 名字重复 / manifest 非对象 —— 四种全拦。
+**校验在 `import` 时执行**（`composite_registry.js:174` 的 `STARTUP_CHECK`），不是等到 `!do` 运行时。
+显式 import、不扫目录：`grep "readdir\|import(" composite_registry.js` = **0**。
+
+**③ `makeCtx` 五条语义（逐条实测）**
+
+| 语义 | 实测 |
+|---|---|
+| `deadline` 两种来源 | 无单子 → `now + manifest.timeoutMs`（collect 实测 480000ms ✅）；有单子 → 用单子的 `deadline`（实测 `deadline===jobDeadline`，`jobId=J1` ✅） |
+| `reserve` / `release` 无板恒成功 | 实测 `ok=true code=OK data.noBoard=true`（两个都是）✅ |
+| `checkpoint` / `save` 无单存内存 | `save({n:7})` → `checkpoint()` 原样读回 `{n:7,tag:'probe'}` ✅ |
+| `mapDir` 统一函数 | `makeCtx().mapDir` 与 `mapDirOf()` 结果一致（`./bots/p/map`）✅ —— **但见下方 ⑤ 的遗留** |
+| `onEvent` 是唯一写 trace_bus 的入口 | 调 `ctx.onEvent` 两次 → `trace_bus.since()` 恰好 **2 条**、按 step 去重 `{1:1,2:1}`（**无 D10 重复**）✅；且自动带上 `jobId` / `skill:'collect'` |
+
+**④ `!do` / `!listSkills`**
+
+`!do` 实测输出原文（假 agent，`runAction` 记录入参）：
+- `!do collect "radius=9999"` → `"!do collect 没执行：参数错：参数 radius 要 4..128（现在 9999）"`
+- `!do collect "count=999"` → `"!do collect 没执行：参数错：参数 count 要 1..64（现在 999）"`
+- `!do nope "x=1"` → `"!do: 没有叫 nope 的复合技能。先 !listSkills 看有哪些。"`（**在 runAction 之前**就返回）
+
+- **无错误码**：上面三条输出里 `NO_TARGET` / `NO_TOOL` / `TIMEOUT` / `NO_PATH` **一个都没有**；
+  `runSkill` 参数错与技能名错都返回 `code: null` + `data.paramError=true`（实测 5 种错法全部 `code=null`）✅
+- **无任务板路径能跑**：`runAction` 收到的 label = `action:do:collect`、`opts={"timeout":8}`（= 480000ms 换算成分钟）✅
+  —— 没有吃默认 10 分钟，30 分钟的 `follow` 会拿到 `timeout:30`
+- **`!listSkills` 完全来自 manifest**：把 `flow_pickup` 的 `summary` 改成「【探针改过】…」→ 输出立刻变成
+  `pickup: 【探针改过】把附近掉落物捡起来`，改回即恢复；**完全不碰 JSDoc** ✅
+- **不会撑爆上下文**：5 个技能合计 **364 字符**（平均 73 字符/技能），含参数说明。
+
+**⑤ D24 修法：前/后对比证据**
+
+修法：`index.js` 的 `docHelper` 从 `str.substring(indexOf('/**')+3, indexOf('**/'))`
+改成非贪婪正则 `/\/\*\*([\s\S]*?)\*\//`，并剥掉每行行首 `* `；没有注释块的函数**整条跳过**。
+
+用 **git HEAD 里的真实旧实现** vs 现实现，跑同一批 104 个函数：
+
+| | 条数 | 总字符 | 最长单条 | >600 字条数 |
+|---|---|---|---|---|
+| 修前（旧 `indexOf('**/')`） | 104 | 55,115 | 1,425 | **36** |
+| 修后（非贪婪正则） | 104 | 51,165 | 1,301 | **26** |
+
+**最硬的证据是那 6 个"外层注释以单星号 `*/` 结尾"的函数**：旧实现里 `indexOf('**/')` 返回 `-1`，
+`substring(pos, -1)` 被钳成 `substring(0, pos)` → **返回的是「函数签名 + `/**`」这种垃圾**（不是文档）：
+
+| 函数 | 修前截出 | 修后截出 |
+|---|---|---|
+| `buildStorageWarehouse` | 65 字，结尾是 `async function buildStorageWarehouse(bot, options = {}) {\n    /**` | 479 字，结尾是 `@example …await skills.buildStorageWarehouse(bot);` |
+| `planRoute` | 50 字，结尾 `function planRoute(bot, x, z, opts = {}) {\n    /**` | 318 字，结尾 `@example …const p = skills.planRoute(bot, 100, -200);` |
+| `useToolOn` | 61 字，垃圾签名 | 300 字，正常 `@returns …` |
+
+> **口径更正（t12）**：t11 报告里写「把**整段函数体**当文档」——对这批函数不准确。
+> 真实后果是 **`substring(pos,-1)` 被钳成 `substring(0,pos)`，返回函数签名 + `/**` 的垃圾**；
+> 而总量减少的另外一部分来自"剥掉行首 `*`"。两种都得修，方向一致，但描述要准 —— 免得下一个人按"函数体泄漏"去找别的 bug。
+> 另外抽 4 条最长的（`buildHouse` 1,295 / `prepareForBuilding` 1,215 / `digTunnel` 1,155 等）结尾均为 `@example`，
+> `@example` 之前**零函数体特征**（`=>{` / `return` / `const` / `for` / `if` 全 false）✅
+
+**⑥ 新增前缀违规：0**（`composite_registry.js` 属 infra，`commands → composite_registry` 合规）。
+preflight 前缀规矩仍是 **5 处**（4 处旧债 + `act_use→openContainer` 那 1 处已入册），本轮无新增。
+
+**⑦ 真机回归（t12 独立跑，非抄 t11）**
+
+- `atom_all` **18/18**，真实 **244 条**用例 0 FAIL（move 10 / dig 14 / place 10 / items 10 / container 13 / use 13 /
+  attack 10 / stand 17 / drops 13 / look 21 / safe 12 / query 22 / wait 14 / move_landing 9 / pickup_parts 16 /
+  vine 7 / skill_collect 22 / skill_clear 11）
+- `bench_move_actions 5` → **49/55（89.1%）**，与新基线 49/55 一致；失败 **全 NO_PATH ×6**
+  （down5 ×5 = `maxDrop=4` 已知边界；dig-through r1 = 基线同水位）
+- `climb-ladder` 中位 **1971ms**（范围 1863–1974；基线 1945ms，+1.3% 在噪声内）
+- `digdown` **5/5** `digdownSeen=true`、`execActions={"scan3d":2,"plan3d":2,"digdown":1}`、`y −57→−60`
+- `unit_all` **20/20 + 1 跳过** exit 0（新增 `composite_registry_unit`）
+- `preflight`：默认 **exit 0**（违规 5 处）/ `--strict-api` **exit 1**（那 1 处 Phase 5.4 旧债，**按规定没有修绿**）/ `--report-api` exit 0
+
+**⑧ 遗留（M5 范围内发现，归属已写清）**
+
+1. **`mapDirOf` 建好了但没人用**（归属：**Phase 5.4 / atoms**）——
+   `mapDirOf` 目前**只有单测在调**，零生产调用；全仓仍有 **13 处**硬编码
+   `` `./bots/${...}/map` `` 分布 5 个文件：`commands/actions.js` **6 处**（:177/:212/:231/:269/:459/:477）、
+   `library/skills.js`、`library/map_query.js:20`、`mindserver_proxy.js`、`composite_registry.js`（唯一正当的一处）。
+   t11 说"收拢原 6 处拼接"——**helper 有了，但那 6 处没搬**，所以"唯一的真相"目前实际是**两个**。
+   **M5 的验收标准里这条只算半个**：`makeCtx().mapDir` 调用链是对的，但"不许有第二处拼法"还没兑现。
+2. **`flow_collect_plan` / `flow_clear` 没有 `run()`**（归属：**M7 P0 流程**）——
+   要让它们成为可执行技能得补 `run()` + manifest，那属于新能力，不在 M5。
 
 ---
 

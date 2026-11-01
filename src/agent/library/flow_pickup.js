@@ -28,6 +28,23 @@ import { findDrops } from './query_drops.js';
 import { EYE_HEIGHT } from '../rules/rules.runtime.js';
 import Vec3 from 'vec3';
 
+/** 复合技能 manifest（04 §4.1）：捡附近的掉落物。 */
+export const manifest = {
+    name: 'pickup',
+    level: 'flow',
+    summary: '把某处附近的掉落物捡进背包',
+    params: {
+        at: 'pos?',
+        radius: 'int 1..32 = 8',
+    },
+    needs: { items: [], near: [] },
+    claims: [],
+    codes: ['NO_TARGET', 'NO_PATH', 'TIMEOUT', 'INTERRUPTED'],
+    resumable: false,
+    timeoutMs: 3 * 60 * 1000,
+};
+
+
 /**
  * 回收 origin 附近的掉落物。
  *
