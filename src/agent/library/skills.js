@@ -16,6 +16,11 @@ import { pressKey } from './atom_input_move.js';
 // 2026-11-01（t6 遗留清理）：挖/放/右键/挥击/停止挖掘全部改走 atom_input_mouse，本文件不再裸调 bot.* 输入。
 import { holdDig, placeAgainst, useOnBlock, useHeld, attackOnce, lookAtPoint, stopDig } from './atom_input_mouse.js';
 import { closeWindow as closeWindowAtom } from './atom_input_inventory.js';
+// M6（2026-11-02）：合成 / 熔炼 / 进食 的真实实现已上提到 act_* 动作层。
+// 下面这些旧函数保留名字与**boolean 返回**（上游 commands/npc 都按 boolean 用），
+// 内部改为调动作 —— 这样"谁真的在干活"只有一份真相。
+import { craftOnce, furnaceLoad, furnaceCollect } from './act_craft.js';
+import { eat as eatAction } from './act_items.js';
 import { scanTree, judgeTree, planFelling } from './query_tree.js';
 import { followEntity as followEntityTask } from './flow_follow.js';
 import pf from 'mineflayer-pathfinder';
@@ -240,16 +245,22 @@ export async function craftRecipe(bot, itemName, num=1) {
         await goToNearestBlock(bot, 'crafting_table', 4, craftingTableRange);
     }
 
-    const recipe = recipes[0];
-    console.log('crafting...');
-    //Check that the agent has sufficient items to use the recipe `num` times.
-    const inventory = world.getInventoryCounts(bot); //Items in the agents inventory
-    const requiredIngredients = mc.ingredientsFromPrismarineRecipe(recipe); //Items required to use the recipe once.
-    const craftLimit = mc.calculateLimitingResource(inventory, requiredIngredients);
-    
-    await bot.craft(recipe, Math.min(craftLimit.num, num), craftingTable);
-    if(craftLimit.num<num) log(bot, `Not enough ${craftLimit.limitingResource} to craft ${num}, crafted ${craftLimit.num}. You now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
-    else log(bot, `Successfully crafted ${itemName}, you now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
+    // ★ M6（2026-11-02）：真正的"合成一次"已上提到 act_craft.craftOnce
+    //   （它自带 配方/料/工作台 的前置判断与 ActionResult 错误码）。
+    //   本函数保留**流程职责**：没工作台就放一个、合完再捡回来（02 §3 明写这属于 flow_craft）。
+    //
+    //   行为差异：原来这里按 `Math.min(craftLimit.num, num)` 合，craftOnce 做同样的事，
+    //   所以数量语义不变；不同点是失败时不再"静默 boolean false"，日志里会带错误码
+    //   （NO_RECIPE / NO_ITEM / NO_WORKSTATION），便于定位。
+    const crafted = await craftOnce(bot, itemName, num);
+    if (!crafted.ok) {
+        log(bot, `合成 ${itemName} 失败：${crafted.code} ${crafted.message ?? ''}`);
+    } else if (crafted.data?.got < crafted.data?.want) {
+        log(bot, `Not enough material to craft ${num}, crafted ${crafted.data.got}.`);
+    } else {
+        log(bot, `Successfully crafted ${itemName}, you now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
+    }
+
     if (placedTable) {
         // 背包满的时候收不回来是必然的（没格子放）。
         // 不要因此报错打断流程——工作台留在地上，下次合成还能直接用。
@@ -264,18 +275,14 @@ export async function craftRecipe(bot, itemName, num=1) {
         }
     }
 
-    // 装备刚合成出来的盔甲（如果有 armorManager 插件）。
-    //
-    // ★ 2026-10-29 修：这里原来直接裸调 `bot.armorManager.equipAll()`，
-    // 但 armorManager 来自 mineflayer-armor-manager 插件，本项目的 bot **没装**。
-    // 后果：合成**成功之后**在最后一行抛 TypeError，整个 craftRecipe 崩掉 ——
-    // 表现是"东西合出来了但调用方拿到异常"，实测她造不出船就是卡在这。
     try {
         bot.armorManager?.equipAll?.();
     } catch { /* 没装插件或没有盔甲，都不影响合成结果 */ }
 
-    return true;
+    // 上游（commands/actions.js、npc/item_goal.js、skills 内部）都按 boolean 用，保持不变
+    return crafted.ok;
 }
+
 
 export async function wait(bot, milliseconds) {
     /**
@@ -582,69 +589,58 @@ export async function smeltItem(bot, itemName, num=1) {
     // 转头走输入原子（一次性，无后置校验，与改前 bot.lookAt 默认 force=false 一致）
     await lookAtPoint(bot, { x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z }, { force: false });
 
-    const furnace = await bot.openFurnace(furnaceBlock);
-
-    // 关窗收尾：不碰里面的东西（别人正在用的东西不能顺走）
+    // ★ M6（2026-11-02）：真正的**放料 / 取产物**已上提到 act_craft 的
+    //   `furnaceLoad` / `furnaceCollect`（它们自己开关窗口）。本函数现在只留流程职责：
+    //   找/放熔炉、等烧完、累计产物、收尾。
+    //
+    //   行为差异（有意为之，写在这里免得以后当 bug）：
+    //   · 每次放料/取产物各自开关一次窗口（原来是开一次窗口做完全程）。本地测试服实测
+    //     开箱 ~10ms，可以接受；换来的好处是"熔炉怎么用"只有一份实现。
+    //   · "熔炉里在炼别人的东西就不抢"这条保护**没有丢** —— 它搬进了
+    //     `act_craft.furnaceLoad`（开窗后读一次输入槽，别人的料就返回 OCCUPIED）。
+    //     这条一度被我漏掉（furnaceLoad 不看里面有什么），是 captain 抓出来的真 bug，
+    //     已修并有离线用例锁住。
     const closeOnly = async () => {
-        // 关窗也是界面输入，走 atom_input_inventory（内部转出 atom_container.closeContainer）
         try { await closeWindowAtom(bot); } catch (e) { /* ignore */ }
         if (placedFurnace) {
             try { await collectBlock(bot, 'furnace', 1); } catch (e) { /* ignore */ }
         }
     };
-    // 收尾并把自己放进去的料取回（失败/中途退出时用）
-    const returnLeftovers = async () => {
-        try { if (furnace.inputItem()) await furnace.takeInput(); } catch (e) { /* ignore */ }
-        try { if (furnace.fuelItem()) await furnace.takeFuel(); } catch (e) { /* ignore */ }
-        await closeOnly();
-    };
 
-    // ---- 第 2 步：当储物箱先看清里面 ----
-    const st = furnaceStatus(bot, furnace);
-    if (st.input && st.input.type !== mc.getItemId(itemName)) {
-        // 里面在炼别的东西：不抢，也不动它的料
-        log(bot, `熔炉里已经在炼 ${st.input.count}x${st.input.name}，先不抢。等它炼完或者换个熔炉。`);
-        await closeOnly();
-            log(bot, `熔炉里已经在炼 ${st.input.count}x${st.input.name}，先不抢。等它炼完或者换个熔炉。`);
-            return false;
-    }
-
-    // ---- 第 3 步：填料（先下格燃料，再上格加工物）----
-    const load = await loadFurnace(bot, furnace, { itemName, num });
+    // ---- 第 2 步：放料 + 燃料 ----
+    const load = await furnaceLoad(bot, furnaceBlock, itemName, null);
     if (!load.ok) {
-        log(bot, `填料失败：${load.reason}。`);
-        await returnLeftovers();
-            log(bot, `填料失败：${load.reason}。`);
-            return false;
+        log(bot, `填料失败：${load.code} ${load.message ?? ''}。`);
+        await closeOnly();
+        return false;
     }
 
-    // ---- 第 4 步：等产物 + 取出来 ----
+    // ---- 第 3 步：等产物 + 取出来 ----
     let total = 0;
     const taken = new Set();
     const deadline = Date.now() + Math.max(30000, num * 12000);
     let lastProgress = Date.now();
     while (total < num && Date.now() < deadline && !bot.interrupt_code) {
-        const w = await waitForSmelt(bot, furnace, {
-            timeoutMs: Math.max(2000, Math.min(15000, deadline - Date.now())),
-        });
-        if (!w.ok) break;
-        const t = await takeFromFurnace(bot, furnace);
-        if (t.ok) {
-            total += t.count;
-            taken.add(t.item);
+        const c = await furnaceCollect(bot, furnaceBlock);
+        if (c.ok) {
+            total += Number(c.data?.count ?? 0);
+            if (c.data?.taken) taken.add(c.data.taken);
             lastProgress = Date.now();
+            continue;
         }
-        // 11 秒没新产物就认为炼不动了（燃料不够/原料被拿走）
-        if (Date.now() - lastProgress > 11000) break;
+        if (c.code === 'NOT_READY') {
+            await new Promise(r => setTimeout(r, 1500));
+            // 11 秒没新产物就认为炼不动了（燃料不够/原料被拿走）
+            if (Date.now() - lastProgress > 11000) break;
+            continue;
+        }
+        if (c.code === 'INVENTORY_FULL') {
+            log(bot, `背包满了，产物取不出来。`);
+            break;
+        }
+        break;
     }
-
-    // ---- 第 5 步：侦测上格是否为空（这才是"真炼完"的判据）----
-    const leftover = furnace.inputItem();
-    if (leftover) {
-        log(bot, `上格还剩 ${leftover.count}x${mc.getItemName(leftover.type)} 没炼完` +
-            `（燃料不够或时间到）。取回来，不留在炉子里。`);
-    }
-    await returnLeftovers();
+    await closeOnly();
 
     if (total === 0) {
             log(bot, `一个都没炼出来（${itemName}）。`);
@@ -654,7 +650,7 @@ export async function smeltItem(bot, itemName, num=1) {
             log(bot, `只炼出 ${total}/${num} 个 ${[...taken].join('/')}。`);
             return false;
     }
-    log(bot, `炼好了 ${total} 个 ${[...taken].join('/')}，上格${leftover ? '还有残留' : '已空'}。`);
+    log(bot, `炼好了 ${total} 个 ${[...taken].join('/')}。`);
             return true;
 }
 
@@ -1534,18 +1530,14 @@ export async function consume(bot, itemName="") {
      * @example
      * await skills.eat(bot, "apple");
      **/
-    let item, name;
-    if (itemName) {
-        item = bot.inventory.findInventoryItem(itemName);
-        name = itemName;
-    }
-    if (!item) {
-        log(bot, `You do not have any ${name} to eat.`);
+    // M6：真实实现是 act_items.eat（它补了"饱食度满了就不吃"的前置，
+    // 并返回 ActionResult）。这里保留 boolean 返回给上游。
+    const r = await eatAction(bot, itemName || null);
+    if (!r.ok) {
+        log(bot, `没吃成：${r.code} ${r.message ?? ''}`);
         return false;
     }
-    await bot.equip(item, 'hand');
-    await bot.consume();
-    log(bot, `Consumed ${item.name}.`);
+    log(bot, `Consumed ${r.data?.food ?? itemName}.`);
     return true;
 }
 

@@ -1,8 +1,11 @@
 /**
  * A6 容器：openContainer / closeContainer / 存取的薄封装。
  *
- * 单一副作用：打开一个容器窗口（或关掉）。
- * 不负责"存什么、取什么"——那是复合层的事，否则就又长回 skills.js 那种 5 个函数各写一遍。
+ * 单一副作用：打开一个容器窗口（或关掉），或者在**已经打开的**窗口里存取一样东西。
+ *
+ * M6（2026-11-02）补了 `deposit` / `withdraw`：02 §3 明确它们"以窗口已开为前置，**不自己开**"——
+ * 开窗、存取、关窗串起来是流程 flow_store / flow_fetch 的事。所以这两个动作不调 openContainer
+ * （那会变成动作调动作），只看 `bot.currentWindow`。
  *
  * 实现原则（见 原子动作规格-v2.md §5）：
  *   - 开窗动作**直接复用 mineflayer 的 bot.openContainer**，本文件只补它缺的三件：
@@ -186,4 +189,123 @@ export function windowItems(bot) {
     return (win.slots || [])
         .map((it, i) => (it && it.name ? { slot: i, name: it.name, count: it.count } : null))
         .filter(Boolean);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// deposit / withdraw：在**已打开**的窗口里存取（02 §3）
+// ───────────────────────────────────────────────────────────────────────────
+
+/** 背包里有多少个某物（动作层自己算，不借道别的动作）。 */
+function invCount(bot, name) {
+    return (bot.inventory?.items?.() ?? [])
+        .filter((i) => i?.name === name)
+        .reduce((n, i) => n + (i.count ?? 0), 0);
+}
+
+/** 当前窗口（容器一侧）里有多少个某物。 */
+function winCount(bot, name) {
+    const win = bot.currentWindow;
+    if (!win) return 0;
+    return (win.slots || [])
+        .filter((i) => i?.name === name)
+        .reduce((n, i) => n + (i.count ?? 0), 0);
+}
+
+/**
+ * 把背包里的 item 存 n 个进当前打开的容器。
+ *
+ * @returns ActionResult
+ *   ok            → data: { item, want, stored, invBefore, invAfter, winBefore, winAfter }
+ *   WINDOW_CLOSED 没有打开的窗口 —— 与 NOT_READY 的区别：这个要"先开箱"，不是"等一会"
+ *   NO_ITEM       背包里没有这件东西
+ *   INVENTORY_FULL 容器放不下了（存进去的比要存的少）
+ */
+export async function deposit(bot, item, n = 1) {
+    if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
+    if (!item) return fail('NO_TARGET', '没说要存什么');
+    const win = bot.currentWindow;
+    if (!win) return fail('WINDOW_CLOSED', '没有打开的容器（先开箱再存）', { item });
+    if (typeof win.deposit !== 'function') {
+        return fail('INTERNAL', '这个窗口不支持 deposit（不是容器？）', { item });
+    }
+
+    const want = Math.max(1, Math.floor(Number(n) || 1));
+    const invBefore = invCount(bot, item);
+    if (invBefore <= 0) return fail('NO_ITEM', `背包里没有 ${item}`, { item });
+
+    const take = Math.min(want, invBefore);
+    const winBefore = winCount(bot, item);
+    try {
+        await win.deposit(bot.registry?.itemsByName?.[item]?.type ?? null, null, take);
+    } catch (e) {
+        const msg = String(e?.message ?? e);
+        if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item });
+        return fail('INTERNAL', msg, { error: msg, item });
+    }
+
+    const invAfter = invCount(bot, item);
+    const winAfter = winCount(bot, item);
+    const stored = invBefore - invAfter;
+
+    // 两边计数必须对上（存了多少，背包就少多少、箱子就多多少）
+    if (stored <= 0) {
+        return fail('INVENTORY_FULL', `没能存进去（容器可能满了）`, {
+            item, want, stored: 0, invBefore, invAfter, winBefore, winAfter,
+        });
+    }
+    if (stored < take) {
+        return fail('INVENTORY_FULL', `只存进去 ${stored}/${take}（容器满了）`, {
+            item, want, stored, invBefore, invAfter, winBefore, winAfter,
+        });
+    }
+    return ok({ item, want, stored, invBefore, invAfter, winBefore, winAfter });
+}
+
+/**
+ * 从当前打开的容器里取 n 个 item。
+ *
+ * @returns ActionResult
+ *   ok            → data: { item, want, taken, invBefore, invAfter, winBefore, winAfter }
+ *   WINDOW_CLOSED 没有打开的窗口
+ *   NO_ITEM       容器里没有这件东西
+ *   INVENTORY_FULL 背包放不下（取出来的比要取的少）
+ */
+export async function withdraw(bot, item, n = 1) {
+    if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
+    if (!item) return fail('NO_TARGET', '没说要取什么');
+    const win = bot.currentWindow;
+    if (!win) return fail('WINDOW_CLOSED', '没有打开的容器（先开箱再取）', { item });
+    if (typeof win.withdraw !== 'function') {
+        return fail('INTERNAL', '这个窗口不支持 withdraw（不是容器？）', { item });
+    }
+
+    const want = Math.max(1, Math.floor(Number(n) || 1));
+    const winBefore = winCount(bot, item);
+    if (winBefore <= 0) return fail('NO_ITEM', `容器里没有 ${item}`, { item });
+
+    const take = Math.min(want, winBefore);
+    const invBefore = invCount(bot, item);
+    try {
+        await win.withdraw(bot.registry?.itemsByName?.[item]?.type ?? null, null, take);
+    } catch (e) {
+        const msg = String(e?.message ?? e);
+        if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item });
+        return fail('INTERNAL', msg, { error: msg, item });
+    }
+
+    const invAfter = invCount(bot, item);
+    const winAfter = winCount(bot, item);
+    const taken = winBefore - winAfter;
+
+    if (taken <= 0) {
+        return fail('INVENTORY_FULL', `没能取出来（背包可能满了）`, {
+            item, want, taken: 0, invBefore, invAfter, winBefore, winAfter,
+        });
+    }
+    if (taken < take) {
+        return fail('INVENTORY_FULL', `只取出来 ${taken}/${take}（背包满了）`, {
+            item, want, taken, invBefore, invAfter, winBefore, winAfter,
+        });
+    }
+    return ok({ item, want, taken, invBefore, invAfter, winBefore, winAfter });
 }
