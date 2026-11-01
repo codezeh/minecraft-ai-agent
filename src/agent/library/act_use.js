@@ -9,10 +9,10 @@
  * 单一副作用：让目标方块的状态发生变化。不负责走过去（复合层先 moveTo）。
  */
 import Vec3 from 'vec3';
-import { ok, fail, normalizeTarget } from './atom_contract.js';
-import { blockAt, reachDistanceTo } from './atom_perceive.js';
+import { ok, fail, normalizeTarget } from './contract.js';
+import { blockAt, reachDistanceTo } from './query_perceive.js';
 import { GOAL_LOOK_AT_DEFAULT_REACH } from '../rules/rules.runtime.js';
-import { openContainer, containerKindOf } from './atom_container.js';
+import { openContainer, containerKindOf } from './act_container.js';
 import { waitUntil } from './atom_wait.js';
 import { holdDig, useOnBlock } from './atom_input_mouse.js';
 

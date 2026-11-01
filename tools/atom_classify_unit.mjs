@@ -12,7 +12,7 @@
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
 import { rmSync } from 'node:fs';
-import { isProtected } from '../src/agent/library/atom_classify.js';
+import { isProtected } from '../src/agent/library/query_classify.js';
 import { protectedPlaces, resetProtectedCache } from '../src/agent/library/landmarks.js';
 import { writeStore } from '../src/agent/library/memory_store.js';
 

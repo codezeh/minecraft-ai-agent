@@ -13,7 +13,7 @@
  * 有后置校验）；本文件只补 `atom_look` 没有的那几个一次性输入。
  */
 import Vec3 from 'vec3';
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { lookAt as _lookAt } from './atom_look.js';
 
 const _Vec3 = Vec3;

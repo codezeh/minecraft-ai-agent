@@ -8,8 +8,8 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
-import { placeBlockAt } from '../src/agent/library/atom_place.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
+import { placeBlockAt } from '../src/agent/library/act_place.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });

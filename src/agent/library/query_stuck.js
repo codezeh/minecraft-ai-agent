@@ -16,9 +16,9 @@
  *
  * 注意：本原子只回答"算不算动了"，**不做决定**（连续几次才放弃是策略层的事）。
  */
-import { ok, fail } from './atom_contract.js';
-import { canStand } from './atom_stand.js';
-import { blockAt } from './atom_perceive.js';
+import { ok, fail } from './contract.js';
+import { canStand } from './query_stand.js';
+import { blockAt } from './query_perceive.js';
 
 /** 默认阈值：低于这个加权位移就算"没动"。 */
 export const DEFAULT_MIN_MOVE = 2;

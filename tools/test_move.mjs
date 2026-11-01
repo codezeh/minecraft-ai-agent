@@ -2,9 +2,9 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { moveTo, stopMove } from '../src/agent/library/atom_move.js';
+import { moveTo, stopMove } from '../src/agent/library/nav_pathfinder.js';
 import { lookAtPoint } from '../src/agent/library/atom_input_mouse.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let passed = 0, failed = 0;

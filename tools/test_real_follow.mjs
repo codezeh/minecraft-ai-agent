@@ -4,7 +4,7 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { follow, ensureTracking } from '../src/agent/library/task_follow.js';
+import { follow, ensureTracking } from '../src/agent/library/flow_follow.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25575 });

@@ -15,7 +15,7 @@
  * 而"跳"是物理动作本身，和 `atom_climb`（爬梯子）同类。
  */
 import Vec3 from 'vec3';
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { holdKey } from './atom_input_move.js';
 import { blockAt, inventory } from './atom_read.js';
 import { placeAgainst } from './atom_input_mouse.js';

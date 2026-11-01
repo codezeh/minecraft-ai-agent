@@ -4,8 +4,8 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { collect } from '../src/agent/library/task_collect.js';
-import { countItem } from '../src/agent/library/atom_perceive.js';
+import { collect } from '../src/agent/library/flow_collect.js';
+import { countItem } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c);          // 测试服 25576

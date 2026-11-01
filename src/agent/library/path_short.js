@@ -5,7 +5,7 @@
  * 所以「整段重试」是浪费，应该切半：24 格失败 → 试 12 格 → 再失败试 6 格。
  * 切到 6 格还失败，才认定这一段真的走不通。
  */
-import { moveToXZEx } from './atom_move.js';
+import { moveToXZEx } from './nav_pathfinder.js';
 
 const MIN_SEG = 6;              // 最短切到 6 格
 const MAX_DEPTH = 4;            // 最多切 4 层（24 → 12 → 6）

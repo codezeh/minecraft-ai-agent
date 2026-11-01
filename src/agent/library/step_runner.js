@@ -12,7 +12,7 @@
  *
  * 它与原子的关系：原子是"一次尝试"，这里是"一串尝试"，不重复原子的断言/校验。
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 
 /**
  * 执行步骤序列。

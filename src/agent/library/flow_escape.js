@@ -27,10 +27,10 @@
  * 3) **删掉自建的「挖不动」清单**：原来 `UNBREAKABLE` 又列了一遍基岩/黑曜石，
  *    与 `atom_dig.isDiggable` 是第二个真相。现在统一用 isDiggable + canDigWithInventory。
  */
-import { ok, fail } from './atom_contract.js';
-import { digBlock, isDiggable } from './atom_dig.js';
-import { blockAt } from './atom_perceive.js';
-import { pillarUpOnce } from './atom_pillar.js';
+import { ok, fail } from './contract.js';
+import { digBlock, isDiggable } from './act_dig.js';
+import { blockAt } from './query_perceive.js';
+import { pillarUpOnce } from './act_pillar.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
 
 /** 可以拿来垫脚的方块见 scaffold_blocks.js（D8：清单原来散在 4 处且互不一致）。 */

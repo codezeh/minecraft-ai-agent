@@ -18,7 +18,7 @@ import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
-import { escapeUp } from '../src/agent/library/skill_escape.js';
+import { escapeUp } from '../src/agent/library/flow_escape.js';
 import { rentArena } from './arena.mjs';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

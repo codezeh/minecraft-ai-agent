@@ -5,7 +5,7 @@ import { rcon } from './rcon.mjs';
 import settings from '../settings.js';
 import { setSettings } from '../src/agent/settings.js';
 import { getCommand } from '../src/agent/commands/index.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let passed = 0, failed = 0;

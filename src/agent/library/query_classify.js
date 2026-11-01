@@ -3,13 +3,13 @@
  *
  * 为什么单独一个原子（见 复合层改造规划 §6 的判据）：
  *   这两个都是**纯查询判断**——只读世界、无副作用、能单独跑、能单独测。
- *   之前埋在 task_collect.js 里（60-128 行），只有采集能用。
+ *   之前埋在 flow_collect.js 里（60-128 行），只有采集能用。
  *   而"这是天然结构还是人造结构"的判断以后做矿脉采集也会用到。
  *
  * 判断口诀（规划 §6）：单独跑有没有意义？能单独跑、能单独测 → 原子。
  */
-import { ok, fail } from './atom_contract.js';
-import { blockAt } from './atom_perceive.js';
+import { ok, fail } from './contract.js';
+import { blockAt } from './query_perceive.js';
 
 // ---------------------------------------------------------------------------
 // 「这是天然树还是房子」

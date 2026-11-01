@@ -2,7 +2,7 @@
  * A11 站立：这一格能不能站人 / 找一个能站的格子。
  *
  * 为什么单独一个原子（见 原子层缺口清单 缺口 1）：
- *   收敛前 task_collect.js 里有 standableAt(10 行) + findStandSpot(35 行) 共 45 行手写。
+ *   收敛前 flow_collect.js 里有 standableAt(10 行) + findStandSpot(35 行) 共 45 行手写。
  *   而"能不能站"不是采集专属：place（不往脚下放）、platform（选落点）、hop（找落脚点）
  *   都需要，各自另写一套 → 判定标准必然漂移。
  *
@@ -15,8 +15,8 @@
  *     - 但如果要长时间作业（砍树），上层应该知道"脚下是树叶，砍完要撤"
  *   把判断留给上层，原子只提供事实——这是分层该有的样子。
  */
-import { ok, fail } from './atom_contract.js';
-import { blockAt } from './atom_perceive.js';
+import { ok, fail } from './contract.js';
+import { blockAt } from './query_perceive.js';
 import { EYE_HEIGHT, digReach } from '../rules/rules.runtime.js';
 
 /**

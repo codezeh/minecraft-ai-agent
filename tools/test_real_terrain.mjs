@@ -4,9 +4,9 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { collect } from '../src/agent/library/task_collect.js';
-import { placePlatform } from '../src/agent/library/task_platform.js';
-import { countItem, blockAt, findBlocks } from '../src/agent/library/atom_perceive.js';
+import { collect } from '../src/agent/library/flow_collect.js';
+import { placePlatform } from '../src/agent/library/flow_platform.js';
+import { countItem, blockAt, findBlocks } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25575 });

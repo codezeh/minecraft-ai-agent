@@ -7,7 +7,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25575 });
 
 // 直接 import 项目的 findStandSpot（它在 task_collect 内部，这里复刻同样逻辑验证参数）
-import { blockAt, reachDistanceTo } from '../src/agent/library/atom_perceive.js';
+import { blockAt, reachDistanceTo } from '../src/agent/library/query_perceive.js';
 
 const NOT_SOLID = new Set(['air', 'cave_air', 'water', 'lava', 'short_grass', 'tall_grass',
     'fern', 'vine', 'snow', 'seagrass', 'torch']);

@@ -3,7 +3,7 @@ import * as world from "./world.js";
 import * as landmarks from "./landmarks.js";
 import * as store from "./memory_store.js";   // dangers / tasks 命名空间直读
 // 攀爬能力（原子层）与实体跟随（任务层）
-import { climbUp, climbDown, isClimbable, climbableUp, climbableDown } from './atom_climb.js';
+import { climbUp, climbDown, isClimbable, climbableUp, climbableDown } from './act_climb.js';
 // 掘进与树体（2026-10-29 新增能力，要暴露给模型）
 // ★ 2026-10-31：原来 import 的是 tunnelAlong（循环长在原子层里）。
 // 原子层规范化后原子只做单步，多步循环交回复合层用 runSteps 表达。
@@ -15,8 +15,8 @@ import { pressKey } from './atom_input_move.js';
 // 2026-11-01（t6 遗留清理）：挖/放/右键/挥击/停止挖掘全部改走 atom_input_mouse，本文件不再裸调 bot.* 输入。
 import { holdDig, placeAgainst, useOnBlock, useHeld, attackOnce, lookAtPoint, stopDig } from './atom_input_mouse.js';
 import { closeWindow as closeWindowAtom } from './atom_input_inventory.js';
-import { scanTree, judgeTree, planFelling } from './atom_tree.js';
-import { followEntity as followEntityTask } from './task_follow.js';
+import { scanTree, judgeTree, planFelling } from './query_tree.js';
+import { followEntity as followEntityTask } from './flow_follow.js';
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";

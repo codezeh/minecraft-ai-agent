@@ -4,20 +4,20 @@
  * 策略层职责：失败换目标、黑名单、deadline、进度汇报。
  * 原子层只做一次尝试，所以这里的重试才是「重试」。
  */
-import { ok, fail } from './atom_contract.js';
-import { countItem } from './atom_perceive.js';
-import { moveTo } from './atom_move.js';
-import { digBlock } from './atom_dig.js';
-import { pauseGoalModes, restoreGoalModes } from './task_modes.js';
+import { ok, fail } from './contract.js';
+import { countItem } from './query_perceive.js';
+import { moveTo } from './nav_pathfinder.js';
+import { digBlock } from './act_dig.js';
+import { pauseGoalModes, restoreGoalModes } from './modes.js';
 import { ensureAxe, ensureScaffold } from './tool_prep.js';
 import { ScaffoldTracker } from './scaffold_cleanup.js';
-import { planCollect, makeHandlers } from './skill_collect.js';
+import { planCollect, makeHandlers } from './flow_collect_plan.js';
 import { runSteps } from './step_runner.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const key = (p) => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
 
-// classifyLog / isProtected 已上提到 atom_classify.js（纯查询判断，能单独跑、能单独测）
+// classifyLog / isProtected 已上提到 query_classify.js（纯查询判断，能单独跑、能单独测）
 // 注意：地标"加载 + 缓存"在数据层 landmarks.protectedPlaces(bot)，
 // 原子只接收算好的列表（原子不许读全局状态/读盘，见 ARCHITECTURE_REDESIGN §6.1）
 

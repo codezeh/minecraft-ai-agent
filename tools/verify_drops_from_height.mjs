@@ -17,9 +17,9 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard, inspectPhysics } from '../src/sim/position_guard.js';
-import { collectDrops } from '../src/agent/library/task_pickup.js';
-import { digBlock } from '../src/agent/library/atom_dig.js';
-import { countItem, blockAt } from '../src/agent/library/atom_perceive.js';
+import { collectDrops } from '../src/agent/library/flow_pickup.js';
+import { digBlock } from '../src/agent/library/act_dig.js';
+import { countItem, blockAt } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });   // 测试服（掉落实测正常）

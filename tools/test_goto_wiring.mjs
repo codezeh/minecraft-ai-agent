@@ -1,6 +1,6 @@
 // 单元验证：goToPlayer 在距离 > 40 格时是否调用 hopTo（不需要真联机）。
 // 用假的 bot 对象 + 假的地图，检查调用链。
-import { goToPlayer } from '../src/agent/library/task_follow.js';
+import { goToPlayer } from '../src/agent/library/flow_follow.js';
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {

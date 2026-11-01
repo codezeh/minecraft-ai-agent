@@ -1,6 +1,6 @@
 // 判定实验：站在树叶上，把树叶挖掉，服务端会不会判 invalid_player_movement。
 //
-// 背景：task_collect.js 的 standableAt() 允许"下方是树叶"作为站立支撑
+// 背景：flow_collect.js 的 standableAt() 允许"下方是树叶"作为站立支撑
 // （注释写「站在树叶上方是合法的」）。但树叶会消失（被挖/自然枯萎），
 // bot 会瞬间从树冠高度掉到地面 —— 实测 diag_collect_kick 里出现过
 // y 74.16 → 65.49 的单帧 8.7 格跳变，随后被踢。

@@ -11,8 +11,8 @@ import pf from 'mineflayer-pathfinder';
 import pvp from 'mineflayer-pvp';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
-import { attackEntity, isAttackable, nearestAttackable } from '../src/agent/library/atom_attack.js';
-import { openContainer, closeContainer } from '../src/agent/library/atom_container.js';
+import { attackEntity, isAttackable, nearestAttackable } from '../src/agent/library/act_attack.js';
+import { openContainer, closeContainer } from '../src/agent/library/act_container.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });

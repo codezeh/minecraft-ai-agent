@@ -19,7 +19,7 @@ import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { installVinePhysics } from '../src/sim/vine_physics.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });

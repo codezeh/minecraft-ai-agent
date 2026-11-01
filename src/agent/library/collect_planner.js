@@ -12,7 +12,7 @@
  *   - 计算带垂直惩罚的距离，用于排序
  *   - 侦察阶段就排除明显到不了的（高差 >8 且水平 >6）
  */
-import { findBlocks, blockAt } from './atom_perceive.js';
+import { findBlocks, blockAt } from './query_perceive.js';
 
 /**
  * 侦察：把附近的原木聚成一处一处，并给出执行顺序。

@@ -13,7 +13,7 @@
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
-import { detectTrapped } from '../src/agent/library/atom_stuck_detect.js';
+import { detectTrapped } from '../src/agent/library/query_stuck.js';
 
 let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };

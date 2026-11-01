@@ -72,7 +72,7 @@ const fakeBot = {
 
 const smokeTests = [
     ['task_collect.collect', async () => {
-        const m = await import(pathToFileURL(join(ROOT, 'library/task_collect.js')).href);
+        const m = await import(pathToFileURL(join(ROOT, 'library/flow_collect.js')).href);
         await m.collect(fakeBot, ['oak_log'], 1, { deadlineMs: 500 });
     }],
     ['collect_targets.resolveCollectTarget', async () => {
@@ -80,7 +80,7 @@ const smokeTests = [
         m.resolveCollectTarget('木头', fakeBot.registry);
     }],
     ['atom_move.makeMovements', async () => {
-        const m = await import(pathToFileURL(join(ROOT, 'library/atom_move.js')).href);
+        const m = await import(pathToFileURL(join(ROOT, 'library/nav_pathfinder.js')).href);
         m.makeMovements({ registry: { blocksByName: {}, itemsByName: {} } });
     }],
     ['history.load+save', async () => {
@@ -138,7 +138,7 @@ try {
 //
 // 用 import 而不是子进程：Windows 中文路径下 execFileSync 容易 MODULE_NOT_FOUND。
 try {
-    const { CODES } = await import('../src/agent/library/atom_contract.js');
+    const { CODES } = await import('../src/agent/library/contract.js');
     const fs2 = await import('node:fs');
     const path2 = await import('node:path');
     const projectRoot2 = fileURLToPath(new URL('../', import.meta.url));
@@ -284,9 +284,9 @@ const API_SCAN_RULES = [
             'src/agent/library/atom_input_inventory.js',   // 切快捷栏 / 点窗口格子（clickWindow、setQuickBarSlot）
             'src/agent/library/atom_look.js',
             // 2026-11-01（t6 遗留清理）已销账：skills.js（14 处鼠标输入 + 6 处 bot.lookAt）、
-            //   tool_prep.js（2 处）、atom_attack.js（1 处挥击）、vision_interpreter.js（3 处）、
-            //   task_follow.js（1 处）、atom_move.js（重复的 lookAt 实现已删）—— 全部改调 atom_input_mouse。
-            //   空豁免 skill_clear.js / scaffold_cleanup.js 也已删（真实命中 0）。
+            //   tool_prep.js（2 处）、act_attack.js（1 处挥击）、vision_interpreter.js（3 处）、
+            //   flow_follow.js（1 处）、nav_pathfinder.js（重复的 lookAt 实现已删）—— 全部改调 atom_input_mouse。
+            //   空豁免 flow_clear.js / scaffold_cleanup.js 也已删（真实命中 0）。
             'src/agent/modes.js',               // bot.look* ×4（296/298/311/313）—— M2 残项，control 负责
             'src/agent/agent.js',               // this.bot.stopDigging()：停任务时的收尾清理（M1 文件）
         ],
@@ -321,7 +321,7 @@ const API_SCAN_RULES = [
             'src/agent/library/skills.js',
             'src/agent/modes.js',
             'src/agent/permissions.js',
-            'src/agent/library/task_follow.js',
+            'src/agent/library/flow_follow.js',
             'src/agent/self_prompter.js',
             'src/agent/conversation.js',
             'src/agent/tasks/**/*.js',
@@ -512,6 +512,173 @@ function locateInText(text, index) {
         console.log(`  · 共 ${totalHits} 处命中：现在只报告不判失败；` +
             '规则填严后用 `node tools/preflight.mjs --strict-api` 验，再翻默认值。');
     }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// [5/5] 前缀 import 规矩（Phase R · 02_actions.md §5）
+//
+// 为什么要有这一层：改完前缀之后"文件名就是层级"，但**没有任何东西保证层没有被绕过**。
+// 之前 `commands/actions.js:8` 直接 import 了 `atom_place.placeBlockAt`（现在是 `act_place`）——
+// 上游命令层伸手去调动作，跳过整个流程层，这类错误编译器完全看不出来。
+//
+// 判据照抄 02 §5 那张表（"谁能 import 谁"）。**只报不改**：这一层先当门禁，
+// 真要重构的地方按 Phase 5.4 另开任务（目前已知 1 处：commands → act_place）。
+// ───────────────────────────────────────────────────────────────────────────
+
+/** 文件 → 层（看前缀；没前缀的基础设施返回 'infra'）。 */
+function layerOfFile(relPath) {
+    const base = relPath.split('/').pop().replace(/\.js$/, '');
+    // commands/ 是命令层，单独一档（规矩最严：不许碰动作和原子）
+    if (/\/commands\//.test(relPath)) return 'commands';
+    if (base.startsWith('atom_input_') || base === 'atom_read' || base === 'atom_wait'
+        || base === 'atom_wait_item' || base === 'atom_look') return 'atom';
+    if (base.startsWith('query_')) return 'query';
+    if (base.startsWith('act_')) return 'act';
+    if (base.startsWith('nav_')) return 'nav';
+    if (base.startsWith('flow_')) return 'flow';
+    if (base.startsWith('strat_')) return 'strat';
+    if (base.startsWith('board_')) return 'board';
+    return 'infra';                       // contract / step_runner / trace_bus / terrain3d / modes …
+}
+
+/**
+ * 每层能 import 哪些层（02 §5）。
+ *   atom   : mineflayer、基础设施
+ *   query  : 读取原子、别的查询（+ 基础设施）
+ *   act    : 原子、查询（+ 基础设施）；动作之间不互相调用
+ *   nav    : 原子、查询、单格动作（下面 SINGLE_CELL_ACTIONS 名单）
+ *   flow   : 动作、导航、查询、原子、别的流程（+ 基础设施）
+ *   commands: 流程、策略、任务板、查询（+ 基础设施）；**不许 import 动作和原子**
+ */
+const PREFIX_IMPORT_ALLOW = {
+    atom: ['atom', 'infra'],
+    query: ['atom', 'query', 'infra'],
+    act: ['atom', 'query', 'infra'],
+    nav: ['atom', 'query', 'infra'],
+    flow: ['atom', 'query', 'act', 'nav', 'flow', 'infra'],
+    strat: ['query', 'flow', 'strat', 'board', 'infra'],
+    board: ['query', 'infra'],
+    commands: ['query', 'flow', 'strat', 'board', 'infra'],
+    infra: ['atom', 'query', 'act', 'nav', 'flow', 'infra'],
+};
+
+/**
+ * 导航层唯一允许直接调的几个**单格动作**（02 §5 明列）。
+ * 其余 act_* 一律不许：要动地形就走动作本身，别在导航里编排。
+ */
+const NAV_ALLOWED_ACT_FUNCS = new Set([
+    'stepInto', 'climb', 'pillarUp', 'sinkInWater', 'swimStep', 'digBlock', 'placeBlockAt',
+    'climbUp', 'climbDown', 'pillarUpOnce',       // 现名（改造中的等价物）
+]);
+
+/** 从一行 import 里取被 import 的本地文件路径（相对路径才管，第三方不管）。 */
+function importedLocalPaths(line) {
+    const out = [];
+    const m = line.match(/^\s*(?:import|export)[^'"]*from\s*['"]([^'"]+)['"]/);
+    const m2 = line.match(/^\s*import\s*\(\s*['"]([^'"]+)['"]\s*\)/);          // 动态 import
+    for (const mm of [m, m2]) {
+        if (!mm) continue;
+        const spec = mm[1];
+        if (spec.startsWith('.')) out.push(spec);
+    }
+    return out;
+}
+
+/** 相对 import 规格 + 当前文件 → 归一化的仓库相对路径（只处理落在 src/agent 下的）。 */
+function resolveLocal(relPath, spec) {
+    const dir = relPath.split('/').slice(0, -1);
+    const parts = spec.split('/');
+    for (const p of parts) {
+        if (p === '.' || p === '') continue;
+        if (p === '..') dir.pop();
+        else dir.push(p);
+    }
+    let p = dir.join('/');
+    if (!p.endsWith('.js')) p += '.js';
+    return p;
+}
+
+{
+    const sources = collectApiScanSources().filter((s) => s.path.startsWith('src/agent/'));
+    const violations = [];
+    let checked = 0;
+
+    for (const src of sources) {
+        const selfLayer = layerOfFile(src.path);
+        const lines = maskJsSource(src.text, { strings: false }).split('\n');
+        const raw = src.text.split('\n');
+        lines.forEach((line, i) => {
+            for (const spec of importedLocalPaths(line)) {
+                const target = resolveLocal(src.path, spec);
+                if (!target.startsWith('src/agent/')) return;
+                // 转发文件与被 import 的文件同层判定（按真身名判：转发的旧名也有前缀）
+                const targetLayer = layerOfFile(target);
+                if (targetLayer === 'infra' || selfLayer === 'infra') { checked++; return; }
+                const allowed = PREFIX_IMPORT_ALLOW[selfLayer] ?? [];
+                // 同层兄弟文件一律放过：02 §5 那张表说的是"层间"规矩。
+                // （"动作之间不互相调用"是**行为**约定——如 act → act 只许拿工具函数，
+                //   这条靠 review，不靠 import 图；用 import 图卡它会把 act_items 这种
+                //   纯工具模块的正当用法一起毙掉。）
+                if (targetLayer === selfLayer) { checked++; return; }
+                if (!allowed.includes(targetLayer)) {
+                    violations.push({
+                        file: src.path, line: i + 1, target,
+                        selfLayer, targetLayer,
+                        snippet: raw[i].trim().slice(0, 100),
+                    });
+                }
+                checked++;
+            }
+        });
+    }
+
+    console.log('\n[5/5] 前缀 import 规矩（02 §5）');
+    console.log(`  扫 ${sources.length} 个文件，检查 ${checked} 条本地 import，违规 ${violations.length} 处`);
+    // ── 已知违规（点名记录，不是悄悄放过）────────────────────────────────
+    //
+    // 这些是**真问题**，只是不在 t9（改名+收敛）的范围里：改它们要动结构。
+    // 名单要短、要有到期日；每条都必须写清"留给谁、在哪个阶段"。
+    const KNOWN_PREFIX_VIOLATIONS = [
+        {
+            file: 'src/agent/commands/actions.js', target: 'src/agent/library/act_place.js',
+            why: '命令层直接 import 动作 placeBlockAt（02 §5 原文就点了这处）',
+            todo: 'Phase 5.4：改成调流程（如 flow_build 的 placeOne），commands 只碰流程/查询',
+        },
+        {
+            file: 'src/agent/library/atom_read.js', target: 'src/agent/library/query_perceive.js',
+            why: '原子层转出查询层的 findBlocks（atom_read 只是转发，未自带实现）',
+            todo: 'Phase R 收尾：把 findBlocks 的实现搬进 atom_read（读取原子的真身），query_perceive 反向复用',
+        },
+        {
+            file: 'src/agent/library/atom_read.js', target: 'src/agent/library/act_container.js',
+            why: '原子层转出动作层的 windowItems',
+            todo: '同上：windowItems 是纯读取，应搬进 atom_read；act_container 反向复用',
+        },
+        {
+            file: 'src/agent/library/atom_input_inventory.js', target: 'src/agent/library/act_container.js',
+            why: 'closeWindow 转出 act_container.closeContainer（避免两份实现）',
+            todo: 'Phase R 收尾：closeContainer 的 bot.closeWindow 那一层搬进 atom_input_inventory，act_container 反向复用',
+        },
+    ];
+    const knownKey = (v) => `${v.file}|${v.target}`;
+    const knownMap = new Map(KNOWN_PREFIX_VIOLATIONS.map((k) => [`${k.file}|${k.target}`, k]));
+
+    const unexpected = [];
+    for (const v of violations) {
+        const k = knownMap.get(knownKey(v));
+        if (k) { console.log(`  · 已知（${k.todo.split('：')[0]}）${v.file}:${v.line} ${v.selfLayer}→${v.targetLayer}`); continue; }
+        unexpected.push(v);
+    }
+    if (unexpected.length) {
+        failed++;
+        for (const v of unexpected) {
+            console.log(`  ✗ 新违规 ${v.file}:${v.line}  ${v.selfLayer} → ${v.targetLayer}  目标 ${v.target}`);
+            console.log(`      ${v.snippet}`);
+        }
+    } else if (violations.length) {
+        console.log(`  ✓ 除 ${violations.length} 处已知违规外没有新违规`);
+    }
+    if (violations.length === 0) console.log('  ✓ 前缀 import 规矩没有命中');
 }
 
 const { rmSync } = await import('fs');

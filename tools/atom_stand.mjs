@@ -10,7 +10,7 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
-import { canStand, findStandSpot } from '../src/agent/library/atom_stand.js';
+import { canStand, findStandSpot } from '../src/agent/library/query_stand.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });

@@ -201,7 +201,7 @@ console.log('\n=== 10) 出安全范围 → 拒绝 ===');
 //            然后规划砍树方案」
 console.log('\n=== 11) 树体：扫描 + 判断 + 规划 ===');
 {
-    const { scanTree, judgeTree, planFelling } = await import('../src/agent/library/atom_tree.js');
+    const { scanTree, judgeTree, planFelling } = await import('../src/agent/library/query_tree.js');
 
     // 造一棵"11 格笔直丛林树"：树干 x/z 各 1 格，y=71~81，周围有叶子
     const at2 = new Map();

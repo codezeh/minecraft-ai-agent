@@ -25,9 +25,9 @@
  * 它有自己的目标失效、重定位、丢失重找逻辑，硬塞进 goTo 会让两个语义搅在一起。
  * 跟随仍然走 task_follow。
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { walkTo } from './executor.js';
-import { moveTo, moveToXZ } from './atom_move.js';
+import { moveTo, moveToXZ } from './nav_pathfinder.js';
 import { ensureTraced } from './trace_bus.js';
 
 /** 目标坐标是否可用。 */

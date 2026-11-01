@@ -14,9 +14,9 @@ import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { installVinePhysics } from '../src/sim/vine_physics.js';
-import { digBlock } from '../src/agent/library/atom_dig.js';
-import { canReach, reachDistanceTo, blockAt } from '../src/agent/library/atom_perceive.js';
-import { findBlocks } from '../src/agent/library/atom_perceive.js';
+import { digBlock } from '../src/agent/library/act_dig.js';
+import { canReach, reachDistanceTo, blockAt } from '../src/agent/library/query_perceive.js';
+import { findBlocks } from '../src/agent/library/query_perceive.js';
 import { requiresTool, canHarvestWith } from '../src/agent/rules/rules.runtime.js';
 import Vec3 from 'vec3';
 

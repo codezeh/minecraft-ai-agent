@@ -23,10 +23,10 @@
  *   3) **液体是硬红线**：上下左右只要有水/岩浆，这一步直接否决 ——
  *      挖穿水会灌进来，挖穿岩浆会烧死。这是唯一的一票否决。
  */
-import { ok, fail } from './atom_contract.js';
-import { blockAt } from './atom_perceive.js';
-import { digBlock, isDiggable } from './atom_dig.js';
-import { moveToXZ } from './atom_move.js';
+import { ok, fail } from './contract.js';
+import { blockAt } from './query_perceive.js';
+import { digBlock, isDiggable } from './act_dig.js';
+import { moveToXZ } from './nav_pathfinder.js';
 import { holdKey, releaseAll } from './atom_input_move.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

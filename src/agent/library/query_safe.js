@@ -19,8 +19,8 @@
  *   所以调用方不能把 safe:true 当成"绝对安全"，只能当"没有已知风险"。
  */
 import Vec3 from 'vec3';
-import { ok, fail } from './atom_contract.js';
-import { blockAt } from './atom_perceive.js';
+import { ok, fail } from './contract.js';
+import { blockAt } from './query_perceive.js';
 import * as worldModel from './world_model.js';
 // 危险方块白名单（用注册表名，不写死数字 id）
 const HAZARD_BLOCK_NAMES = [

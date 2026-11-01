@@ -4,7 +4,7 @@ import mineflayer from 'mineflayer';
 import { rcon } from './rcon.mjs';
 import {
     blockAt, findBlocks, canReach, reachDistanceTo, countItem, playerPos, blockBelow,
-} from '../src/agent/library/atom_perceive.js';
+} from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let passed = 0, failed = 0;

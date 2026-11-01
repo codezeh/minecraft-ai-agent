@@ -10,7 +10,7 @@
  *   ① `hopTo` 这个名字在 3 个调用点里已经稳定，改名只是制造 diff
  *   ② 它是一处**收口**：以后换导航实现，改这一个文件就够
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { goTo } from './nav_core.js';
 import { describeStore } from './executor.js';
 

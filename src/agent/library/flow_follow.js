@@ -11,16 +11,16 @@
  *   2) RCON 不可用 → 用最后可见位置（带年龄，太旧就如实说）
  *   3) 完全没有线索 → 如实说，并问玩家在哪
  *
- * PlayerTracker / 四态判定已上提到 atom_query.js，本文件只负责"跟"这个动作。
+ * PlayerTracker / 四态判定已上提到 query_target.js，本文件只负责"跟"这个动作。
  */
 import pf from 'mineflayer-pathfinder';
-import { moveTo, stopMove, makeMovements } from './atom_move.js';
-import { ok, fail } from './atom_contract.js';
-import { pauseGoalModes, restoreGoalModes } from './task_modes.js';
+import { moveTo, stopMove, makeMovements } from './nav_pathfinder.js';
+import { ok, fail } from './contract.js';
+import { pauseGoalModes, restoreGoalModes } from './modes.js';
 import Vec3 from 'vec3';
-import { PlayerTracker, ensureTracking, query, queryPlayerExact } from './atom_query.js';
+import { PlayerTracker, ensureTracking, query, queryPlayerExact } from './query_target.js';
 import { ensureScaffold, countScaffold } from './tool_prep.js';
-import { detectTrapped } from './atom_stuck_detect.js';
+import { detectTrapped } from './query_stuck.js';
 // 2026-11-01（t6）：转头改走输入原子（bot.look* 的唯一出口）。
 import { lookAtPoint } from './atom_input_mouse.js';
 
@@ -28,7 +28,7 @@ export { PlayerTracker, ensureTracking };
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// mode 互斥统一在 task_modes.js（跟随/采集/放置共用一份，见方案 §9）。
+// mode 互斥统一在 modes.js（跟随/采集/放置共用一份，见方案 §9）。
 
 function horizontalDist(bot, pos) {
     const p = bot.entity.position;
@@ -105,7 +105,7 @@ export async function follow(bot, name, opts = {}) {
                 if (d0 > 40) {
                     onEvent({ type: 'hop_start', dist: Math.round(d0) });
                     try {
-                        const { hopTo } = await import('./task_hop.js');
+                        const { hopTo } = await import('./nav_hop.js');
                         const hr = await hopTo(bot, { x: ent.position.x, z: ent.position.z },
                             { mapDir, onEvent: (e) => onEvent({ type: 'hop_' + e.type, ...e }) });
                         onEvent({ type: 'hop_done', code: hr.code, dist: Math.round(bot.entity.position.distanceTo(ent.position)) });
@@ -229,7 +229,7 @@ export async function goToPlayer(bot, name, opts = {}) {
         onEvent({ type: 'hop_start', dist: Math.round(d0) });
         console.log(`[goToPlayer] 进入 hopTo，目标 (${known.x.toFixed(0)},${known.z.toFixed(0)})`);
         try {
-            const { hopTo } = await import('./task_hop.js');
+            const { hopTo } = await import('./nav_hop.js');
             const hr = await hopTo(bot, { x: known.x, z: known.z },
                 { mapDir, onEvent: (e) => onEvent({ type: 'hop_' + e.type, ...e }) });
             console.log(`[goToPlayer] hopTo 返回 code=${hr.code} message=${hr.message ?? ''}`);
@@ -339,7 +339,7 @@ export async function goToPlayer(bot, name, opts = {}) {
                     onEvent({ type: 'escape_skipped', why: 'can_roam', reach: Math.round(reach) });
                 } else {
                     console.log(`[goToPlayer] 往上挖到 y=${goalY}`);
-                    const { escapeUp } = await import('./skill_escape.js');
+                    const { escapeUp } = await import('./flow_escape.js');
                     const esc = await escapeUp(bot, {
                         targetY: goalY,
                         maxBlocks: 40,

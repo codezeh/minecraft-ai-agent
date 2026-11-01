@@ -12,7 +12,7 @@
 //   4) scaffold=false   → 永远不搭（不受清单影响）
 import pf from 'mineflayer-pathfinder';
 import mcDataFactory from 'minecraft-data';
-import { makeMovements } from '../src/agent/library/atom_move.js';
+import { makeMovements } from '../src/agent/library/nav_pathfinder.js';
 
 const mcData = mcDataFactory('1.21.8');
 

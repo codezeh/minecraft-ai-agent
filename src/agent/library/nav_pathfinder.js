@@ -8,7 +8,7 @@
  */
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
-import { ok, fail, normalizeTarget } from './atom_contract.js';
+import { ok, fail, normalizeTarget } from './contract.js';
 import { scaffoldBlockIds } from './scaffold_blocks.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

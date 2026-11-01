@@ -15,10 +15,10 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
-import { planCollect, makeHandlers } from '../src/agent/library/skill_collect.js';
+import { planCollect, makeHandlers } from '../src/agent/library/flow_collect_plan.js';
 import { runSteps } from '../src/agent/library/step_runner.js';
-import { inspectObstacles, planClearObstacles } from '../src/agent/library/skill_clear.js';
-import { countItem, blockAt } from '../src/agent/library/atom_perceive.js';
+import { inspectObstacles, planClearObstacles } from '../src/agent/library/flow_clear.js';
+import { countItem, blockAt } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });

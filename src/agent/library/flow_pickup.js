@@ -20,11 +20,11 @@
  *
  * 判据仍然是【背包增量】而不是【实体消失】（原注释的理由仍然成立，保留在下面）。
  */
-import { ok, fail } from './atom_contract.js';
-import { findStandSpot } from './atom_stand.js';
-import { moveTo } from './atom_move.js';
+import { ok, fail } from './contract.js';
+import { findStandSpot } from './query_stand.js';
+import { moveTo } from './nav_pathfinder.js';
 import { waitUntil } from './atom_wait.js';
-import { findDrops } from './atom_find_drops.js';
+import { findDrops } from './query_drops.js';
 import { EYE_HEIGHT } from '../rules/rules.runtime.js';
 import Vec3 from 'vec3';
 

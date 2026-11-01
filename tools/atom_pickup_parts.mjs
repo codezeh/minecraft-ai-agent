@@ -15,9 +15,9 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
-import { findDrops } from '../src/agent/library/atom_find_drops.js';
+import { findDrops } from '../src/agent/library/query_drops.js';
 import { waitForItem } from '../src/agent/library/atom_wait_item.js';
-import { countItem } from '../src/agent/library/atom_perceive.js';
+import { countItem } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });

@@ -11,7 +11,7 @@
 //   - 返回契约改为 ok()/fail() 信封 → 断言从 plan.steps/plan.why 改为 plan.data.steps/plan.message
 //   - 步骤名 jumpPlace → pillar（现在这一步就是调 atom_pillar.pillarUpOnce）
 //   - 新增：头顶第二格挖不动只降空间、不致命；第一格挖不动才 BLOCKED
-import { planEscape } from '../src/agent/library/skill_escape.js';
+import { planEscape } from '../src/agent/library/flow_escape.js';
 import { findScaffoldItem } from '../src/agent/library/scaffold_blocks.js';
 
 let passed = 0, failed = 0;

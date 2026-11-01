@@ -3,7 +3,7 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { hopTo } from '../src/agent/library/task_hop.js';
+import { hopTo } from '../src/agent/library/nav_hop.js';
 import { scanArea } from '../src/agent/library/chunk_map.js';
 import { importRegionDir } from '../src/agent/library/mca_import.js';
 import { mkdirSync, existsSync } from 'fs';

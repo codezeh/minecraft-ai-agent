@@ -2,7 +2,7 @@
  * moveTo 落脚状态契约验收（测试服 25566）。
  *
  * 起因（用户判断）：「原子技能不够干净，移动和攀爬这几个动作不够明确」。
- * 核实结果：atom_move.js 310 行、6 个导出函数里，
+ * 核实结果：nav_pathfinder.js 310 行、6 个导出函数里，
  *   onGround / standable / findStandSpot 命中数 **0** ——
  *   移动原子完全不报告「最后停在哪、是不是站着」。
  * 后果实测：collectDrops 里 moveTo 返回 OK，但 bot 停在半空，
@@ -20,8 +20,8 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
-import { moveTo } from '../src/agent/library/atom_move.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
+import { moveTo } from '../src/agent/library/nav_pathfinder.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });

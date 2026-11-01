@@ -2,7 +2,7 @@
  * A13 朝向：看向某处（方块 / 实体 / 玩家 / 坐标）。
  *
  * 为什么单独一个原子（见 原子层缺口清单 缺口 4）：
- *   `atom_move.js` 里有个 lookAt，但只看方块坐标；实体的看向在各处各写一遍
+ *   `nav_pathfinder.js` 里有个 lookAt，但只看方块坐标；实体的看向在各处各写一遍
  *   （`task_follow` 里 `bot.lookAt(ent.position.offset(0, head, 0))`、
  *    `atom_attack` 里 `bot.lookAt(entity.position.offset(0, entity.height ?? 1, 0))`）。
  *   陪玩场景里"看着玩家说话"是真实需求，需要统一入口。
@@ -13,7 +13,7 @@
  *   - 后置校验：读 yaw/pitch，确认真的转过去了（bot.lookAt 有时静默失败）
  */
 import Vec3 from 'vec3';
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { EYE_HEIGHT } from '../rules/rules.runtime.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

@@ -11,7 +11,7 @@
  */
 // ★ 2026-11-01（A.4 收口）：挖 / 放 这两个鼠标输入改由 atom_input_mouse 出手，本文件不再裸调 bot.dig / bot.placeBlock。
 import { holdDig, placeAgainst } from './atom_input_mouse.js';
-import { countItem } from './atom_perceive.js';
+import { countItem } from './query_perceive.js';
 import Vec3 from 'vec3';                 // bot.blockAt 必须传 Vec3（交接文档 §7.2 记过）
 import pf from 'mineflayer-pathfinder';  // 捡掉落物时要用 GoalNear
 import { countScaffold } from './scaffold_blocks.js';

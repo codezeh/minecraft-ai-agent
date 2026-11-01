@@ -11,9 +11,9 @@ import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { installVinePhysics } from '../src/sim/vine_physics.js';
-import { planClearObstacles, inspectObstacles } from '../src/agent/library/skill_clear.js';
-import { planCollect } from '../src/agent/library/skill_collect.js';
-import { findBlocks } from '../src/agent/library/atom_perceive.js';
+import { planClearObstacles, inspectObstacles } from '../src/agent/library/flow_clear.js';
+import { planCollect } from '../src/agent/library/flow_collect_plan.js';
+import { findBlocks } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25575 });

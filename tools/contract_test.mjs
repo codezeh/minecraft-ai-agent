@@ -1,6 +1,6 @@
 // 契约测试：不需要服务器，验证 ActionResult 的形状、校验、序列化。
 import assert from 'node:assert';
-import { CODES, ok, fail, isResult, asBool, truncate, formatActionResult } from '../src/agent/library/atom_contract.js';
+import { CODES, ok, fail, isResult, asBool, truncate, formatActionResult } from '../src/agent/library/contract.js';
 
 let passed = 0, failed = 0;
 function t(name, fn) {

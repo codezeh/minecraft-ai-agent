@@ -2,7 +2,7 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { goToPlayer } from '../src/agent/library/task_follow.js';
+import { goToPlayer } from '../src/agent/library/flow_follow.js';
 import { scanArea } from '../src/agent/library/chunk_map.js';
 import { mkdirSync, existsSync } from 'fs';
 

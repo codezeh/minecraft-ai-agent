@@ -19,7 +19,7 @@
  *   视线根本不穿过它，所以永远找不到（这就是"包裹就不砍"的第二个原因）。
  *   这里改成两路都扫：视线采样 + 目标周围一圈。
  */
-import { blockAt, eyePosition } from './atom_perceive.js';
+import { blockAt, eyePosition } from './query_perceive.js';
 import { EYE_HEIGHT } from '../rules/rules.runtime.js';
 
 /** 算作"软障碍"、值得先清掉的方块 */

@@ -16,7 +16,7 @@
  *   ② 调用方还必须显式传 `{ cheat: true }`：这不是权限判断（原子不做前置判断，A6），
  *      而是**让代码自己交代"我知道这是作弊命令"**，防止随手调。
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { slashVerdict, slashCommandName, inspectChatText, LEVEL } from '../permissions.js';
 
 /** 命令名规范化（去掉前导 `/`，只留第一个词）。真身是 permissions.slashCommandName。 */

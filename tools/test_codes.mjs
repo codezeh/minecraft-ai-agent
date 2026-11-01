@@ -9,7 +9,7 @@
 // 这条测试把"用到的 code 必须在 CODES 里"变成硬约束。
 import fs from 'node:fs';
 import path from 'node:path';
-import { CODES } from '../src/agent/library/atom_contract.js';
+import { CODES } from '../src/agent/library/contract.js';
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {
@@ -63,7 +63,7 @@ check('所有用到的错误码都已注册在 CODES 里', missing.length === 0,
 // 3) 关键：fail() 对未注册 code 会 throw，必须验证这个行为本身是"响亮的"
 //    （如果哪天有人把 throw 改成静默返回，这条测试会失败，提醒他别这么做）
 {
-    const { fail } = await import('../src/agent/library/atom_contract.js');
+    const { fail } = await import('../src/agent/library/contract.js');
     let threw = false;
     try { fail('__DEFINITELY_NOT_A_REAL_CODE__'); } catch { threw = true; }
     check('fail() 对未注册 code 会 throw（不静默）', threw, '');

@@ -8,9 +8,9 @@
  * - 支撑面按「下 → 四侧 → 上」优先，且不依附箱子/门/床这类可交互方块
  */
 import Vec3 from 'vec3';
-import { ok, fail, normalizeTarget } from './atom_contract.js';
-import { blockAt, canReach, reachDistanceTo } from './atom_perceive.js';
-import { findItem } from './atom_items.js';
+import { ok, fail, normalizeTarget } from './contract.js';
+import { blockAt, canReach, reachDistanceTo } from './query_perceive.js';
+import { findItem } from './act_items.js';
 import { waitUntil } from './atom_wait.js';
 import { lookAtPoint, placeAgainst } from './atom_input_mouse.js';
 

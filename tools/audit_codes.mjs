@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const SRC = 'src';
-const file = path.join(SRC, 'agent/library/atom_contract.js');
+const file = path.join(SRC, 'agent/library/contract.js');
 const src = fs.readFileSync(file, 'utf8');
 
 const m = src.match(/export const CODES = \[([\s\S]*?)\]/);

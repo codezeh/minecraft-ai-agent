@@ -10,8 +10,8 @@
  *   - 容器判定按注册表 + 名字模式，不写死长名单（版本升级会漏）
  */
 import Vec3 from 'vec3';
-import { ok, fail, normalizeTarget } from './atom_contract.js';
-import { blockAt, reachDistanceTo } from './atom_perceive.js';
+import { ok, fail, normalizeTarget } from './contract.js';
+import { blockAt, reachDistanceTo } from './query_perceive.js';
 import { GOAL_LOOK_AT_DEFAULT_REACH } from '../rules/rules.runtime.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

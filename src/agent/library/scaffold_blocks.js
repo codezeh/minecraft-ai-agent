@@ -2,10 +2,10 @@
  * 可垫脚方块的唯一清单。
  *
  * 为什么单独一个文件：清单原本散在 4 处，且**互不一致**——
- *   atom_move.js:76    GOOD_SCAFFOLD 正则（含 grass_block/*_planks/*_log）
+ *   nav_pathfinder.js:76    GOOD_SCAFFOLD 正则（含 grass_block/*_planks/*_log）
  *   tool_prep.js:88    SCAFFOLD_RE   正则（同上）
  *   executor.js:63     SCAFFOLD      数组（12 项，缺 grass_block/logs/netherrack）
- *   skill_escape.js:35 SCAFFOLD      数组（13 项，缺 grass_block/logs）
+ *   flow_escape.js:35 SCAFFOLD      数组（13 项，缺 grass_block/logs）
  * 后果很实际：`ensureScaffold` 数了 8 个（按正则），`executor` 却认不出其中
  * 的木板/木头 → 判成"没有可垫脚的方块"直接 NO_ITEM 卡住。
  *

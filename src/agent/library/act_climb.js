@@ -21,7 +21,7 @@
  *      向上离开要当前在爬 + 目标格可站 + 头上空。
  */
 import Vec3 from 'vec3';
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { blockAt } from './atom_read.js';
 import { holdKey, releaseAll } from './atom_input_move.js';
 

@@ -9,7 +9,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { plan3D } from '../src/agent/library/path_3d.js';
 import { saveSurfaces, classifyBlock, columnSurfaces, T } from '../src/agent/library/terrain3d.js';
-import { isClimbableName, climbableUp, climbableDown } from '../src/agent/library/atom_climb.js';
+import { isClimbableName, climbableUp, climbableDown } from '../src/agent/library/act_climb.js';
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {

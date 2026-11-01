@@ -17,7 +17,7 @@ import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { installVinePhysics } from '../src/sim/vine_physics.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
 import Vec3 from 'vec3';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

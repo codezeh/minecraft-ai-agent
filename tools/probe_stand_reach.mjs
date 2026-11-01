@@ -18,8 +18,8 @@ import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { installVinePhysics } from '../src/sim/vine_physics.js';
 import { surveyTrees } from '../src/agent/library/collect_planner.js';
-import { findStandSpot } from '../src/agent/library/atom_stand.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
+import { findStandSpot } from '../src/agent/library/query_stand.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
 import { EYE_HEIGHT } from '../src/agent/rules/rules.runtime.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

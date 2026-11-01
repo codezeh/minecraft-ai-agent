@@ -13,8 +13,8 @@
  * （Phase R 会把 `atom_perceive` / `atom_container` 的读取正式改名归位）。
  */
 import Vec3 from 'vec3';
-import { blockAt as _blockAt, findBlocks as _findBlocks } from './atom_perceive.js';
-import { windowItems as _windowItems } from './atom_container.js';
+import { blockAt as _blockAt, findBlocks as _findBlocks } from './query_perceive.js';
+import { windowItems as _windowItems } from './act_container.js';
 
 const AIRISH = new Set(['air', 'cave_air', 'void_air']);
 /** 空气以外的"空"：水/岩浆算方块，但不算可站的面（查询层再判）。 */

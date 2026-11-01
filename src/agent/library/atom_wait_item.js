@@ -14,7 +14,7 @@
  *   本原子专用于"等计数增加"，把常见用法（判据 + 轮询 + 增量报告）固定下来，
  *   避免每个调用方各写一遍（写得不一样就会漏判，这次就是这么踩的）。
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { waitUntil } from './atom_wait.js';
 
 /**

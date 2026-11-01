@@ -14,8 +14,8 @@
  * 本文件只发一次输入，不判断"该不该切/该不该扔"（A6）、不重试（A5）；
  * "切过去没有""格子少了没有"这类后置复核是动作层的事。
  */
-import { ok, fail } from './atom_contract.js';
-import { closeContainer } from './atom_container.js';
+import { ok, fail } from './contract.js';
+import { closeContainer } from './act_container.js';
 
 /** 快捷栏格数（原版 9）。 */
 export const HOTBAR_SLOTS = 9;

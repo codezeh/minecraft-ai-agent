@@ -5,10 +5,10 @@
  * 失败分类：NO_TARGET / OUT_OF_REACH / NO_TOOL / TIMEOUT / INTERRUPTED / INTERNAL。
  */
 import Vec3 from 'vec3';
-import { ok, fail, normalizeTarget } from './atom_contract.js';
+import { ok, fail, normalizeTarget } from './contract.js';
 import { waitUntil } from './atom_wait.js';
-import { blockAt, canReach, reachDistanceTo } from './atom_perceive.js';
-import { findItem } from './atom_items.js';
+import { blockAt, canReach, reachDistanceTo } from './query_perceive.js';
+import { findItem } from './act_items.js';
 import { holdDig, stopDig } from './atom_input_mouse.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

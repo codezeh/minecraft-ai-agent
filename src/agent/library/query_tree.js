@@ -21,7 +21,7 @@
  *   2) judgeTree()  判断是不是自然树（有树冠、不是人造结构、形状像树）
  *   3) planFelling()排出砍伐顺序（从底往上，保证每步都在够取范围内）
  */
-import { blockAt } from './atom_perceive.js';
+import { blockAt } from './query_perceive.js';
 
 /** 原木/菌柄。 */
 const LOG_RE = /_log$|_stem$/;

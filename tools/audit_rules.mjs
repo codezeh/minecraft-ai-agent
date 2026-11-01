@@ -151,7 +151,7 @@ export function newModuleGuard({ quiet = false } = {}) {
     const problems = [];
     // ★ 2026-10-28 修：**申报文件在 docs/ 下**，不在根目录。
     //
-    // 起因：本次新增 atom_climb.js，审计报"没有申报记录"，但文档里明明写了。
+    // 起因：本次新增 act_climb.js，审计报"没有申报记录"，但文档里明明写了。
     // 根因：提交 2a500a9「纳入项目与方法论文档（22 份）」把 自研申报.md
     // 从根目录移到了 docs/，而这里仍然只查 PROJECT_ROOT。
     // 结果：这条校验对所有人静默失效 —— 新模块申报 = 形同虚设。
@@ -189,14 +189,36 @@ export function newModuleGuard({ quiet = false } = {}) {
     const decl = readFileSync(declPath, 'utf8');
     const sections = decl.split(/^## /m).slice(1);
 
-    for (const f of newFiles) {
+    // Phase R（2026-11-01）：**转发文件不算新模块**。
+    // `git mv` 改名后，原路径会留一行 `export * from './新名.js'` 作临时转发（02 §5 强制手法），
+    // 这类文件里没有任何新实现，要求它写自研申报只会逼人往申报文档里灌垃圾。
+    // 判据写窄：整个文件除注释外**只有** export * from './x.js' 才算转发。
+    const isForwarder = (rel) => {
+        let text = '';
+        try { text = readFileSync(join(MC_ROOT, rel), 'utf8'); } catch { return false; }
+        const code = text
+            .replace(/\/\*[\s\S]*?\*\//g, '')   // 块注释
+            .replace(/^\s*\/\/.*$/gm, '')          // 行注释
+            .trim();
+        return /^export\s+\*\s+from\s+['"]\.\/[^'"]+\.js['"];?$/m.test(code)
+            && code.split('\n').filter((l) => l.trim()).length <= 2;
+    };
+
+    const realNew = newFiles.filter((f) => !isForwarder(f));
+    const forwarders = newFiles.length - realNew.length;
+
+    for (const f of realNew) {
         const name = f.split('/').pop();
         const sec = sections.find(s => s.includes(name));
         if (!sec) { problems.push(`新模块 ${name} 没有申报记录`); continue; }
         if (!/结论[:：]\s*\**\s*已批准/.test(sec)) problems.push(`新模块 ${name} 申报结论不是「已批准」`);
     }
 
-    if (!quiet) console.log(`  新模块申报：${newFiles.length} 个新增，${problems.length ? `${problems.length} 个有问题` : '全部已批准'}`);
+    if (!quiet) {
+        console.log(`  新模块申报：${realNew.length} 个新增，`
+            + `${problems.length ? `${problems.length} 个有问题` : '全部已批准'}`
+            + (forwarders ? `（另有 ${forwarders} 个 Phase R 转发文件，不计入）` : ''));
+    }
     return { problems, ok: problems.length === 0 };
 }
 

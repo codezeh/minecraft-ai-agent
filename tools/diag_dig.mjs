@@ -3,9 +3,9 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { findBlocks, canReach, blockAt } from '../src/agent/library/atom_perceive.js';
-import { moveTo } from '../src/agent/library/atom_move.js';
-import { digBlock } from '../src/agent/library/atom_dig.js';
+import { findBlocks, canReach, blockAt } from '../src/agent/library/query_perceive.js';
+import { moveTo } from '../src/agent/library/nav_pathfinder.js';
+import { digBlock } from '../src/agent/library/act_dig.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25575 });

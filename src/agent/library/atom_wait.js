@@ -15,7 +15,7 @@
  *   谓词返回 **undefined 或 null**  = 还没完成，继续等
  *   谓词返回**其它任何值**（含 false / 0 / ''） = 完成，立即返回该值
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 

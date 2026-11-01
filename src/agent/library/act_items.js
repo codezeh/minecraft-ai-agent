@@ -1,8 +1,8 @@
 /**
  * A5 物品：equipItem / dropItem。
  */
-import { ok, fail } from './atom_contract.js';
-import { countItem } from './atom_perceive.js';
+import { ok, fail } from './contract.js';
+import { countItem } from './query_perceive.js';
 
 export function findItem(bot, name) {
     const items = bot.inventory?.items?.() ?? [];

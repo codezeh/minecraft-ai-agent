@@ -15,19 +15,19 @@
  */
 import { surveyTrees } from './collect_planner.js';
 // 整树感知：一次扫出整棵树、判断自然树、排砍伐顺序
-import { scanTree, judgeTree, planFelling } from './atom_tree.js';
+import { scanTree, judgeTree, planFelling } from './query_tree.js';
 import { tunnelStep, findDryClimbColumn } from './atom_tunnel.js';
-import { classifyLog, isProtected } from './atom_classify.js';
+import { classifyLog, isProtected } from './query_classify.js';
 import { protectedPlaces } from './landmarks.js';
-import { findStandSpot } from './atom_stand.js';
-import { blockAt } from './atom_perceive.js';
-import { digBlock } from './atom_dig.js';
-import { moveTo } from './atom_move.js';
+import { findStandSpot } from './query_stand.js';
+import { blockAt } from './query_perceive.js';
+import { digBlock } from './act_dig.js';
+import { moveTo } from './nav_pathfinder.js';
 import { walkTo } from './executor.js';
-import { collectDrops } from './task_pickup.js';
-import { query } from './atom_query.js';
-import { planClearObstacles } from './skill_clear.js';
-import { ok, fail } from './atom_contract.js';
+import { collectDrops } from './flow_pickup.js';
+import { query } from './query_target.js';
+import { planClearObstacles } from './flow_clear.js';
+import { ok, fail } from './contract.js';
 
 /**
  * 规划一轮采集：选目标 → 为每个目标算站位 → 产出「走 / 挖 / 捡」序列。

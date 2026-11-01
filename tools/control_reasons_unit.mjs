@@ -36,7 +36,7 @@ import { saveSurfaces, closeDb3d, T } from '../src/agent/library/terrain3d.js';
 import { execute as executeMode, holdSwimJump } from '../src/agent/modes.js';
 import { SelfPrompter } from '../src/agent/self_prompter.js';
 import { stay } from '../src/agent/library/skills.js';
-import { follow } from '../src/agent/library/task_follow.js';
+import { follow } from '../src/agent/library/flow_follow.js';
 import { makeFakeBot, worldOf, realRegistry } from './fixtures/fake_bot.mjs';
 
 const REG = realRegistry();
@@ -475,7 +475,7 @@ async function stopRunningJob(reason, { job = {}, board = null } = {}) {
 // 10. D19：follow() 入口不再把 interrupt_code 清成 false
 // ───────────────────────────────────────────────────────────────────────────
 {
-    const src = readFileSync(new URL('../src/agent/library/task_follow.js', import.meta.url), 'utf8');
+    const src = readFileSync(new URL('../src/agent/library/flow_follow.js', import.meta.url), 'utf8');
     check('D19：源码里不再有 bot.interrupt_code = false',
         !/bot\.interrupt_code\s*=\s*false/.test(src),
         '已删除（清标志只在 action_manager 开工前做）',

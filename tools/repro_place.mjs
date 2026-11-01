@@ -2,8 +2,8 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { placeBlockAt } from '../src/agent/library/atom_place.js';
-import { blockAt, reachDistanceTo } from '../src/agent/library/atom_perceive.js';
+import { placeBlockAt } from '../src/agent/library/act_place.js';
+import { blockAt, reachDistanceTo } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const bot = mineflayer.createBot({ host: '127.0.0.1', port: 25566, username: 'probe', auth: 'offline', version: '1.21.8' });

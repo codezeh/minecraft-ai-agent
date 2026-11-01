@@ -1,6 +1,6 @@
 // 判定实验：collectDrops 里的「跳跃 + 前后挪半步」会不会导致 invalid_player_movement。
 //
-// 背景：那段代码是为「掉落物漏捡」加的补丁（task_collect.js:153-176）：
+// 背景：那段代码是为「掉落物漏捡」加的补丁（flow_collect.js:153-176）：
 //   setControlState('jump', true) → 250ms → false → forward/back 各 280ms
 // 怀疑：手动控制状态与 pathfinder 同时作用，客户端位置与服务端物理不同步 → 被踢。
 //

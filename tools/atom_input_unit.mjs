@@ -17,8 +17,8 @@ import { holdDig, useOnBlock, placeAgainst, attackOnce } from '../src/agent/libr
 import { command, say, checkCommand } from '../src/agent/library/atom_input_misc.js';
 import { selectSlot, clickSlot, dropSlot, closeWindow, HOTBAR_SLOTS } from '../src/agent/library/atom_input_inventory.js';
 import { blockAt, pose, inventory, isEmptyName } from '../src/agent/library/atom_read.js';
-import { climbUp } from '../src/agent/library/atom_climb.js';
-import { pillarUpOnce } from '../src/agent/library/atom_pillar.js';
+import { climbUp } from '../src/agent/library/act_climb.js';
+import { pillarUpOnce } from '../src/agent/library/act_pillar.js';
 
 let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };

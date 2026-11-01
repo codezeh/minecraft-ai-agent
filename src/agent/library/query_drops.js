@@ -9,7 +9,7 @@
  *
  * 拆分后：**纯查询，不移动、不等待、不改世界**，能单独跑、能单独测。
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 
 /** 默认搜索半径。8 格是服务端拾取半径（约 1 格）之外比较宽松的范围 */
 const DEFAULT_RADIUS = 8;

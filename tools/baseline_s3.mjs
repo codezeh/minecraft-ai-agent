@@ -3,8 +3,8 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { placePlatform, platformCells } from '../src/agent/library/task_platform.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
+import { placePlatform, platformCells } from '../src/agent/library/flow_platform.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c);

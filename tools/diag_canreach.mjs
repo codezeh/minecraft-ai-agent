@@ -2,7 +2,7 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { canReach, blockAt, reachDistanceTo } from '../src/agent/library/atom_perceive.js';
+import { canReach, blockAt, reachDistanceTo } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c);

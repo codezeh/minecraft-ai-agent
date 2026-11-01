@@ -1,12 +1,12 @@
 import * as skills from '../library/skills.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
-import { formatActionResult } from '../library/atom_contract.js';
-import { follow as followTask, goToPlayer as goToPlayerTask } from '../library/task_follow.js';
-import { collect as collectTask } from '../library/task_collect.js';
+import { formatActionResult } from '../library/contract.js';
+import { follow as followTask, goToPlayer as goToPlayerTask } from '../library/flow_follow.js';
+import { collect as collectTask } from '../library/flow_collect.js';
 import { resolveCollectTarget } from '../library/collect_targets.js';
-import { placeBlockAt } from '../library/atom_place.js';
-import { placePlatform } from '../library/task_platform.js';
+import { placeBlockAt } from '../library/act_place.js';
+import { placePlatform } from '../library/flow_platform.js';
 
 /**
  * 「放在我面前」：取朝向那一格。
@@ -151,7 +151,7 @@ export const actionsList = [
             const mapDir = `./bots/${agent.bot.username || agent.bot.entity?.name || 'agent'}/map`;
             console.log(`[!followEntity] 跟随 ${entity_name}（距离 ${distance}），mapDir=${mapDir}`);
             // 路径注意：本文件在 src/agent/commands/，库在 src/agent/library/
-            const { followEntity } = await import('../library/task_follow.js');
+            const { followEntity } = await import('../library/flow_follow.js');
             const r = await followEntity(agent.bot, entity_name, {
                 distance: Math.max(1, Number(distance) || 3),
                 mapDir,
@@ -242,7 +242,7 @@ export const actionsList = [
             // spreadplayers 在未生成区放不下去），而 !walkTo 给坐标就能测长距离。
             const mapDir = `./bots/${agent.bot.username || agent.bot.entity?.name || 'agent'}/map`;
             console.log(`[!walkTo] 走 hopTo 到 (${x}, ${z})，mapDir=${mapDir}`);
-            const { hopTo } = await import('../library/task_hop.js');
+            const { hopTo } = await import('../library/nav_hop.js');
             const r = await hopTo(agent.bot, { x: Number(x), z: Number(z) }, { mapDir, deadlineMs: 420000 });
 
             const p = agent.bot.entity.position;

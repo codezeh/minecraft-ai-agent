@@ -2,7 +2,7 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { follow, goToPlayer, ensureTracking } from '../src/agent/library/task_follow.js';
+import { follow, goToPlayer, ensureTracking } from '../src/agent/library/flow_follow.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let passed = 0, failed = 0;

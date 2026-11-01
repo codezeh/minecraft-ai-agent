@@ -5,7 +5,7 @@ import pf from 'mineflayer-pathfinder';
 import { plugin as collectblock } from 'mineflayer-collectblock';
 import { plugin as toolPlugin } from 'mineflayer-tool';
 import { rcon } from './rcon.mjs';
-import { countItem } from '../src/agent/library/atom_perceive.js';
+import { countItem } from '../src/agent/library/query_perceive.js';
 
 const Vec3 = (await import('vec3')).Vec3;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

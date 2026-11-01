@@ -2,9 +2,9 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { placeBlockAt } from '../src/agent/library/atom_place.js';
-import { blockAt } from '../src/agent/library/atom_perceive.js';
-import { isResult, CODES } from '../src/agent/library/atom_contract.js';
+import { placeBlockAt } from '../src/agent/library/act_place.js';
+import { blockAt } from '../src/agent/library/query_perceive.js';
+import { isResult, CODES } from '../src/agent/library/contract.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let passed = 0, failed = 0;

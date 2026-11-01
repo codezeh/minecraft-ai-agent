@@ -9,7 +9,7 @@
  *
  * 输出：PASS <用例> / FAIL <用例> <实际>，全过退出码 0。
  */
-import { canStand, findStandSpot } from '../src/agent/library/atom_stand.js';
+import { canStand, findStandSpot } from '../src/agent/library/query_stand.js';
 import { makeFakeBot } from './fixtures/fake_bot.mjs';
 
 let pass = 0, fail = 0;

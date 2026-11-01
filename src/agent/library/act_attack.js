@@ -8,7 +8,7 @@
  *   实际攻击直接走 mineflayer-pvp（已加载）。本文件只补它缺的：
  *   前置断言（实体有效性/距离）、后置校验（目标死了吗）、错误码归一。
  */
-import { ok, fail, normalizeTarget } from './atom_contract.js';
+import { ok, fail, normalizeTarget } from './contract.js';
 // ★ 2026-11-01（A.4）：挥击是鼠标输入，只许从 atom_input_mouse 出手。本文件不再裸调 bot.attack。
 import { attackOnce, lookAtPoint } from './atom_input_mouse.js';
 

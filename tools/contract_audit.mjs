@@ -5,14 +5,14 @@ import path from 'node:path';
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { CODES, isResult } from '../src/agent/library/atom_contract.js';
-import { blockAt, findBlocks, canReach, countItem, playerPos, reachDistanceTo } from '../src/agent/library/atom_perceive.js';
-import { moveTo } from '../src/agent/library/atom_move.js';
+import { CODES, isResult } from '../src/agent/library/contract.js';
+import { blockAt, findBlocks, canReach, countItem, playerPos, reachDistanceTo } from '../src/agent/library/query_perceive.js';
+import { moveTo } from '../src/agent/library/nav_pathfinder.js';
 import { lookAtPoint } from '../src/agent/library/atom_input_mouse.js';
-import { digBlock } from '../src/agent/library/atom_dig.js';
-import { equipItem, dropItem } from '../src/agent/library/atom_items.js';
-import { collect } from '../src/agent/library/task_collect.js';
-import { follow, goToPlayer } from '../src/agent/library/task_follow.js';
+import { digBlock } from '../src/agent/library/act_dig.js';
+import { equipItem, dropItem } from '../src/agent/library/act_items.js';
+import { collect } from '../src/agent/library/flow_collect.js';
+import { follow, goToPlayer } from '../src/agent/library/flow_follow.js';
 
 const LIB = path.resolve('src/agent/library');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -51,7 +51,7 @@ for (const f of atomFiles) {
             if (/return\s+(true|false)\s*;/.test(code)) {
                 banned.push(`${f}:${i + 1} 裸布尔返回`);
             }
-            if (f !== 'atom_contract.js' && /\{\s*ok\s*:/.test(code)) {
+            if (f !== 'contract.js' && /\{\s*ok\s*:/.test(code)) {
                 banned.push(`${f}:${i + 1} 手写 {ok:...}`);
             }
         }

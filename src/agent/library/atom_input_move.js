@@ -12,7 +12,7 @@
  *   - 按下的键在所有退出路径上松开（A7，`try/finally`）
  *   - 等待中每 ~100ms 查一次 `interrupt_code`，中断返回 `INTERRUPTED`（A3）
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 

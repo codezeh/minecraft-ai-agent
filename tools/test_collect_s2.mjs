@@ -5,9 +5,9 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
-import { collect } from '../src/agent/library/task_collect.js';
-import { countItem } from '../src/agent/library/atom_perceive.js';
-import { isResult } from '../src/agent/library/atom_contract.js';
+import { collect } from '../src/agent/library/flow_collect.js';
+import { countItem } from '../src/agent/library/query_perceive.js';
+import { isResult } from '../src/agent/library/contract.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let passed = 0, failed = 0;

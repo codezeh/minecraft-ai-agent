@@ -8,11 +8,11 @@
  *
  * 顺序很关键：先放离自己近的、贴地的格子，后面格子就能靠刚放好的方块当侧面支撑。
  */
-import { ok, fail } from './atom_contract.js';
-import { blockAt } from './atom_perceive.js';
-import { placeBlockAt } from './atom_place.js';
-import { moveTo } from './atom_move.js';
-import { pauseGoalModes, restoreGoalModes } from './task_modes.js';
+import { ok, fail } from './contract.js';
+import { blockAt } from './query_perceive.js';
+import { placeBlockAt } from './act_place.js';
+import { moveTo } from './nav_pathfinder.js';
+import { pauseGoalModes, restoreGoalModes } from './modes.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 

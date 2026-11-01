@@ -25,9 +25,9 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { rcon } from './rcon.mjs';
 import { inspectPhysics, installPositionGuard } from '../src/sim/position_guard.js';
-import { collect } from '../src/agent/library/task_collect.js';
-import { digBlock } from '../src/agent/library/atom_dig.js';
-import { countItem, findBlocks } from '../src/agent/library/atom_perceive.js';
+import { collect } from '../src/agent/library/flow_collect.js';
+import { digBlock } from '../src/agent/library/act_dig.js';
+import { countItem, findBlocks } from '../src/agent/library/query_perceive.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25575 });

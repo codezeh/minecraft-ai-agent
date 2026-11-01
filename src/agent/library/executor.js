@@ -21,17 +21,17 @@
  * ═══════════════════════════════════════════════════════════════════
  */
 import Vec3 from 'vec3';
-import { ok, fail } from './atom_contract.js';
-import { moveToXZ } from './atom_move.js';
-import { digBlock, isDiggable, canDigWithInventory } from './atom_dig.js';
-import { climbUp, climbDown, isClimbable } from './atom_climb.js';
+import { ok, fail } from './contract.js';
+import { moveToXZ } from './nav_pathfinder.js';
+import { digBlock, isDiggable, canDigWithInventory } from './act_dig.js';
+import { climbUp, climbDown, isClimbable } from './act_climb.js';
 import { scanSphere, stats3d, columnSurfaces, T } from './terrain3d.js';
 import { plan3D } from './path_3d.js';
 import { ensureTraced } from './trace_bus.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
-import { movedEnough, realMove } from './atom_stuck_detect.js';
-import { pillarUpOnce } from './atom_pillar.js';
-import { pauseGoalModes, restoreGoalModes } from './task_modes.js';
+import { movedEnough, realMove } from './query_stuck.js';
+import { pillarUpOnce } from './act_pillar.js';
+import { pauseGoalModes, restoreGoalModes } from './modes.js';
 import { holdKey, releaseAll } from './atom_input_move.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -605,7 +605,7 @@ export async function walkTo(bot, dest, opts = {}) {
     // 这一段原来硬编码了 6 个 mode 名（item_collecting / torch_placing / idle_staring /
     // hunting / unstuck / elbow_room），而 `task_modes.GOAL_MODES` 里就是同一份清单 ——
     // 正是 §3.2 记的「mode 列表三套」的残留。现在只留一个真相：
-    // pauseGoalModes / restoreGoalModes（task_modes.js）。
+    // pauseGoalModes / restoreGoalModes（modes.js）。
     //
     // 为什么要暂停它们（原注释保留）：实测长规划第 1~7 轮稳定推进 64 格，随后 unstuck
     // 判定"20 秒内移动 <2 格"，直接 interrupts:['all'] 打断任务，还 moveAway(5) 把她挪走

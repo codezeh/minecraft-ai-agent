@@ -19,15 +19,15 @@
  *   offline   不在线 → 跟"看不见"是两回事，不该说"我找不到你"
  *   lost      在线但从未见过 → 完全没线索
  */
-import { ok, fail } from './atom_contract.js';
+import { ok, fail } from './contract.js';
 import { EYE_HEIGHT } from '../rules/rules.runtime.js';
-import { findBlocks, blockAt } from './atom_perceive.js';
+import { findBlocks, blockAt } from './query_perceive.js';
 import { rconPlayerPos, rconOptsFromBot } from './rcon_client.js';
 
 const DEFAULT_MAX_AGE_MS = 5 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
-// 玩家位置追踪（从 task_follow.js 上提，逻辑未改）
+// 玩家位置追踪（从 flow_follow.js 上提，逻辑未改）
 // ---------------------------------------------------------------------------
 
 export class PlayerTracker {
