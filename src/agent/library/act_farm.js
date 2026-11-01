@@ -63,7 +63,7 @@ export async function harvestCrop(bot, target) {
     // 后置：那格应该真的空了
     const after = bot.blockAt?.(v, false);
     const gone = !after || after.name === 'air' || after.name === 'cave_air';
-    if (!gone) return fail('TIMEOUT', `收了但 ${block.name} 还在`, { crop: block.name });
+    if (!gone) return fail('DIG_FAIL', `收了但 ${block.name} 还在（挖不动，不是超时）`, { crop: block.name });
 
     return ok({ crop: block.name, pos: { x: v.x, y: v.y, z: v.z }, harvested: 1, costMs: Date.now() - t0 });
 }

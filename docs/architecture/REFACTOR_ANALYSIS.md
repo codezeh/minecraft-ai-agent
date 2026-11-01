@@ -1139,13 +1139,111 @@ async function skillName(bot, goal, context = {}) {
 > 所以：**不先注册这 7 个码，M6 的任何流程/动作一写就启动失败**。
 > 未注册状态下不要把它们写进任何 manifest 的 `codes`。
 
-- [ ] 先把 7 个新错误码加进 `CODES`（`02_actions.md §4`） ← **阻塞项，先做**
-- [ ] P0（P0 流程要用）：`craftOnce` `furnaceLoad` / `furnaceCollect` `eat` `equip`（补护甲槽校验）`deposit` / `withdraw` `attackOnce` `harvestCrop` `plantSeed` `tillSoil`
-- [ ] P1：`stepInto`（换之前先跑基线）`sleepInBed` / `wake` `fishOnce` `feedEntity` `tradeOnce` `toggleBlock` `boneMeal` `swimStep`（05 末节）
-- [ ] P2：`brewOnce` `enchantOnce` `anvilCombine`；其余（盾、弓、投掷、剪毛、挤奶、拴绳、载具）按流程需要再补
+- [x] 先把 7 个新错误码加进 `CODES`（`02_actions.md §4`） ← **M6 完成（`1976cb6`）**：`CODES` 现 **38 个**（t14 复核：`sed -n '/export const CODES/,/\];/p'` 计数 = 38，且 11 个动作用到的 13 个码全部在册）
+- [x] P0（P0 流程要用）：`craftOnce` `furnaceLoad` / `furnaceCollect` `eat` `equip`（补护甲槽校验）`deposit` / `withdraw` `attackOnce` `harvestCrop` `plantSeed` `tillSoil` —— **M6 完成（`2cfc43f`），t14 逐条验收见下**
+- [ ] P1：`stepInto`（换之前先跑基线）`sleepInBed` / `wake` `fishOnce` `feedEntity` `tradeOnce` `toggleBlock` `boneMeal` `swimStep`（05 末节）—— **未做**
+- [ ] P2：`brewOnce` `enchantOnce` `anvilCombine`；其余（盾、弓、投掷、剪毛、挤奶、拴绳、载具）按流程需要再补 —— **未做**
 
 > 注：P1 里"换 `stepInto` 之前先跑基线"的基准数已更新为**新干净基线 49/55（89.1%）**
 > （2026-11-01 `gap-bridge` 修好之后重建；旧 99/110 那套是跨多次运行累积的混合物，已废弃）。
+
+#### M6 P0 验收记录（t14 / 2026-11-02，全部实测）
+
+**① 11 个动作清单 + 失败码（每一条都实测过返回形态）**
+
+| 动作 | 文件 | 用到的失败码 | 关键语义（为什么是这些码） |
+|---|---|---|---|
+| `craftOnce` | `act_craft` | NO_RECIPE / NO_ITEM / NO_WORKSTATION / NO_TARGET / INTERRUPTED / INTERNAL | `NO_RECIPE`=永远做不了（补料也没用）；`NO_ITEM`=补齐材料能续；`NO_WORKSTATION`=放个工作台就能做 —— 三种上层的处置**完全不同** |
+| `furnaceLoad` | `act_craft` | OUT_OF_REACH / NO_ITEM / **OCCUPIED** / NO_TARGET / INTERRUPTED / INTERNAL | 够不着 → `OUT_OF_REACH`（走近就行，**不是** `NO_WORKSTATION`「没熔炉」）；输入槽被别人占 → `OCCUPIED` |
+| `furnaceCollect` | `act_craft` | NOT_READY / OUT_OF_REACH / INVENTORY_FULL / NO_TARGET / INTERRUPTED / INTERNAL | 还没烧完 → `NOT_READY`（等一会，不是 `TIMEOUT`）；背包满 → `INVENTORY_FULL` |
+| `harvestCrop` | `act_farm` | **NOT_READY** / NO_TARGET / TIMEOUT / INTERRUPTED | 没熟 → `NOT_READY` 带 `age/maxAge`（**不是 `BLOCKED`**：BLOCKED 是"路被挡"，这里是"还没长好"，上层应等而不是换目标） |
+| `plantSeed` | `act_farm` | OCCUPIED / NO_ITEM / NO_TARGET / BLOCKED / INTERRUPTED / INTERNAL | 那格被占 → `OCCUPIED`（换一格）；脚下不能种 → `BLOCKED` |
+| `tillSoil` | `act_farm` | NO_TOOL / NO_TARGET / … | 手上没锄 → `NO_TOOL`（提示"去拿工具"，与"没材料"方向不同） |
+| `eat` | `act_items` | NO_ITEM / NOT_READY / INTERRUPTED / INTERNAL | 饱食度满 → `NOT_READY`（别浪费食物） |
+| `equip` | `act_items` | NO_ITEM / NO_TARGET / INTERRUPTED / INTERNAL | 读不到护甲槽时 **`ok()` + `verified:false`**（不假装验证过） |
+| `deposit` / `withdraw` | `act_container` | WINDOW_CLOSED / NO_ITEM / INVENTORY_FULL / NO_TARGET / INTERRUPTED / INTERNAL | 窗口没开 → `WINDOW_CLOSED`（先开箱，不是"没目标"） |
+| `attackOnce` | `act_attack` | **NOT_READY** / OUT_OF_REACH / NO_TARGET / BLOCKED / INTERRUPTED / INTERNAL | 冷却没好 → `NOT_READY` + `waitMs`（**不是 `TIMEOUT`**：TIMEOUT 是"这次操作超时了"，冷却是"等一下再挥就行"，上层不该重试整段） |
+
+**契约核对（机械 + 动态双证）**
+
+- **静态**：11 个动作函数体里每个 `return` 都是 `ok(...)` / `fail(...)`，**没有裸 boolean / 对象字面量**；
+  `fail('CODE'` 用到的 **13 个码全部在 `CODES`（38 个）里**。
+- **动态**：用"敌对 stub"（没背包/没窗口/没 registry/不给 dig+placeBlock）逐个调用 11 个动作 →
+  **11/11 返回 `Object.isFrozen` 的 ActionResult**、`ok` 是 boolean、`code` 合法、**没有一个抛异常**：
+  `craftOnce→NO_RECIPE` / `furnaceLoad→NO_TARGET` / `furnaceCollect→NO_TARGET` / `harvestCrop→NO_TARGET` /
+  `plantSeed→NO_TARGET` / `tillSoil→NO_TARGET` / `eat→NOT_READY` / `equip→NO_TARGET` /
+  `deposit→WINDOW_CLOSED` / `withdraw→WINDOW_CLOSED` / `attackOnce→NO_TARGET`。
+
+**② `furnaceLoad` 的 OCCUPIED 保护（captain 抓的真回归）—— 独立用例 15/15**
+
+我**自造了与 atoms 用例不同的预置状态**（熔炉里烧的是第三种物品 `raw_copper`，我放 `raw_gold`），双向都验：
+
+| 场景 | 期望 | 实测 |
+|---|---|---|
+| 熔炉里是别人在炼的**第三种**料 | `OCCUPIED` + 零放料 | ✅ `OCCUPIED`，`putInput`/`putFuel` **各 0 次**，`occupantNow='raw_copper'`、`count=7`，窗口已关 |
+| 熔炉里是**同种**料 | 正常续料 | ✅ `ok`，`putInput`+`putFuel` 各 1 次（**没误判 OCCUPIED**） |
+| 输入槽空（`inputItem()` 返回 null） | 放行 | ✅ `ok` |
+| 输入槽空、但 `slots[0]` 有货（fallback 路径） | 拦住 | ✅ `OCCUPIED`、零放料 |
+| 读输入槽**抛异常** | 当"没有"处理，不崩不误判 | ✅ `ok`、放料 1 次 |
+| 槽里同种但 `count=0` | 不算占位 | ✅ `ok` |
+| 只有**燃料槽/输出槽**有货、输入槽空 | 不算占位 | ✅ `ok` |
+
+**③ `skills.js` 胶水层兼容（防连锁崩）**
+
+- `craftRecipe` / `smeltItem` / `consume` **仍返回严格 boolean**（实测 `typeof out === 'boolean'`，
+  三条路径都返回 `false` 而不是对象）。
+- **内部确实改调新动作**（不是两套实现并存）：
+  `craftRecipe` → `craftOnce`（`return crafted.ok`）；`smeltItem` → `furnaceLoad` + `furnaceCollect`；
+  `consume` → `act_items.eat`（`import { eat as eatAction }`）。
+- **上游调用点行为没变**：`commands/actions.js:359/495/506`（`!consume` / `!craftRecipe` / `!smeltItem`）、
+  `npc/item_goal.js:160/168` 全部 `await` 后按 boolean 用，没有一处期待 ActionResult。
+- **最关键的一处兼容**：`skills.js:5079` 有短路用法
+  `have = (await craftRecipe(bot,'chest',1)) && countInventoryItem(bot,'chest') > 0`。
+  如果 `craftRecipe` 改成返回 ActionResult **对象**，`&&` 会永远为真 → 静默行为变化。
+  实测它仍返回 boolean，**短路语义安全**。
+
+**④ 动作层规矩**
+
+- **动作之间不互相调用**：`grep "from './act_"` 只剩 3 条，全部合规 ——
+  `act_dig → act_items.findItem`、`act_place → act_items.findItem`（白名单纯工具）；
+  `act_use → act_container.{openContainer, containerKindOf}` 是**已入册的第 5 处**（`TIGHTENED_NEW_VIOLATIONS`）。
+- **不自己拼 map 路径**：`grep 'bots/${' src/agent/library/act_*.js` = **0** ✅
+  （`7722b1f` 把 mapDirOf 真正落地了，11 处硬编码收成一处 —— t12 报的 M5 遗留 1 已销账）
+- **前缀规矩 0 新增违规**：preflight 仍 **5 处**（4 旧债 + `act_use→openContainer`），`--strict-api` exit 1（预期）。
+
+**⑤ 真机回归（t14 独立跑）**
+
+- `unit_all` **21/21 + 1 跳过**，exit 0
+- `preflight` 默认 **exit 0** / `--strict-api` **exit 1**（Phase 5.4 旧债，未修绿）/ `--report-api` exit 0；模块 **97/97** 导入
+- `atom_all` **17/18** —— `vine_physics_test` 崩了 1 条，**判定为偶发，非回归**，见下方 ⑥
+- `bench 5` → **49/55（89.1%）**，与基线 49/55 一致；失败全 `NO_PATH ×6`（down5×5 + dig-through r1）；
+  `climb-ladder` 中位 **1947ms**；`digdown` **5/5** `digdownSeen=true`、`execActions={"digdown":1}`、`y −57→−60`
+
+**⑥ `vine_physics_test` 偶发的根因（已定位，属测试脚手架问题、不是 M6 回归）**
+
+现象：整轮里 `爬藤蔓: 升高 0.00 格，前进 2.20 格` → FAIL；单跑 **3/3 全过**（升高 6.47 / 6.59 / 6.82）。
+关键观测：**前进距离通过/失败两种情况下都是 2.20**（她走到藤蔓柱、被挡住停下，位置对），**只有 `dy` 不同**
+→ 不是"没走到"，是**爬升没被激活**。
+
+根因（实测证明）：`src/sim/vine_physics.js` 在 `vineIds.size === 0`（**注册表里查不到藤蔓**）时
+**静默返回一个空壳** `{ setClimbing(){} , isClimbing(){return false} , uninstall(){} }` ——
+我实测：这种情况下 `setClimbing(true)` 之后 `isClimbing()` **仍是 false**，而且**返回对象里没有任何
+`installed`/`ok` 标记**能让调用方察觉。测试只断言了"藤蔓方块就位"（`blockAt` 读到 vine），
+**从没断言补丁真的装上了** → 注册表未就绪时，失败会伪装成"爬不上去"。
+
+**建议（待办，属测试脚手架）**：`installVinePhysics` 失败时返回 `installed:false`（或直接 throw），
+测试在"爬模式"前断言 `vine.isClimbing() === true`；另 `pushInto` 里的 `TP` 是**未校验的裸 RCON**
+（和第 3 次 bench tpFlake 同源），建议加"传送后确认坐标"再开始推。
+
+**⑦ 已知偏差 / 待办**
+
+1. **`harvestCrop` 后置失败用 `TIMEOUT` 语义不准**（归属：`atoms` / M7 前收口）——
+   实测：熟了、`dig` 成功返回但方块还在 → `fail('TIMEOUT', '收了但 wheat 还在')`，
+   可**并没有超时发生**（`holdDig` 已 ok）。`CODES` 里现成有 `DIG_FAIL`（"挖了但没生效"）更贴切。
+   上层看到 `TIMEOUT` 会"加时间重试"，而真相是"挖不动"（保护区域/工具不对）。
+   现有单测只断言了 `NOT_READY` 与 `NO_TARGET` 两条，**这条路径无覆盖**。
+2. **`walk-flat` 干跑动作数从 11 变 23**（观察项，非失败）——本轮 5 轮每轮都是 `{"walk":23}`，
+   通过率 5/5、中位 7781ms（上轮 7594ms）都没变。数值翻倍但行为没变，先记着，若后续导航改动再对照。
 
 ---
 

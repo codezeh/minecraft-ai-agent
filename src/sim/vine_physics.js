@@ -58,8 +58,23 @@ export function installVinePhysics(bot, opts = {}) {
         if (def) vineIds.add(def.id);
     }
     if (!vineIds.size) {
-        // 这个版本的注册表里没有藤蔓：什么都不做，避免假装装上了
-        return { setClimbing() { }, isClimbing() { return climbByDefault; }, uninstall() { } };
+        // 这个版本的注册表里没有藤蔓（注册表还没就绪 / 版本差异）。
+        //
+        // ★ 2026-11-02 修（verify 定位的偶发根因）：原来返回的空壳有两个毛病，
+        //   合起来会把「补丁没装上」伪装成「她爬不上去」：
+        //   ① `isClimbing()` 返回 `climbByDefault` —— 默认 true 时会**谎报正在爬**；
+        //   ② 没有 `installed` 标记，调用方（测试）无法区分
+        //      「装上了但爬不动」和「压根没装」。
+        //   实测：`installVinePhysics({registry:{blocksByName:{}}})` 之后
+        //   `setClimbing(true)`，`isClimbing()` 仍 false，返回对象只有 3 个键。
+        //   这是"静默失败"，比抛错更难查 —— 表现是"前进距离恒 2.20、只有 dy 不同"。
+        return {
+            installed: false,
+            setClimbing() { },
+            // 没有补丁就绝不能说"正在爬"（旧实现返回 climbByDefault = 谎报）
+            isClimbing() { return false; },
+            uninstall() { },
+        };
     }
 
     const airId = bot.registry?.blocksByName?.air?.id ?? 0;
@@ -136,6 +151,8 @@ export function installVinePhysics(bot, opts = {}) {
     }
 
     return {
+        /** 装上了吗 —— 调用方用它区分「没装」与「装了但爬不动」 */
+        get installed() { return installed; },
         /** 显式要爬藤蔓时打开（当梯子） */
         setClimbing(v) {
             climbing = !!v;

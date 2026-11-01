@@ -41,6 +41,27 @@ bot.on('kicked', (r) => console.log('KICKED', JSON.stringify(r).slice(0, 90)));
 
 bot.once('spawn', async () => {
     await sleep(2500);
+
+    // ★ 2026-11-02（verify 定位的偶发根因）：**先断言补丁真装上了**。
+    //
+    // 以前这里只断言"藤蔓方块就位"（blockAt 读到 vine），从没断言物理补丁装上了。
+    // 于是注册表尚未就绪时，`installVinePhysics` 静默返回空壳 →
+    // 「补丁没装」被伪装成「她爬不上去」，表现为"前进距离恒 2.20、只有 dy 不同"，
+    // 单跑 3/3 过、整轮偶发 1/18 挂。
+    //
+    // 判据：`installed` 必须是 true；再 `setClimbing(true)` 后 `isClimbing()` 必须为 true。
+    // 不满足就直接判失败并说清是脚手架问题，**不许算成"爬不上去"的行为失败**。
+    if (vine.installed !== true) {
+        console.log(`FAIL 脚手架：藤蔓物理补丁没装上（vine.installed=${vine.installed}）——`
+            + `注册表可能还没就绪。这不是"爬不上去"的行为失败，是测试前置没满足。`);
+        process.exit(1);
+    }
+    vine.setClimbing(true);
+    if (vine.isClimbing() !== true) {
+        console.log('FAIL 脚手架：setClimbing(true) 之后 isClimbing() 仍为 false —— 补丁没真正接管。');
+        process.exit(1);
+    }
+    vine.setClimbing(false);
     await RC(`op ${NAME}`);
     await RC(`gamemode creative ${NAME}`);
     await sleep(1200);
