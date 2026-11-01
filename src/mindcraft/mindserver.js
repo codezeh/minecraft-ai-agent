@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as mindcraft from './mindcraft.js';
 import * as procCtrl from './proc_control.js';
+import { allowLocalOnly } from './local_only.js';
 import { readFileSync, existsSync, readdirSync } from 'fs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,6 +56,8 @@ export function createMindServer(host_public = false, port = 8080) {
     io = new Server(server, {
         pingInterval: 25000,
         pingTimeout: 60000,
+        // 只放本机连接（第一轮审查）：只绑 localhost 挡不住浏览器网页直连 WebSocket，见 local_only.js
+        allowRequest: allowLocalOnly,
     });
 
     // Serve static files
@@ -284,7 +287,8 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('chat-message', (agentName, json) => {
-            if (!agent_connections[agentName]) {
+            // 停掉的 agent socket 为 null，原来直接 .socket.emit 会让 mindserver 崩（同 D25）
+            if (!agent_connections[agentName]?.socket) {
                 console.warn(`Agent ${agentName} tried to send a message but is not logged in`);
                 return;
             }
@@ -296,13 +300,20 @@ export function createMindServer(host_public = false, port = 8080) {
             const agent = agent_connections[agentName];
             if (agent) {
                 agent.setSettings(settings);
-                agent.socket.emit('restart-agent');
+                // 停着的 agent 没有 socket：设置照存，下次启动生效（同 D25）
+                agent.socket?.emit('restart-agent');
             }
         });
 
         socket.on('restart-agent', (agentName) => {
             console.log(`Restarting agent: ${agentName}`);
-            agent_connections[agentName].socket.emit('restart-agent');
+            // D25：停掉的 agent socket 为 null（面板上重启按钮仍可点），原来这里直接崩掉整个 mindserver
+            const conn = agent_connections[agentName];
+            if (!conn?.socket) {
+                console.warn(`Agent ${agentName} is not running, cannot restart`);
+                return;
+            }
+            conn.socket.emit('restart-agent');
         });
 
         socket.on('stop-agent', (agentName) => {
@@ -401,23 +412,38 @@ function addListener(listener_socket) {
     registerMapRelay(listener_socket);   // 地图按需拉取，不进每秒 state-update
     agent_listeners.push(listener_socket);
     if (agent_listeners.length === 1) {
+        // 第一轮审查：原来没有超时 —— 一个 agent 卡住（等模型 API / 跑大段同步代码），
+        // 所有面板的状态一起停，而且每秒再叠一个永远不 resolve 的 Promise。
+        // 现在：单个 agent 5 秒没回就沿用它上一次的状态（新面板 StatusCard 读 `s?.gameplay.health`，
+        // 收到 { error } 会渲染报错，所以超时不发 error）；上一轮还没跑完就跳过这一轮。
+        let polling = false;
         listenerInterval = setInterval(async () => {
-            const states = {};
-            for (let agentName in agent_connections) {
-                let agent = agent_connections[agentName];
-                if (agent.in_game) {
-                    try {
-                        const state = await new Promise((resolve) => {
-                            agent.socket.emit('get-full-state', (s) => resolve(s));
-                        });
-                        states[agentName] = state;
-                    } catch (e) {
-                        states[agentName] = { error: String(e) };
+            if (polling) return;
+            polling = true;
+            try {
+                const states = {};
+                for (let agentName in agent_connections) {
+                    let agent = agent_connections[agentName];
+                    if (agent.in_game) {
+                        try {
+                            const state = await new Promise((resolve, reject) => {
+                                const timer = setTimeout(() => reject(new Error('state timeout')), 5000);
+                                agent.socket.emit('get-full-state', (s) => { clearTimeout(timer); resolve(s); });
+                            });
+                            agent.last_state = state;
+                            states[agentName] = state;
+                        } catch (e) {
+                            states[agentName] = (String(e?.message) === 'state timeout' && agent.last_state)
+                                ? agent.last_state
+                                : { error: String(e) };
+                        }
                     }
                 }
-            }
-            for (let listener of agent_listeners) {
-                listener.emit('state-update', states);
+                for (let listener of agent_listeners) {
+                    listener.emit('state-update', states);
+                }
+            } finally {
+                polling = false;
             }
         }, 1000);
     }
