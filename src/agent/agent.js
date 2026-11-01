@@ -39,6 +39,22 @@ export class Agent {
         this.prompter = new Prompter(this, settings.profile);
         this.name = (this.prompter.getName() || '').trim();
         console.log(`Initializing agent ${this.name}...`);
+
+        // 启动自检：permissions.owner 没配时明确提示，别让"危险命令静默不可用"变成谜。
+        // 默认状态（不配 owner）按 08 §5 是"人人信任级"：聊天/走/跟/采集/制作/建造/存取都能用，
+        // 但 !newAction、斜杠命令、!attackPlayer、!setMode、!restart 这些会被拒。
+        try {
+            const perms = settings.profile?.permissions;
+            const owner = typeof perms?.owner === 'string' ? perms.owner.trim() : '';
+            if (!owner) {
+                console.log('[权限] 未配置 permissions.owner —— 当前人人「信任级」。');
+                console.log('        可用：聊天 / 走 / 跟 / 采集 / 制作 / 建造 / 存取');
+                console.log('        不可用：!newAction、斜杠命令、!attackPlayer、!setMode、!restart、!discard、!givePlayer');
+                console.log('        要解锁：在 profile 里加 "permissions": { "owner": "你的游戏名" }，然后重启这只 bot（区分大小写）');
+            } else {
+                console.log(`[权限] 主人 = ${owner}（名单外的人只能聊天）`);
+            }
+        } catch { /* 提示失败不影响启动 */ }
         
         // Validate Name Format
         // connection_handler now ensures the message has [LoginGuard] prefix
