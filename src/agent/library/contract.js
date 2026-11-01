@@ -51,6 +51,44 @@ export const CODES = [
     //   NO_REACH 是"知道你在哪、但这段路走不过去"。
     //   混用会让她反复问"你在哪"，而坐标一直是查得到的（实测踩过）。
     'NO_REACH',
+    // ── 2026-11-02 新增 7 个（02_actions.md §4；M6 的阻塞前置）──
+    //
+    // 为什么必须先注册：`fail()` 遇到 CODES 之外的码直接抛异常，而 M5 建好的
+    // `composite_registry` 会在**模块加载时**校验 manifest 的 `codes` 字段 ——
+    // 引用未注册的码 = 进程启动即崩。M5 就当场撞上过（collect 写了 INVENTORY_FULL）。
+    //
+    // 每一个都必须是"上层处理方式确实不同"才加，不是为了好看：
+
+    // NOT_READY：东西在，时机不对（作物没熟 / 熔炉没烧完 / 白天睡不了）。
+    //   与 BLOCKED 的区别：BLOCKED 是"路被挡住"，该绕；NOT_READY 是"等一会再来"，
+    //   换目标就错了（别的地里也不熟）。
+    'NOT_READY',
+    // NO_RECIPE：没有这个配方。
+    //   与 NO_ITEM 的区别：缺料可以去采；没配方采了也没用 —— 上层一个该去采集、
+    //   一个该直接放弃。
+    'NO_RECIPE',
+    // NO_WORKSTATION：需要工作台 / 熔炉，附近没有。
+    //   与 OUT_OF_REACH 的区别：OUT_OF_REACH 是"走近一点"，NO_WORKSTATION 是
+    //   "得先放一个" —— 处理动作完全不同。
+    'NO_WORKSTATION',
+    // INVENTORY_FULL：背包满了。
+    //   与 BLOCKED 的区别：BLOCKED 该绕路，背包满了该先去存箱子；换个目标没用。
+    'INVENTORY_FULL',
+    // PREEMPTED：被更高优先级任务挤掉。
+    //   与 INTERRUPTED 的区别（07 §4）：INTERRUPTED 是玩家喊停 → 任务单
+    //   cancelled/paused；PREEMPTED 是调度器抢占 → 任务单回 ready、之后接着做。
+    //   注意：PREEMPTED **只由调度器写进任务单结果**，流程不管被谁打断一律返回
+    //   INTERRUPTED（分层：流程不认识优先级）。
+    'PREEMPTED',
+    // CLAIM_CONFLICT：资源被别的 bot 预约了。
+    //   与 OCCUPIED 的区别：OCCUPIED 是那格本身有东西（等它走开）；CLAIM_CONFLICT
+    //   是"另一个 bot 已认领这块" —— 换一个目标，等是等不来的。
+    'CLAIM_CONFLICT',
+    // LEASE_LOST：任务单租约过期被收回。
+    //   与 TIMEOUT 的区别：TIMEOUT 是"这次动作超时了"，重试可能成；
+    //   LEASE_LOST 必须**立刻停且不写结果** —— 别人可能已经接手同一张单，
+    //   写结果会把别人的进度覆盖掉。
+    'LEASE_LOST',
 ];
 
 export function ok(data = {}) {

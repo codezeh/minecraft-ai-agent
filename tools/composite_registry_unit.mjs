@@ -65,13 +65,30 @@ const base = () => ({
 }
 
 // ── 4. codes 里出现未注册的码必须被拒（§4.4 第 2 条）──────────────────
-//    这是真踩过的：collect 的 manifest 曾写了 INVENTORY_FULL，而它是 M6 才注册的新码
+//    这是真踩过的：collect 的 manifest 曾写了 INVENTORY_FULL，而当时它是未注册的新码，
+//    于是模块加载直接崩。
+//
+//    ★ 2026-11-02 更新：INVENTORY_FULL 已在 M6 注册进 CODES，不能再拿它当"未注册"用
+//      （否则这条用例会永远 fail，失去证明力）。改用**结构上永不可能注册**的假码，
+//      才能持续证明这道闸门真的在工作。
 {
-    const m = base(); m.codes = ['NO_TARGET', 'INVENTORY_FULL'];
+    const FAKE = 'THIS_CODE_IS_NOT_REGISTERED_AT_ALL';
+    const m = base(); m.codes = ['NO_TARGET', FAKE];
     const probs = validateManifest(m);
-    const caught = probs.some((p) => /INVENTORY_FULL/.test(p));
-    if (caught) okCase('未注册的 code 被拒（INVENTORY_FULL 属 M6）', probs[0]);
-    else badCase('未注册的 code 被拒（INVENTORY_FULL 属 M6）', JSON.stringify(probs));
+    const caught = probs.some((p) => p.includes(FAKE));
+    if (caught) okCase('未注册的 code 被拒（假码）', probs[0]);
+    else badCase('未注册的 code 被拒（假码）', JSON.stringify(probs));
+}
+
+// ── 4b. 反向确认：7 个新码**已**注册，manifest 引用它们必须**通过** ──────
+//     只验"假码被拒"还不够 —— 还要验"真码被接受"，否则闸门可能过严把新码全拦了。
+{
+    const seven = ['NOT_READY', 'NO_RECIPE', 'NO_WORKSTATION', 'INVENTORY_FULL',
+                   'PREEMPTED', 'CLAIM_CONFLICT', 'LEASE_LOST'];
+    const m = base(); m.codes = ['NO_TARGET', ...seven];
+    const probs = validateManifest(m);
+    if (!probs.length) okCase('7 个新码已在 CODES 中（引用应通过）', `${seven.length} 个全部接受`);
+    else badCase('7 个新码已在 CODES 中（引用应通过）', JSON.stringify(probs));
 }
 
 // ── 5. 名字重复必须被拒（§4.4 第 1 条：name 唯一）─────────────────────
