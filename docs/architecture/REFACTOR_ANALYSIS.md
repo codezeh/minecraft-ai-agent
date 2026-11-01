@@ -443,6 +443,18 @@ async function skillName(bot, goal, context = {}) {
 > 基线暴露、属于 Phase 3 要修的：`climb-ladder` 每次都是 22s，且日志必然出现一次
 > `步7 walk 失败: STUCK 连续 20 秒没靠近（还差 0.7 格）` —— 规划先给了一个走不到的
 > walk 步，白等 20 秒才重规划（walk 分支对垂直目标处理不当）。
+>
+> **✅ 已修（2026-11-01，commit 4b4ac1c）**：根因是「目标格是可攀爬方块（梯子/藤蔓），
+> 物理上走不进去 → `GoalNearXZ` 永远不 resolve → isStalled 等满 20 秒」。
+> 判据钉在成因上（目标格可攀爬 + 已在格里 + 高度对）才短路。
+> 效果：climb-ladder 21958ms → **1959ms（-91%）**，climb-vine 2256 → 1945ms，
+> 其余场景无回归（pillar-up2 8251ms、digdown 13398ms、gap-bridge 7340ms）。
+>
+> ⚠️ **过程中的教训**：第一版守卫写成"水平 ≤1.0 就算到位"（只看距离），
+> 结果静默改变了别的场景：pillar-up2 8674→14490ms（双峰，jump 从相邻格起跳 → NO_PATH），
+> gap-bridge 出现过掉到 y=-181.5。**收紧到 0.8 仍复现**，只有改成"目标格走不进去"
+> 才干净。→ 这类"提前判到位"的优化，判据必须钉在具体成因上，不能用距离近似；
+> 而且必须在**多场景**基线上验证，单场景（只看爬梯）发现不了。
 
 - [x] 新增 nav_core.js - goTo统一入口
       — 三引擎按输入选：有 mapDir→walkTo(3D)、给了 y→moveTo、只有 x/z→moveToXZ。
