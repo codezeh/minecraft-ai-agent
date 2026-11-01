@@ -622,11 +622,11 @@ async function skillName(bot, goal, context = {}) {
 ---
 
 ### 动作补齐（2026-11-01 新增）
-**目标**: 42 个动作（[`02_actions.md §3`](02_actions.md)），21 个复用或拆分、21 个新写
+**目标**: 43 个动作（[`02_actions.md §3`](02_actions.md)），21 个复用或拆分、22 个新写
 
 - [ ] 先把 7 个新错误码加进 `CODES`（`02_actions.md §4`）
 - [ ] P0（P0 流程要用）：`craftOnce` `furnaceLoad` / `furnaceCollect` `eat` `equip`（补护甲槽校验）`deposit` / `withdraw` `attackOnce` `harvestCrop` `plantSeed` `tillSoil`
-- [ ] P1：`stepInto`（换之前先跑 99/110 基线）`sleepInBed` / `wake` `fishOnce` `feedEntity` `tradeOnce` `toggleBlock` `boneMeal`
+- [ ] P1：`stepInto`（换之前先跑 99/110 基线）`sleepInBed` / `wake` `fishOnce` `feedEntity` `tradeOnce` `toggleBlock` `boneMeal` `swimStep`（05 末节）
 - [ ] P2：`brewOnce` `enchantOnce` `anvilCombine`；其余（盾、弓、投掷、剪毛、挤奶、拴绳、载具）按流程需要再补
 
 ---

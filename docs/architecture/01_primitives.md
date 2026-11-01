@@ -47,7 +47,7 @@ mineflayer 的 `equip` / `craft` / `consume` / `sleep` / `openFurnace` 等是它
 
 | 原子 | mineflayer | 完成条件 | 现状 |
 |---|---|---|---|
-| `holdKey(key, {until, timeout})` | `setControlState(key, true)` … `false` | `until()` 为真或到时；`finally` 松键 | 🔀 executor 潜水、`atom_climb`、`atom_pillar`、`atom_boat` 各写一份 |
+| `holdKey(keys, {until, timeout})` | 对每个键 `setControlState(k, true)` … `false`（`keys` 一个或一组：`swimStep` 要同时按前进和跳） | `until()` 为真或到时；`finally` 松键 | 🔀 executor 潜水、`atom_climb`、`atom_pillar`、`atom_boat` 各写一份 |
 | `pressKey(key, ms)` | 同上，固定时长 | 到时松开 | 🔀 |
 | `setSprint(on)` | `setControlState('sprint', on)` | 立即 | 🆕 |
 | `setSneak(on)` | `setControlState('sneak', on)` | 立即 | 🆕 |

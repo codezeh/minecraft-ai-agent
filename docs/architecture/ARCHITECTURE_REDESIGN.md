@@ -365,7 +365,7 @@
 ### 5.1 原子层（Atoms）— 按功能分类
 
 > ⚠️ **2026-11-01**：按新定义（原子 = 一次玩家输入，[`01_primitives.md`](01_primitives.md)），下表的 `atom_craft` / `atom_smelt` / `atom_brew` / `atom_eat` / `atom_trade` / `atom_bed` / `atom_enchant` 等是**动作**，
-> `atom_pathfind` 是导航，`atom_stuck_detect` / `atom_perceive` / `atom_safe` 是查询。现行清单：原子 44 个见 `01_primitives.md §3`，动作 42 个见 `02_actions.md §3`。下表保留作历史对照。
+> `atom_pathfind` 是导航，`atom_stuck_detect` / `atom_perceive` / `atom_safe` 是查询。现行清单：原子 44 个见 `01_primitives.md §3`，动作 43 个见 `02_actions.md §3`。下表保留作历史对照。
 >
 > **参数列约定**：一律写成 `目标描述对象, opts`（见 §6.4）。表里保留的 `name` / `pos` 是目标对象内的字段，
 > **不是**位置参数。`reach` 这个名字已废除（→ `maxReach`），若在下游文档里看到 `reach`，按旧名处理。

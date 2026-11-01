@@ -45,7 +45,7 @@ mineflayer
 |---|---|---|---|
 | 原子 | 按新定义只有 3 个（`atom_look` / `atom_wait` / `atom_wait_item`）；按键散在 8 个文件 | 44 个，收进 6 个文件 | [01](01_primitives.md) |
 | 查询 | 8 个，名字仍是 `atom_*` | 改名 `query_*` | [01 §5](01_primitives.md) |
-| 动作 | 8 个，名字仍是 `atom_*` | 42 个，改名 `act_*` | [02](02_actions.md) |
+| 动作 | 8 个，名字仍是 `atom_*` | 43 个，改名 `act_*` | [02](02_actions.md) |
 | 流程 | 约 6 个（`task_*` / `skill_*`）+ 导航 | 24 个（P0 与已有 17，P1 7），改名 `flow_*` | [04 §6](04_skills.md) |
 | 策略 | 0 | P0/P1 6 个，P2 4 个 | [04 §6.3](04_skills.md) |
 | 任务板 | 无（`action_manager` 只有一个不落盘的 resume 槽） | B0–B4 五期 | [06](06_task_board.md) |
@@ -75,7 +75,7 @@ mineflayer
 |---|---|
 | `00_overview.md` | 本文：分层、口径、阅读顺序 |
 | [`01_primitives.md`](01_primitives.md) | 原子：定义、规矩、44 个清单、查询 |
-| [`02_actions.md`](02_actions.md) | 动作：怎么调原子、42 个清单、新错误码、改名与 import 规则 |
+| [`02_actions.md`](02_actions.md) | 动作：怎么调原子、43 个清单、新错误码、改名与 import 规则 |
 | [`03_tasks.md`](03_tasks.md) | 旧任务层能力盘点（30–40 个签名）；规范以 04 为准 |
 | [`04_skills.md`](04_skills.md) | 复合技能：两级、调用规矩、规划、编写规范、清单 |
 | [`05_navigation.md`](05_navigation.md) | 导航：`nav_core` / executor / path_3d / terrain3d |
@@ -116,6 +116,7 @@ mineflayer
 | 预约 / 租约 | 预约锁资源（方块、箱子…，06 §9.2）；租约锁任务单（谁在做，06 §6）；都靠心跳续期 | — |
 | 断点 | `checkpoint`：流程存的进度，重启或被打断后接着做 | — |
 | 反射 / 空闲行为 | 反射保命、能打断一切；空闲行为只在没有单时跑（07 §2） | mode（两者都用 mode 实现） |
+| idle_planner | 空闲时自己找事做的那一层，产出 0–2 级的任务单（08 §6.1） | 空闲行为（mode） |
 | 接驳层 | 模型和系统之间：命令、结果回传、权限（08） | — |
 | 面位 / 脚位 | 面位 = 脚下实心块的 y，对外统一用它；脚位 = 面位 + 1，只在 executor 里用（§4） | 旧词"脚格"（已废） |
 | 打断 / 抢占 | 流程一律返回 `INTERRUPTED`；调度器按原因记成 `PREEMPTED` 等（07 §4） | — |
@@ -137,9 +138,14 @@ mineflayer
 | 11-01 | `findStandSpot` 不加 `isSafe` 过滤 | REFACTOR D27 |
 | 11-01 | mindserver socket 只放本机连接 | 09 §4 |
 | 11-01 | 流程只返回 `INTERRUPTED`，`PREEMPTED` 由调度器记 | 07 §4 |
-| 11-01 | 跟随主人做成空闲行为，不做成任务单 | 08 §6 |
+| 11-01 | 水面过河用单独的 `swim` 步和动作 `swimStep`，不交给 pathfinder | 05 末节 |
+| 11-01 | 权限写在每只 bot 的 profile JSON（`permissions`）；没配 owner 时人人按"信任" | 08 §5、09 §3.1 |
+| 11-01 | 空闲时不跟随，自己找事做（idle_planner）；跟随只在玩家要求时做（`flow_follow` 单） | 08 §6.1 |
+| 11-01 | `protect_owner` 反射，只在跟随主人时生效 | 07 §3.1 |
+| 11-01 | `!stay` 不停 `self_preservation` | 07 §3.2 |
+| 11-01 | server-ip 只绑本机；RCON 换密码并改读 `server.properties` | 09 §4（M1） |
 
-**待定**：水面要不要单独的 `swim` 步骤（05 末节）；没配 owner 时的默认等级、空闲是否默认跟随、要不要 `protect_owner`（08 §8）；server-ip 只绑本机、RCON 换密码（09 §4）。
+**可调的默认值**（不用再定，改 profile 就行）：idle_planner 多久想一次、活动半径（09 §3.1）。
 更早的"为什么不"见 `legacy/陪玩改造方案.md §13`。
 
 ## 10. 实施顺序
@@ -147,15 +153,15 @@ mineflayer
 | 里程碑 | 内容 | 依赖 |
 |---|---|---|
 | M0 ✅ | Phase 1、Phase 2 大部分、`nav_core`、爬梯空等；D14 / D15 / D25 / D27；socket 只放本机 | — |
-| M1 安全 | RCON 改读 `server.properties` + 换密码；server-ip；`openChat` 拦 `/`；按发言人分级（08 §5） | 无，**先做** |
+| M1 安全 | RCON 改读 `server.properties` + 换密码；server-ip 只绑本机；`openChat` 拦 `/`；按发言人分级 + profile 的 `permissions`（08 §5、09 §3.1） | 无，**先做** |
 | M2 控制 | 07 §9 的清单（含 D17 / D18 / D19）；trace 只写一次（09 §2，D10） | 无 |
 | M3 原子收拢 | Phase A（顺手 D16 / D21 / D22） | 可与 M2 并行 |
 | M4 改前缀 | Phase R | M3 |
 | M5 注册表 | `composite_registry` + `makeCtx`（04 §4.6）；现有 6 个流程补 manifest；`!do` / `!listSkills`（D24）；顺手 D20 | M2 |
-| M6 动作 | 7 个新 code；P0 动作（REFACTOR"动作补齐"） | M4 |
+| M6 动作 | 7 个新 code；P0 动作（REFACTOR"动作补齐"）；`swimStep` + `path_3d` 的 `swim` 边 + executor 的 `swim` 分支（05 末节） | M4 |
 | M7 P0 流程 | craft → smelt → store / fetch → eat → mine → farm → fight → build | M5、M6 |
 | M8 任务板 | B1 个人单 + 持久化 → B2 调度、抢占；周期单（06 §13） | M5 |
-| M9 接驳层 | 命令改路由（08 §3）；结果格式（08 §4）；陪玩默认行为（08 §6）；D23 | M7、M8 |
+| M9 接驳层 | 命令改路由（08 §3）；结果格式（08 §4）；idle_planner（08 §6.1）；`protect_owner`（07 §3.1，只依赖 M1、M2，可以提前做）；D23 | M7、M8 |
 | M10 策略 | `strat_obtain` → `tool_tier` → `first_night`（先做 `flow_shelter`）；关掉 NPC 执行循环（08 §7） | M7；长策略要 M8 |
 | M11 多 bot | B3 / B4 | M8 |
 

@@ -653,12 +653,15 @@ describe('Navigation Integration', () => {
 - [ ] 编写测试
 - [ ] 性能测试与优化
 
-## 待定：水面过河（2026-11-01）
+## 水面过河：单独的 `swim` 步（2026-11-01 定）
 
-- **现状**：`path_3d` 把水面（`T.WATER`）当能走的面；深水底（`SUBMERGED`）代价很高，规划宁可走水面也不潜水底（`test_tunnel` 用例 13）。executor 用普通 `walk` 走过去；落点检查只拦 `T.LAVA`（D14 修复时有意收窄）
-- **问题**：10-28 的事故是在深水面上一脚沉到底、反复下坠卡死。现在没有专门处理"在水面上移动"，全靠 pathfinder
-- **建议**：给水面单独一种步骤 `swim`。`path_3d` 对 `T.WATER` 只生成 `swim` 边；executor 的 `swim` 分支按住跳（`holdKey('jump')`）浮在水面，同时 `moveToXZ`；落点检查改成"`walk` 落到 `T.WATER` 就拒，`swim` 照放"
-- **验收**：逐 action 基线加一个"过 6 格宽的河"场景，`walk` 和 `swim` 各跑 10 轮，比成功率和耗时。定之前维持现状
+- **背景**：`path_3d` 把水面（`T.WATER`）当能走的面，深水底（`SUBMERGED`）代价很高，所以规划宁可走水面也不潜水底（`test_tunnel` 用例 13）；但 executor 用普通 `walk` 走过去，10-28 的事故就是在深水面上一脚沉到底、反复下坠卡死
+- **规划**：落点是 `T.WATER` 的边一律是 `swim`（水面上四邻移动、从岸上下水都算），不再生成 `walk` 到水面；上岸照旧是 `walk` / `jump`
+- **执行**：`swim` 分支调动作 `swimStep`（02 §3.6）：朝目标格水平转头 → 同时按住前进和跳，直到进到那一格 → 松开。**不交给 pathfinder**：它走的时候每 tick 自己设控制键，会把按住的跳改掉（上游 `self_preservation` 的水下分支也是 `pathfinder.goal` 为空才按跳，`modes.js:38-42`）
+- **到位判据**：水平进格（≤ 0.5）且头在水面之上。00 §4 的"脚位 = 面位 + 1"只对实心面成立，浮在水里不适用；具体阈值真机量
+- **落点检查**：`walk` / `jump` / `down` 落到 `T.WATER` → `UNSAFE`（恢复 10-28 的本意）；`swim` 落到 `T.WATER` 放行；落到 `T.LAVA` 一律 `UNSAFE`
+- **要跟着改**：`executor.js` 落点检查那段注释（现在写着"水面要不要拦等基线再定"）；`tools/exec_landing_unit.mjs` 用例 3 改成"`walk` 落水面 → UNSAFE"，另加"`swim` 落水面 → 照走"；`test_tunnel` 用例 13 再断言"落在水面的步都是 `swim`"
+- **验收**：逐 action 基线加"过 6 格宽、4 格深的河"，10 轮至少 9 轮过、没有 `HEIGHT_MISS`；原来 11 个场景不掉（99/110）
 
 ## 相关文档
 

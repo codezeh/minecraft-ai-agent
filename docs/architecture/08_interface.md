@@ -22,7 +22,7 @@
 | mode 打断了动作 | AUTO MESSAGE 叫 | 被打断的是任务单 → 不叫，调度器接着做（07 §4）；不是任务单 → 照旧 |
 | 任务单完成 / 失败 / blocked | 无 | 往对话历史塞一行状态（§4 的格式），不立刻叫；同一张单 30 秒内最多一行。玩家下的单完成或失败时叫一次，让模型告诉玩家 |
 | 死亡 | 叫（`agent.js:297`） | 叫，附上"回去捡"那张单（07 §7） |
-| 空闲 | 有目标就由 `self_prompter` 催 | 有任务单在跑或排队时不催 |
+| 空闲 | 有目标就由 `self_prompter` 催 | 有任务单在跑或排队时都不催；有 `!goal` 目标时由 `self_prompter` 催，没有目标时由 idle_planner 限频问（§6.1） |
 
 ## 3. 命令的去向
 
@@ -77,26 +77,47 @@
 
 | 等级 | 谁 | 能用 |
 |---|---|---|
-| 主人 | profile 的 `owner` | 全部，包括 `!newAction` `!setMode` `!restart` `!attackPlayer` `!discard` `!givePlayer` 和白名单里的斜杠命令 |
-| 信任 | profile 的 `trusted` | 聊天、走、跟、采集、制作、建造、存取、`!jobs`；下的单最高 6 级 |
+| 主人 | profile 的 `permissions.owner` | 全部，包括 `!newAction` `!setMode` `!restart` `!attackPlayer` `!discard` `!givePlayer` 和白名单里的斜杠命令 |
+| 信任 | profile 的 `permissions.trusted` | 聊天、走、跟、采集、制作、建造、存取、`!jobs`；下的单最高 6 级 |
 | 其他玩家 | 其余所有人 | 只聊天；由他们的话引出的命令一律不执行 |
 | 别的 bot | 同一 mindserver 下的 agent | 只聊天；分工走任务板 |
 
 - **按发言人判，不按模型说了什么判**：`handleMessage(source, …)` 已经知道是谁说的；`executeCommand(agent, message)` 加一个 `{ author }` 参数，按等级查命令类别，不够就不执行、回一句。提示词注入改不了等级
 - `self_prompter` 发出的命令按设目标的人（`!goal` 的发言人）算；调度器跑的单按 `job.source` 算
 - 回复文字：`openChat` 拦 `/` 开头（以后并进原子 `say()`，01 §3.4）；斜杠命令只走 `command()` 的白名单。`agent.js:119-121` 的 `/skin` 也进白名单
-- 没配 `owner` 的老 profile 按"信任"处理，所以默认没人能用 `!newAction` 和斜杠命令（行为变化，§8）
+- 没配 `permissions.owner` 时人人按"信任"：能让她干活，但没人能用 `!newAction` 和斜杠命令；配了 owner，名单外的人降成"其他玩家"
+- 名单写在每只 bot 的 profile JSON 里（字段表见 09 §3.1），改完重启这只 bot 生效；名字按原样比，区分大小写（离线模式下 `Zeh` 和 `zeh` 是两个人）
+- 按名字认人的前提是别人冒用不了这个名字：服务器只绑本机（M1，09 §4）
 
 ## 6. 陪玩的默认行为
 
 | 情况 | 默认 | 怎么做 |
 |---|---|---|
-| 主人在线、没有任务单 | 跟在主人 3–6 格内（待你定） | 空闲行为，不做成任务单：任何单来了都要立刻让路，做成单还得先抢占它 |
-| 主人下线 | 原地待着；记了 home 就回去 | 空闲行为 |
+| 没有任务单（主人在不在都一样） | 自己找事做，不跟着 | idle_planner（§6.1） |
+| 主人说"跟着我" | 跟随 | `flow_follow` 单（9 级），直到主人叫停或下别的命令 |
 | 主人说"帮我做 X" | 9 级个人单 | §3 的命令 → 任务单 |
 | 主人说"有空做 X" | 4 级个人单 | 同上 |
-| 主人被怪打 | 现在不管（`self_defense` 只保护自己） | 建议加反射 `protect_owner`，默认关（待你定） |
+| 跟随中主人被怪打 | 护着他 | 反射 `protect_owner`，只在跟随主人时生效（07 §3.1） |
+| 不在跟随时主人被怪打 | 不管 | `self_defense` 只保护她自己 |
 | 长任务的进度 | 每完成 25% 或每 2 分钟说一句 | 任务板事件 → `say()`，不叫模型 |
+
+### 6.1 空闲时自己找事做（idle_planner）
+
+**空闲** = 没有任务单在跑或排队、没有反射在跑、30 秒内没人跟她说话。idle_planner 挂在任务板调度器上（M8 之后），按顺序：
+
+| 层 | 做什么 | 叫不叫模型 |
+|---|---|---|
+| 1 需要 | 按规则补短板：背包满 → `store`；缺基础工具 → `obtain`；天快黑、附近没地方待 → `shelter`；食物少于 5 个 → `strat_food` | 不叫 |
+| 2 想做 | 问模型"现在想干什么"：它可以 `!addJob` 一张 0–2 级的单，也可以什么都不做 | 叫，每 `idle.thinkEveryMs` 一次（默认 5 分钟） |
+| 3 发呆 | 现有的空闲行为 mode（捡东西、插火把、打猎、看人，07 §3） | 不叫 |
+
+- 第 1 层用到的 `store` / `obtain` / `shelter` / `strat_food` 哪个写好了用哪个，没写好的先跳过
+- 自己找的单 `source: 'self'`，优先级只能 0–2：玩家一下命令就让路
+- 权限按"信任"算（§5），另外不许 `!attack` / `!attackPlayer` / `!discard` / `!givePlayer`
+- 不挖保护区的方块（`atom_classify.isProtected`）；只动记成她自己的箱子（`chests.json` 加 `mine: true`），别人的箱子不碰
+- 活动范围不超过 `idle.radius`（默认 100 格）：主人在线以主人为圆心，不在线以 home 为圆心，没有 home 就以她现在的位置
+- `!stay` / `!stop` 之后不再自己找事，直到玩家下一条命令
+- 有 `!goal` 目标时第 2 层交给 `self_prompter`，第 1 层照跑
 
 ## 7. 三个旧机制
 
@@ -106,8 +127,8 @@
 | `NPCContoller`（`npc/controller.js`，`agent.js:9/46`） | 按 profile 的目标自己建造 / 采集，直接调旧 `skills.*` | 它的需求图（`item_goal.js`）给 `strat_obtain` 用（04 §3.2）；它自己的执行循环在 `strat_obtain` 能用之后关掉 |
 | `companion_mode` | 四处分支（Phase 5.2）；面板会把它删掉（D23） | 先补进 `settings_spec`；任务板成了唯一路径之后删掉开关 |
 
-## 8. 待你定
+## 8. 已定（2026-11-01）
 
-1. 没配 `owner` 时按"信任"处理（§5）：现在依赖 `!newAction` 的用法会失效
-2. 空闲时默认跟随主人（§6）
-3. 加不加 `protect_owner` 反射（§6）
+1. 权限写在每只 bot 的 profile JSON（`permissions`，09 §3.1）；没配 `owner` 时人人按"信任"，所以默认没人能用 `!newAction` 和斜杠命令
+2. 空闲时不跟随，自己找事做（§6.1）；跟随只在玩家要求时做
+3. 加 `protect_owner`，只在跟随主人时生效（07 §3.1）

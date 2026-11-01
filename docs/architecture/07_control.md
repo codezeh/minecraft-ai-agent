@@ -13,7 +13,7 @@
 | `task_modes` | 流程开始时暂停 `GOAL_MODES`，`finally` 里恢复 | `task_modes.js:13-20` |
 | auto-eat 插件 | 在 `physicsTick` 上自己判断、自己换手、自己吃，**不经 `action_manager`** | `agent.js:229` |
 | `self_prompter` | 空闲时按 `!goal` 的目标催模型 | `agent.js:48` |
-| 任务板调度器（计划） | 空闲时领单 | 06 §8 |
+| 任务板调度器（计划） | 空闲时领单；没单可领时由 idle_planner 自己找事 | 06 §8、08 §6.1 |
 
 问题：
 - mode 打断前台后，没有 `resume_func` 就发 AUTO MESSAGE 让模型重新决定（`modes.js:350-360`），进度从零开始
@@ -28,7 +28,7 @@
 
 - **反射**：保命，不经任务板，能打断任何事
 - **任务单**：玩家的命令就是 9 级任务单（06 §7），不单独占一档；高优先级抢占低优先级，同级排队
-- **空闲行为**：没有单在跑时才动，从不打断别人
+- **空闲行为**：没有单在跑时才动，从不打断别人。idle_planner 自己找的事（08 §6.1）是 0–2 级的任务单，不算空闲行为
 - **即时命令**（`!stop` `!stay` `!setMode` `!equip` `!lookAtPlayer` …）：不进任务板，直接走 `action_manager`；打断任务单时按 §4 的 `brief` 处理
 
 ## 3. 现有 mode 归到哪
@@ -38,6 +38,7 @@
 | `self_preservation` | all | 照跑 | 反射 | 不变；打断任务单时走 §4 |
 | `self_defense` | all | 照跑 | 反射 | 同上 |
 | `cowardice` | all | 照跑 | 反射 | 同上 |
+| `protect_owner`（新） | action:followPlayer、job:follow | 只在跟随主人时 | 反射 | §3.1 |
 | `unstuck` | all | 暂停（`GOAL_MODES`） | 导航自救 | 导航层自带被困检测（`atom_stuck_detect`）；`unstuck` 只在空闲时跑 |
 | `hunting` | action:followPlayer | 暂停 | 空闲行为 | 保持；任务里要打猎用 `flow_fight` / `strat_food` |
 | `item_collecting` | 同上 | 暂停 | 空闲行为 | 保持；任务里捡东西用 `flow_pickup` |
@@ -46,6 +47,29 @@
 | `idle_staring` | 无 | 暂停 | 空闲行为 | 保持 |
 | `cheat` | 无 | — | 开发用，默认关 | 陪玩时不许开 |
 | auto-eat（插件） | 不经 `action_manager` | 照跑；`flow_eat` 期间暂停 | 反射 | §6 |
+
+### 3.1 `protect_owner`：跟随主人时护着他
+
+| 项 | 规则 |
+|---|---|
+| 什么时候生效 | 只在跟随主人时：正在跑的是 `flow_follow` 单或 `!followPlayer`，跟的人是 `permissions.owner`（09 §3.1）。follow 开始时记下目标（如 `agent.follow_target`），结束时清掉 |
+| 触发 | 敌对生物（`atom_safe.js` 的 `HOSTILE`）离主人 6 格内、高差 ≤ 3；或主人刚掉血（`entityHurt`）且离主人 8 格内有敌对生物 |
+| 不打 | 玩家；苦力怕（近战会把它引爆在主人身边）；末影人只在主人刚掉血时打（平时去惹它会被反打） |
+| 做什么 | `stop('brief')` 打断跟随，打离主人最近的那只（`attackOnce` 循环；它还没有时先用现在的 `atom_attack`，加 20 秒上限） |
+| 什么时候收手 | 目标死了或离主人超过 16 格；打了 20 秒还没完；她自己血量 < 8（交给 `cowardice` / `self_preservation`）。放弃的那只 30 秒内不再管 |
+| 之后 | 跟随单还是 `claimed`，接着跟（§4 的 `brief`） |
+| 排在哪 | `modes_list` 里放在 `self_defense` 后面。`update()` 按列表顺序查，遇到正在跑的就停（`modes.js:440-445`），所以列表顺序就是优先级 |
+| 开关 | 默认开（`modes.js` 里 `on: true`）；profile 的 `modes.protect_owner: false` 关掉，也能 `!setMode` 临时关 |
+
+- 任务单跑在 `runAction('job:<skill>', …)` 上，`interrupts` 才能写 `job:follow` 按 label 匹配
+- 数字（6 / 8 / 16 格、20 / 30 秒、血量 8）是起步值，写成 mode 里的命名常量
+
+真机验收：跟随中在主人身边刷 1 只僵尸 → 她打完接着跟；刷苦力怕 → 不动手；不在跟随时在主人身边刷僵尸 → 不管。
+
+### 3.2 `!stay` 不停保命反射
+
+`skills.stay`（`skills.js:2270`）现在把 mode 全停了，包括 `self_preservation`：让她站着时着火、溺水、被沙子埋，她都不躲。
+改成：`!stay` 期间 `self_preservation` 照跑；`cowardice` / `self_defense` / `protect_owner` 和空闲行为照旧停（"站着别动"也包括别去追怪、别跑开）；自动领单和 idle_planner 也停。
 
 ## 4. 打断的原因决定任务单去哪
 
@@ -115,6 +139,7 @@ JS 没法强行取消一个 Promise，取消全靠流程和原子自己查 `inte
 6. 任务单的 `runAction` 带上 deadline（§8）
 7. 死亡 → `paused` + 回去捡的单（§7）
 8. 删掉 `task_follow.js:85` 写 `interrupt_code = false`（D19）
+9. `!stay` 不停 `self_preservation`（§3.2）
 
 测试：
 - 离线：假 `action_manager` + 假任务板，§4 每个原因各一条状态转移用例

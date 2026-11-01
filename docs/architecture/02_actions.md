@@ -60,7 +60,7 @@ switch (r.code) {
 
 动作不重试；"再来一次"永远由流程的 `onFail` 表决定（[`04_skills.md §3`](04_skills.md)）。
 
-## 3. 清单（42 个）
+## 3. 清单（43 个）
 
 表里省略 `bot` 参数。"现状"：✅ 有，改名即可 / 🔀 能从现有函数拆出 / 🆕 新写。
 
@@ -129,7 +129,7 @@ switch (r.code) {
 | `mount(vehicle)` | 附近有载具 → `command('ride …')` → `bot.vehicle` 非空 | `NO_VEHICLE` `RIDE_FAILED` `NO_PERMISSION` | 🔀 `atom_boat` |
 | `dismount()` | 在载具上 → `bot.dismount` / `command('ride … dismount')` → 不在载具上 | `NOT_MOUNTED` | 🔀 `atom_boat` |
 
-### 3.6 身体（5）
+### 3.6 身体（6）
 
 | 动作 | 前置 → 原子序列 → 后置 | 常见 code | 现状 |
 |---|---|---|---|
@@ -137,13 +137,14 @@ switch (r.code) {
 | `climb(dir)` | 在梯子 / 藤蔓上 → `holdKey('jump')` 或 `holdKey('sneak')` → 高度变化 | `NOT_CLIMBABLE` `HEIGHT_MISS` | ✅ `atom_climb.climbUp` / `climbDown`（D16） |
 | `pillarUp()` | 手里有垫脚块、头顶空 → `holdKey('jump')` 到顶点 → `placeAgainst` 脚下 | `NO_ITEM` `BLOCKED` | ✅ `atom_pillar.pillarUpOnce` |
 | `sinkInWater(targetFeetY)` | 在水里 → `holdKey('sneak', {until: 脚位到位})` | `HEIGHT_MISS` `TIMEOUT` | 🔀 executor 潜水循环（D9：30 秒不查中断） |
+| `swimStep(cell)` | 相邻一格是水面（`T.WATER`）→ `lookAt` 格心（水平）→ `holdKey(['forward', 'jump'], {until: 进格且头在水面上})` → 在那一格浮着 | `TIMEOUT` `BLOCKED` | 🆕 P1（05 末节） |
 | `fishOnce()` | 手里有鱼竿、面前是水 → `bot.fish()` → 背包多一样 | `NO_TOOL` `TIMEOUT` | 🆕 |
 
 `stepInto` 为什么是 P1：executor 现在每个单格步骤都调 `moveToXZ`，也就是每走一格都起一次 pathfinder。
 爬梯前空等 20 秒是这个结构的一个症状：目标格是梯子，`GoalNearXZ` 永远不 resolve。`4b4ac1c` 已针对这个成因加守卫修掉（21958 → 1959ms），但"单格也走 pathfinder"的结构还在。
 换之前先跑逐 action 基线（`REFACTOR_ANALYSIS.md` Phase 3，99/110），换完不能掉。那次修复的教训同样适用：判据要钉在具体成因上，必须多场景验证。
 
-**合计**：方块 8 + 物品容器 7 + 合成加工 6 + 生存战斗 9 + 实体 7 + 身体 5 = **42**。其中 21 个复用或拆分现有代码，21 个新写。
+**合计**：方块 8 + 物品容器 7 + 合成加工 6 + 生存战斗 9 + 实体 7 + 身体 6 = **43**。其中 21 个复用或拆分现有代码，22 个新写。
 
 ## 4. 新错误码（7 个，用到时再加）
 
@@ -187,7 +188,7 @@ switch (r.code) {
 | 原子 | mineflayer、基础设施 |
 | 查询 | 读取原子、别的查询 |
 | 动作 | 原子、查询、mineflayer 现成动作（§2）。动作之间不互相调用，换手直接用 `bot.equip`（§2 示例就是这样） |
-| 导航 | 原子、查询，以及单格动作 `stepInto` `climb` `pillarUp` `sinkInWater` `digBlock` `placeBlockAt` |
+| 导航 | 原子、查询，以及单格动作 `stepInto` `climb` `pillarUp` `sinkInWater` `swimStep` `digBlock` `placeBlockAt` |
 | 流程 | 动作、导航（只经 `nav_core.goTo`）、查询、等待原子、`releaseAll`、别的流程 |
 | 策略 | 流程、查询、任务板客户端 |
 | `commands/` | 流程、策略、任务板、查询；**不 import 动作和原子** |

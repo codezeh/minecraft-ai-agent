@@ -45,22 +45,48 @@
 | 放什么 | 放哪 | 例 |
 |---|---|---|
 | MC 机制事实（要有出处） | `src/agent/rules/` | 眼高、挖掘距离（`EYE_HEIGHT`、`digReach`）、矿种目标高度 |
-| 每只 bot 的偏好 | `profiles/*.json` | 模型、`owner` / `trusted`（08 §5）、`roles`（06 §9.4） |
+| 每只 bot 的偏好 | `profiles/*.json` | 模型、`permissions` / `idle` / `modes`（§3.1）、`roles`（06 §9.4） |
 | 进程级 | `settings.js` | 端口、`allow_insecure_coding` |
 | 流程自己的可调值 | 流程文件顶部的命名常量，或 manifest 的默认值 | 支巷间距、熔炉轮询间隔 |
 
 - 流程里不写裸数字；MC 事实带出处（`legacy/改进规划.md` 第一条约束：规则必须有出处）
-- `settings.js` / profile 新加 key 要同步进 `settings_spec.json`：面板创建或编辑 agent 时会删掉 spec 里没有的 key（`mindserver.js` 的 `create-agent`），D23 就是这么来的
+- `settings.js` 顶层新加 key 要同步进 `settings_spec.json`：面板创建 agent 时会删掉 spec 里没有的顶层 key（`mindserver.js` 的 `create-agent`），D23 就是这么来的。profile 里新加字段不用：`profile` 整个是 spec 里的一个 key（`settings_spec.json:2`），里面的字段不会被删
+
+### 3.1 profile 里新加的字段（2026-11-01）
+
+写在每只 bot 自己的 profile JSON 里（就是现在 `profiles/*.json` 那份），不另开文件：bot 启动时已经在读它，每只 bot 可以配不同的主人。
+
+```json
+{
+  "name": "deepseek",
+  "permissions": { "owner": "你的游戏名", "trusted": ["朋友A"] },
+  "idle": { "autonomy": true, "thinkEveryMs": 300000, "radius": 100 },
+  "roles": ["miner"]
+}
+```
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `permissions.owner` | 无 | 主人的游戏名，原样比较（区分大小写）；没配 = 人人按"信任"（08 §5） |
+| `permissions.trusted` | `[]` | 信任的玩家 |
+| `idle.autonomy` | `true` | 空闲时自己找事做（08 §6.1）；`false` = 只跑第 3 层（发呆） |
+| `idle.thinkEveryMs` | `300000` | 空闲时多久问一次模型（第 2 层） |
+| `idle.radius` | `100` | 自己找事时离圆心最远多少格 |
+| `modes.protect_owner` | `true` | 跟随主人时护着他（07 §3.1）；加在 profile 已有的 `modes` 对象里（`prompter.getInitModes()` 读它） |
+| `roles` | `[]` | 多人单按角色领（06 §9.4） |
+
+- 没写的字段用表里的默认值；改完重启这只 bot 生效
+- `profiles/my-local.json` 不进库（gitignore，第一轮发现），主人名不会进提交
 
 ## 4. 安全
 
 | 入口 | 风险 | 现状 | 怎么补 |
 |---|---|---|---|
 | 浏览器网页 → mindserver socket | 冒充面板发 `create-agent` / `send-message` / `shutdown` | ✅ `local_only.js`（`b1793d9`） | — |
-| 同一局域网 → MC 服务器 | 离线模式下冒用 op 的名字进服（第一轮：监听所有网卡，ops 里 341 个名字） | 待你定 | `server-ip=127.0.0.1`；或开正版验证（离线模式下白名单挡不住冒名） |
-| 同一局域网 → RCON | 默认密码写死在 `rcon_client.js` 和几个 tools 脚本里，已推到 GitHub | 待做 | 只绑本机（同上）；换密码；客户端从 `server.properties` 读（`proc_control.js` 已经这样读） |
-| 游戏里任何玩家 → bot | 诱导她写代码执行、发斜杠命令（她是 op） | ❌ | 08 §5 分级，按发言人过滤 |
-| 模型回复 → 聊天 | 回复以 `/` 开头会被当成命令执行 | ❌ `agent.js:507` 直接 `bot.chat` | `openChat` 拦 `/` 开头 |
+| 同一局域网 → MC 服务器 | 离线模式下冒用 op 的名字进服（第一轮：监听所有网卡，ops 里 341 个名字） | 已定，M1 | `server-ip=127.0.0.1`（之后手机 / 别的电脑连不上） |
+| 同一局域网 → RCON | 默认密码写死在 `rcon_client.js` 和几个 tools 脚本里，已推到 GitHub | 已定，M1 | 只绑本机（同上）；换密码；客户端从 `server.properties` 读（`proc_control.js` 已经这样读）；换完重启服务器 |
+| 游戏里任何玩家 → bot | 诱导她写代码执行、发斜杠命令（她是 op） | 已定，M1 | 08 §5 分级，按发言人过滤；名单在 profile（§3.1） |
+| 模型回复 → 聊天 | 回复以 `/` 开头会被当成命令执行 | 已定，M1 | `openChat` 拦 `/` 开头（`agent.js:507` 现在直接 `bot.chat`） |
 | `!newAction` 生成的代码 | 跑在 SES 沙箱里，但拿得到 `bot`，游戏里能做的都能做 | 设计如此 | 只给主人；不用时关 `allow_insecure_coding` |
 | 依赖 | `package-lock.json` 被忽略；patch-package 的补丁按 mineflayer 4.33.0 写，装的是 4.39.0（第一轮） | 待做 | §6 |
 
