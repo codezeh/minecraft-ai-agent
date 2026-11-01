@@ -1141,8 +1141,44 @@ async function skillName(bot, goal, context = {}) {
 
 - [x] 先把 7 个新错误码加进 `CODES`（`02_actions.md §4`） ← **M6 完成（`1976cb6`）**：`CODES` 现 **38 个**（t14 复核：`sed -n '/export const CODES/,/\];/p'` 计数 = 38，且 11 个动作用到的 13 个码全部在册）
 - [x] P0（P0 流程要用）：`craftOnce` `furnaceLoad` / `furnaceCollect` `eat` `equip`（补护甲槽校验）`deposit` / `withdraw` `attackOnce` `harvestCrop` `plantSeed` `tillSoil` —— **M6 完成（`2cfc43f`），t14 逐条验收见下**
-- [ ] P1：`stepInto`（换之前先跑基线）`sleepInBed` / `wake` `fishOnce` `feedEntity` `tradeOnce` `toggleBlock` `boneMeal` `swimStep`（05 末节）—— **未做**
+- [x] P1：`sleepInBed` / `wake` / `fishOnce` / `feedEntity` / `tradeOnce` / `toggleBlock` / `boneMeal` / `swimStep`（05 末节）—— **8 个动作已完成（`9c8c7a2`）**，32 条离线用例
+- [ ] P1 的 `stepInto`：**动作本体已交付、接入两次失败后回滚**（详见下面「`stepInto` 接入失败调查」）
 - [ ] P2：`brewOnce` `enchantOnce` `anvilCombine`；其余（盾、弓、投掷、剪毛、挤奶、拴绳、载具）按流程需要再补 —— **未做**
+
+#### `stepInto` 接入失败调查（2026-11-02，两次尝试都回滚）
+
+`act_step.js` 本体（102 行 + 用例）**已交付并保留**，但**没有接进 `executor`**。
+`executor.js` 当前与 HEAD 逐字节一致；回滚后 bench 复跑确认 **49/55**（与基线一致）。
+
+**收益是真的**：第一次接入时前 31 条明显变好，`dig-through` **8368ms → 4269ms**
+（`执行={"step-into":14}`），`digdown #1` 正常且仍有 `digdown:1`。
+
+**但两次都在 `digdown #2` 卡死**（13 分钟无进展，进程活着、无日志）。
+
+| 尝试 | 判据/门槛 | 结果 |
+|---|---|---|
+| 第一次（atoms） | `until` = 到格心水平 ≤0.5 | `digdown #2` 卡死 13 分钟 |
+| 第二次（captain） | 改成"脚位格子 == 目标格"（`insideCell`，三轴都比）+ 返回前后置复核 | **仍卡死**（31 行 = 卡在 `digdown #2`）|
+| 第三次（captain） | 再加门槛：**只处理同一层**（`targetFeetY === nowFeet`）| **仍卡死**（同样 31 行）|
+
+**被证伪的假设**（别再重复走）：
+- ❌ "谓词太宽导致假成功" —— 换成 `insideCell` 精确判据后照样卡
+- ❌ "不该用于不同高度（走出盖板边缘掉下去）" —— 加 `sameLevel` 门槛后照样卡
+
+**仍未被证伪的方向**（下一轮从这里查，别再从头猜）：
+1. **`holdKey('forward')` 的超时/中断路径是否真的松键**。若某次失败后 forward 仍被按住，
+   她会持续移动 → 位置一直变 → walkTo 永远重规划。查法：卡住时 `rcon data get` 位置、
+   或临时在 `stepInto` 的 finally 里打日志确认 `setControlState('forward', false)` 真发出去。
+2. **`lookAtPoint` 失败是否静默继续**。视线不对时 forward 会朝错方向走。
+3. **`digdown` 场景本身的特殊性**：她站在 1 格厚盖板上，`down` 之前那步 `walk` 的
+   目标格可能就在盖板边缘 —— 任何"按 forward"的动作都可能把她推下去。
+   查法：在 `digdown` 场景里打 `step-into-fallback` 事件计数（现在 `execActions` 里有，
+   但默认不打印），看是不是每轮都在 fallback。
+
+**接入前必须具备的护栏**（比判据更重要）：
+- `stepInto` 的 `finally` 必须**无条件** `releaseAll`，且要有用例锁住"超时后键已松"
+- 卡住检测：若连续 N 次 `step-into-fallback` 且位置未变，直接返回 `STUCK`，不要继续重规划
+- 只在**位置真的变了**之后才让 walkTo 的 `stalled` 计数归零
 
 > 注：P1 里"换 `stepInto` 之前先跑基线"的基准数已更新为**新干净基线 49/55（89.1%）**
 > （2026-11-01 `gap-bridge` 修好之后重建；旧 99/110 那套是跨多次运行累积的混合物，已废弃）。

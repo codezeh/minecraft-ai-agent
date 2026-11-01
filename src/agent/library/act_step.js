@@ -18,7 +18,30 @@ import { ok, fail } from './contract.js';
 import { holdKey } from './atom_input_move.js';
 import { lookAtPoint } from './atom_input_mouse.js';
 
-/** 进格判据：水平距离 ≤ 0.5 格（与 05 末节 swim 的到位判据同一口径）。 */
+/**
+ * 进格判据：**脚位格子 == 目标格**。
+ *
+ * ★ 2026-11-02 修（captain 抓的"假成功死循环"）：
+ *   原来用的是「到格心水平距离 ≤ 0.5」—— 她在被方块挡住时会停在 0.5 边缘，
+ *   于是**被判定成已经进格**。后果比失败严重得多：
+ *   `execStep` 报成功 → `walkTo` 以为这一步推进了 → 从同一位置重新规划 →
+ *   `stalled` 计数被"成功"重置 → 永远到不了 `STUCK` → 无日志空转 13 分钟
+ *   （实测：接入 stepInto 后 `digdown #2` 卡死）。
+ *
+ *   **假成功比失败更糟：失败会重规划，假成功会死循环。**
+ *   （与 `4b4ac1c` 那条"提前判到位"是同一类错。）
+ *
+ * 现在改成读**脚位格子**：`Math.floor(位置) === 目标格`，三轴都要对。
+ * 她要么真在那一格里，要么就是没进——没有"差不多"。
+ */
+export function insideCell(p, cell) {
+    if (!p || !cell) return false;
+    return Math.floor(p.x) === cell.x
+        && Math.floor(p.y) === cell.y
+        && Math.floor(p.z) === cell.z;
+}
+
+/** @deprecated 旧的"水平 0.5"口径，已被 insideCell 取代；保留导出只为不破坏既有调用方。 */
 export const STEP_ARRIVE_XZ = 0.5;
 
 /** 一格的水平尺度：只有"相邻一格"才归本动作管。 */
@@ -81,7 +104,7 @@ export async function stepInto(bot, cell, opts = {}) {
         until: () => {
             const p = bot.entity?.position;
             if (!p) return false;
-            return Math.hypot(p.x - cx, p.z - cz) <= STEP_ARRIVE_XZ;
+            return insideCell(p, target);
         },
         timeout: timeoutMs,
         intervalMs: 100,
@@ -97,6 +120,14 @@ export async function stepInto(bot, cell, opts = {}) {
         return fail('TIMEOUT', `按了前进 ${costMs}ms 没进格（还差 ${d == null ? '?' : d.toFixed(1)} 格）`, {
             cell: target, from, to, distXZ: d, costMs,
         });
+    }
+    // 后置再核一次：`until` 说是进了，但**返回前必须自己确认**。
+    // 这一步专门防"谓词口径漂了"——只要谓词有漏洞，这里就会把它变成显式失败，
+    // 而不是让 walkTo 拿到一个假成功（假成功会死循环，见 insideCell 注释）。
+    if (!insideCell(p1, target)) {
+        const d = p1 ? Math.hypot(p1.x - cx, p1.z - cz) : null;
+        return fail('TIMEOUT', `谓词判成功但脚位不在目标格（现在 ${p1 ? `${Math.floor(p1.x)},${Math.floor(p1.y)},${Math.floor(p1.z)}` : '?'}，`
+            + `目标 ${target.x},${target.y},${target.z}）`, { cell: target, from, to, distXZ: d, costMs });
     }
     return ok({ cell: target, from, to, costMs });
 }
