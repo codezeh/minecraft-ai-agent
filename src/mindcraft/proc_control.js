@@ -14,7 +14,9 @@
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
+// server.properties 的唯一读法（M1，09 §4）
+import { loadRconConfigs } from '../agent/server_props.js';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -67,34 +69,18 @@ function findServerJar() {
     return existsSync(p) ? p : null;
 }
 
-/** 读 server.properties 里的 RCON 配置（Paper 可能放在 server/ 或 server/config/） */
+/** 读 server.properties 里的 RCON 配置（Paper 可能放在 server/ 或 server/config/）。
+ *
+ * ★ 2026-11-01（M1，09 §4）：解析逻辑**收进 src/agent/server_props.js 一份**，
+ * 这里只负责按「本面板管着的服务端目录」挑出对应那一条。
+ * 原来是本文件自己手写一遍（rcon_client.js 又写死一遍密码），
+ * 两份实现迟早对不上 —— 一份数据只有一个读法。
+ */
 function loadRconConfig() {
-    const candidates = [
-        path.join(SERVER_DIR, 'server.properties'),
-        path.join(SERVER_DIR, 'config', 'server.properties'),
-    ];
-    const f = candidates.find(p => existsSync(p));
-    if (!f) return { port: 25575, password: '', enabled: false };
-    try {
-        const kv = {};
-        // 注意：properties 是 CRLF，且不能拿正则 ^...$ 逐行匹配（实测键数为 0）。
-        // 用 indexOf('=') 切，最稳。
-        for (const raw of readFileSync(f, 'utf8').split(/\r?\n/)) {
-            const line = raw.trim();
-            if (!line || line.startsWith('#') || line.startsWith('!')) continue;
-            const i = line.indexOf('=');
-            if (i < 0) continue;
-            kv[line.slice(0, i).trim()] = line.slice(i + 1).trim();
-        }
-        return {
-            enabled: String(kv['enable-rcon'] ?? '').trim().toLowerCase() === 'true',
-            port: Number(kv['rcon.port']) || 25575,
-            password: kv['rcon.password'] || '',
-            file: f,
-        };
-    } catch {
-        return { port: 25575, password: '', enabled: false };
-    }
+    const dirs = [SERVER_DIR, path.join(SERVER_DIR, 'config')];
+    const cfgs = loadRconConfigs({ root: ROOT });
+    const hit = cfgs.find(c => c.file && dirs.includes(path.dirname(c.file))) ?? cfgs[0];
+    return hit ?? { port: 25575, password: '', enabled: false };
 }
 
 /** 端口是否有人在听（用来判断服是否已在跑、避免起第二个） */

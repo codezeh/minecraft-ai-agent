@@ -3,6 +3,8 @@ import * as world from './library/world.js';
 import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
 import convoManager from './conversation.js';
+// 控制层（M2，07 §4）：停的原因 + 被打断的是任务单时不叫模型
+import { STOP_REASONS, isJobLabel, noteJobInterrupted } from './library/control.js';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -325,16 +327,24 @@ const modes_list = [
     }
 ];
 
-async function execute(mode, agent, func, timeout=-1) {
+/**
+ * 跑一个 mode 的动作。
+ *
+ * 导出是为了能离线单测 07 §4 的那条分叉：打断的是任务单 → 不叫模型，
+ * 不是任务单 → 照旧 AUTO MESSAGE。只测 `noteJobInterrupted` 测不到这条分叉。
+ */
+export async function execute(mode, agent, func, timeout=-1) {
     if (agent.self_prompter.isActive())
         agent.self_prompter.stopLoop();
     let interrupted_action = agent.actions.currentActionLabel;
     mode.active = true;
     let code_return;
     try {
+        // ★ 2026-11-01（M2，07 §4）：反射 mode 打断一律是 `brief` ——
+        // 打完 / 躲完还要回来接着做（不是抢占，也不是玩家喊停）。
         code_return = await agent.actions.runAction(`mode:${mode.name}`, async () => {
             await func();
-        }, { timeout });
+        }, { timeout, stopReason: STOP_REASONS.BRIEF });
     }
     catch (err) {
         // runAction 抛异常时也必须复位，否则 mode.active 永远为 true，
@@ -347,11 +357,21 @@ async function execute(mode, agent, func, timeout=-1) {
     }
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return.message}`);
 
+    // ★ 2026-11-01（M2，07 §4 第 5 步 / 08 §2）：被打断的是**任务单**时**不发** AUTO MESSAGE。
+    // 那条消息会让模型重新下命令，把调度器正要续做的单冲掉；改给模型一行状态就够了。
+    // 不是任务单（即时命令 / mode / !newAction）时行为不变，照旧 AUTO MESSAGE。
+    const interrupted_job = isJobLabel(interrupted_action);
+
     let should_reprompt = 
         interrupted_action && // it interrupted a previous action
+        !interrupted_job && // 任务单由调度器接手，不叫模型（07 §4）
         !agent.actions.resume_func && // there is no resume function
         !agent.self_prompter.isActive() && // self prompting is not on
         !code_return.interrupted; // this mode action was not interrupted by something else
+
+    if (interrupted_job) {
+        noteJobInterrupted(agent, { label: interrupted_action, mode: mode.name });
+    }
 
     if (should_reprompt) {
         // auto prompt to respond to the interruption

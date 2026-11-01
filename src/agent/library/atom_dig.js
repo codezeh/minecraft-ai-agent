@@ -9,6 +9,7 @@ import { ok, fail, normalizeTarget } from './atom_contract.js';
 import { waitUntil } from './atom_wait.js';
 import { blockAt, canReach, reachDistanceTo } from './atom_perceive.js';
 import { findItem } from './atom_items.js';
+import { holdDig, stopDig } from './atom_input_mouse.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -107,48 +108,40 @@ export async function digBlock(bot, pos, opts = {}) {
     // 但前一个动作留下 pathfinder 目标后就超时）。
     // 原子要保证单一副作用，不能和别的动作并存。
     try { bot.pathfinder?.stop?.(); } catch { /* ignore */ }
-    try { bot.stopDigging?.(); } catch { /* ignore */ }
+    await stopDig(bot);
 
-    let digErr = null;
     if (process.env.DIG_DEBUG) {
         console.log(`[dig-dbg] 目标=${block.name} 位置=${block.position} 距离=${dist.toFixed(2)} 手持=${bot.heldItem?.name} digTime=${block.digTime?.(heldId)} budget=${digMs}`);
     }
-    const digging = bot.dig(block, true).catch((e) => {
-        digErr = e;
-        if (process.env.DIG_DEBUG) console.log('[dig-dbg] bot.dig 抛错:', e.message);
-    });
-    const timedOut = await Promise.race([
-        digging.then(() => false),
-        sleep(digMs).then(() => true),
-    ]);
 
-    if (timedOut) {
-        try { bot.stopDigging(); } catch { /* ignore */ }
-        return fail('TIMEOUT', `挖了 ${Date.now() - t0}ms 还没挖完`, { block: block.name, costMs: Date.now() - t0 });
-    }
-    if (digErr) {
-        const msg = String(digErr?.message ?? digErr);
-        if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了');
-        return fail('INTERNAL', msg, { error: msg, block: block.name });
+    // ★ 2026-11-01（Phase A.2）：按住左键这个输入交回 `atom_input_mouse.holdDig`。
+    // 原来这段自己 Promise.race(bot.dig, sleep(digMs))，两个问题：
+    //   ① 等待中不查 interrupt_code（D21）—— 喊停了也要挖完/超时才回来；
+    //   ② 超时 / 异常 / 中断三种结局的分类只有这一份，别处再挖就要抄一遍。
+    const dig = await holdDig(bot, block, { digTimeMs: digMs });
+    if (!dig.ok) {
+        if (dig.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了', { block: block.name });
+        if (dig.code === 'TIMEOUT') {
+            return fail('TIMEOUT', `挖了 ${Date.now() - t0}ms 还没挖完`, { block: block.name, costMs: Date.now() - t0 });
+        }
+        return fail('INTERNAL', dig.message, { error: dig.data?.error ?? dig.message, block: block.name });
     }
 
     // 复核：方块真的消失了吗（幽灵方块会让"挖了"变成假成功）
-    const gone = await waitGone(bot, v, verifyMs);
-    if (!gone) {
+    //
+    // ★ 2026-11-01（D21）：等方块消失的循环放到 `atom_wait.waitUntil` 里，并把 bot 传进去 ——
+    // 原来 waitGone 自己 while+sleep，**不查 interrupt_code**，取消后还要空等最多 1.5 秒。
+    const gone = await waitUntil(() => {
+        const b = blockAt(bot, v);
+        if (!b || b.name === 'air' || b.name === 'cave_air') return true;
+        return undefined;
+    }, { timeoutMs: verifyMs, intervalMs: 80, bot });
+    if (!gone.ok) {
+        if (gone.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了', { block: block.name });
         return fail('TIMEOUT', `挖了但 ${block.name} 还在`, { block: block.name, pos: { x: v.x, y: v.y, z: v.z } });
     }
 
     return ok({ dugBlock: block.name, pos: { x: v.x, y: v.y, z: v.z }, costMs: Date.now() - t0 });
-}
-
-async function waitGone(bot, v, ms) {
-    const t0 = Date.now();
-    while (Date.now() - t0 < ms) {
-        const b = blockAt(bot, v);
-        if (!b || b.name === 'air' || b.name === 'cave_air') return true;
-        await sleep(80);
-    }
-    return false;
 }
 
 /**

@@ -22,8 +22,8 @@
  */
 import Vec3 from 'vec3';
 import { ok, fail } from './atom_contract.js';
-import { blockAt } from './atom_perceive.js';
-import { waitUntil } from './atom_wait.js';
+import { blockAt } from './atom_read.js';
+import { holdKey, releaseAll } from './atom_input_move.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -184,25 +184,26 @@ export async function climbUp(bot, opts = {}) {
     const fromY = p.y;
     const wantY = fromY + steps;
 
-    try { bot.setControlState('jump', true); } catch { /* ignore */ }
-
-    // ★ 2026-10-29 修（两处）：
+    // ★ 2026-11-01（Phase A.1）：按键改由 `atom_input_move.holdKey` 负责。
     //
-    // ① 参数名：waitUntil 的签名是 { timeoutMs = 1500 }，原来传 `{ timeout }`
-    //    → timeoutMs 用了默认 1500ms。实测按住 jump 10 秒她能爬到 y=67.2
-    //    （升 5.2 格），能力本身没问题，是被 1.5 秒的超时打断的。
+    // 改之前这里自己 setControlState('jump', true) + waitUntil + setControlState(false)，
+    // 而 waitUntil **没传 bot**（D16）：中断谓词 `if (bot.interrupt_code) return undefined`
+    // 返回的是 undefined（= 继续等），所以"爬梯子时喊停"不会让循环退出 ——
+    // 她会一直按住跳，直到 8 秒超时才松手。
+    // holdKey 每 ~100ms 查一次 interrupt_code、并在 finally 里松键，两个问题一起没了。
     //
-    // ② **谓词必须返回 undefined 表示"继续等"，不能返回 false**。
-    //    waitUntil 的判据是 `value !== undefined && value !== null` 就算完成 ——
-    //    所以 `false`（"还没爬到"）会被当成"等到了"，立刻返回。
-    //    这就是"每次只爬 0.7~1 格就停"的真因。
-    //    对比 atom_drops / atom_wait_item 都是 `? true : undefined`，写法正确。
-    const done = await waitUntil(() => {
-        if (bot.interrupt_code) return undefined;
-        return bot.entity.position.y >= wantY - 0.15 ? true : undefined;
-    }, { timeoutMs: timeout });
+    // 判据保持原样（y 达标即算到位）：`>= wantY - 0.15` 是实测出来的容差，
+    // 别在这里加"更聪明"的判定 —— climb-ladder 曾因"提前判到位"的宽判据回归过（4b4ac1c）。
+    const held = await holdKey(bot, 'jump', {
+        until: () => bot.entity.position.y >= wantY - 0.15,
+        timeout,
+        intervalMs: 100,
+    });
 
-    try { bot.setControlState('jump', false); } catch { /* ignore */ }
+    if (!held.ok && held.code === 'INTERRUPTED') {
+        const toY = bot.entity.position.y;
+        return fail('INTERRUPTED', '被取消了', { fromY, toY, climbed: toY - fromY });
+    }
     await sleep(150);
 
     const toY = bot.entity.position.y;
@@ -250,17 +251,26 @@ export async function climbDown(bot, opts = {}) {
     //   sneak       Δ-0.83  ← 几乎不动（原来用的是这个，所以一直降不下去）
     //
     // 所以这里要**清空所有按键**，让重力带她下去。
-    try { bot.clearControlStates(); } catch { /* ignore */ }
+    await releaseAll(bot);
 
-    // 同 climbUp：timeoutMs 名字 + 谓词返回 undefined（不能返回 false）
-    const done = await waitUntil(() => {
-        if (bot.interrupt_code) return undefined;
-        const now = bot.entity.position.y;
-        if (now <= wantY) return true;
-        // 已经脱离可攀爬方块（掉出来了）也算结束；否则继续等
-        return !isClimbable(bot, bot.entity.position, { allowVine }) ? true : undefined;
-    }, { timeoutMs: timeout });
+    // 同 climbUp（Phase A.1）：等待交给 holdKey —— 它每 ~100ms 查中断并在 finally 松键，
+    // D16（中断谓词返回 undefined → 按到超时）在这条路径上同样没了。
+    // 没有任何键要按（就是"什么都不按"），所以 keys 传空数组，只借它的等待/中断/松键。
+    const held = await holdKey(bot, [], {
+        until: () => {
+            const now = bot.entity.position.y;
+            if (now <= wantY) return true;
+            // 已经脱离可攀爬方块（掉出来了）也算结束；否则继续等
+            return !isClimbable(bot, bot.entity.position, { allowVine });
+        },
+        timeout,
+        intervalMs: 100,
+    });
 
+    if (!held.ok && held.code === 'INTERRUPTED') {
+        const toY = bot.entity.position.y;
+        return fail('INTERRUPTED', '被取消了', { fromY, toY, dropped: fromY - toY });
+    }
     await sleep(150);
 
     const toY = bot.entity.position.y;

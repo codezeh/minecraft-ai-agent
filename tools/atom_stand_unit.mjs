@@ -9,8 +9,8 @@
  *
  * 输出：PASS <用例> / FAIL <用例> <实际>，全过退出码 0。
  */
-import Vec3 from 'vec3';
 import { canStand, findStandSpot } from '../src/agent/library/atom_stand.js';
+import { makeFakeBot } from './fixtures/fake_bot.mjs';
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {
@@ -18,15 +18,9 @@ const check = (name, cond, detail = '') => {
     else { fail++; console.log(`FAIL ${name} ${detail}`); }
 };
 
-/** 假 bot：world 是 Map<"x,y,z", 方块名>，没登记的格子返回 null（= 未加载）。 */
+/** 假 bot（公共夹具）：world 是 Map<"x,y,z", 方块名>，没登记的格子返回 null（= 未加载）。 */
 function fakeBot(world, feet = { x: 0, y: 64, z: 0 }) {
-    return {
-        entity: { position: new Vec3(feet.x + 0.5, feet.y, feet.z + 0.5), eyeHeight: 1.62 },
-        blockAt: (v) => {
-            const name = world.get(`${Math.floor(v.x)},${Math.floor(v.y)},${Math.floor(v.z)}`);
-            return name === undefined ? null : { name };
-        },
-    };
+    return makeFakeBot({ world, feet, posOffset: 0.5 });
 }
 
 /** 一根竖列：下方 / 脚位 / 头位 */

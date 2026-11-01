@@ -6,6 +6,7 @@
 //
 // 用假 bot（不带真实世界），因为这些都是**纯几何判断**，不需要连游戏。
 import { computeSafeZone, inSafeZone, checkStep } from '../src/agent/library/atom_tunnel.js';
+import { makeFakeBot } from './fixtures/fake_bot.mjs';
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {
@@ -13,23 +14,18 @@ function check(name, cond, detail = '') {
     else { failed++; console.log(`  FAIL  ${name}  ${detail}`); }
 }
 
-/** 造一个假 bot：blocks 是 Map<"x,y,z", name>，没登记的格子返回 null（未加载）。 */
-function fakeBot(at, { x = 0, y = 64, z = 0 } = {}) {
-    const pos = {
-        x, y, z,
-        distanceTo: () => 0,
-        clone() { return { x, y, z }; },
-    };
-    return {
-        entity: { position: pos },
-        blockAt: (v) => {
-            if (!v) return null;
-            const k = `${Math.floor(v.x)},${Math.floor(v.y)},${Math.floor(v.z)}`;
-            const name = at.get(k);
-            // 未加载返回 null（⚠ 关键：不是 air）
-            return name === undefined ? null : { name, diggable: !/^(bedrock|water|lava)$/.test(name) };
-        },
-    };
+/**
+ * 造一个假 bot（公共夹具 tools/fixtures/fake_bot.mjs）：
+ * blocks 是 Map<"x,y,z", name>，没登记的格子返回 null（未加载，⚠ 关键：不是 air）。
+ */
+function fakeBot(at, feet = { x: 0, y: 64, z: 0 }) {
+    return makeFakeBot({
+        world: at,
+        feet,
+        posOffset: 0,          // 原来这里就是整格坐标，不是格中心
+        unloaded: 'null',      // 未加载必须是 null：判 NO_DATA 靠它
+        diggable: (name) => !/^(bedrock|water|lava)$/.test(name),
+    });
 }
 
 // ---------- 1) 安全范围 ----------

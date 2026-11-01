@@ -79,11 +79,14 @@ export async function follow(bot, name, opts = {}) {
     let goalEntity = null;
     let lastVisibleAt = Date.now();
 
-    // 临时诊断（定位「连续两条跟随即 INTERRUPTED」）：进入时立刻记下中断标志与谁在跑。
-    if (bot.interrupt_code) {
-        console.log(`[follow-diag] 进入时 interrupt_code=true，action=${this?.name ?? '?'}`);
-        bot.interrupt_code = false;   // 旧动作遗留的标志不该杀新任务
-    }
+    // ★ 2026-11-01 删除（M2，07 §4 / D19）：这里原来有个"临时诊断"块，
+    // 入口发现 interrupt_code 为真就把它**清成 false**（注释写的是"旧动作遗留的标志不该杀新任务"）。
+    // 那是把**中断标志**当成可以随手清掉的杂物 —— 于是「上一条动作真的被
+    // !stop / mode 打断」这件事在下一条动作开头被抹掉，谁在打断谁再也查不出来，
+    // 而且新动作会绕过 07 §5 的保护继续驱动身体。
+    // 清标志只在唯一的地方做：`action_manager._executeAction` 开工前（它知道自己在开新动作）。
+    // 进到这里时若 interrupt_code 还是真，就应该按"已被打断"立刻返回，而不是假装没发生
+    // —— 就是下面 while 循环第一次判断走 else 分支、返回 INTERRUPTED 的那条路。
 
     bot.pathfinder.setMovements(makeMovements(bot));
     const pausedBefore = pauseGoalModes(bot);

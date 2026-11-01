@@ -14,15 +14,14 @@
  *
  * 输出：PASS <用例> / FAIL <用例> <实际>，全过退出码 0。
  */
-import Vec3 from 'vec3';
-import mcDataFactory from 'minecraft-data';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execStep } from '../src/agent/library/executor.js';
 import { saveSurfaces, closeDb3d, T } from '../src/agent/library/terrain3d.js';
+import { makeFakeBot, worldOf, realRegistry } from './fixtures/fake_bot.mjs';
 
-const REG = mcDataFactory('1.21.8');
+const REG = realRegistry();
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {
@@ -30,33 +29,17 @@ const check = (name, cond, detail = '') => {
     else { fail++; console.log(`FAIL ${name} ${detail}`); }
 };
 
-/** 假 bot：脚在 (0,64,0)，脚下是石头；goto 直接把她挪到目标列（同 exec_step_y_unit）。 */
+/** 假 bot：脚在 (0,64,0)，脚下是石头；goto 直接把她挪到目标列（公共夹具，同 exec_step_y_unit）。 */
 function makeBot() {
-    const world = new Map([['0,63,0', 'stone'], ['1,63,0', 'stone']]);
-    const bot = {
-        entity: { position: new Vec3(0.5, 64, 0.5), onGround: true, height: 1.8, eyeHeight: 1.62 },
-        inventory: { items: () => [] },
+    return makeFakeBot({
+        world: worldOf([['0,63,0', 'stone'], ['1,63,0', 'stone']]),
+        feet: { x: 0, y: 64, z: 0 },
+        posOffset: 0.5,        // 格中心
+        gotoOffset: 0.5,
+        unloaded: 'air',
         registry: REG,
-        version: '1.21.8',
-        blockAt: (v, dflt) => {
-            const fx = Math.floor(v.x), fy = Math.floor(v.y), fz = Math.floor(v.z);
-            const name = world.get(`${fx},${fy},${fz}`) ?? 'air';
-            const block = {
-                name, position: { x: fx, y: fy, z: fz },
-                diggable: name !== 'bedrock', boundingBox: name === 'air' ? null : 'block',
-                canHarvest: () => true,
-            };
-            return typeof dflt === 'function' ? dflt(block) : block;
-        },
-        setControlState: () => { },
-        equip: async () => { },
-        pathfinder: {
-            goals: {}, setMovements: () => { }, stop: () => { },
-            goto: async (goal) => { bot.__moved = true; bot.entity.position = new Vec3(goal.x + 0.5, 64, goal.z + 0.5); },
-        },
-        __moved: false,
-    };
-    return bot;
+        diggable: (name) => name !== 'bedrock',
+    });
 }
 
 /** 按 cells 建一个临时 3D 库（cells 为 null 就不建），走一步 walk→(1,63,0)。 */

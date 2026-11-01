@@ -9,6 +9,8 @@
  *   3. 有木头没圆石 → 造木斧（3 木板 + 2 木棍）
  *   4. 都没有 → 如实说「没工具也没材料」，用手砍（速度慢但能砍）
  */
+// ★ 2026-11-01（A.4 收口）：挖 / 放 这两个鼠标输入改由 atom_input_mouse 出手，本文件不再裸调 bot.dig / bot.placeBlock。
+import { holdDig, placeAgainst } from './atom_input_mouse.js';
 import { countItem } from './atom_perceive.js';
 import Vec3 from 'vec3';                 // bot.blockAt 必须传 Vec3（交接文档 §7.2 记过）
 import pf from 'mineflayer-pathfinder';  // 捡掉落物时要用 GoalNear
@@ -157,7 +159,10 @@ export async function ensureScaffold(bot, opts = {}) {
 
         try {
             // D12：挖也可能永不返回（服务端不回确认/被实体卡住），给个上限。
-            const dug = await withTimeout(bot.dig(target), 8000);
+            //
+            // ★ 2026-11-01（A.4）：挖掘本身交给 atom_input_mouse.holdDig（它自己带超时/中断/stopDigging）。
+            // 外层 withTimeout 保留 —— 它是 D12 的兜底（holdDig 内部若卡在非 Promise 路径上也不至于挂死整链）。
+            const dug = await withTimeout(holdDig(bot, target, { timeout: 8000 }), 8000);
             if (dug.timedOut) {
                 onEvent({ type: 'scaffold-dig-fail', block: target.name, message: 'dig 超时 8000ms' });
                 if (got === 0) {
@@ -166,6 +171,14 @@ export async function ensureScaffold(bot, opts = {}) {
                 break;
             }
             if (dug.error) throw dug.error;
+            // 原子如实报告挖没挖成：挖失败**不能**当成挖到了（否则素材数量虚高、后面又缺料）
+            if (!dug.value?.ok) {
+                onEvent({ type: 'scaffold-dig-fail', block: target.name, message: `dig ${dug.value?.code ?? 'FAILED'}` });
+                if (got === 0) {
+                    return { ok: false, have: countScaffold(bot), got, why: `挖 ${target.name} 失败（${dug.value?.code ?? 'FAILED'}）` };
+                }
+                break;
+            }
             got++;
             // ★ 2026-10-29 修：**挖完要走过去把掉落物捡起来**。
             //
@@ -295,7 +308,9 @@ async function tryCraft(bot, itemName, count = 1) {
                 const ground = bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z));
                 if (ground) {
                     await bot.equip(bot.inventory.items().find(i => i.name === 'crafting_table'), 'hand');
-                    await bot.placeBlock(ground, new Vec3(0, 1, 0));
+                    // 放置交给 atom_input_mouse.placeAgainst；失败就抛出，由外层 catch 落回"没有工作台"
+                    const placed = await placeAgainst(bot, ground, new Vec3(0, 1, 0));
+                    if (!placed.ok) throw new Error(placed.message);
                     await new Promise(r => setTimeout(r, 400));
                     const t2 = bot.blockAt(spot);
                     if (t2?.name === 'crafting_table') {

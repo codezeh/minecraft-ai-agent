@@ -20,77 +20,38 @@
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
-import Vec3 from 'vec3';
-import mcDataFactory from 'minecraft-data';
 import { execStep } from '../src/agent/library/executor.js';
+import { makeFakeBot, worldOf, realRegistry } from './fixtures/fake_bot.mjs';
 
 // 真注册表：executor 的水平移动分支会走 atom_move → new pf.Movements(bot)，
 // 它要求 bot.registry 完整（会读 blocksByName.chest 等一堆）。用真数据，别手搓。
-const MC_VERSION = '1.21.8';
-const REG = mcDataFactory(MC_VERSION);
+const REG = realRegistry();
 
 let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };
 const badCase = (name, actual) => { fail++; console.log(`FAIL ${name} ${actual}`); };
 
-const key = (x, y, z) => `${x},${y},${z}`;
-
 /**
- * 假 bot：站在 (0,64,0)（脚下 y=63 是实心）。
+ * 假 bot：站在 (0,64,0)（脚下 y=63 是实心），公共夹具 tools/fixtures/fake_bot.mjs。
  * - jump 不生效（无物理），stepUp 必然 STUCK
  * - pathfinder.goto 直接把位置挪到目标（让水平分支"成功"）
+ * - 未登记格子当空气（executor 按"这里是空气"判断能不能走过去）
  */
 function makeBot({ world, feetY = 64 } = {}) {
-    const dug = [];
-    const bot = {
-        entity: {
-            position: new Vec3(0, feetY, 0),
-            onGround: true,
-            height: 1.8,
-            eyeHeight: 1.62,
-        },
-        inventory: {
-            items: () => [],       // 没有垫脚方块也不影响：dy 分支判定在任何 stepUp 之前
-        },
+    return makeFakeBot({
+        world,
+        feet: { x: 0, y: feetY, z: 0 },
+        posOffset: 0,          // entity.position 是整格坐标（脚位语义测试要精确）
+        gotoOffset: 0,
+        unloaded: 'air',
         registry: REG,
-        version: MC_VERSION,
-        dig: async (b) => {
-            const p = b.position;
-            dug.push({ x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) });
-            world.set(key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), 'air');
-        },
-        blockAt: (v, dflt) => {
-            const p = v && typeof v === 'object' ? v : { x: 0, y: 0, z: 0 };
-            const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
-            const name = world.get(key(fx, fy, fz)) ?? 'air';
-            const block = {
-                name, position: { x: fx, y: fy, z: fz },
-                diggable: name !== 'bedrock',
-                boundingBox: name === 'air' ? null : 'block',
-                canHarvest: () => true,
-            };
-            if (typeof dflt === 'function') return dflt(block);
-            return block;
-        },
-        setControlState: () => { },            // 跳不起来 → stepUp 会 STUCK
-        equip: async () => { },
-        pathfinder: {
-            goals: {},
-            setMovements: () => { },
-            stop: () => { },
-            // 水平移动"成功"：直接把脚挪到目标格上方
-            goto: async (goal) => { bot.entity.position = new Vec3(goal.x, feetY, goal.z); },
-        },
-        __dug: dug,
-    };
-    return bot;
+        diggable: (name) => name !== 'bedrock',
+    });
 }
 
 function baseWorld(extra = []) {
-    const w = new Map();
-    w.set(key(0, 63, 0), 'stone');   // 她脚下
-    for (const [x, y, z, name] of extra) w.set(key(x, y, z), name);
-    return w;
+    // 她脚下那块单独放最前，extra 里同坐标的会覆盖它（和原来逐条 set 一致）
+    return worldOf([[0, 63, 0, 'stone'], ...extra]);
 }
 
 // ── 1. 真要上 2 格：必须进"垫方块"分支（旧代码 dy 少算 1，会漏）─────────

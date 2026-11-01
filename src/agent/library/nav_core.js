@@ -28,6 +28,7 @@
 import { ok, fail } from './atom_contract.js';
 import { walkTo } from './executor.js';
 import { moveTo, moveToXZ } from './atom_move.js';
+import { ensureTraced } from './trace_bus.js';
 
 /** 目标坐标是否可用。 */
 function finiteXZ(t) {
@@ -84,11 +85,16 @@ export async function goTo(bot, target, opts = {}) {
     const dest = normalizeDest(target);
     if (!dest) return fail('NO_TARGET', '目标坐标无效（需要 {x,z} 或 {kind:"point",pos:{x,y,z}}）');
 
+    // ★ 09 §2 / D10：没有任务单时，**nav_core 就是最外层**，由它写 trace_bus —— walkTo
+    // 和 execStep 都不再各包一层（那样 execStep 的事件会被记两次）。
+    // 有任务单时最外层是 `ctx.onEvent`（M5），传进来的函数已带记号，ensureTraced 原样返回。
+    const tracedOnEvent = ensureTraced(onEvent);
+
     // ---- 引擎 1：有 3D 库 → walkTo（唯一能爬台阶 / 挖穿 / 垫方块的）----
     if (mapDir) {
         const r = await walkTo(bot, { x: dest.x, z: dest.z }, {
             mapDir,
-            onEvent,
+            onEvent: tracedOnEvent,
             deadlineMs,
             arriveTol: arriveTol ?? 5,
             rescan,

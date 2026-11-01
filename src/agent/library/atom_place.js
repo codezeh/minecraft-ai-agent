@@ -11,6 +11,8 @@ import Vec3 from 'vec3';
 import { ok, fail, normalizeTarget } from './atom_contract.js';
 import { blockAt, canReach, reachDistanceTo } from './atom_perceive.js';
 import { findItem } from './atom_items.js';
+import { waitUntil } from './atom_wait.js';
+import { lookAtPoint, placeAgainst } from './atom_input_mouse.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -107,16 +109,32 @@ export async function placeBlockAt(bot, pos, item, opts = {}) {
     let placeErr = null;
     try {
         await bot.equip(itemStack, 'hand');
-        await bot.lookAt(support.position.offset(0.5, 0.5, 0.5), true);
-        await bot.placeBlock(support, faceVec);
+        // 转准星（一次输入，不校验）+ 放置（一次输入）都交给 atom_input_mouse。
+        // 分类判据保持原样：把里面的失败消息**原样抛出去**，下面的 catch 照旧按
+        // `blockUpdate` / `entity|occupied|collide` 分流，行为与改前逐字一致。
+        const looked = await lookAtPoint(bot, support.position.offset(0.5, 0.5, 0.5), { force: true });
+        if (!looked.ok) throw new Error(looked.message);
+        const pr = await placeAgainst(bot, support, faceVec);
+        if (!pr.ok) {
+            if (pr.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
+            throw new Error(pr.message);
+        }
     } catch (e) {
         // placeBlock 有时在成功的情况下也会抛（实体挡了一下），先记下来，靠复核定性
         placeErr = e;
     }
 
-    const placed = await waitForBlock(bot, v, item, verifyMs);
-    if (placed) {
+    // ★ 2026-11-01（D21）：等方块出现的循环放回 `atom_wait.waitUntil` 并把 bot 传进去——
+    // 原来的 waitForBlock 自己 while+sleep，**不查 interrupt_code**，取消后还要空等 900ms。
+    const placedRes = await waitUntil(() => {
+        const b = blockAt(bot, v);
+        return (b && b.name === item) ? true : undefined;
+    }, { timeoutMs: verifyMs, intervalMs: 80, bot });
+    if (placedRes.ok) {
         return ok({ placedBlock: item, pos: { x: v.x, y: v.y, z: v.z }, support: supportName });
+    }
+    if (placedRes.code === 'INTERRUPTED') {
+        return fail('INTERRUPTED', '被取消了', { pos: { x: v.x, y: v.y, z: v.z } });
     }
 
     if (placeErr) {
@@ -140,14 +158,4 @@ export async function placeBlockAt(bot, pos, item, opts = {}) {
     return fail('TIMEOUT', `放了但没变成 ${item}（现在是 ${now?.name ?? '空'}）`, {
         occupantNow: now?.name ?? null, pos: { x: v.x, y: v.y, z: v.z },
     });
-}
-
-async function waitForBlock(bot, v, item, ms) {
-    const t0 = Date.now();
-    while (Date.now() - t0 < ms) {
-        const b = blockAt(bot, v);
-        if (b && b.name === item) return true;
-        await sleep(80);
-    }
-    return false;
 }

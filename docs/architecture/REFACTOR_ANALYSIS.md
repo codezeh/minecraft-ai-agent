@@ -601,12 +601,187 @@ async function skillName(bot, goal, context = {}) {
 ### Phase A: 原子收拢（2026-11-01 新增）
 **目标**: 所有按键、点击、斜杠命令只从 `atom_input_*.js` 出去（[`01_primitives.md`](01_primitives.md)）
 
-- [ ] A.1 `atom_input_move` + `atom_read`；executor 潜水、`atom_climb`、`atom_pillar` 改调 `holdKey`（顺手修 D16）
-- [ ] A.2 `atom_input_mouse`；dig / place / use 改走 `holdDig` / `placeAgainst` / `useOnBlock`（顺手修 D21、D22）
-- [ ] A.3 `atom_input_misc` + 带白名单的 `command()`；`skills.js` 的斜杠命令改调它
-- [ ] A.4 preflight 扫描 A1 列的 API，清空豁免名单
+- [x] A.1 `atom_input_move` + `atom_read`；executor 潜水、`atom_climb`、`atom_pillar` 改调 `holdKey`（顺手修 D16）
+  - 2026-11-01：`atom_input_move`（holdKey / pressKey / setSprint / setSneak / releaseAll）与 `atom_read`（14 个读取，
+    不抛异常、读不到给 null/[]）。executor 潜水循环、`atom_climb.climbUp/climbDown`、`atom_pillar`、`atom_tunnel`
+    全部改调 `holdKey`。**D16 已修**：中断不再靠谓词返回 undefined 拖到超时，`holdKey` 每 ~100ms 查
+    `interrupt_code` 并在 `finally` 松键。回归 `tools/atom_input_unit.mjs`（19 用例，含「爬梯中断 219ms 内返回且 jump 已松」）。
+- [x] A.2 `atom_input_mouse`；dig / place / use 改走 `holdDig` / `placeAgainst` / `useOnBlock`（顺手修 D21、D22）
+  - 2026-11-01：`atom_input_mouse`（holdDig / stopDig / placeAgainst / useOnBlock / useOnEntity / useHeld /
+    releaseUse / attackOnce / setLook / lookAtPoint / swing；`lookAt` 转出 `atom_look`，不重复实现）。
+    **D21 已修**：`waitGone` / `waitForBlock` 改 `waitUntil({ bot })`，中断即返回。
+    **D22 已修**：`atom_use` 的本地 `waitFor` 删除，门 / 床 / 作物三处都区分「中断」与「世界没变」。
+- [x] A.3 `atom_input_misc` + 带白名单的 `command()`；`skills.js` 的斜杠命令改调它
+  - 2026-11-01：白名单**只有一张表** —— `permissions.SLASH_COMMANDS`（`permissions.js:217`；
+    `:242` 的 `SLASH_WHITELIST` 是同一对象的别名，不是副本）。每条形如
+    `{ cmd, level: 'owner' | 'trusted', cheat?: true }`；作弊类（`tp` / `setblock` / `fill` / `gamemode`）
+    标 `level: 'owner'` + `cheat: true`。
+    `atom_input_misc.command()` **只问这一张表**（`slashVerdict`），该文件内**没有**第二份 SAFE/CHEAT 清单。
+    调用侧仍要求显式 `{ cheat: true }` —— 那是调用者的自我约束，与表里的等级判定是两层**防御**，
+    不是两份**真相**。
+    > ⚠️ 早期设计写的是"两层：先问 M1 的 SLASH_WHITELIST、再问本文件的 SAFE/CHEAT"，
+    > 已按 captain 2026-11-01 决策**并成一张表**。以本行为准。
+    > 理由：两个真相是本项目反复出问题的根源（mode 列表三套、垫脚块四处、站立判据两份、y 语义混用）。
+    `skills.js` 的 9 处斜杠命令全部改 `command()`，2 处 `setControlState('forward')` 改 `pressKey`。
+- [x] A.4 preflight 扫描 A1 列的 API，清空豁免名单
 
-**交付物**: 44 个原子；`setControlState` 只出现在 `atom_input_*.js`
+  **A.4 豁免台账（2026-11-01 逐条核对真实命中，已排除注释）** —— 「5 条规则 0 命中」**不等于**「豁免已清空」，
+  下面每一条都是「仍允许从 atom_input_* 之外发出输入」的窗口，Phase R / 对应里程碑必须逐条销账：
+
+  | 豁免 | 真实命中 | 为什么留 | 销账里程碑 |
+  |---|---|---|---|
+  | `library/atom_boat.js` | setControlState ×9（176/183/249/250/251/252/258/356/362）、`/ride` ×2（208/380） | 零调用方（已 grep 确认 src 里没人 import）；Paper 1.21.8 上船过水走不通 | **Phase R 直接删除**（2026-11-01 决定，**不再是「冻结」**）：载具能力已由 `atom_input_misc.mountEntity/dismount` 承接，删掉不丢功能。**不要再去维护这个文件** |
+  | `modes.js` | setControlState ×1（:43 jump）；另有 `bot.look*` ×4（296/298/311/313；294/310 是 `smoothLook.*`，另一种 API，不在此列） | t3 收口后仍在，属 M2 控制层（自保跳跃/扭头） | **M2 残项**（t3 已收口，本轮不重开）：Phase R 前收敛到 `holdKey` / `atom_input_mouse.lookAt` |
+  | `tasks/**`（= `src/agent/tasks/`） | 斜杠命令 ×45（tasks.js / cooking_tasks.js / construction_tasks.js） | 上游评测任务（mindcraft 原版烹饪/建造评测），**不在陪玩运行路径** | 长期豁免，但只限这三个文件；新文件不许以「反正在 tasks 下」为由加进来 |
+  | `library/skills.js` | 鼠标输入 ×14（attack 732；dig 908/1057；placeBlock 1257；activateBlock 1858/2352/2368/2473/2486/2511/2930；activateItem 2842/2927；stopDigging 1933） | 运行路径（采集/建造/开关门），量最大、风险最高 | **Phase R**（按前缀重排时一起搬）。注意：这 14 处是**既定的直发行为**，Phase A 没有让它们变得更差，窗口期可接受 |
+  | ~~`library/tool_prep.js`~~ | ~~×2（dig 160；placeBlock 298）~~ | **已于 2026-11-01 本轮改掉**：改调 `holdDig`（保留 D12 的 withTimeout 兜底，并按 ActionResult 判成败）与 `placeAgainst` | ✅ 已销账 |
+  | ~~`library/atom_attack.js`~~ | ~~×1（bot.attack 143）~~ | **已于 2026-11-01 本轮改掉**：`bareAttack` 改调 `atom_input_mouse.attackOnce` + `lookAtPoint`（挥击与扭头同一个出口） | ✅ 已销账 |
+  | `agent.js` | ×1（`this.bot.stopDigging()` 342） | 停任务时的收尾清理；agent.js 属 M1 | M1 或 Phase R：改调 `stopDig` |
+  | ~~`library/skill_clear.js`、`library/scaffold_cleanup.js`~~ | **0**（当初把注释里的提及也算进去了） | — | ✅ 2026-11-01 已从 `allow` 删除（空豁免比没有更坏：让人以为「确实违规但我们原谅了」） |
+
+  **扫描覆盖缺口（必须记下，别当成「没发现」）**
+
+  - ✅ **2026-11-01 已把 `bot.look*` 纳入扫描**（`mouse-input-owner` 的 pattern 补齐 lookAt / look）。
+    纳入后 `bot.look*` 的真实命中（已排除注释，全仓共 **21** 处）：
+    `skills.js` 7、`modes.js` 4、`vision_interpreter.js` 3、`atom_boat.js` 2、
+    `atom_input_mouse.js` 2 与 `atom_look.js` 1（**这两个是正当的实现方**）、
+    `atom_move.js` 1（507，与 `atom_look.lookAt` 重复实现）、`task_follow.js` 1（384）。
+    也就是说：**归属方之外仍有 18 处**；其中 `skills.js`(7) 与 `atom_boat.js`(2) 本来就在既有豁免内，
+    新暴露出来的是 `modes.js` 4 + `vision_interpreter.js` 3 + `atom_move.js` 1 + `task_follow.js` 1 = **9 处**，
+    已逐条具名写进 `allow` 并注明归属。
+    另：`atom_attack.js` 本轮改调 `lookAtPoint` 后自己不再命中。
+    **这句话现在仍然不成立**（「look 只从 atom_input_mouse 出去」尚未做到），但**从今往后违规会被扫出来** ——
+    t5 请按「具名豁免 + 命中数」判定，不要按「0 命中」判定 A1 的 look 一半已完成。
+    规则自验：临时摘掉 `atom_move.js` 的豁免，preflight 立刻报 `✗ mouse-input-owner 1 处`（已实测）。
+  - `atom_input_inventory`（selectSlot / clickWindow / closeWindow / dropSlot）**尚未建**，但**当前没有绕过口**：
+    全仓 `clickWindow` 0 处、`setQuickBarSlot` 0 处；`atom_container` 只用 `bot.closeWindow`、
+    `atom_items` 只用 `bot.equip`（两者都不在 A1 清单里）。这是「缺原子」而不是「有后门」，
+    但 A1 的「物品栏」那一格确实是空的。
+
+  - 2026-11-01：先给扫描器加**跳过注释 / 字符串**的判据（否则 `atom_boat` 文档注释里提到的 setControlState 也算
+    命中，只能靠给注释加豁免让门禁变绿 —— 名单立刻变脏）。五条规则：control-state-owner / mouse-input-owner /
+    slash-command-owner / chat-via-openchat / rcon-password-literal，**命中即判失败**（`--report-api` 退回只报告）。
+    当前全部 0 处。豁免名单里只留**具名**残余，每条写了理由与归属：`atom_boat`（冻结、无人 import）、
+    `modes.js`（M2 / t3）、`tasks/**`（开发用任务脚本）、以及 `skills.js` / `tool_prep` / `skill_clear` /
+    `scaffold_cleanup` / `atom_attack` 的鼠标输入存量（Phase R 迁）。迁一个删一行。
+
+**交付物**: 输入原子 4 个文件共 36 个（`atom_input_move` 5 + `atom_input_mouse` 11 + `atom_input_misc` 6 + `atom_read` 14）；
+`atom_input_inventory` 的 4 个（selectSlot / clickSlot / closeWindow / dropSlot）尚未建，`closeWindow` 现由 `atom_container.closeContainer` 提供。
+`setControlState` 只出现在 `atom_input_move.js`（`atom_boat` 冻结、`modes.js` 属 M2 —— 见 A.4 的具名残余）。
+
+---
+
+### 里程碑 M1–M3 统一验收（2026-11-01，t5）
+**目标**: 按 [`09_crosscut.md §5`](09_crosscut.md)（测试）/ §6（版本）对 M1 安全、M2 控制、M3 原子收拢做统一验收
+
+> **数据溯源（污染留档，不隐藏）**：`verify-run1` 因 `control` 收尾时误踢了本轮的 bot
+> （`19:14:43 kick ma75354 "M2 bench finished"`，它自己的 bot 是 `ma70482`），bot 断线后 13 行是
+> 传送失败/SKIP 的假数据，**已作废并归档**为 `tmp/bench/2026-11-01-move-actions.verify-run1-killed.jsonl`
+> （不参与任何统计）；正式数据来自 run2。`control` 自己的 424 行归档为 `...control-m2.jsonl`。
+
+- [x] 1 离线全量 `node tools/unit_all.mjs` → **19/19 脚本通过、1 跳过、exit 0**
+  - 用例数：atom_input_unit 19 / control_reasons_unit 35 / permissions_unit 64 / server_props_unit 29 /
+    test_tunnel 39 / test_escape 25 / mindserver_local_only_unit 16 / atom_stand_unit 7 / atom_stuck_detect_unit 7 /
+    detect_trapped_unit 6 / exec_landing_unit 6 / nav_core_unit 6 / scaffold_tracker_unit 6 / atom_classify_unit 5 /
+    task_pickup_unit 4 / terrain3d_unit 4 / exec_step_y_unit 3 / exec_step_dig_unit 3 / tool_prep_timeout_unit 3
+  - `needsRealData` 三条都实测：默认 → `⏭ verify_y_semantics` + exit 0；只筛真机脚本
+    （`node tools/unit_all.mjs verify_y_semantics`）→ `0/0 通过、1 跳过`、exit 0（**不假红**）；
+    `--real` 没被当过滤器。
+- [x] 1b `node tools/unit_all.mjs --real` → **20/20 通过**（补上一直跳过的真机量化）。`verify_y_semantics`：
+  真实地形库 `bots/deepseek/map/terrain3d.db` 抽 2000 条，**面位(y) 命中 2000/2000 = 100.0%**，
+  **脚位(y+1) 命中 134/2000 = 6.7%** —— 与 1.1 结论一致，y 语义（面位）落地成立。
+- [x] 2 `preflight` 三种模式全 exit 0，5 条 API 规则各 **0 命中**（默认 / `--strict-api` / `--report-api`）
+  - 94/94 模块导入；新模块申报 5 个全部已批准；规则表 18 条自洽；错误码 31 个合法；裸常量 11 处（基线 14）
+- [x] 3 真机 `node tools/atom_all.mjs` → **18/18 通过**，每项都有真实用例数，**无 `NO_CASES_RAN`**
+  - ⚠️ **atom_all 的用例计数系统性 +1**（低危，本轮未修）：18 个脚本结尾都打印一行
+    `xxx 原子：N PASS / M FAIL`，而 `tools/atom_all.mjs:71` 用 `/\bPASS\b/g` 计数，把这行汇总里的
+    `PASS` 也算成一条用例。所以显示数 = 真实数 + 1。以下括号前是**真实用例数**：
+    atom_move 10、atom_dig 14、atom_place 10、atom_items 10、atom_container 13、atom_use 13、
+    atom_attack 10、atom_stand 17、atom_drops 13、atom_look 21、atom_safe 12、atom_query 22、
+    atom_wait 14、atom_move_landing 9、atom_pickup_parts 16、vine_physics_test 7、
+    skill_collect 22、skill_clear 11 —— 共 **244 条真实用例、0 FAIL**（显示总数 262 = 244 + 18 行汇总）。
+    这不影响「有没有真跑用例」的判据（PASS>0 仍成立），但**别把显示数当用例数引用**。
+  - **`skill_collect`：真实 22/22、0 FAIL**（显示 23）。这是 A.4 里 `tool_prep.js:165`
+    （`bot.dig` → `holdDig`，顺手修「挖失败当挖到」）在**采集路径**上的唯一覆盖
+    （`task_collect.js:12` import → `:89 ensureScaffold`），覆盖成立。
+  - **`atom_attack`：真实 10/10、0 FAIL**（显示 11）。覆盖 `atom_attack.js:13` 改走
+    `atom_input_mouse.attackOnce` + `:143 lookAtPoint` + `:145 attackOnce`（挥击与扭头同一出口），覆盖成立。
+- [x] 4 真机 `node tools/bench_move_actions.mjs 5` → **49/55（89.1%）**，失败**全部 NO_PATH ×6**，无新问题
+  - 基线 `261/297 = 87.9%`（同口径 5 轮期望 ≈ 48.4/55）→ 本轮 49/55，**持平略好**
+  - 逐场景（本轮 n/5 + 中位；基线中位取自 27 轮）；「动作直方图」是本轮 5 轮合计：
+
+    | 场景 | 本轮 | 中位 ms | 范围 ms | wantHit | 动作直方图 | 基线中位 | 基线通过 |
+    |---|---|---|---|---|---|---|---|
+    | walk-flat | 5/5 | 7643 | 7415–7728 | 5/5 | walk 55 | 6248 | 27/27 |
+    | jump-up1 | 5/5 | 6571 | 6405–6694 | 5/5 | walk 110 | 5515 | 27/27 |
+    | pillar-up2 | 5/5 | 9533 | 7992–11091 | 5/5 | walk 105, jump 5 | 8050 | 27/27 |
+    | down1 | 5/5 | 6764 | 6479–6868 | 5/5 | walk 105, down 5 | 6059 | 27/27 |
+    | down5 | **0/5** | 2809 | 2586–2817 | 5/5 | walk 40 | 2218 | 0/27（NO_PATH） |
+    | dig-through | 4/5 | 5502 | 5053–18137 | 5/5 | walk 40, dig 5 | 5497 | 21/27（NO_PATH×6） |
+    | **digdown** | **5/5** | **14991** | 12502–15146 | **5/5** | walk 110, jump 5, down 5 | （旧场地不可比） | —— |
+    | climb-ladder | 5/5 | 1922 | 1719–2050 | 5/5 | walk 40, dig 5, climb 5 | 1532 | 27/27 |
+    | climb-vine | 5/5 | 1922 | 1704–2028 | 5/5 | walk 40, dig 5, climb 5 | 1614 | 27/27 |
+    | water-cross | 5/5 | 33959 | 16435–66530 | 5/5 | walk 95, down 5 | 24707 | 27/27 |
+    | gap-bridge | 5/5 | 7677 | 7330–12461 | 5/5 | walk 95, down 5 | 7039 | 24/27（NO_DATA×1, TIMEOUT×2） |
+
+  - **digdown 单列：场景已修为台子横贯全场 `AZ±26`（`bench_move_actions.mjs:174`），本轮是首次有效数据，
+    不与旧基线混算。`wantHit = 5/5（true）`，直方图里 `dig 5 / down 5 / jump 5` 都在 —— 场景封住了。**
+    基线旧场地的 digdown 27/27 是在「她会从南北绕过去」的场地上量的，只作参考不作对照。
+  - **失败归类（四类口径）**：① `down5` 5/5 NO_PATH —— `maxDrop=4` 已知边界，基线同样 0/27；
+    ② `dig-through` 1/5 NO_PATH（r1 = 18137ms）—— 基线本就 21/27（78%），本轮 4/5 = 80%，同水位；
+    ③ `gap-bridge` 0 失败（5/5，基线 24/27，**好于基线**）；④ **其它类：0 条**。
+  - **climb-ladder 1906–2050ms，落在「约 1.5–2s」区间内**（基线中位 1532、范围 1371–1840）——
+    比中位慢约 25%，见下两条口径。
+  - **基线口径警告（必须与数字一起读）**：`baseline-m2.jsonl` 是 `appendFileSync` **跨多次运行累积**的混合物
+    （297 行 = 27 轮，来自今晚多个不同代码状态），**不是一次干净的会话基线**。证据：`climb-ladder` 27 行里
+    只有 r1–r3 三行是 21840/21947/21825ms（守卫收窄前），其余 24 行 1371–1840ms → **双峰**：
+    中位 1532、平均 3862、max 21947。同病：`pillar-up2` 8 行 >12s（max 34976）、
+    `gap-bridge` 2 行 TIMEOUT（60.9/63.1s）、`dig-through` r1 有 5 行 14–17.9s。
+    **因此对比一律用中位数**；用平均数会得出「改后快 10 倍」的假结论。
+  - **全场景一致偏慢 8%–37%（中位对比）待同环境 A/B 定量**：动作直方图、wantHit、失败结构三项与基线完全一致，
+    却每个场景都慢一点（walk-flat +22%、jump-up1 +19%、down1 +12%、pillar-up2 +18%、climb-ladder +25%、
+    climb-vine +19%、gap-bridge +9%、water-cross +37% 且方差极大 16–66s）。「每个场景都慢、但行为和失败结构
+    一点没变」更像**服务器状态/负载**（同一台测试服连续跑了数小时，沉积实体与 TPS 漂移），不是行为回归 ——
+    但**没有同会话 A/B 就只是推测**，记入「仍需真机确认」。
+- [x] 5 安全检查
+  - RCON 口令：`server/server.properties:46`、`server-test/server.properties:46` 各 32 字符随机值；
+    `server-ip=127.0.0.1` 两处（`:54`）；`enable-rcon=true` 保留；测试服 `level-type=flat`、`server-port=25566`。
+  - **口令泄露扫描**：当前口令全仓仅出现在 `server*.properties` 自身；`*.log` 里 **0 次**
+    （`logs/`、`mindcraft/run-live*.log`、服务器控制台日志都查了）。残留 `localdev` 的 10 个文件
+    全是注释与 `docs/legacy` 历史说明，非代码字面量 → 与 preflight `rcon-password-literal` 0 命中一致。
+  - 口令**真的生效**（不是只改了文件）：用 `tools/rcon.mjs` 走 `resolveRconCreds` 实连 25576 成功返回
+    `There are N of a max of 4 players online`，说明服务器已重启并接受新口令。
+  - `openChat` 拦 `/`：`agent.js:519` 起，安检在「换行变空格」**之前**（防 `/op` 藏第二行）；
+    `sendSlashCommand`（`:568`）是唯一出口且也过 `inspectChatText`。单测：`permissions_unit.mjs:97`（表驱动）。
+  - 非 owner 的 `!newAction` 被拒：`permissions_unit.mjs:131` 走真 `executeCommand`，断言返回以 `[权限]` 开头
+    且点名 `!newAction`；`:183` 另测「没配 owner 时陌生人 `!newAction` 仍不行」；
+    `commandLevel` 未登记命令仍默认主人级（`:74`）。
+- [x] 6 `npm test` 接线：`package.json` 加 `"test": "node tools/unit_all.mjs"`（= 不带 `--real` 的离线全量），
+  实跑 **exit 0**（19/19 + 1 跳过）。
+
+**未覆盖项 / 仍需真机确认**
+
+1. **「全场景一致偏慢」需要一次同环境 A/B**（同一会话内先跑基线代码 3 轮、再跑现码 3 轮），否则不能排除环境。
+   本轮只能给「失败结构与动作直方图未变」这个定性结论。
+2. A.1 的 `bot.look*` 一半**不在扫描覆盖内**（`mouse-input-owner` 的 pattern 不含 look）：
+   实际调用方 `modes.js` 6 / `vision_interpreter.js` 3 / `skills.js` 2 / `task_follow.js` 1 /
+   `atom_move.lookAt` / `atom_boat` 2 —— 「look 只从 `atom_input_mouse` 出去」**当前不成立**，只是没被扫出来。
+   不能按「0 命中」判这一半完成。
+3. `atom_input_inventory` 的 4 个原子（selectSlot / clickSlot / closeWindow / dropSlot）**尚未建**
+   （当前无绕过口：`clickWindow` 0 处、`setQuickBarSlot` 0 处）。
+4. `modes.js:43` 仍有 1 处 `setControlState('jump')`（M2 收尾或 Phase R 销账）。
+5. `atom_all.mjs:71` 的 PASS 计数 +1（见第 3 条内注），修法：只数行首 `^\s*PASS\b`，或先剔除 `N PASS / M FAIL` 汇总行。
+6. M2 的 `control.js` 只有离线覆盖（`control_reasons_unit` 35 例）；真机部分（僵尸动作 10 秒自杀并重新拉起、
+   死亡捡单、任务单 deadline）**尚未在真机上触发过**，需一次人工真机演练。
+
+**文档-代码不一致（只列不改，由 captain 统一收口）**
+
+1. 本文件 `:615`（A.3）写「白名单**两层**：先问 M1 的 `SLASH_WHITELIST`，再问本文件的 SAFE(`ride`)/CHEAT(`tp`…)」，
+   与最终实现**相反** —— 现在是**一张表** `permissions.SLASH_COMMANDS`（`permissions.js:217`；
+   `:242 SLASH_WHITELIST = SLASH_COMMANDS` 是同一对象别名），`atom_input_misc.js` 只 `import { slashVerdict }` 问表，
+   文件里已无 SAFE/CHEAT 清单。按现文档读会以为有两个真相。
+2. ~~本文件 `:608`（A.1）写 `atom_input_unit`「18 用例」，实跑 **19 用例**~~ → **已修（captain 2026-11-01 改为 19）**。
+3. ~~t3 报 `control_reasons_unit` 34 条，`unit_all` 实跑 **35 用例**~~ → **已核实 35 为准**（t3 报告少报 1）。
 
 ---
 

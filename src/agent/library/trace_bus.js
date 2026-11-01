@@ -46,6 +46,44 @@ export function collectSilent(e) {
     push(type || 'event', rest);
 }
 
+/**
+ * 谁写 trace_bus 的记号（09 §2「trace_bus 只在最外层写一次」，D10 的修法）。
+ *
+ * 为什么要记号而不是"约定调用方只包一层"：`walkTo` 会把自己包好的 `onEvent`
+ * 传给 `execStep`，而 `execStep` 原来**自己也包了一层**，于是 execStep 发出的
+ * 每个事件被记两次（09 §2，D10 的根因）。层数还会变，靠人记"谁包过了"必然再错一次。
+ * 记号挂在函数对象上：包过的函数原样往下传，内层看到记号就不再包。
+ */
+const TRACED = Symbol('trace_bus.traced');
+
+/**
+ * 把 `fn` 包装成"事件进 trace_bus，同时也交给 fn"的版本。
+ *
+ * **幂等**：已经包过的函数原样返回 —— 这是"只写一次"的机械保证。
+ * `meta` 里的字段平铺进事件（09 §2：`jobId` / `skill` 在任务单里跑时自动带上，M5 的 ctx 用）。
+ *
+ * @param {Function} [fn] 调用方自己的 onEvent
+ * @param {{jobId?:string, skill?:string}} [meta]
+ * @returns {Function} 带记号的 onEvent
+ */
+export function ensureTraced(fn, meta = null) {
+    if (typeof fn === 'function' && fn[TRACED]) return fn;
+    const inner = typeof fn === 'function' ? fn : () => {};
+    const wrapped = (e) => {
+        try {
+            collectSilent(meta && e && typeof e === 'object' ? { ...e, ...meta } : e);
+        } catch { /* 留档失败不影响主链路 */ }
+        try { inner(e); } catch { /* 调用方回调异常不影响主链路 */ }
+    };
+    wrapped[TRACED] = true;
+    return wrapped;
+}
+
+/** 这个函数是不是已经包过（测试与诊断用）。 */
+export function isTraced(fn) {
+    return !!(typeof fn === 'function' && fn[TRACED]);
+}
+
 /** 需要同时保留控制台日志的地方用它（行为与原来的 console.log 一致，另加留档）。 */
 export function collect(e) {
     collectSilent(e);

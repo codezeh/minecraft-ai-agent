@@ -6,8 +6,9 @@
  * 本来就能离线跑。没有统一入口的话，要么漏跑，要么各跑各的。
  *
  * 用法：
- *   node tools/unit_all.mjs            # 跑全部
+ *   node tools/unit_all.mjs            # 跑全部（**跳过**要真机数据的，见 NEEDS_REAL_DATA）
  *   node tools/unit_all.mjs terrain    # 只跑文件名含 "terrain" 的
+ *   node tools/unit_all.mjs --real     # 连要真机数据的也跑（本机得有 bots/<名字>/map 里的库）
  *
  * 约定：每个脚本自己打印 `PASS/FAIL`，全过退出码 0。
  * 这里额外检查"至少跑出一条用例"，防止脚本中途静默退出被当成通过
@@ -22,25 +23,48 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 /** 离线回归脚本（新增离线测试后记得加进来） */
 const UNITS = [
     'atom_classify_unit',        // 原子纯函数化 + 地标缓存按 bot 隔离
+    'atom_input_unit',           // Phase A：输入原子唯一出口 + A3/A7（中断/松键）+ 白名单
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
     'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）
+    'control_reasons_unit',      // M2：停的原因 → 任务单去哪 + D17/D18/D19/D10（控制层）
     'detect_trapped_unit',       // 被困判据（面积/封顶/出口/地表）
     'exec_landing_unit',         // D14 落点检查真的执行（岩浆面拦，水面照走）
     'exec_step_dig_unit',        // D2 挖邻列 / 液体不假成功
     'exec_step_y_unit',          // D1 y 语义（脚位 vs 面位）
     'mindserver_local_only_unit', // socket 只放本机连接（第一轮安全项）
     'nav_core_unit',             // 导航入口的坐标归一与前置
+    'permissions_unit',          // M1：按发言人分级 + 斜杠命令白名单（提示词注入改不了等级）
     'scaffold_tracker_unit',     // D7 只清自己放的方块
+    'server_props_unit',         // M1：server.properties 读取 + RCON 凭据按端口认领（不写死密码）
     'task_pickup_unit',          // 掉落物回收搬到复合层后语义不变
     'terrain3d_unit',            // 连接复用 / fail 表 TTL / prune
     'test_escape',               // skill_escape 规划（假 bot，纯读世界）
     'test_tunnel',               // 掘进安全检查（含 D15 液体地板）
     'tool_prep_timeout_unit',    // D12 goto/dig/craft 有上限
-    'verify_y_semantics',        // 在真机录的地图库上量化 y 语义
+    'verify_y_semantics',        // 在真机录的地图库上量化 y 语义（needsRealData）
 ];
 
-const filter = process.argv.slice(2);
-const list = filter.length ? UNITS.filter((n) => filter.some((f) => n.includes(f))) : UNITS;
+/**
+ * 需要真机数据的脚本 —— 默认**跳过**，加 `--real` 才跑（见 docs/architecture/09_crosscut.md §5.2）。
+ *
+ * 为什么按名字单独标：这类脚本读 `bots/<名字>/map/` 里真机录的库，
+ * 换台机器 / 清过 bots 目录就跑不动。混在默认集合里，
+ * 要么每次都得手动摘掉，要么一红就以为是代码坏了。
+ */
+const NEEDS_REAL_DATA = new Set([
+    'verify_y_semantics',        // 读真机地形库 terrain3d.db（没有那个库无法量化 y 语义）
+]);
+
+const argv = process.argv.slice(2);
+const withReal = argv.includes('--real');
+const filter = argv.filter((a) => !a.startsWith('--'));
+const picked = filter.length ? UNITS.filter((n) => filter.some((f) => n.includes(f))) : UNITS;
+const list = picked.filter((n) => withReal || !NEEDS_REAL_DATA.has(n));
+const skipped = picked.filter((n) => !withReal && NEEDS_REAL_DATA.has(n));
+
+if (skipped.length) {
+    console.log(`跳过 ${skipped.length} 个需要真机数据的脚本（加 --real 才跑）：${skipped.join(', ')}`);
+}
 
 let failed = 0;
 const results = [];
@@ -54,7 +78,9 @@ for (const name of list) {
         });
         const printed = String(out);
         process.stdout.write(printed);
-        const passCount = (printed.match(/\bPASS\b/g) || []).length;
+        // ★ 2026-11-01 修：只数**行首**的 PASS（同 atom_all）。汇总行里也含 "PASS" 字样，
+        // 用词边界匹配会把汇总行算成一条用例，显示数系统性虚高。
+        const passCount = (printed.match(/^\s*PASS\s/mg) || []).length;
         if (passCount === 0) {
             console.log(`  ✗ ${name} 一条 PASS 都没有 —— 视为失败`);
             results.push({ name, ok: false, code: 'NO_CASES_RAN' });
@@ -74,7 +100,10 @@ console.log('\n================ 离线单测总览 ================');
 for (const r of results) {
     console.log(`  ${r.ok ? '✅' : '❌'} ${r.name}${r.ok ? `  (${r.cases} 个用例)` : `  (exit ${r.code})`}`);
 }
-console.log(`  ${results.length - failed}/${results.length} 个脚本通过`);
+for (const name of skipped) {
+    console.log(`  ⏭ ${name}  (需要真机数据，加 --real 跑)`);
+}
+console.log(`  ${results.length - failed}/${results.length} 个脚本通过${skipped.length ? `，${skipped.length} 个跳过` : ''}`);
 console.log('  （这些都不需要服务器；需要真机的另有 tools/atom_all.mjs）');
 console.log('============================================');
 process.exit(failed === 0 ? 0 : 1);

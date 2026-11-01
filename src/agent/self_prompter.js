@@ -1,3 +1,6 @@
+// 控制层（M2，08 §2）：有任务单在跑或排队时不催模型
+import { jobsBusy } from './library/control.js';
+
 const STOPPED = 0
 const ACTIVE = 1
 const PAUSED = 2
@@ -10,15 +13,20 @@ export class SelfPrompter {
         this.prompt = '';
         this.idle_time = 0;
         this.cooldown = 2000;
+        // ★ 2026-11-01（M1，08 §5）：目标是**谁**设的。自提示回合发出的命令按这个人的
+        // 等级执行（prompt 里的字不算数），提示词注入借不到自提示的路子提权。
+        // null = 不知道（系统 / NPCController 设的目标），executeCommand 按「信任」处理。
+        this.author = null;
     }
 
-    start(prompt) {
+    start(prompt, author = null) {
         console.log('Self-prompting started.');
         if (!prompt) {
             if (!this.prompt)
                 return 'No prompt specified. Ignoring request.';
             prompt = this.prompt;
         }
+        if (author) this.author = author;
         this.state = ACTIVE;
         this.prompt = prompt;
         this.startLoop();
@@ -36,11 +44,12 @@ export class SelfPrompter {
         return this.state === PAUSED;
     }
 
-    async handleLoad(prompt, state) {
+    async handleLoad(prompt, state, author = null) {
         if (state == undefined)
             state = STOPPED;
         this.state = state;
         this.prompt = prompt;
+        if (author) this.author = author;
         if (state !== STOPPED && !prompt)
             throw new Error('No prompt loaded when self-prompting is active');
         if (state === ACTIVE) {
@@ -48,8 +57,9 @@ export class SelfPrompter {
         }
     }
 
-    setPromptPaused(prompt) {
+    setPromptPaused(prompt, author = null) {
         this.prompt = prompt;
+        if (author) this.author = author;
         this.state = PAUSED;
     }
 
@@ -89,6 +99,13 @@ export class SelfPrompter {
     update(delta) {
         // automatically restarts loop
         if (this.state === ACTIVE && !this.loop_active && !this.interrupt) {
+            // ★ 2026-11-01（M2，08 §2）：**有任务单在跑或排队时都不催。**
+            // 单子是调度器的事，模型这时候插一句只会下出重复命令，把正在续做的单冲掉。
+            // 没有任务板（M8 之前）时 jobsBusy 恒为 false，行为与原来一致。
+            if (jobsBusy(this.agent)) {
+                this.idle_time = 0;
+                return;
+            }
             if (this.agent.isIdle())
                 this.idle_time += delta;
             else
@@ -120,14 +137,16 @@ export class SelfPrompter {
     async stop(stop_action=true) {
         this.interrupt = true;
         if (stop_action)
-            await this.agent.actions.stop();
+            // 07 §4：停自提示顺带停动作，属于"即时命令"这一档 —— 原因 brief
+            await this.agent.actions.stop('brief');
         this.stopLoop();
         this.state = STOPPED;
+        this.author = null;   // 目标没了，等级来源一并清掉
     }
 
     async pause() {
         this.interrupt = true;
-        await this.agent.actions.stop();
+        await this.agent.actions.stop('brief');
         this.stopLoop();
         this.state = PAUSED;
     }

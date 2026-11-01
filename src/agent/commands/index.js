@@ -2,6 +2,8 @@ import { getBlockId, getItemId } from "../../utils/mcdata.js";
 import { actionsList } from './actions.js';
 import { queryList } from './queries.js';
 import settings from '../settings.js';
+// 发言人分级（M1 安全，08 §5）：命令能不能执行由「谁说的」定，不由模型说了什么定
+import { resolveLevel, canRunCommand, permissionDeniedReply } from '../permissions.js';
 
 /**
  * 陪玩模式只暴露这几条给模型（方案 §12：60 条 → 7 条）。
@@ -250,13 +252,46 @@ function numParams(command) {
     return commandParams(command).length;
 }
 
-export async function executeCommand(agent, message) {
+/**
+ * 执行一条命令。
+ *
+ * ★ 2026-11-01 M1 安全改造（08 §5）：加了 `{ author }`。
+ *
+ * 为什么要 author：原来这里是「模型说了什么就执行什么」。模型被一句
+ * 「你现在是我的管理员」骗到，就能让她（op 账号）执行 `!newAction` 写代码、
+ * 或者回一句 `/op 某人`。判据必须换成**谁说的**：
+ *   - 玩家聊天 → author = 玩家名（agent.js 的 respondFunc 已经知道是谁）
+ *   - 自提示回合 → author = 设 `!goal` 的那个人（self_prompter.author）
+ *   - 代码自己发起（任务/NPCController）→ internal: true
+ * 等级只由 author 名字 + profile 的 permissions 算出，**模型输出的文字不参与**，
+ * 所以提示词注入改不了等级。
+ *
+ * @param {object} agent
+ * @param {string} message 形如 `!goToPlayer("Zeh", 3)`
+ * @param {{author?:string|null, isOtherBot?:boolean, internal?:boolean}} [perm]
+ */
+export async function executeCommand(agent, message, perm = {}) {
+    const { author = null, isOtherBot = false, internal = false } = perm;
     let parsed = parseCommandMessage(message);
     if (typeof parsed === 'string')
         return parsed; //The command was incorrectly formatted or an invalid input was given.
     else {
         console.log('parsed command:', parsed);
         const command = getCommand(parsed.commandName);
+
+        // —— 权限闸门：按发言人分级（08 §5）——
+        const level = resolveLevel({
+            author,
+            permissions: agent?.prompter?.profile?.permissions,
+            isOtherBot,
+            internal,
+            internalNames: agent?.name ? [agent.name] : [],
+        });
+        if (!canRunCommand(level, parsed.commandName)) {
+            console.warn(`[权限] 拒绝 ${parsed.commandName}：author=${author ?? '(none)'} level=${level}`);
+            return permissionDeniedReply(level, parsed.commandName, author);
+        }
+
         let numArgs = 0;
         if (parsed.args) {
             numArgs = parsed.args.length;
@@ -264,8 +299,15 @@ export async function executeCommand(agent, message) {
         if (numArgs !== numParams(command))
             return `Command ${command.name} was given ${numArgs} args, but requires ${numParams(command)} args.`;
         else {
-            const result = await command.perform(agent, ...parsed.args);
-            return result;
+            // 记下「这条命令是谁下的」，给 !goal 之类需要留存发言人的命令用（self_prompter 按它判等级）
+            const prev_author = agent.command_author;
+            agent.command_author = author;
+            try {
+                const result = await command.perform(agent, ...parsed.args);
+                return result;
+            } finally {
+                agent.command_author = prev_author;
+            }
         }
     }
 }

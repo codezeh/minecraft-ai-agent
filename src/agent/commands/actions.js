@@ -21,7 +21,15 @@ function frontBlockPos(bot) {
 }
 
 
-function runAsAction (actionFn, resume = false, timeout = -1) {
+/**
+ * 把一个技能包成 `!命令`。
+ *
+ * @param {Function} actionFn
+ * @param {boolean} [resume]
+ * @param {number} [timeout] 分钟；-1 = 不设（07 §8 要求任务单自己带，命令维持原样）
+ * @param {string|null} [stopReason] 这条命令打断上一条时用的原因（07 §4）；不给 = brief
+ */
+function runAsAction (actionFn, resume = false, timeout = -1, stopReason = null) {
     let actionLabel = null;  // Will be set on first use
     
     const wrappedAction = async function (agent, ...args) {
@@ -42,7 +50,11 @@ function runAsAction (actionFn, resume = false, timeout = -1) {
         const actionFnWithAgent = async () => {
             result = await actionFn(agent, ...args);
         };
-        const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, { timeout, resume });
+        const code_return = await agent.actions.runAction(`action:${actionLabel}`, actionFnWithAgent, {
+            timeout,
+            resume,
+            ...(stopReason ? { stopReason } : {}),
+        });
         // 被打断（新指令 / mode 抢占）时原来直接 return undefined，
         // 模型只看到空结果，就会说「好嘞」然后什么都没发生。至少给它一行事实。
         if (code_return.interrupted && !code_return.timedout) {
@@ -84,7 +96,8 @@ export const actionsList = [
         name: '!stop',
         description: 'Force stop all actions and commands that are currently executing.',
         perform: async function (agent) {
-            await agent.actions.stop();
+            // 07 §4：玩家喊停 → 被打断的单 `paused` + 暂停自动领单（不然她停一秒又去领下一张）
+            await agent.actions.stop('player');
             agent.clearBotLogs();
             agent.actions.cancelResume();
             agent.bot.emit('idle');
@@ -543,11 +556,12 @@ export const actionsList = [
     },
     {
         name: '!stay',
-        description: 'Stay in the current location no matter what. Pauses all modes.',
+        description: 'Stay in the current location. Pauses idle modes; self-preservation keeps running.',
         params: {'type': { type: 'int', description: 'The number of seconds to stay. -1 for forever.', domain: [-1, Number.MAX_SAFE_INTEGER] }},
+        // 07 §4：!stay 与 !stop 同档 —— 玩家让站住，被打断的单 paused，自动领单也暂停
         perform: runAsAction(async (agent, seconds) => {
             await skills.stay(agent.bot, seconds);
-        })
+        }, false, -1, 'player')
     },
     {
         name: '!setMode',
@@ -573,11 +587,15 @@ export const actionsList = [
             'selfPrompt': { type: 'string', description: 'The goal prompt.' },
         },
         perform: async function (agent, prompt) {
+            // ★ 2026-11-01（M1，08 §5）：记下这个目标是**谁**设的。
+            // 自提示回合里模型发出的命令，等级按这个人算（executeCommand 的 author 从这里来），
+            // 所以「先骗她设个目标、再靠自提示循环执行」这条提权路走不通。
+            const goal_author = agent.command_author ?? null;
             if (convoManager.inConversation()) {
-                agent.self_prompter.setPromptPaused(prompt);
+                agent.self_prompter.setPromptPaused(prompt, goal_author);
             }
             else {
-                agent.self_prompter.start(prompt);
+                agent.self_prompter.start(prompt, goal_author);
             }
         }
     },

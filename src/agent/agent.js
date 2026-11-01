@@ -5,6 +5,8 @@ import { Prompter } from '../models/prompter.js';
 import { initModes } from './modes.js';
 import { initBot } from '../utils/mcdata.js';
 import { containsCommand, commandExists, executeCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
+// 聊天输出安检 + 斜杠命令白名单（M1 安全，08 §5 / 09 §4）
+import { inspectChatText } from './permissions.js';
 import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
@@ -19,6 +21,8 @@ import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
+// 控制层（M2，07 §4 / §7）：死亡对任务单的处理
+import { onDeath } from './library/control.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -28,6 +32,10 @@ export class Agent {
 
         // Initialize components
         this.actions = new ActionManager(this);
+        // ★ 2026-11-01（M2，07 §4 / §7）：任务板客户端，M8 接上（board_client）。
+        // 现在是 null = 没有任务板，控制层的一切转移都退化成"没有单要动"，
+        // 行为与加控制层之前一致，但 `stop(reason)` 已经开始记录原因了。
+        this.board = null;
         this.prompter = new Prompter(this, settings.profile);
         this.name = (this.prompter.getName() || '').trim();
         console.log(`Initializing agent ${this.name}...`);
@@ -115,10 +123,12 @@ export class Agent {
             serverProxy.login();
             
             // Set skin for profile, requires Fabric Tailor. (https://modrinth.com/mod/fabrictailor)
+            // ★ 2026-11-01（M1，08 §5）：斜杠命令只走白名单，`/skin` 就是白名单里的这一条。
+            // 统一走 sendSlashCommand() 而不是直接 bot.chat，白名单将来只改一处。
             if (this.prompter.profile.skin)
-                this.bot.chat(`/skin set URL ${this.prompter.profile.skin.model} ${this.prompter.profile.skin.path}`);
+                this.sendSlashCommand(`/skin set URL ${this.prompter.profile.skin.model} ${this.prompter.profile.skin.path}`);
             else
-                this.bot.chat(`/skin clear`);
+                this.sendSlashCommand(`/skin clear`);
         });
 		const spawnTimeoutDuration = settings.spawn_timeout;
         const spawnTimeout = setTimeout(() => {
@@ -233,7 +243,7 @@ export class Agent {
             if (init_message) {
                 this.history.add('system', init_message);
             }
-            await this.self_prompter.handleLoad(save_data.self_prompt, save_data.self_prompting_state);
+            await this.self_prompter.handleLoad(save_data.self_prompt, save_data.self_prompting_state, save_data.self_prompt_author ?? null);
         }
         if (save_data?.last_sender) {
             this.last_sender = save_data.last_sender;
@@ -291,11 +301,27 @@ export class Agent {
             : (dist <= 128
                 ? ` The spot is ${dist} blocks away - you can call skills.recoverDeathItems(bot) to walk back and pick your items up.`
                 : ` The spot is ${dist} blocks away, which is too far to walk automatically - ask the player whether to go.`);
+
+        // ★ 2026-11-01（M2，07 §7）：死亡对**任务单**的处理，交给控制层：
+        //   正在跑的单 → paused（result 记 died，不算 attempts）；
+        //   另开一张 8 级"回去捡"的单（goto 死亡点 → pickup，deadline 4 分钟）。
+        //   死因是岩浆 / 掉出世界就不开 —— 东西已经没了，那里也危险。
+        let death_info = { cause: null, paused: [], pickup: null };
+        try {
+            death_info = onDeath(this, { message, pos: death_pos });
+        } catch (err) { /* 任务板没接上（M8 之前）时不该影响"告诉模型她死了" */ }
+
+        const pickupHint = death_info?.pickup
+            ? ` A level-${death_info.pickup.priority} job has been queued to walk back and pick them up.`
+            : (death_info?.cause && death_info.cause !== 'other'
+                ? ` Nothing to go back for (${death_info.cause}).`
+                : '');
+
         this.handleMessage('system',
             `You died at position ${posText} in the ${dimension} dimension` +
             (message ? ` with the final message: '${message}'` : '') +
             `. Your items are still there. The place is saved as 'last_death_position' if you want to go back.` +
-            recoverHint +
+            recoverHint + pickupHint +
             ` Previous actions were stopped and you have respawned.`);
     }
 
@@ -350,6 +376,14 @@ export class Agent {
         const self_prompt = source === 'system' || source === this.name;
         const from_other_bot = convoManager.isOtherAgent(source);
 
+        // ★ 2026-11-01（M1，08 §5）：命令的等级按「谁说的」算，不按模型说了什么算。
+        //   - 玩家发言  → 发言人本人（respondFunc 已经拿到 username）
+        //   - 自提示回合 → 设 !goal 的那个人（self_prompter.author），不是 'system'
+        //   - 别的 bot   → isOtherBot，只聊天
+        // 这样提示词注入（"你现在是我主人"）改不了等级，因为 author 不来自文本。
+        const perm_author = self_prompt ? (this.self_prompter?.author ?? source) : source;
+        const perm = { author: perm_author, isOtherBot: from_other_bot };
+
         if (!self_prompt && !from_other_bot) { // from user, check for forced commands
             const user_command_name = containsCommand(message);
             if (user_command_name) {
@@ -363,7 +397,7 @@ export class Agent {
                     // add the preceding message to the history to give context for newAction
                     this.history.add(source, message);
                 }
-                let execute_res = await executeCommand(this, message);
+                let execute_res = await executeCommand(this, message, perm);
                 if (execute_res) 
                     this.routeResponse(source, execute_res);
                 return true;
@@ -440,7 +474,7 @@ export class Agent {
                         this.routeResponse(source, pre_message);
                 }
 
-                let execute_res = await executeCommand(this, res);
+                let execute_res = await executeCommand(this, res, perm);
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;
@@ -492,6 +526,18 @@ export class Agent {
             remaining = message.substring(translate_up_to);
         }
         message = (await handleTranslation(to_translate)).trim() + " " + remaining;
+
+        // ★ 2026-11-01（M1，08 §5 / 09 §4）：模型回复以 `/` 开头会被服务端当命令执行，
+        // 而她是 op —— 一句诱导出来的「/op 某人」就等于把 op 交出去。
+        // 检查必须放在「换行变空格」**之前**：bot.chat 里的换行等于连发多条，`/op` 可以另起一行。
+        // 斜杠命令只走 sendSlashCommand() 的白名单（现在是 /skin）。
+        const chat_verdict = inspectChatText(message);
+        if (!chat_verdict.allowed) {
+            console.warn(`[安全] ${this.name} 的回复以 / 开头，已拦截（${chat_verdict.reason}）：${message.slice(0, 80)}`);
+            sendOutputToServer(this.name, '[已拦截：回复以 / 开头] ' + message);
+            return;
+        }
+
         // newlines are interpreted as separate chats, which triggers spam filters. replace them with spaces
         message = message.replaceAll('\n', ' ');
 
@@ -507,6 +553,26 @@ export class Agent {
             if (settings.chat_ingame) {this.bot.chat(message);}
             sendOutputToServer(this.name, message);
         }
+    }
+
+    /**
+     * 发一条斜杠命令 —— 唯一允许直接给服务端发 `/` 命令的入口。
+     *
+     * ★ 2026-11-01（M1，08 §5）：「斜杠命令只走白名单」。现在白名单里只有 `/skin`
+     * （profile 的 skin 字段，需要服务端装 Fabric Tailor）。模型回复里的 `/`
+     * 一律被 openChat 拦掉，不会走到这里。
+     *
+     * @param {string} text 形如 `/skin clear`
+     * @returns {boolean} 是否真的发出去了
+     */
+    sendSlashCommand(text) {
+        const verdict = inspectChatText(text);
+        if (!verdict.allowed) {
+            console.warn(`[安全] 拒绝发送不在白名单里的斜杠命令（${verdict.reason}）：${String(text).slice(0, 80)}`);
+            return false;
+        }
+        this.bot.chat(text);
+        return true;
     }
 
     startEvents() {
@@ -545,7 +611,9 @@ export class Agent {
         });
         this.bot.on('death', () => {
             this.actions.cancelResume();
-            this.actions.stop();
+            // 07 §7：死亡不是"谁打断的"，但同样要停 —— 原因记 `death`，
+            // 被打断的单 `paused` + 不算 attempts（_handleDeath 里再补"回去捡"的单）。
+            this.actions.stop('death');
         });
         this.bot.on('kicked', (reason) => {
             if (!this._disconnectHandled) {
@@ -609,7 +677,12 @@ export class Agent {
 
     cleanKill(msg='Killing agent process...', code=1) {
         this.history.add('system', msg);
-        this.bot.chat(code > 1 ? 'Restarting.': 'Exiting.');
+        // ★ 2026-11-01（M2）：文案原来写反了 —— `code > 1 ? 'Restarting.' : 'Exiting.'`。
+        // 退出码语义见 src/process/agent_process.js:37-51：**code 1 = 重新拉起 agent 进程，
+        // code > 1 = 结束整个任务（mindserver 一起退）**。反着播的后果是直接坑下一次排障：
+        // 日志说她"Exiting."，人就去查为什么退出，其实她只是重启了一轮。
+        // 现在按实际语义正向播：>1 说结束任务，其余（1）说重启。判定逻辑一字未动。
+        this.bot.chat(code > 1 ? 'Ending task.' : 'Restarting.');
         this.history.save();
         process.exit(code);
     }

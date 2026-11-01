@@ -166,8 +166,12 @@ bot.once('spawn', async () => {
             name: 'digdown', want: ['digdown', 'dig', 'down'],
             build: async () => {
                 await reset();
-                // 在起点与终点之间铺一层厚 3 的实心台，终点在台下
-                await fillSafe(RC, AX - 4, G, AZ - 6, AX + 12, G + 3, AZ + 6, 'stone');
+                // ★ 2026-11-01：台子必须**横贯整个场地**（AZ±26），否则她会从南北两侧绕过去。
+                //   上一版只铺 AZ-6..AZ+6，实测动作直方图是纯 {"walk":32}（wantHit=false）——
+                //   她压根没往下挖，在台上走过去了。dig-through 的墙当初也犯过同一个错
+                //   （墙只有 ±12 宽，于是"通过"了但动作里一个 dig 都没有）。
+                //   教训：只要场景想逼出某个 action，障碍物就必须封死**所有**绕行方向。
+                await fillSafe(RC, AX - 4, G, AZ - 26, AX + 12, G + 3, AZ + 26, 'stone');
                 await RC(`fill ${AX + 8} ${G + 1} ${AZ - 3} ${AX + 8} ${G + 3} ${AZ + 3} air`);
             },
             start: { dx: -10, dz: 0 }, dest: { dx: 16, dz: 0 },
@@ -227,6 +231,18 @@ bot.once('spawn', async () => {
     for (const sc of scenarios) {
         await sc.build();
         await sleep(700);
+
+        // ★ 2026-11-01：**每个场景都要补一次补给**，不能只在开场给一次。
+        //
+        // 实测（t4 报告）：前面场景把 64 块 dirt 用完（pad/pillar 要垫方块），
+        // 后面的场景就开始以 `NO_ITEM 没有可垫脚的方块` 失败 ——
+        // 那是"背包空了"，不是"路径/按键坏了"，会被误判成回归。
+        // 同理补镐（dig-through / digdown 要挖）。
+        await RC(`gamemode creative ${NAME}`);
+        await RC(`give ${NAME} dirt 64`);
+        await RC(`give ${NAME} diamond_pickaxe 1`);
+        await RC(`gamemode survival ${NAME}`);
+        await sleep(300);
 
         // ---- 干跑规划：证明这条路线真的需要这些 action ----
         //

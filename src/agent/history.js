@@ -132,6 +132,10 @@ export class History {
                 turns: this.turns,
                 self_prompting_state: this.agent.self_prompter.state,
                 self_prompt: this.agent.self_prompter.isStopped() ? null : this.agent.self_prompter.prompt,
+                // ★ 2026-11-01：目标是谁设的也要存 —— 自提示发出的命令按这个人定级（08 §5）。
+                // 不存的话重启后等级会退回「信任」，等于升了权。
+                self_prompt_author: this.agent.self_prompter.isStopped()
+                    ? null : (this.agent.self_prompter.author ?? null),
                 taskStart: this.agent.task.taskStartTime,
                 last_sender: this.agent.last_sender,
                 // 结构化的"记住的地点"（!rememberHere 存的坐标）。

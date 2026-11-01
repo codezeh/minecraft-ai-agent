@@ -13,6 +13,8 @@ import { ok, fail, normalizeTarget } from './atom_contract.js';
 import { blockAt, reachDistanceTo } from './atom_perceive.js';
 import { GOAL_LOOK_AT_DEFAULT_REACH } from '../rules/rules.runtime.js';
 import { openContainer, containerKindOf } from './atom_container.js';
+import { waitUntil } from './atom_wait.js';
+import { holdDig, useOnBlock } from './atom_input_mouse.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -70,28 +72,34 @@ async function useDoor(bot, v, block, timeout) {
     const before = getOpenState(block);
     const t0 = Date.now();
 
-    try {
-        await Promise.race([
-            bot.activateBlock(block),
-            sleep(timeout).then(() => { throw new Error('activate-timeout'); }),
-        ]);
-    } catch (e) {
-        const msg = String(e?.message ?? e);
-        if (/timeout/.test(msg)) return fail('TIMEOUT', `右键 ${Date.now() - t0}ms 没反应`, { block: block.name, costMs: Date.now() - t0 });
-        return fail('INTERNAL', msg, { error: msg, block: block.name });
+    // ★ 2026-11-01（Phase A.2）：「右键方块」这一个输入交给 atom_input_mouse.useOnBlock。
+    // 错误分类保持不变（超时 / 其它异常各自一个码）。
+    const used = await useOnBlock(bot, block, { timeout });
+    if (!used.ok) {
+        if (used.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
+        if (used.code === 'TIMEOUT') {
+            return fail('TIMEOUT', `右键 ${Date.now() - t0}ms 没反应`, { block: block.name, costMs: Date.now() - t0 });
+        }
+        return fail('INTERNAL', used.message, { error: used.data?.error ?? used.message, block: block.name });
     }
 
     // 后置：读世界看 open 属性是否翻转（服务端可能拒绝开门，比如被红石锁住）
-    const after = await waitFor(bot, () => {
+    //
+    // ★ 2026-11-01（D22）：等状态变化改用 `atom_wait.waitUntil` 并把 bot 传进去。
+    // 原来的本地 waitFor 在中断时返回 null，调用方把它当成"没变化"→ 报 BLOCKED
+    // 说"门被红石锁住了"。取消就是取消，不该伪装成世界变了。
+    const afterRes = await waitUntil(() => {
         const b = blockAt(bot, v);
         if (!b) return 'gone';
         const now = getOpenState(b);
         return now !== before ? now : null;
-    }, 1200);
+    }, { timeoutMs: 1200, intervalMs: 80, bot });
 
-    if (after === null) {
+    if (afterRes.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了', { block: block.name });
+    if (!afterRes.ok) {
         return fail('BLOCKED', `${block.name} 没打开（可能被挡住/红石锁住）`, { block: block.name });
     }
+    const after = afterRes.data.value;
     return ok({ useKind: 'door', pos: { x: v.x, y: v.y, z: v.z }, state: after, costMs: Date.now() - t0 });
 }
 
@@ -125,12 +133,19 @@ async function useBed(bot, v, block, timeout) {
         return fail('BLOCKED', msg.slice(0, 80), { error: msg, block: block.name });
     }
 
-    const after = await waitFor(bot, () => (!!bot.isSleeping !== wasSleeping ? !!bot.isSleeping : null), 1500);
-    if (after === null) {
+    // 同 useDoor：D22 —— 中断要报 INTERRUPTED，不能伪装成"床没反应"。
+    const bedRes = await waitUntil(
+        () => (!!bot.isSleeping !== wasSleeping ? !!bot.isSleeping : null),
+        { timeoutMs: 1500, intervalMs: 80, bot },
+    );
+    if (bedRes.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了', { block: block.name });
+    if (!bedRes.ok) {
         return fail('BLOCKED', `床的状态没变化（${wasSleeping ? '没能起床' : '没能躺下'}）`, { block: block.name });
     }
+    const after = bedRes.data.value;
     return ok({ useKind: 'bed', pos: { x: v.x, y: v.y, z: v.z }, state: after ? 'sleeping' : 'awake', costMs: Date.now() - t0 });
 }
+
 
 // ---------------------------------------------------------------------------
 // 农作物（只收成熟的）
@@ -145,25 +160,23 @@ async function harvestCrop(bot, v, block, timeout) {
     }
 
     const t0 = Date.now();
-    try {
-        await Promise.race([
-            bot.dig(block, true),
-            sleep(timeout).then(() => { throw new Error('harvest-timeout'); }),
-        ]);
-    } catch (e) {
-        const msg = String(e?.message ?? e);
-        if (/timeout/.test(msg)) return fail('TIMEOUT', `收 ${Date.now() - t0}ms 没完`, { block: block.name, costMs: Date.now() - t0 });
-        return fail('INTERNAL', msg, { error: msg, block: block.name });
+    // 收作物 = 对着那格按住左键 → atom_input_mouse.holdDig（超时/中断都在里面收尾）
+    const dug = await holdDig(bot, block, { timeout });
+    if (!dug.ok) {
+        if (dug.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了', { block: block.name });
+        if (dug.code === 'TIMEOUT') return fail('TIMEOUT', `收 ${Date.now() - t0}ms 没完`, { block: block.name, costMs: Date.now() - t0 });
+        return fail('INTERNAL', dug.message, { error: dug.data?.error ?? dug.message, block: block.name });
     }
 
     // 后置：该格应该变空（作物被收走）或 age 归零（部分作物）
-    const after = await waitFor(bot, () => {
+    const cropRes = await waitUntil(() => {
         const b = blockAt(bot, v);
         if (!b) return 'gone';
         if (b.name === 'air' || b.name === 'cave_air') return 'gone';
         return null;
-    }, 1200);
-    if (after === null) {
+    }, { timeoutMs: 1200, intervalMs: 80, bot });
+    if (cropRes.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了', { block: block.name });
+    if (!cropRes.ok) {
         return fail('TIMEOUT', `${block.name} 收了但还在`, { block: block.name });
     }
     return ok({ useKind: 'crop', pos: { x: v.x, y: v.y, z: v.z }, state: 'harvested', costMs: Date.now() - t0 });
@@ -172,18 +185,8 @@ async function harvestCrop(bot, v, block, timeout) {
 // ---------------------------------------------------------------------------
 
 /**
- * 轮询等待 predicate 返回「有效值」；超时返回 null。
+ * 「等某个状态变化」现在统一走 `atom_wait.waitUntil`（传 bot → 中断返回 INTERRUPTED）。
  *
- * 注意：predicate 返回 **undefined 表示还没完成**，其它任何值（含 false、0、''）都算完成。
- * 2026-10-24 踩过：门关闭时 open=false，旧实现用 `r !== false` 过滤，导致「关上」永远判成超时。
+ * 原来这里有一个本地 waitFor：中断时返回 null，调用方当成「没变化」→ 报 BLOCKED
+ * 说「门被红石锁住了」。取消就是取消，不该伪装成世界没变（D22）。
  */
-async function waitFor(bot, predicate, ms) {
-    const t0 = Date.now();
-    while (Date.now() - t0 < ms) {
-        if (bot.interrupt_code) return null;
-        const r = predicate();
-        if (r !== undefined && r !== null) return r;
-        await sleep(80);
-    }
-    return null;
-}

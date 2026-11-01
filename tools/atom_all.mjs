@@ -68,7 +68,12 @@ for (const name of list) {
         const printed = String(out);
         process.stdout.write(printed);
         // ★ 防假绿：一个用例都没 PASS 就说明脚本中途放弃（最常见是连不上服务器后静默退出）
-        const passCount = (printed.match(/\bPASS\b/g) || []).length;
+        // ★ 2026-11-01 修：只数**行首**的 PASS，不要数汇总行里的。
+        // 每个测试脚本结尾都会打印 `xxx 原子：12 PASS / 0 FAIL` 这样一行汇总，
+        // 原来的词边界匹配把这一行也算成一条用例 → 显示数系统性 +1（18 个脚本 = +18）。
+        // 实测后果：atom_all 显示 262 条、真实 244 条；"skill_collect 23/23" 实为 22/22。
+        // 凡引用过显示数的地方都被虚高抬了一次 —— 这是测量说谎，比慢 8% 更该先修。
+        const passCount = (printed.match(/^\s*PASS\s/mg) || []).length;
         if (passCount === 0) {
             console.log(`  ✗ ${name} 一条 PASS 都没有 —— 视为失败（可能没连上服务器）`);
             results.push({ name, ok: false, code: 'NO_CASES_RAN' });

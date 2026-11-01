@@ -9,6 +9,8 @@
  *   前置断言（实体有效性/距离）、后置校验（目标死了吗）、错误码归一。
  */
 import { ok, fail, normalizeTarget } from './atom_contract.js';
+// ★ 2026-11-01（A.4）：挥击是鼠标输入，只许从 atom_input_mouse 出手。本文件不再裸调 bot.attack。
+import { attackOnce, lookAtPoint } from './atom_input_mouse.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -136,11 +138,11 @@ async function bareAttack(bot, entity, timeout) {
     while (Date.now() - t0 < timeout && entity.isValid && !bot.interrupt_code) {
         const d = bot.entity.position.distanceTo(entity.position);
         if (d > MELEE_REACH) await sleep(120);
-        try {
-            await bot.lookAt(entity.position.offset(0, entity.height ?? 1, 0), true);
-        } catch { /* ignore */ }
+        // 扭头 + 挥击都走输入原子（同一个出口，别在这里另开一份）
+        const eye = entity.position.offset(0, entity.height ?? 1, 0);
+        await lookAtPoint(bot, { x: eye.x, y: eye.y, z: eye.z }, { force: true });
         if (bot.entity.position.distanceTo(entity.position) <= MELEE_REACH) {
-            bot.attack(entity, true);
+            await attackOnce(bot, entity);
         }
         await sleep(600);
     }

@@ -27,11 +27,12 @@ import { digBlock, isDiggable, canDigWithInventory } from './atom_dig.js';
 import { climbUp, climbDown, isClimbable } from './atom_climb.js';
 import { scanSphere, stats3d, columnSurfaces, T } from './terrain3d.js';
 import { plan3D } from './path_3d.js';
-import { collectSilent as tracePush } from './trace_bus.js';
+import { ensureTraced } from './trace_bus.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
 import { movedEnough, realMove } from './atom_stuck_detect.js';
 import { pillarUpOnce } from './atom_pillar.js';
 import { pauseGoalModes, restoreGoalModes } from './task_modes.js';
+import { holdKey, releaseAll } from './atom_input_move.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -88,11 +89,11 @@ const IS_LIQUID = /^(water|kelp|seagrass|bubble_column|lava)$/;
 export async function execStep(bot, step, opts = {}) {
     // mapDir：只给下面的落点检查用（D14）；不传就跳过那段检查
     const { onEvent: userOnEvent = () => { }, mapDir = null } = opts;
-    // 同 walkTo：替身转发，保证原子层事件也进 trace_bus
-    const onEvent = (e) => {
-        try { tracePush(e); } catch { /* ignore */ }
-        try { userOnEvent(e); } catch { /* ignore */ }
-    };
+    // ★ 09 §2 / D10：**trace_bus 只在最外层写一次**。
+    // 原来这里自己包一层，而 walkTo 已经把它包好的 onEvent 传下来了 ——
+    // 于是 execStep 发出的每个事件都被记两次。现在只调 `ensureTraced()`：
+    // 调用方（walkTo / nav_core / ctx.onEvent）包过就原样复用，没包过才在这里补一层。
+    const onEvent = ensureTraced(userOnEvent);
     const p = bot.entity.position;
     // ★ D1 修复（2026-10-31）：**y 语义统一为「目标格的脚位」**。
     //
@@ -417,17 +418,26 @@ export async function execStep(bot, step, opts = {}) {
                 // 于是每轮都 break 掉、报 `HEIGHT_MISS 该降到 y=58，实际停在 y=62`。
                 const needDrop = Math.floor(bot.entity.position.y) - targetFeetY;
                 const diveMs = Math.min(30000, Math.max(4000, needDrop * 1000 + 2500));
-                try { bot.setControlState('sneak', true); } catch { /* ignore */ }
-                try { bot.setControlState('forward', false); } catch { /* ignore */ }
-                const t0 = Date.now();
-                while (Date.now() - t0 < diveMs) {
-                    await sleep(200);
-                    const ny = Math.floor(bot.entity.position.y);
-                    if (ny <= targetFeetY) break;                       // 降到目标附近
-                    const nb = blockAt(bot, Math.floor(bot.entity.position.x), ny - 1, Math.floor(bot.entity.position.z));
-                    if (nb && !IS_LIQUID.test(nb.name) && !IS_AIR.has(nb.name)) break;   // 着底
-                }
-                try { bot.setControlState('sneak', false); } catch { /* ignore */ }
+                // ★ 2026-11-01（Phase A.1）：按键改由 `atom_input_move` 出手。
+                //
+                // 改之前这里直接 setControlState('sneak'/'forward')，而且这个最长 30 秒的
+                // 下沉循环**一次都不查 interrupt_code**（REFACTOR_ANALYSIS §3.3 第 6 条，
+                // 与 D16 同源：喊停了还在按着键往下沉，等沉到底才回来）。
+                // holdKey 每 200ms 查一次中断、退出时在 finally 里松键 —— 两个问题一起没了。
+                //
+                // 判据与原来逐字对应：降到目标高度、或者着底（下方既不是液体也不是空气）。
+                await releaseAll(bot, ['forward']);          // pathfinder 可能留下 forward
+                const dove = await holdKey(bot, 'sneak', {
+                    until: () => {
+                        const ny = Math.floor(bot.entity.position.y);
+                        if (ny <= targetFeetY) return true;                       // 降到目标附近
+                        const nb = blockAt(bot, Math.floor(bot.entity.position.x), ny - 1, Math.floor(bot.entity.position.z));
+                        return !!(nb && !IS_LIQUID.test(nb.name) && !IS_AIR.has(nb.name));   // 着底
+                    },
+                    timeout: diveMs,
+                    intervalMs: 200,
+                });
+                if (!dove.ok && dove.code === 'INTERRUPTED') return dove;
                 await sleep(150);
                 // 如果沉到底了但还差高度，说明下方是实心：挖下去继续
                 const afterDive = Math.floor(bot.entity.position.y);
@@ -568,10 +578,11 @@ export async function walkTo(bot, dest, opts = {}) {
 
     // ★ 2026-10-30：包装一层，让所有事件同时进 trace_bus（前端诊断面板用）。
     // 这样无论调用方自己传了什么 onEvent，事件都不会再"出了进程就没了"。
-    const onEvent = (e) => {
-        try { tracePush(e); } catch { /* 留档失败不影响导航 */ }
-        try { userOnEvent(e); } catch { /* 调用方回调异常不影响导航 */ }
-    };
+    //
+    // ★ 2026-11-01（09 §2 / D10）：**walkTo 是最外层**（谁调它谁就不再包），
+    //   它包过的 onEvent 原样传给 execStep / climb / stepUp，内层只调不包，
+    //   所以每个事件只记一次。幂等靠 `ensureTraced` 的函数记号保证。
+    const onEvent = ensureTraced(userOnEvent);
 
     const t0 = Date.now();
     if (!mapDir) return fail('INTERNAL', 'walkTo 需要 mapDir');

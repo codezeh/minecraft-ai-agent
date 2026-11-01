@@ -8,7 +8,9 @@
 // 用法: node tools/inv.mjs [玩家名]
 import { rcon } from './rcon.mjs';
 
-const R = (c) => rcon(c, { port: 25575, password: 'localdev' });
+// 密码不再写死（原来写死成 localdev，已随仓库泄露）：
+// 走 ./rcon.mjs → src/agent/library/rcon_client.js → server.properties 按端口认领（09 §4 M1）。
+const R = (c) => rcon(c, { port: 25575 });
 const who = process.argv[2] ?? 'deepseek';
 
 const raw = String(await R(`data get entity ${who} Inventory`));

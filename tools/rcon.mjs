@@ -1,42 +1,25 @@
-// 最小 RCON 客户端（测试服 25576）
-import net from 'node:net';
+// 最小 RCON 客户端（tools 侧的薄包装）。
+//
+// ★ 2026-11-01 M1 安全改造（09 §4）：
+//   原来这里写死端口 25576 + 密码 localdev —— 那个密码已经推到 GitHub。
+//   现在密码和端口一律走 `src/agent/library/rcon_client.js` 的 resolveRconCreds()：
+//     显式参数 → 环境变量（RCON_PASSWORD / RCON_PORT）→ <项目根>/server*/server.properties
+//   按端口认领配置（25575→主服、25576→测试服），所以下面的默认端口仍是 25576（测试服），
+//   但密码是从 server-test/server.properties 读的，不再有硬编码值。
+//   想临时换目标：MC_SERVER_DIR=... 或 RCON_PASSWORD=... / RCON_PORT=...
+import { rcon as _rcon } from '../src/agent/library/rcon_client.js';
 
-export function rcon(command, { host = '127.0.0.1', port = 25576, password = 'localdev', timeout = 8000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const sock = net.connect(port, host);
-    const t = setTimeout(() => { sock.destroy(); reject(new Error('rcon timeout')); }, timeout);
-    let buf = Buffer.alloc(0);
-    let authed = false;
-    const send = (id, type, body) => {
-      const b = Buffer.from(body, 'utf8');
-      const out = Buffer.alloc(4 + 4 + 4 + b.length + 2);
-      out.writeInt32LE(4 + 4 + b.length + 2, 0);
-      out.writeInt32LE(id, 4);
-      out.writeInt32LE(type, 8);
-      b.copy(out, 12);
-      sock.write(out);
-    };
-    sock.on('connect', () => send(1, 3, password));
-    sock.on('data', (d) => {
-      buf = Buffer.concat([buf, d]);
-      if (buf.length < 4) return;
-      const len = buf.readInt32LE(0);
-      if (buf.length < 4 + len) return;
-      const id = buf.readInt32LE(4);
-      const body = buf.slice(12, 4 + len - 2).toString('utf8');
-      buf = buf.slice(4 + len);
-      if (!authed) {
-        if (id === -1) { clearTimeout(t); sock.destroy(); return reject(new Error('rcon auth failed')); }
-        authed = true;
-        send(2, 2, command);
-      } else {
-        clearTimeout(t);
-        sock.end();
-        resolve(body);
-      }
-    });
-    sock.on('error', (e) => { clearTimeout(t); reject(e); });
-  });
+export { resolveRconCreds } from '../src/agent/library/rcon_client.js';
+
+/**
+ * 执行一条 RCON 命令。
+ * 默认连**测试服**（25576）—— tools 里的真机脚本按 09 §5.3 只在 25566 上跑。
+ *
+ * @param {string} command 不带斜杠
+ * @param {{host?:string, port?:number, password?:string, timeout?:number}} [opts]
+ */
+export function rcon(command, { host = '127.0.0.1', port = Number(process.env.RCON_PORT) || 25576, timeout = 8000, ...rest } = {}) {
+    return _rcon(command, { host, port, timeout, ...rest });
 }
 
 // 批量执行，逐条返回

@@ -27,6 +27,7 @@ import { ok, fail } from './atom_contract.js';
 import { blockAt } from './atom_perceive.js';
 import { digBlock, isDiggable } from './atom_dig.js';
 import { moveToXZ } from './atom_move.js';
+import { holdKey, releaseAll } from './atom_input_move.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -252,13 +253,13 @@ export async function tunnelStep(bot, dir, opts = {}) {
             { tol: 0.9, timeout: walkTimeout });
         if (dyUp > 0) {
             // 往上：按住 jump，等高度到位（最多 2.5 秒）
-            try { bot.setControlState('jump', true); } catch { /* ignore */ }
-            const tw = Date.now();
-            while (Date.now() - tw < 2500) {
-                await sleep(100);
-                if (Math.floor(bot.entity.position.y) >= chk.to.y) break;
-            }
-            try { bot.setControlState('jump', false); } catch { /* ignore */ }
+            // 2026-11-01（Phase A.1）：按键走 atom_input_move，顺带获得"等待中查中断"。
+            const up = await holdKey(bot, 'jump', {
+                until: () => Math.floor(bot.entity.position.y) >= chk.to.y,
+                timeout: 2500,
+                intervalMs: 100,
+            });
+            if (!up.ok && up.code === 'INTERRUPTED') return up;
             await sleep(120);
             // 还不到位就再朝目标挪一点（贴边跳上去）
             if (Math.floor(bot.entity.position.y) < chk.to.y) {
@@ -267,12 +268,13 @@ export async function tunnelStep(bot, dir, opts = {}) {
             }
         } else {
             // 往下：清空按键让重力带下去
-            try { bot.clearControlStates(); } catch { /* ignore */ }
-            const tw = Date.now();
-            while (Date.now() - tw < 2000) {
-                await sleep(100);
-                if (Math.floor(bot.entity.position.y) <= chk.to.y) break;
-            }
+            await releaseAll(bot);
+            const down = await holdKey(bot, [], {
+                until: () => Math.floor(bot.entity.position.y) <= chk.to.y,
+                timeout: 2000,
+                intervalMs: 100,
+            });
+            if (!down.ok && down.code === 'INTERRUPTED') return down;
         }
     } else {
         const mv = await moveToXZ(bot, { kind: 'point', posXZ: { x: chk.to.x, z: chk.to.z } },

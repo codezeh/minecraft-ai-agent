@@ -9,6 +9,9 @@ import { climbUp, climbDown, isClimbable, climbableUp, climbableDown } from './a
 // 原子层规范化后原子只做单步，多步循环交回复合层用 runSteps 表达。
 import { tunnelStep, computeSafeZone } from './atom_tunnel.js';
 import { runSteps } from './step_runner.js';
+// ★ 2026-11-01（Phase A.3 / A1）：斜杠命令与按键只许从输入原子出去，本文件不再自己拼 bot.chat('/…')。
+import { command } from './atom_input_misc.js';
+import { pressKey } from './atom_input_move.js';
 import { scanTree, judgeTree, planFelling } from './atom_tree.js';
 import { followEntity as followEntityTask } from './task_follow.js';
 import pf from 'mineflayer-pathfinder';
@@ -1125,14 +1128,13 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
             blockType += `[facing=${face}]`;
         }
         if (useDelay) { await new Promise(resolve => setTimeout(resolve, blockPlaceDelay)); }
-        let msg = '/setblock ' + Math.floor(x) + ' ' + Math.floor(y) + ' ' + Math.floor(z) + ' ' + blockType;
-        bot.chat(msg);
+        await command(bot, 'setblock', [Math.floor(x), Math.floor(y), Math.floor(z), blockType], { cheat: true });
         if (blockType.includes('door'))
             if (useDelay) { await new Promise(resolve => setTimeout(resolve, blockPlaceDelay)); }
-            bot.chat('/setblock ' + Math.floor(x) + ' ' + Math.floor(y+1) + ' ' + Math.floor(z) + ' ' + blockType + '[half=upper]');
+            await command(bot, 'setblock', [Math.floor(x), Math.floor(y + 1), Math.floor(z), `${blockType}[half=upper]`], { cheat: true });
         if (blockType.includes('bed'))
             if (useDelay) { await new Promise(resolve => setTimeout(resolve, blockPlaceDelay)); }
-            bot.chat('/setblock ' + Math.floor(x) + ' ' + Math.floor(y) + ' ' + Math.floor(z-1) + ' ' + blockType + '[part=head]');
+            await command(bot, 'setblock', [Math.floor(x), Math.floor(y), Math.floor(z - 1), `${blockType}[part=head]`], { cheat: true });
         log(bot, `Used /setblock to place ${blockType} at ${target_dest}.`);
         return true;
     }
@@ -1916,7 +1918,7 @@ export async function goToPosition(bot, x, y, z, min_distance = 2) {
         return false;
     }
     if (modesIsOn(bot, 'cheat')) {
-        bot.chat('/tp @s ' + x + ' ' + y + ' ' + z);
+        await command(bot, 'tp', ['@s', x, y, z], { cheat: true });
         log(bot, `Teleported to ${x}, ${y}, ${z}.`);
         return true;
     }
@@ -2027,7 +2029,7 @@ export async function goToPlayer(bot, username, distance=3) {
         return true;
     }
     if (modesIsOn(bot, 'cheat')) {
-        bot.chat('/tp @s ' + username);
+        await command(bot, 'tp', ['@s', username], { cheat: true });
         log(bot, `Teleported to ${username}.`);
         return true;
     }
@@ -2205,7 +2207,7 @@ export async function moveAway(bot, distance) {
             let x = Math.floor(last_move.x);
             let y = Math.floor(last_move.y);
             let z = Math.floor(last_move.z);
-            bot.chat('/tp @s ' + x + ' ' + y + ' ' + z);
+            await command(bot, 'tp', ['@s', x, y, z], { cheat: true });
             return true;
         }
     }
@@ -2269,14 +2271,22 @@ export async function avoidEnemies(bot, distance=16) {
 
 export async function stay(bot, seconds=30) {
     /**
-     * Stay in the current position until interrupted. Disables all modes.
+     * Stay in the current position until interrupted.
+     *
+     * ★ 2026-11-01（M2，07 §3.2）：**不再停 `self_preservation`**。
+     * 原来这里把 mode 全停了（含保命反射），于是"站着别动"变成了"站着被烧死"——
+     * 用户实测：让她 stay，脚下着火她不躲、溺水不上浮、被沙子埋着不动。
+     * 现在 "站着别动" 只包括"别去追怪、别跑开"：
+     *   - 停：cowardice / self_defense / unstuck / 空闲行为（hunting / torch_placing / item_collecting …）
+     *   - 不停：self_preservation（着火 / 溺水 / 挨打要躲，且躲完自己回位）
+     * 自动领单与 idle_planner 的暂停不在这里做（那是调度器的事，见 06 §7、08 §6.1）。
+     *
      * @param {MinecraftBot} bot, reference to the minecraft bot.
      * @param {number} seconds, the number of seconds to stay. Defaults to 30. -1 for indefinite.
      * @returns {Promise<boolean>} true if the bot stayed, false otherwise.
      * @example
      * await skills.stay(bot);
      **/
-    modesPause(bot, 'self_preservation');
     modesPause(bot, 'unstuck');
     modesPause(bot, 'cowardice');
     modesPause(bot, 'self_defense');
@@ -2342,9 +2352,8 @@ export async function useDoor(bot, door_pos=null) {
     if (!wasOpen) await bot.activateBlock(door_block);
 
     // 穿过去
-    bot.setControlState('forward', true);
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    bot.setControlState('forward', false);
+    // 2026-11-01（Phase A.1）：按键走 atom_input_move.pressKey（到时必松，try/finally）
+    await pressKey(bot, 'forward', 600);
 
     // 关门：只有门还在伸手可及范围（4.5 格）才关得动。
     // 原来不看距离就 activateBlock，走过之后超出距离会静默失败 ——
@@ -3480,7 +3489,7 @@ export async function levelGround(bot, x0, z0, size, targetY, maxOps = 4000) {
         const TOP = TY + 12;
         for (const name of naturalNames) {
             if (bot.interrupt_code) break;
-            bot.chat(`/fill ${X0} ${TY + 1} ${Z0} ${X1} ${TOP} ${Z1} air replace ${name}`);
+            await command(bot, 'fill', [X0, TY + 1, Z0, X1, TOP, Z1, 'air', 'replace', name], { cheat: true });
             // 让服务器处理上一批再发下一批
             await new Promise(resolve => setTimeout(resolve, 120));
         }
@@ -3492,7 +3501,7 @@ export async function levelGround(bot, x0, z0, size, targetY, maxOps = 4000) {
         // 填坑深度自适应：原来固定 6 格，遇到深坑填不满，导致"铲平后仍有高差"
         const _depth = 20;   // 固定填 20 格深：足够应付这次遇到的 4~10 格落差，又不会刷屏
         // keep 模式只填空气格；从 TY-20 填到 TY，把深坑补齐
-            bot.chat(`/fill ${X0} ${TY - _depth} ${Z0} ${X1} ${TY} ${Z1} ${fillerName} keep`);
+            await command(bot, 'fill', [X0, TY - _depth, Z0, X1, TY, Z1, fillerName, 'keep'], { cheat: true });
         await new Promise(resolve => setTimeout(resolve, 300));
         log(bot, `Leveling done (fast mode) at ${X0},${TY},${Z0} .. ${X1},${TY},${Z1}.`);
         return { mode: 'fill', x0: X0, z0: Z0, size: size, targetY: TY, top: TOP, depth: _depth };
@@ -4773,7 +4782,7 @@ async function safePlace(bot, blockType, x, y, z) {
     }
 
     try {
-        bot.chat(`/setblock ${fx} ${fy} ${fz} minecraft:${name}`);
+        await command(bot, 'setblock', [fx, fy, fz, `minecraft:${name}`], { cheat: true });
         await new Promise(r => setTimeout(r, 60));
         const after = bot.blockAt(new Vec3(fx, fy, fz));
         if (after && after.name === name) return 'placed';
@@ -4800,7 +4809,7 @@ async function placeChestFacing(bot, x, y, z, facing) {
 
     // 优先用指令精确指定朝向（bot 有 OP）
     try {
-        bot.chat(`/setblock ${Math.floor(x)} ${Math.floor(y)} ${Math.floor(z)} minecraft:chest[facing=${facing}]`);
+        await command(bot, 'setblock', [Math.floor(x), Math.floor(y), Math.floor(z), `minecraft:chest[facing=${facing}]`], { cheat: true });
         await new Promise(r => setTimeout(r, 120));
         const after = bot.blockAt(new Vec3(x, y, z));
         if (after && after.name === 'chest') return 'placed';
