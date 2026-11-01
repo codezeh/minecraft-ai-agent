@@ -19,9 +19,14 @@ import { ok, fail } from './atom_contract.js';
 import { blockAt } from './atom_perceive.js';
 import { EYE_HEIGHT, digReach } from '../rules/rules.runtime.js';
 
-/** 脚位/头位必须是真正的可穿过方块。树叶/原木不在这里，所以"站进树叶里"会被判不可站。 */
+/**
+ * 脚位/头位必须是真正的可穿过方块。树叶/原木不在这里，所以"站进树叶里"会被判不可站。
+ *
+ * D27（2026-11-01）：原来这里有 `lava` —— 脚位或头位是岩浆、下方是石头的格子被判成能站，
+ * findStandSpot 会选进岩浆里。水留着：站在浅水里是正常的。
+ */
 const PASSABLE = new Set([
-    'air', 'cave_air', 'void_air', 'water', 'lava',
+    'air', 'cave_air', 'void_air', 'water',
     'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush',
     'snow', 'vine', 'seagrass', 'tall_seagrass', 'torch', 'wall_torch',
     'rail', 'powered_rail', 'detector_rail', 'activator_rail',

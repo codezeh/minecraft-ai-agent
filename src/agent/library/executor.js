@@ -86,7 +86,8 @@ const IS_LIQUID = /^(water|kelp|seagrass|bubble_column|lava)$/;
  * 规划层给出 step.x/z，执行层是否照做，中间没有别的可观察点。
  */
 export async function execStep(bot, step, opts = {}) {
-    const { onEvent: userOnEvent = () => { } } = opts;
+    // mapDir：只给下面的落点检查用（D14）；不传就跳过那段检查
+    const { onEvent: userOnEvent = () => { }, mapDir = null } = opts;
     // 同 walkTo：替身转发，保证原子层事件也进 trace_bus
     const onEvent = (e) => {
         try { tracePush(e); } catch { /* ignore */ }
@@ -306,27 +307,29 @@ export async function execStep(bot, step, opts = {}) {
         return ok({ climbed: guard });
     }
 
-    // ---- 落点安全检查：目标格下面是空的就别去 ----
+    // ---- 落点安全检查：落点那一格是危险面就别去 ----
     //
-    // ★ 2026-10-28 修：实测她走到水面上（y=62 水，y=49 才是地面），
-    // 一脚踩空沉到 y=49，之后连续下坠卡死。
-    // 规划层用"水面"当可站立面是错的 —— 水面不能站。
+    // ★ 2026-10-28 加：实测她走到水面上（y=62 水，y=49 才是地面），一脚踩空沉到 y=49，之后连续下坠卡死。
+    // 当时的判据是"目标高度附近没有非水、非岩浆的面就拒"。
     //
-    // 这里做最后一道防线：目标 (x,z) 那列，在她目标高度下方 3 格里
-    // 如果没有实心面 → 说明落点悬空，不去，让规划器换路。
-    try {
-        const col = columnSurfaces(mapDir, Math.floor(step.x), Math.floor(step.z));
-        if (col.length) {
-            // 找她将要落的那层（目标 y 附近）
-            const near = col.filter(c => Math.abs(c.y - step.y) <= 2);
-            const solidUnder = near.some(c => c.t !== T.WATER && c.t !== T.LAVA)
-                || col.some(c => c.y < step.y && c.y >= step.y - 3 && c.t !== T.WATER && c.t !== T.LAVA);
-            if (!solidUnder) {
+    // ★ D14（2026-11-01）：这段从加上起**一次都没跑过** —— execStep 里没有 mapDir，
+    // 每次 ReferenceError 被空 catch 吞掉。现在由 walkTo 传进来；不传就跳过（单测、直接调用）。
+    // 启用时判据收窄为"落点那一格是危险面（T.LAVA：岩浆 / 岩浆块 / 火 / 篝火 / 仙人掌）"：
+    // 10-29 起规划器有意让她从水面过河（SUBMERGED 高代价，test_tunnel 用例 13），
+    // 照 10-28 的判据启用会把这些步全拦掉。水面要不要拦，等真机多场景基线再定。
+    if (mapDir) {
+        try {
+            const col = columnSurfaces(mapDir, Math.floor(step.x), Math.floor(step.z));
+            const landing = col.find(c => c.y === Math.floor(step.y));
+            if (landing && landing.t === T.LAVA) {
                 onEvent({ type: 'unsafe-landing', x: step.x, y: step.y, z: step.z });
-                return { ok: false, code: 'UNSAFE', message: `落点 (${step.x},${step.y},${step.z}) 下方没有实地` };
+                return { ok: false, code: 'UNSAFE', message: `落点 (${step.x},${step.y},${step.z}) 是危险面` };
             }
+        } catch (e) {
+            // 查不到就不拦，但要留痕：原来这里是空 catch，D14 就是这么藏住的
+            onEvent({ type: 'landing-check-error', x: step.x, y: step.y, z: step.z, error: String(e?.message ?? e).slice(0, 120) });
         }
-    } catch { /* 查不到就不拦 */ }
+    }
 
     // ---- 水平移动（walk / jump / down 都交给 pathfinder）----
     // pathfinder 自己会跳 1 格、会往下掉，所以这三类不需要分开处理。
@@ -801,7 +804,7 @@ export async function walkTo(bot, dest, opts = {}) {
             if (bot.interrupt_code) return fail('INTERRUPTED', '停了');
 
             const before = bot.entity.position.clone();
-            const r = await execStep(bot, step, { onEvent });
+            const r = await execStep(bot, step, { onEvent, mapDir });   // mapDir：落点检查要用（D14）
             // 诊断：记录每一步的目标与执行后位置，定位"返回 ok 但没动"的情况
             if (process.env.NAV_DEBUG) {
                 const nn = bot.entity.position;

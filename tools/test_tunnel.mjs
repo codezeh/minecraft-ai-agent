@@ -142,6 +142,23 @@ console.log('\n=== 7) 地板是空气 → 拒绝（会掉）===');
     check('无地板 → 拒绝', !r.ok && r.code === 'NO_FLOOR', r.code ?? 'OK');
 }
 
+// ---------- 7b) 前方地板是水 / 岩浆 → 拒绝（D15）----------
+// D15：原来写成 isLiquid(floorB.name)，传了字符串，恒为 false → 液体地板被当成实心。
+// 地板在目标格正下方，不在"液体一票否决"扫的 9 个邻格里，只能靠这一条挡住。
+for (const liquid of ['water', 'lava']) {
+    console.log(`\n=== 7b) 地板是 ${liquid} → 拒绝（D15）===`);
+    const at = new Map();
+    at.set('0,63,0', 'stone');
+    at.set('1,63,0', liquid);               // 前方的地板是液体
+    at.set('1,64,0', 'air');
+    at.set('1,65,0', 'air');
+    const bot = fakeBot(at);
+    const zone = computeSafeZone(bot, { radius: 4, up: 3, down: 3 });
+    const r = checkStep(bot, { dx: 1, dz: 0 }, { zone });
+    console.log(`  ${r.ok ? '允许（错）' : '拒绝: ' + r.code + ' — ' + r.why}`);
+    check(`地板是 ${liquid} → NO_FLOOR`, !r.ok && r.code === 'NO_FLOOR', r.code ?? 'OK');
+}
+
 // ---------- 8) 基岩 → 拒绝 ----------
 console.log('\n=== 8) 前方是基岩 → 拒绝 ===');
 {

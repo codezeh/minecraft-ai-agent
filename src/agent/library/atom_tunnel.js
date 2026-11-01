@@ -173,7 +173,9 @@ export function checkStep(bot, dir, opts = {}) {
     if (!floorB) {
         return { ok: false, code: 'NO_DATA', why: `(${supportX},${supportY},${supportZ}) 落脚点读不到` };
     }
-    const floorSolid = !AIRISH.has(floorB.name) && !isLiquid(floorB.name);
+    // D15（2026-11-01）：原来写成 isLiquid(floorB.name)，传了字符串，isLiquid 读 b.name → 恒为 false，
+    // 水 / 岩浆地板被当成实心。地板不在下面"液体一票否决"扫的邻格里，只能靠这里挡。
+    const floorSolid = !AIRISH.has(floorB.name) && !isLiquid(floorB);
     if (!floorSolid && !allowFall) {
         return { ok: false, code: 'NO_FLOOR', why: `(${tx},${ty},${tz}) 下方是 ${floorB.name}，站不住` };
     }

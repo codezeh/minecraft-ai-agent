@@ -22,15 +22,19 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 /** 离线回归脚本（新增离线测试后记得加进来） */
 const UNITS = [
     'atom_classify_unit',        // 原子纯函数化 + 地标缓存按 bot 隔离
+    'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
     'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）
     'detect_trapped_unit',       // 被困判据（面积/封顶/出口/地表）
+    'exec_landing_unit',         // D14 落点检查真的执行（岩浆面拦，水面照走）
     'exec_step_dig_unit',        // D2 挖邻列 / 液体不假成功
     'exec_step_y_unit',          // D1 y 语义（脚位 vs 面位）
+    'mindserver_local_only_unit', // socket 只放本机连接（第一轮安全项）
     'nav_core_unit',             // 导航入口的坐标归一与前置
     'scaffold_tracker_unit',     // D7 只清自己放的方块
     'task_pickup_unit',          // 掉落物回收搬到复合层后语义不变
     'terrain3d_unit',            // 连接复用 / fail 表 TTL / prune
     'test_escape',               // skill_escape 规划（假 bot，纯读世界）
+    'test_tunnel',               // 掘进安全检查（含 D15 液体地板）
     'tool_prep_timeout_unit',    // D12 goto/dig/craft 有上限
     'verify_y_semantics',        // 在真机录的地图库上量化 y 语义
 ];
