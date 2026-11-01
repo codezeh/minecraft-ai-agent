@@ -1018,14 +1018,31 @@ async function skillName(bot, goal, context = {}) {
 | `bench 5` | ✅ **48/55**，与 t8 干净基线 48/55 持平；`climb-ladder` 中位 **1956ms**（基线 1945ms，+0.6%）；`digdown` 5/5 `execActions={"digdown":1}`、`y −57→−60` |
 | `task_collect`+`skill_collect` 合并 | ❌ **未合并**（只改名成 `flow_collect` + `flow_collect_plan`）。合并待办见「待办 4」：`flow_collect` 内部化 `planCollect`/`makeHandlers` |
 
-**bench 待修：tpFlake 会产出一轮假失败**（t10 独立复现，**不算回归**）
+**bench 待修：gap-bridge 会产出一轮假失败 —— 真因是死亡重生，不是 tpFlake**（**已修 `74eb3f5`**）
 
-`gap-bridge #1`：`moved 11456.7` 格、`remain 11473.1`、`60364ms TIMEOUT`、`execActions {"scan3d":10,"plan3d":10}`
-（重规划 10 轮 = 一直在远离起点）；同场景 #2–#5 全部 `moved 19.8 / remain 0.5 / ~7.7s`。
-→ 判定：**不是行为回归，是 `arena.tpSafe()` 有洞** —— 3 次重试后仍未确认传送成功就放行，人还在原地/被弹飞，
-于是这一轮测的是"从 1.1 万格外走回来"。t9 的 M4 跑也出现过同一形态。
-**修法（待办）**：`tpSafe` 失败的那一轮应 `skip` 并标记 `tpFlake`，而不是硬跑成 TIMEOUT；
-bench 汇总里把 `tpFlake` 单独计数、不计入通过率分母。**归属：Phase R 收尾 / bench 维护者。**
+`gap-bridge #1`：`moved 11456.7` 格、`remain 11473.1`、`60364ms TIMEOUT`、`execActions {"scan3d":10,"plan3d":10}`；
+同场景 #2–#5 全部 `moved 19.8 / remain 0.5 / ~7.7s`。
+
+> ⚠️ **t10 当时的定性是错的。** t10（及 t9）都归因成"`arena.tpSafe()` 有洞、传送没生效"，
+> 并据此写下"应在 `tpSafe` 失败时 skip"的修法。
+> **captain 实测更正**：服务器日志有 `[23:48:12] ma67453 fell out of the world` ——
+> **她掉进虚空摔死了**，重生在出生点 (0,0)，于是 `walkTo` 从出生点往 10000 格外走。
+> tp 明明生效了，不是传送问题。**"她不在起点"≠"传送失败"**，中间还有"跑着跑着死掉"这一类。
+>
+> 教训：只看"结果位置不对"就推断原因，会得出方向错误的修法。
+> **查服务器日志 30 秒能定性的事，不要靠推测。**
+
+**实际修法（`74eb3f5`）**：
+1. **场景层（根因）**：`gap-bridge` 原来把地面挖到 `G`，而 `G` 下面是虚空 →
+   沟底补一层实心（`G-3`）。掉下去只是"困在坑里"这种正常失败，不会死、不会重生。
+2. **兜底检测**：位移 >200 格或剩余 >256 格即判"死亡重生"，单列 `⊘` 并**排除出通过率分母**
+   （场地最大跨度 ~56 格，200 格不可能是场景内正常移动）。
+
+**验证**：修前 `61s TIMEOUT / 剩 11484`；修后 **PASS 12059ms / 剩 0.7 格**，死亡日志无新增。
+
+**另：bench 归档纪律**（今晚两人各犯一次，已写进文件头）
+`bench_move_actions.mjs` 是 `appendFileSync`，跑之前必须 `mv` 上一次的 jsonl 到 `archive/`，
+否则基线和新数据混进同一文件（实测出现过 110 行 = 两轮各 55 行）。
 
 #### 前缀规矩：判据与白名单（t10 实现，2026-11-01）
 
