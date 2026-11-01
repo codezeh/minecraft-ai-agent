@@ -598,6 +598,53 @@ function resolveLocal(relPath, spec) {
     return p;
 }
 
+/**
+ * 同层 import 的**只读工具白名单**（同层 = act_*→act_* / query_*→query_*）。
+ *
+ * ★ 2026-11-01（t10，captain 定稿口径）：
+ *   **一份白名单 + 默认拒绝** —— 符号 ∈ 本集合 → 放行；其余**一律违规**（含不认识的符号）。
+ *   所以 `digBlock` / `placeBlockAt` 这些副作用入口**不需要黑名单**：不在白名单里就自然违规。
+ *
+ *   为什么要这条：原来同层一律放过（`if (targetLayer === selfLayer) return`），注释还写着
+ *   「动作之间不互相调用是行为约定，靠 review 不靠 import 图」。实测后果：`act_pillar` 里
+ *   `import { digBlock } from './act_dig.js'` **完全拦不住**（检查条数 256→257 说明扫到了，
+ *   违规数不变、exit 0）—— 那条规矩等于纸做的。
+ *
+ *   **新增符号必须显式加进来，并在下面写一句「为什么它是纯读/纯判断、为什么不搬去 query_*」。**
+ *   白名单是数据驱动的显式集合，不许改成隐式正则。
+ *
+ *   判据只跑在**剥掉注释后**的代码上（见下方 `lines`）—— 否则文档注释里提到的
+ *   `digBlock(bot, pos)` 会被当成真调用（atom_boat 那次注释假命中的教训）。
+ */
+const PURE_SIBLING_IMPORTS = new Set([
+    // ── act_items 的只读工具（待办：搬去 query_items 后即可从这里删）──────────────
+    'findItem',            // 查"包里有没有这个物品、在第几格"：只读 inventory，不动手
+    // ── act_container 的只读工具 ────────────────────────────────────────────────
+    'containerKindOf',     // 判"这个方块名对应哪类容器"：查 registry + 正则，纯判断
+    'windowItems',         // 列"当前窗口里有哪些格子/物品"：读 bot.currentWindow 快照，纯读
+    // ── act_dig 的纯判断 ───────────────────────────────────────────────────────
+    'isDiggable',          // 判"这类方块能不能挖"：查黑名单表，纯判断
+    'canDigWithInventory', // 判"手上工具够不够挖它"：查背包 + 工具等级，纯判断
+    // ── act_attack 的纯查询 ────────────────────────────────────────────────────
+    'nearestAttackable',   // 找"最近的可攻击目标"：只遍历 entities 比较距离，不挥击
+    // ── query_* 的纯读取 ───────────────────────────────────────────────────────
+    'blockAt',             // 读"那一格是什么方块"：一次世界查询
+    'findBlocks',          // 找"符合名字的方块都在哪"：一次世界查询
+    'canStand',            // 判"那一格能不能站人"：读脚下/头顶，纯判断
+    'countItem',           // 数"某物品有几个"：只读 inventory
+    // 故意不在名单里（副作用入口，上层应走原子或由流程编排）：
+    //   digBlock / placeBlockAt / useOnBlock / openContainer / equipItem / dropItem / tunnelStep …
+]);
+
+/** 从一行 import 取具名导入的**原符号名**（`a as b` 取 `a`）；不是具名 import 返回 null。 */
+function namedImportSymbols(line) {
+    const m = line.match(/^\s*import\s+(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/);
+    if (!m) return null;
+    return m[1].split(',')
+        .map((s) => s.trim().split(/\s+as\s+/)[0].trim())
+        .filter(Boolean);
+}
+
 {
     const sources = collectApiScanSources().filter((s) => s.path.startsWith('src/agent/'));
     const violations = [];
@@ -615,11 +662,38 @@ function resolveLocal(relPath, spec) {
                 const targetLayer = layerOfFile(target);
                 if (targetLayer === 'infra' || selfLayer === 'infra') { checked++; return; }
                 const allowed = PREFIX_IMPORT_ALLOW[selfLayer] ?? [];
-                // 同层兄弟文件一律放过：02 §5 那张表说的是"层间"规矩。
-                // （"动作之间不互相调用"是**行为**约定——如 act → act 只许拿工具函数，
-                //   这条靠 review，不靠 import 图；用 import 图卡它会把 act_items 这种
-                //   纯工具模块的正当用法一起毙掉。）
-                if (targetLayer === selfLayer) { checked++; return; }
+                // ── 同层：层间规矩不管这一格，但 02 §5「动作之间不互相调用」必须管。 ──
+                //
+                // ★ 2026-11-01（t10）：这里原来是 `if (targetLayer === selfLayer) { checked++; return; }`
+                //   一律放过 → `act_pillar → act_dig.digBlock` 谁都拦不住（已用注入实测证明）。
+                //   现在改成按**导入了哪个符号名**判：白名单外的符号一律违规（默认拒绝）。
+                //   只对 act_* / query_* 判（这两层的语义最严：动作不互相调用、查询只读）。
+                if (targetLayer === selfLayer) {
+                    if (selfLayer === 'act' || selfLayer === 'query') {
+                        const syms = namedImportSymbols(line);
+                        if (syms === null) {
+                            // default / import * as ns / 纯副作用 import：符号名不可审计 → 判违规
+                            violations.push({
+                                file: src.path, line: i + 1, target,
+                                selfLayer, targetLayer, symbols: [],
+                                snippet: raw[i].trim().slice(0, 100),
+                                why: '同层 import 用了非具名形式（default / namespace），审计不了调的是哪个函数',
+                            });
+                        } else {
+                            const bad = syms.filter((s) => !PURE_SIBLING_IMPORTS.has(s));
+                            if (bad.length) {
+                                violations.push({
+                                    file: src.path, line: i + 1, target,
+                                    selfLayer, targetLayer, symbols: bad,
+                                    snippet: raw[i].trim().slice(0, 100),
+                                    why: `同层导入了非只读符号：${bad.join(' / ')}`,
+                                });
+                            }
+                        }
+                    }
+                    checked++;
+                    return;
+                }
                 if (!allowed.includes(targetLayer)) {
                     violations.push({
                         file: src.path, line: i + 1, target,
@@ -660,23 +734,61 @@ function resolveLocal(relPath, spec) {
             todo: 'Phase R 收尾：closeContainer 的 bot.closeWindow 那一层搬进 atom_input_inventory，act_container 反向复用',
         },
     ];
+
+    /**
+     * ── 收紧同层规则后**新暴露**的真问题（不是悄悄放过，也不是现在就判死）──────────
+     *
+     * ★ 2026-11-01（t10，captain 定稿）：把"同层一律放过"改成"白名单外一律违规"之后，
+     *   `act_use:15 → act_container.openContainer` 露出来了 —— 动作调动作的**副作用入口**。
+     *   它**不许塞进白名单**（塞进去就等于把规则改回纸做的）。
+     *
+     *   处置按 captain 口径：**默认模式只报告（exit 0）**，`--strict-api` 下判失败（exit 1），
+     *   避免"每天开机就因为一条已知真问题红着"、也避免"红了就被顺手加白名单"。
+     *   修完就删这条，届时 strict 也应恢复 exit 0。
+     */
+    const TIGHTENED_NEW_VIOLATIONS = [
+        {
+            file: 'src/agent/library/act_use.js', target: 'src/agent/library/act_container.js',
+            symbols: ['openContainer'],
+            why: '动作调动作的副作用入口：act_use 为"门/箱子"直接 import act_container.openContainer（真开窗，改世界状态）',
+            todo: 'Phase 5.4 / 补动作时（归属 atoms）：容器交互走 flow_store / flow_fetch，act_use 只负责"右键这一下"；'
+                + '或把"打开容器窗口"下沉成输入原子（atom_input_inventory.openWindow）。修完删本条，strict 必须恢复 exit 0',
+        },
+    ];
+
     const knownKey = (v) => `${v.file}|${v.target}`;
     const knownMap = new Map(KNOWN_PREFIX_VIOLATIONS.map((k) => [`${k.file}|${k.target}`, k]));
+    const tightenedMap = new Map(TIGHTENED_NEW_VIOLATIONS.map((k) => [`${k.file}|${k.target}`, k]));
+    const STRICT_PREFIX = process.argv.includes('--strict-api');
 
     const unexpected = [];
+    const tightened = [];
     for (const v of violations) {
         const k = knownMap.get(knownKey(v));
         if (k) { console.log(`  · 已知（${k.todo.split('：')[0]}）${v.file}:${v.line} ${v.selfLayer}→${v.targetLayer}`); continue; }
+        const t = tightenedMap.get(knownKey(v));
+        if (t) { tightened.push({ v, t }); continue; }
         unexpected.push(v);
     }
+    for (const { v, t } of tightened) {
+        console.log(`  ⚠ 收紧后新暴露 ${v.file}:${v.line}  ${v.selfLayer} → ${v.targetLayer}`
+            + `  [符号 ${v.symbols?.join(', ') || '?'}]`);
+        console.log(`      ${t.why}`);
+        console.log(`      归属：${t.todo.split('：')[0]}（见 Phase R 台账）`
+            + (STRICT_PREFIX ? '  ← --strict-api：判失败' : '  ← 默认只报告；--strict-api 会判失败'));
+    }
+    if (STRICT_PREFIX && tightened.length) failed++;
     if (unexpected.length) {
         failed++;
         for (const v of unexpected) {
-            console.log(`  ✗ 新违规 ${v.file}:${v.line}  ${v.selfLayer} → ${v.targetLayer}  目标 ${v.target}`);
+            const syms = v.symbols?.length ? `  [符号 ${v.symbols.join(', ')}]` : '';
+            console.log(`  ✗ 新违规 ${v.file}:${v.line}  ${v.selfLayer} → ${v.targetLayer}  目标 ${v.target}${syms}`);
+            if (v.why) console.log(`      ${v.why}`);
             console.log(`      ${v.snippet}`);
         }
     } else if (violations.length) {
-        console.log(`  ✓ 除 ${violations.length} 处已知违规外没有新违规`);
+        const extra = tightened.length ? `，其中 ${tightened.length} 处为收紧后新暴露（${STRICT_PREFIX ? '已判失败' : '默认只报告'}）` : '';
+        console.log(`  ✓ 除 ${violations.length} 处已知违规外没有新违规${extra}`);
     }
     if (violations.length === 0) console.log('  ✓ 前缀 import 规矩没有命中');
 }

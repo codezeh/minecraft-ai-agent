@@ -947,11 +947,110 @@ async function skillName(bot, goal, context = {}) {
 ### Phase R: 按层改前缀（2026-11-01 新增；时间已确认：Phase A 之后、补动作之前）
 **目标**: 文件名就是层级（[`02_actions.md §5`](02_actions.md)）
 
-- [ ] R.1 新文件直接用新前缀（`act_*` / `query_*` / `flow_*` / `strat_*` / `board_*`）
-- [ ] R.2 旧文件 `git mv`，原路径留 `export *` 转发
-- [ ] R.3 preflight 按前缀查 import 规矩；全部通过后删转发文件
+- [x] R.1 新文件直接用新前缀（`act_*` / `query_*` / `flow_*` / `strat_*` / `board_*`）—— 2026-11-01 t9 完成
+- [x] R.2 旧文件 `git mv`，原路径留 `export *` 转发 —— 转发行**在同一 commit 内即删**（`export * from` 全仓 0 处）
+- [x] R.3 preflight 按前缀查 import 规矩；全部通过后删转发文件 —— 2026-11-01 **t10 完成规则并自证**：
+  跨层 + 同层（按符号名、白名单默认拒绝）两层判据；转发文件已删（`export * from` 0 处）。
+  仍留 5 处**点名违规**（含收紧后新暴露的 `act_use→openContainer`），已在下方台账逐条写清「谁 + 哪一期」。
+  口径：**默认模式 exit 0**（已知违规只报告）；**`--strict-api` exit 1**（那 1 处新暴露的真问题判失败）。
+  5 处销账后 strict 应恢复 0 —— 那是 Phase 5.4 / Phase R 收尾的事，不是规则的事。
 
 **交付物**: `task_*` 前缀退役；`commands/` 不再直接 import 原子和动作
+
+#### 改名台账（t9 / 2026-11-01 / commit `071fc74`，37 个文件）
+
+| 层 | 新名 | 旧名 |
+|---|---|---|
+| 基础设施 | `contract` `modes` | `atom_contract` `task_modes` |
+| 查询（8） | `query_perceive` `query_stand` `query_safe` `query_classify` `query_tree` `query_drops` `query_stuck` `query_target` | `atom_perceive` `atom_stand` `atom_safe` `atom_classify` `atom_tree` `atom_find_drops` `atom_stuck_detect` `atom_query` |
+| 动作（8） | `act_dig` `act_place` `act_use` `act_container` `act_attack` `act_items` `act_climb` `act_pillar` | `atom_dig` `atom_place` `atom_use` `atom_container` `atom_attack` `atom_items` `atom_climb` `atom_pillar` |
+| 导航（2） | `nav_hop` `nav_pathfinder` | `task_hop` `atom_move` |
+| 流程（7） | `flow_collect` `flow_collect_plan` `flow_follow` `flow_pickup` `flow_platform` `flow_escape` `flow_clear` | `task_collect` `skill_collect` `task_follow` `task_pickup` `task_platform` `skill_escape` `skill_clear` |
+
+**保留旧名但符合映射表**（不是漏改）：`atom_input_move/mouse/misc/inventory`、`atom_read`、`atom_look`、
+`atom_wait`、`atom_wait_item` —— 02 §5 的原子层那一行就是这些名字。`skill_library`（04 §173：上游已占名，改不得）。
+`nav_core` / `executor` / 规划器 / `step_runner` / `trace_bus` / `terrain3d` —— 基础设施或导航保留原名（02 §5 明列）。
+
+**核对结果（t10 独立复核）**：`export * from` 转发 **0 处**；28 个旧名逐个 grep **0 悬空 import**；
+`preflight` **94/94 模块导入成功**；`nav_core`/`nav_hop`/`nav_pathfinder` 三件齐全。
+
+#### 前缀规矩：判据与白名单（t10 实现，2026-11-01）
+
+**判据**（`tools/preflight.mjs` 的 `[5/5]`，两层）：
+
+1. **跨层**：按文件层判（`PREFIX_IMPORT_ALLOW`，照抄 02 §5 那张表）—— 原有的那一半，未改动。
+2. **同层**（`act_*`→`act_*`、`query_*`→`query_*`）：**按 named import 的符号名判**。
+   **一份白名单 + 默认拒绝**：符号 ∈ `PURE_SIBLING_IMPORTS` → 放行；**其余一律违规（含不认识的符号）**。
+   因此 `digBlock` / `placeBlockAt` 这些副作用入口**不需要黑名单** —— 不在白名单里就自然违规。
+   非具名形式（`import * as ns` / default import）**一律违规**：审计不了调的是哪个函数。
+
+**白名单**（`PURE_SIBLING_IMPORTS`，每个都写清"为什么纯读/纯判断"；新增必须显式加 + 说明为何不搬去 `query_*`）：
+
+| 符号 | 出处 | 为什么放行 |
+|---|---|---|
+| `findItem` | `act_items` | 查"包里有没有这个物品、在第几格"：只读 inventory，不动手（**待办 2 搬 `query_items` 后从名单删**） |
+| `countItem` | `query_perceive` | 数"某物品有几个"：只读 inventory |
+| `containerKindOf` | `act_container` | 判"这个方块名对应哪类容器"：查 registry + 正则，纯判断 |
+| `windowItems` | `act_container` | 列"当前窗口有哪些格子/物品"：读 `bot.currentWindow` 快照，纯读 |
+| `isDiggable` | `act_dig` | 判"这类方块能不能挖"：查不可挖表，纯判断 |
+| `canDigWithInventory` | `act_dig` | 判"手上工具够不够挖它"：查背包 + 工具等级，纯判断 |
+| `nearestAttackable` | `act_attack` | 找"最近的可攻击目标"：只遍历 entities 比距离，**不挥击** |
+| `blockAt` | `query_perceive` | 读"那一格是什么方块"：一次世界查询 |
+| `findBlocks` | `query_perceive` | 找"符合名字的方块都在哪"：一次世界查询 |
+| `canStand` | `query_stand` | 判"那一格能不能站人"：读脚下/头顶，纯判断 |
+
+> 判据只跑在**剥掉注释后**的代码上（`maskJsSource`）—— 文档注释里提到 `digBlock(bot,pos)` 不算违规
+> （`atom_boat` 那次注释假命中的教训）。已实测：注释里写 `import { digBlock } from './act_dig.js'` → 绿。
+
+**当前模式（写清楚，别猜）**：
+
+| 模式 | 行为 | exit |
+|---|---|---|
+| 默认 `node tools/preflight.mjs` | 已知违规只报告；**白名单外符号违规随时判失败**；「收紧后新暴露」的 1 处（见下）**只报告** | **0** |
+| `--strict-api` | 同上 + 「收紧后新暴露」**也判失败** | **1**（当前期望值） |
+| `--report-api` | 只报告 | 0 |
+
+为什么这么分：那 1 处是**真问题**，不能塞进白名单（塞进去规则就又是纸做的），
+但也不该让日常开机天天红着、红久了就会有人顺手加白名单。所以**默认只报告、strict 判失败**。
+
+**三次注入自证（t10 实测，在独立 worktree 做，不污染主仓 src）**
+
+| # | 注入 | 期望 | 实测 |
+|---|---|---|---|
+| 1 | 同层副作用：`act_pillar.js` 加 `import { digBlock } from './act_dig.js'` | 红 | ✅ `✗ 新违规 act_pillar.js:22 act → act [符号 digBlock]`，**exit 1** |
+| 2 | 同层纯工具：`act_pillar.js` 加 `import { findItem } from './act_items.js'` | 绿 | ✅ 无新违规，**exit 0** |
+| 3 | 跨层：`commands/actions.js` 加 `import { digBlock } from '../library/act_dig.js'` | 仍红 | ✅ `✗ 新违规 commands → act`，**exit 1** |
+| 4 | 注释干扰：`act_pillar.js` 注释里写同一条 import | 绿（不误判） | ✅ **exit 0** |
+
+**改动前**（`071fc74` 里的旧判据）同一条 #1 注入是 **exit 0**（检查条数 256→257 扫到了，违规数不变）——
+即「同层一律放过」，那条规矩等于纸做的。根因就一行 `if (targetLayer === selfLayer) { checked++; return; }`。
+
+#### 已知前缀违规 5 处（点名 + 谁 + 哪一期）
+
+| # | 位置 | 层间 | 为什么现在动不了 | 销账归属（谁 + 哪一期） |
+|---|---|---|---|---|
+| 1 | `commands/actions.js:8` → `act_place` | commands → act | 命令层直接 import `placeBlockAt`（02 §5 原文点的就是这处） | **atoms / Phase 5.4**：改调流程（如 `flow_build.placeOne`），commands 只碰流程/查询 |
+| 2 | `atom_read.js:16` → `query_perceive` | atom → query | `atom_read` 转出 `findBlocks`（真身在查询层） | **atoms / Phase R 收尾**：`findBlocks` 实现搬进 `atom_read`，`query_perceive` 反向复用 |
+| 3 | `atom_read.js:17` → `act_container` | atom → act | `atom_read` 转出 `windowItems`（真身在动作层） | **atoms / Phase R 收尾**：`windowItems` 是纯读取，搬进 `atom_read`，`act_container` 反向复用 |
+| 4 | `atom_input_inventory.js:18` → `act_container` | atom → act | `closeWindow` 转出 `closeContainer`（避免两份实现） | **atoms / Phase R 收尾**：`bot.closeWindow` 那层搬进 `atom_input_inventory`，`act_container` 反向复用 |
+| **5** | **`act_use.js:15` → `act_container.openContainer`** | **act → act（副作用）** | **收紧同层规则后新暴露**：动作调动作的副作用入口（真开窗、改世界状态）。**不许进白名单** | **atoms / Phase 5.4 或补动作时**：容器交互走 `flow_store`/`flow_fetch`，`act_use` 只做"右键这一下"；或把"开窗"下沉成 `atom_input_inventory.openWindow`。修完删 `TIGHTENED_NEW_VIOLATIONS` 那条，strict 必须恢复 exit 0 |
+
+> 前 4 条的病根是同一件事：**纯读取的实现住进了 `act_*`，原子层只好反向 import**。
+> 第 5 条不同：那才是真正的**分层违规**（动作调动作的副作用），所以它单独占一档、默认只报告但 strict 判失败。
+
+#### 待办（必须销账，不许变永久放宽）
+
+1. **`act_items` 的只读工具搬去 `query_items`**（归属：**atoms / Phase R 收尾**）——
+   `findItem` / `countItem` / `hasItem` 是**查询**（"包里有没有/有几个"），住在 `act_items` 才逼得 `act_dig`、`act_place`
+   必须 import 兄弟层。**搬完才能把同层白名单收回到"动作之间零 import"**，并把 `findItem` 从 `PURE_SIBLING_IMPORTS` 删掉。
+2. **`atom_tunnel.js` 拆分**（归属：**atoms / Phase R 收尾**）—— 02 §5 把 `atom_tunnel.tunnelStep` 归 `flow_*`，
+   但它是**混合文件**：纯查询 `computeSafeZone` / `inSafeZone` / `checkStep` / `findDryClimbColumn`
+   + 多步复合 `tunnelStep`（只被 `flow_collect_plan.js` import）。正确处置是**拆**（查询进 `query_*`、`tunnelStep` 进 `flow_*`），
+   不是改名 —— 只改名会把查询拖进流程层，所以 t9 没动它。**必须留账，不能当"已改名完成"。**
+3. **`act_use → openContainer` 销账**（归属：**atoms / Phase 5.4**）—— 见上表第 5 条。
+4. **`flow_collect` 与 `flow_collect_plan` 未合并**（归属：**atoms / Phase R 收尾 或 M7**）——
+   `task_collect`+`skill_collect` 是同一件事的两半，合并要改语义（`flow_collect` 内部化 `planCollect`/`makeHandlers`），
+   改名安全、合并另开。
 
 ---
 
