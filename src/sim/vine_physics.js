@@ -100,8 +100,14 @@ export function installVinePhysics(bot, opts = {}) {
         });
         bot.once('spawn', apply);   // login 可能早于 blocks 插件就绪，spawn 再兜一次
         return {
+            // ★ 2026-11-02：这条延迟安装路径原来**没有 installed**，于是调用方读到的
+            //   是 `undefined` —— 与"没装"和"装了但爬不动"都无法区分。
+            //   （vine_physics_test 就是卡在这里：报 `vine.installed=undefined`）
+            get installed() { return api ? api.installed === true : false; },
             setClimbing(v) { state.climbing = !!v; apply(); },
-            isClimbing() { return state.climbing; },
+            // 只有"真装上了 且 意图是爬"才算在爬。旧写法 `return state.climbing`
+            // 返回的是**意图**而不是实际状态 —— 补丁没装时它会谎报正在爬。
+            isClimbing() { return !!(api && api.installed === true && state.climbing); },
             uninstall() { if (api) api.uninstall(); },
         };
     }

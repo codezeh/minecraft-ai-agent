@@ -20,6 +20,7 @@
 import * as mc from '../../utils/mcdata.js';
 import { ok, fail } from './contract.js';
 import { countItem } from './query_perceive.js';
+import { GOAL_LOOK_AT_DEFAULT_REACH as REACH } from '../rules/rules.runtime.js';
 
 /**
  * 合成 n 个 item（**一次** bot.craft 调用；料不够就按能合的量合）。
@@ -125,7 +126,7 @@ export async function craftOnce(bot, itemName, n = 1) {
 }
 
 /** 熔炉够不够得着（够不着就不动作；走近是流程的事）。 */
-function furnaceInReach(bot, furnace, maxReach = 4.5) {
+function furnaceInReach(bot, furnace, maxReach = REACH) {
     const p = furnace?.position;
     const self = bot?.entity?.position;
     if (!p || !self) return { ok: false, dist: null };
