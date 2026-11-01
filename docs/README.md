@@ -1,7 +1,7 @@
 # 文档索引
 
 > **别按文件名猜，按下面的顺序读。**
-> 最后更新：2026-10-31（文档分家：新规范入 `architecture/`，旧文档入 `legacy/`）
+> 最后更新：2026-11-01（补原子 / 动作 / 复合技能 / 任务板规范，见下方修订说明）；2026-10-31 文档分家：新规范入 `architecture/`，旧文档入 `legacy/`
 
 ---
 
@@ -23,14 +23,17 @@
 |---|---|---|
 | 1 | [architecture/00_overview.md](architecture/00_overview.md) | 新的六层架构、现状 vs 目标、本目录每份文档干什么 |
 | 2 | [architecture/ARCHITECTURE_REDESIGN.md](architecture/ARCHITECTURE_REDESIGN.md) | **§6 是唯一契约来源**：返回结构 / 31 条错误码 / 字段白名单 / 参数命名 / 中断规则 |
-| 3 | [architecture/REFACTOR_ANALYSIS.md](architecture/REFACTOR_ANALYSIS.md) | 现状哪里烂了，带行号证据；**§5 是勾选式验收清单，§3.4 是 D1–D13 台账** |
+| 3 | [architecture/REFACTOR_ANALYSIS.md](architecture/REFACTOR_ANALYSIS.md) | 现状哪里烂了，带行号证据；**§5 是勾选式验收清单，§3.4 是 D1–D27 台账** |
 | 4 | [architecture/ARCHITECTURE_REDESIGN_PART2.md](architecture/ARCHITECTURE_REDESIGN_PART2.md) | 怎么测、分几期做（§11 Phase 表 = 按周排的执行清单） |
 | 5 | [交接文档.md](交接文档.md) | 项目现状、怎么启动、已知限制（**仍在用**，preflight 会检查它是否过时） |
 
-> ⚠️ **空着的部分（暂不补）**：`04_skills.md`、`06_task_queue.md`、`07_multi_bot.md` 不存在；
-> `ARCHITECTURE_REDESIGN.md` 的 §7 配置 / §8 错误恢复 / §9 多Bot 三节未写。
-> 已定：**不补新规范**——落地按 `REFACTOR_ANALYSIS.md §5` 的勾选清单 + `PART2 §11` 的 Phase 表执行；
-> **多 Bot 协作模式后续再搭**。遇到这三块时按代码现状处理，别拿旧文档当规范。
+> **2026-11-01 改版**（用户要求补齐）：原子收窄为"一次玩家输入"并重写 [`01_primitives.md`](architecture/01_primitives.md)（旧版归档）；
+> 恢复动作层 [`02_actions.md`](architecture/02_actions.md)；新增 [`04_skills.md`](architecture/04_skills.md)（复合技能规范）
+> 和 [`06_task_board.md`](architecture/06_task_board.md)（个人 / 多人任务板，吸收了原计划的 `06_task_queue` / `07_multi_bot`）。
+> 先前"不补新规范、多 Bot 后续再搭"的决定撤回：规范现在写，多 Bot 按 06 §11 分期落地。
+> `ARCHITECTURE_REDESIGN.md` §7 配置 / §8 错误恢复仍未单独成节：配置的一部分见 `04_skills.md §4.2` 的 `ctx`，错误恢复见 `04 §3.3`。
+>
+> 要改哪一层，先看 [architecture/00_overview.md](architecture/00_overview.md) §1 的分层图，再读对应的 01 / 02 / 04 / 05 / 06。
 
 ---
 
@@ -54,7 +57,8 @@
 | 文档 | 内容 |
 |---|---|
 | [legacy/陪玩改造方案.md](legacy/陪玩改造方案.md) | 最初的方案设计（历史起点） |
-| [legacy/02_actions.md](legacy/02_actions.md) | 动作层 40-50 个（**六层架构中该层已取消**，只当能力盘点表看） |
+| [legacy/02_actions.md](legacy/02_actions.md) | 旧版动作层盘点（40-50 个）。动作层已恢复，现行清单见 [architecture/02_actions.md](architecture/02_actions.md) |
+| [legacy/01_primitives_v1.md](legacy/01_primitives_v1.md) | 旧版原子层（35 个"原子"，含寻路、合成、砍树）。按新定义大多是动作，现行见 [architecture/01_primitives.md](architecture/01_primitives.md) |
 | [legacy/原子动作规格.md](legacy/原子动作规格.md) | 更旧的规格，已被 -v2 取代 |
 | [legacy/复合层改造规划.md](legacy/复合层改造规划.md) | plan/runSteps 的契约（对应现在的 task 层） |
 | [legacy/原子层清理规划-拆分collectDrops.md](legacy/原子层清理规划-拆分collectDrops.md) | 为什么把 collectDrops 拆成三个原子 |

@@ -4,6 +4,9 @@
 > `task_platform` / `task_modes`（最后一个是 mode 管理器，不是任务）。
 > 契约（返回结构、错误码、参数命名）以 [`ARCHITECTURE_REDESIGN.md §6`](./ARCHITECTURE_REDESIGN.md) 为准。
 >
+> ⚠️ **2026-11-01**：本文的"任务"按新分层是**流程级复合技能**（`flow_*`），规范以 [`04_skills.md`](04_skills.md) 为准，本文只作能力盘点。
+> 动作层已恢复（[`02_actions.md`](02_actions.md)），流程调动作，下面这条旧说明作废。"任务"一词今后只指任务板上的任务单（[`06_task_board.md`](06_task_board.md)）。
+>
 > ⚠️ 六层架构中任务层**直接调导航层**（`nav_core.goTo`），不经过 Actions 层——本文若出现
 > 调用"动作层"的链路，按"直接调 atom_*"理解。
 

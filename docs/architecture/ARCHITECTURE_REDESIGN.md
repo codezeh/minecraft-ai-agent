@@ -271,6 +271,10 @@
 - atom_stand的standableAt接受脚格坐标
 - 所有命令参数y统一为脚格（文档明确说明）
 
+> ⚠️ **2026-11-01 更正**：上面第一条把 `floor(position.y)` 当成"脚格（实心方块）"是错的——`floor(position.y)` 是 bot 脚所在的**空气格**。
+> 定稿口径：对外一律用**面位**（实心块 y），脚位 = 面位 + 1 只在执行层内部换算；"脚格"一词停用。
+> 详见 [`00_overview.md §4`](00_overview.md)；代码已按此实现（`ba84907`）。
+
 ---
 
 ## 4. 目标架构设计
@@ -360,6 +364,9 @@
 
 ### 5.1 原子层（Atoms）— 按功能分类
 
+> ⚠️ **2026-11-01**：按新定义（原子 = 一次玩家输入，[`01_primitives.md`](01_primitives.md)），下表的 `atom_craft` / `atom_smelt` / `atom_brew` / `atom_eat` / `atom_trade` / `atom_bed` / `atom_enchant` 等是**动作**，
+> `atom_pathfind` 是导航，`atom_stuck_detect` / `atom_perceive` / `atom_safe` 是查询。现行清单：原子 44 个见 `01_primitives.md §3`，动作 42 个见 `02_actions.md §3`。下表保留作历史对照。
+>
 > **参数列约定**：一律写成 `目标描述对象, opts`（见 §6.4）。表里保留的 `name` / `pos` 是目标对象内的字段，
 > **不是**位置参数。`reach` 这个名字已废除（→ `maxReach`），若在下游文档里看到 `reach`，按旧名处理。
 
@@ -602,6 +609,9 @@ async function atomName(bot, target, opts = {}) {
 | `STUCK` vs `NO_PATH` | `NO_PATH` 是算不出路；`STUCK` 是路有但走不动 | 前者该放弃/换目标，后者该重试/换路/搭方块 |
 | `NO_REACH` vs `NO_TARGET` | `NO_REACH` 是知道坐标但这段路走不过去；`NO_TARGET` 是压根不知道在哪 | 混用会导致反复问"你在哪"，而坐标一直查得到（实测踩过） |
 
+> **计划新增 7 条**（2026-11-01，用到时再加；含义和要与谁区分见 [`02_actions.md §4`](02_actions.md)）：
+> `NOT_READY` `NO_RECIPE` `NO_WORKSTATION` `INVENTORY_FULL` `PREEMPTED` `CLAIM_CONFLICT` `LEASE_LOST`。
+
 **新增错误码的流程**：先在本表和 `atom_contract.js` 的 `CODES` 同时加（含一行注释说明"为什么必须区分"），再加到代码里。
 **禁止**：`FAILED` / `NOT_FOUND` / `TOO_FAR` / `ERROR` 这类同义词。
 
@@ -708,8 +718,8 @@ async function atomName(bot, target, opts = {}) {
 | `opts` 不许出现 `reach` / `extraMs` / `allowBreak` | 正则扫 |
 | 返回里不许出现 `reached:` | 正则扫 |
 | 原子内不许 `for` / `while` | AST 检查（策略循环归上层） |
-| 原子内不许 `setControlState` | 正则扫（按键必须经原子封装） |
-| 所有移动必须走 `nav_core.goTo` | 调用图 / 测试时 mock |
+| `setControlState` 等输入 API 只许出现在 `atom_input_*.js`（2026-11-01 改，见 `01_primitives.md` A1） | 正则扫；过渡期豁免名单见 `01_primitives.md §6` |
+| 流程里的跨格移动必须走 `nav_core.goTo`；单格动作（`stepInto` / `climb` …）只由导航层调 | import 扫描（`02_actions.md §5`） |
 
 > ⚠️ **"原子内不许 for/while"这条不能照字面实现**（2026-10-31 核对）：
 > 现状 22 个原子里 **19 个都有循环**，绝大多数是**合法的遍历查询**

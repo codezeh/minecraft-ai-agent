@@ -185,13 +185,14 @@
 5. onEvent包装两层，trace_bus重复记录 (executor:95/506/738)
 6. 潜水循环30s不查中断 (executor:349-355)
 
-### 3.4 可证缺陷（D1–D13 台账）
-13 条**全部有记录**，但原先分散在 4 份文档（本文件、`05_navigation.md`、`03_tasks.md`、`PART2`）。
+### 3.4 可证缺陷（D1–D27 台账）
+D1–D13 **全部有记录**，但原先分散在 4 份文档（本文件、`05_navigation.md`、`03_tasks.md`、`PART2`）。
+D14–D27 是 2026-11-01 对照源码逐条核实后补登的（D18、D25 是推断，标了"需复现"）。
 下表是唯一台账：新增缺陷沿用编号，并在此登记。
 
 | 编号 | 缺陷 | 原文位置 | 修复项 |
 |------|------|---------|--------|
-| **D1** | y 语义混乱（方块本身 vs 脚格）→ 下坡挖错列、上 2 格跳不上 | 本文 §3.4 / `05_navigation.md` §D1 | Phase1 1.1（方案 B：统一脚格） |
+| **D1** | y 语义混乱（方块本身 vs 脚格）→ 下坡挖错列、上 2 格跳不上 | 本文 §3.4 / `05_navigation.md` §D1 | Phase1 1.1（方案 1B：统一面位 = 脚下实心块的 y；`ba84907`） |
 | **D2** | dig 步骤忽略 x/z（挖邻列的边），液体头顶假成功 | 本文 §3.4 / `05_navigation.md` §D2 | Phase1 1.3 |
 | **D3** | `onFail` 只处理 `NO_PATH`/`TIMEOUT`，`NO_REACH` 等落默认 next | 本文 §3.4 | Phase4 4.1（task_collect） |
 | **D4** | `followEntity` 不传 `mapDir` → 立刻 `INTERNAL` 失败 | 本文 §3.4 | Phase4 4.1 |
@@ -204,6 +205,20 @@
 | **D11** | SQLite 语句缓存用 WeakMap，永不命中 | 本文 §3.4 / §3.3 | Phase6 6.1 |
 | **D12** | `tool_prep` 的 goto 无超时，可能永不返回 | 本文 §3.4 / §5 Phase1 1.7 | Phase1 1.7 |
 | **D13** | `goToPlayer` 的 `attempt >= 1` 恒真（重试条件失效） | `03_tasks.md`·task_follow_player | Phase4 4.1 |
+| **D14** | `execStep` 用了没定义的 `mapDir`（`columnSurfaces(mapDir, …)`，调用处只传 `{ onEvent }`）→ ReferenceError 被空 `catch` 吞掉，**10-28 加的"落点安全检查"从未执行** | `executor.js` execStep 落点检查段 | ✅ 2026-11-01 已修：walkTo 传 `mapDir`；catch 改发 `landing-check-error`；判据收窄为"落点那格是 `T.LAVA`"（原判据会拦掉水面过河，理由见 executor 注释）。回归 `tools/exec_landing_unit.mjs` |
+| **D15** | `isLiquid(floorB.name)` 传了字符串，`isLiquid` 读 `b.name` → 恒假，**液体地板被当实心** | `atom_tunnel.js:85/176` | ✅ 2026-11-01 已修：`isLiquid(floorB)`。回归 `tools/test_tunnel.mjs` 7b（已接进 unit_all） |
+| **D16** | `waitUntil` 没传 `bot`，中断谓词返回 `undefined`（=继续等）→ 爬梯中喊停仍按住跳直到超时（`climbUp` 默认 8 秒） | `atom_climb.js:200/256` | 传 `bot`，中断返回 `INTERRUPTED` |
+| **D17** | `this.timedout = true` 之后从不复位 → 之后每个动作都带着 timedout，中断消息被吞 | `action_manager.js:9/137/205` | `_executeAction` 开头复位（任务板 B0） |
+| **D18** | `stop()` 等 10 秒后强制 `executing=false`，但旧动作函数没被取消、还在跑；新动作开头 `clearBotLogs` 又清了 `interrupt_code` → 可能两个流程同时驱动 bot（推测，需真机复现） | `action_manager.js:30-41` | 任务板 B0 |
+| **D19** | 自己写 `bot.interrupt_code = false`，与 `stop()` 竞速，可能吞掉真中断 | `task_follow.js:85` | 删掉；`action_manager.js:106` 已在新动作开始时清过 |
+| **D20** | 注释说用精确坐标，下一行却 `Math.floor` → 落点差半格吸不到 | `task_pickup.js:123-126` | 直接用 `dest`，`tol` 0.5 |
+| **D21** | `waitGone` / `waitForBlock` 循环里不查 `interrupt_code` → 被取消时多等最多 1.5 秒 | `atom_dig.js:144` / `atom_place.js:145` | 循环内加检查 |
+| **D22** | 本地 `waitFor` 中断时返回 `null`，调用方当成"没变化"报 `BLOCKED` | `atom_use.js:183` → `:93` / `:130` | 区分中断与超时 |
+| **D23** | `settings_spec.json` 没有 `companion_mode` → 面板创建/编辑 agent 时被删掉，`!followPlayer` 等走旧路径 | `mindserver.js:222-226` | 补 key；长期按 5.2 删开关 |
+| **D24** | docHelper 用 `indexOf('**/')` 截 JSDoc；注释以 `*/` 结尾时返回 -1 → 截错，模型看到的技能文档残缺 | `src/agent/library/index.js:11` | 改正则；`!listSkills` 改走 manifest（`04_skills.md §5`） |
+| **D25** | `restart-agent` 对已停止的 agent（socket 为 null）直接 `.socket.emit` → mindserver 崩（推断；第一轮审查已报） | `mindserver.js:303-306` | ✅ 2026-11-01 已修：判空；`chat-message` / `set-agent-settings` 的同类问题一并判空 |
+| **D26** | `nav_core.withEngine` 往 `data` 里加 `engine`，不在 §6.3 白名单 | `nav_core.js:119-122` | 白名单加 `engine`，或改进 trace |
+| **D27** | `PASSABLE` 含 `water` / `lava`，`canStand` 只查"可穿过 + 下方有支撑"，**脚位或头位是岩浆也判能站**；`findStandSpot` 直接用它的结论 | `atom_stand.js:24` / `:62-84` | ✅ 2026-11-01 已修：`PASSABLE` 去掉 `lava`。没加"选点后过 `isSafe`"：它把 4 格内有水、12 格内有敌对生物都算不安全，会拒掉大量正常站位。回归 `tools/atom_stand_unit.mjs` |
 
 > ⚠️ `PART2` §11 写"10 个回归用例覆盖 D1–D13"，13 条缺陷对 10 个用例，缺口要么补用例要么补说明。
 
@@ -395,6 +410,9 @@ async function skillName(bot, goal, context = {}) {
       — 已提取为纯函数原子（movedEnough / weightedMove / realMove），
         executor 改为调用它，判据与阈值原值不变（2 / 1.5）
 
+> 2026-11-01：按新定义（原子 = 一次玩家输入），下面 P1 / P2 的 craft / eat / smelt / trade / bed / ride / lever / door / enchant 都是**动作**，
+> 归 [`02_actions.md §3`](02_actions.md)；原子补齐另见 Phase A。
+
 **P1（生存必需）**
 - [ ] atom_craft.js - 合成单物品
 - [ ] atom_eat.js - 进食
@@ -546,9 +564,9 @@ async function skillName(bot, goal, context = {}) {
 - [ ] 5.4 actions.js命令全部路由到task/nav
 
 - [ ] 5.5 mode管理统一到task_modes
-  - [ ] 删除executor mode列表
+  - [x] 删除executor mode列表 — `a5e48e7`：executor 改调 `task_modes`
   - [ ] 删除skills.js mode列表
-  - [ ] 修复空闲时unPauseAll竞态
+  - ~~修复空闲时unPauseAll竞态~~（2026-11-01 复核：不构成竞态，撤销此项）
 
 **交付物**: 上游代码只保留LLM决策层
 
@@ -574,13 +592,70 @@ async function skillName(bot, goal, context = {}) {
 - [ ] 6.4 测试覆盖
   - [ ] 每个原子单元测试
   - [ ] 关键任务集成测试（collect/follow/build）
-  - [ ] 缺陷D1-D13回归测试
+  - [ ] 缺陷D1-D27回归测试（D14–D27 见 §3.4）
 
 **交付物**: 性能提升30%+，测试覆盖率60%+
 
 ---
 
+### Phase A: 原子收拢（2026-11-01 新增）
+**目标**: 所有按键、点击、斜杠命令只从 `atom_input_*.js` 出去（[`01_primitives.md`](01_primitives.md)）
+
+- [ ] A.1 `atom_input_move` + `atom_read`；executor 潜水、`atom_climb`、`atom_pillar` 改调 `holdKey`（顺手修 D16）
+- [ ] A.2 `atom_input_mouse`；dig / place / use 改走 `holdDig` / `placeAgainst` / `useOnBlock`（顺手修 D21、D22）
+- [ ] A.3 `atom_input_misc` + 带白名单的 `command()`；`skills.js` 的斜杠命令改调它
+- [ ] A.4 preflight 扫描 A1 列的 API，清空豁免名单
+
+**交付物**: 44 个原子；`setControlState` 只出现在 `atom_input_*.js`
+
+---
+
+### Phase R: 按层改前缀（2026-11-01 新增；时间已确认：Phase A 之后、补动作之前）
+**目标**: 文件名就是层级（[`02_actions.md §5`](02_actions.md)）
+
+- [ ] R.1 新文件直接用新前缀（`act_*` / `query_*` / `flow_*` / `strat_*` / `board_*`）
+- [ ] R.2 旧文件 `git mv`，原路径留 `export *` 转发
+- [ ] R.3 preflight 按前缀查 import 规矩；全部通过后删转发文件
+
+**交付物**: `task_*` 前缀退役；`commands/` 不再直接 import 原子和动作
+
+---
+
+### 动作补齐（2026-11-01 新增）
+**目标**: 42 个动作（[`02_actions.md §3`](02_actions.md)），21 个复用或拆分、21 个新写
+
+- [ ] 先把 7 个新错误码加进 `CODES`（`02_actions.md §4`）
+- [ ] P0（P0 流程要用）：`craftOnce` `furnaceLoad` / `furnaceCollect` `eat` `equip`（补护甲槽校验）`deposit` / `withdraw` `attackOnce` `harvestCrop` `plantSeed` `tillSoil`
+- [ ] P1：`stepInto`（换之前先跑 99/110 基线）`sleepInBed` / `wake` `fishOnce` `feedEntity` `tradeOnce` `toggleBlock` `boneMeal`
+- [ ] P2：`brewOnce` `enchantOnce` `anvilCombine`；其余（盾、弓、投掷、剪毛、挤奶、拴绳、载具）按流程需要再补
+
+---
+
+### 复合技能（2026-11-01 新增）
+**目标**: 24 个流程 + 6 个策略，另有 4 个 P2 策略（[`04_skills.md`](04_skills.md)）
+
+- [ ] 现有 6 个流程补 manifest 和 ctx
+- [ ] 注册表 + `!do` / `!listSkills`（顺手修 D24）
+- [ ] P0 流程：craft → smelt → store/fetch → eat → mine（D15 已修）→ farm → fight → build
+- [ ] 策略：`strat_obtain` → `strat_tool_tier` → `strat_first_night`；其余等任务板 B2
+
+---
+
+### Phase B: 任务板（2026-11-01 新增）
+**目标**: 个人单和多人单（[`06_task_board.md`](06_task_board.md)），验收用例见 06 §11
+
+- [ ] B0 修 D17、D18；流程注入 ctx（不依赖任务板，可与 Phase A 并行）
+- [ ] B1 个人单 + 持久化（socket 的 `allowRequest` 已于 2026-11-01 提前做完）
+- [ ] B2 调度：自动领单、优先级、抢占
+- [ ] B3 多人单、预约、角色
+- [ ] B4 共享地标、危险点、箱子内容
+
+---
+
 ## 6. 文件组织结构（目标）
+
+> ⚠️ 2026-11-01：本节的子目录方案被 [`02_actions.md §5`](02_actions.md) 的**前缀方案**取代：`library/` 保持平铺，靠文件名前缀区分层级
+> （分子目录要改所有相对 import，收益只是好看）。下面保留作历史参考。
 
 ```
 src/agent/library/

@@ -6,13 +6,13 @@
 >
 > | 文中模块 | 现状 |
 > |---|---|
-> | `nav.js`（统一入口） | ❌ **不存在** —— 这正是 `ARCHITECTURE_REDESIGN.md §4.1` 要补的 `nav_core`（P0 新增） |
+> | `nav.js`（统一入口） | ✅ **已落地为 `nav_core.js`**（2026-11-01，`f7a0b25`）：`goTo` 按输入选引擎——有 `mapDir` → `walkTo`，给了 y → `moveTo`，只有 x/z → `moveToXZ`；实体跟随仍走 `task_follow` |
 > | `pathfinder.js`（短距离封装） | ❌ **不存在** —— 短途能力实际在 `path_short.js`（`moveToXZEx` 等） |
 > | `executor.js` | ✅ 存在 |
 > | `path_3d.js` / `terrain3d.js` | ✅ 存在（另有 `terrain_view.js`、`path_short.js` 未在本文提及） |
 >
 > 所以本文应当成**目标设计**读：它描述的"统一入口"是要新建的，不是现状。
-> 阅读时把 `nav.js` 一律替换成"计划中的 `nav_core`"，把 `pathfinder.js` 替换成 `path_short.js`。
+> 阅读时把 `nav.js` 一律替换成 `nav_core.js`（已落地），把 `pathfinder.js` 替换成 `path_short.js`。
 >
 > 另外 §分层原则里"所有移动走 nav.goTo"目前**尚无强制入口**——今天直接调 `moveTo`/`executor` 的地方仍在。
 
