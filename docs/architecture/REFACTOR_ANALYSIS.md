@@ -1128,10 +1128,24 @@ async function skillName(bot, goal, context = {}) {
 ### 动作补齐（2026-11-01 新增）
 **目标**: 43 个动作（[`02_actions.md §3`](02_actions.md)），21 个复用或拆分、22 个新写
 
-- [ ] 先把 7 个新错误码加进 `CODES`（`02_actions.md §4`）
+> 🔴 **M6 的第一件事（阻塞性，不是建议）**：把 `02_actions.md §4` 的 **7 个新码加进
+> `contract.js` 的 `CODES`**：
+> `CLAIM_CONFLICT` / `INVENTORY_FULL` / `LEASE_LOST` / `NOT_READY` / `NO_RECIPE` /
+> `NO_WORKSTATION` / `PREEMPTED`。
+>
+> **依据（M5 实测）**：M5 建了 `composite_registry` 的 manifest 启动校验，`codes` 字段里
+> 引用未注册的码会**模块加载即 throw**。t11 就当场撞上：
+> `[collect] codes 里的 INVENTORY_FULL 没在 CODES 注册` → 启动崩。
+> 所以：**不先注册这 7 个码，M6 的任何流程/动作一写就启动失败**。
+> 未注册状态下不要把它们写进任何 manifest 的 `codes`。
+
+- [ ] 先把 7 个新错误码加进 `CODES`（`02_actions.md §4`） ← **阻塞项，先做**
 - [ ] P0（P0 流程要用）：`craftOnce` `furnaceLoad` / `furnaceCollect` `eat` `equip`（补护甲槽校验）`deposit` / `withdraw` `attackOnce` `harvestCrop` `plantSeed` `tillSoil`
-- [ ] P1：`stepInto`（换之前先跑 99/110 基线）`sleepInBed` / `wake` `fishOnce` `feedEntity` `tradeOnce` `toggleBlock` `boneMeal` `swimStep`（05 末节）
+- [ ] P1：`stepInto`（换之前先跑基线）`sleepInBed` / `wake` `fishOnce` `feedEntity` `tradeOnce` `toggleBlock` `boneMeal` `swimStep`（05 末节）
 - [ ] P2：`brewOnce` `enchantOnce` `anvilCombine`；其余（盾、弓、投掷、剪毛、挤奶、拴绳、载具）按流程需要再补
+
+> 注：P1 里"换 `stepInto` 之前先跑基线"的基准数已更新为**新干净基线 49/55（89.1%）**
+> （2026-11-01 `gap-bridge` 修好之后重建；旧 99/110 那套是跨多次运行累积的混合物，已废弃）。
 
 ---
 
