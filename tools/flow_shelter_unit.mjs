@@ -28,6 +28,18 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     check('② 两层墙都是外圈 8 格（封闭，不露天）', wall64 === 8 && wall65 === 8, `${wall64}/${wall65}`);
 }
 
+// ②b ★ 屋顶正中**最后放**（这样条件 C 的"4 邻已落地"必然成立，才能封顶）
+{
+    const bp = shelterBlueprint({ x: 0.5, y: 64, z: 0.5 }, 'cobblestone', 1);
+    const roof = bp.filter((b) => b.y === 66);
+    const last = roof[roof.length - 1];
+    const centerIsLast = last.x === 0 && last.z === 0;
+    const othersFirst = roof.slice(0, -1).every((b) => !(b.x === 0 && b.z === 0));
+    check('②b ★ 屋顶正中最后放（保证 4 邻已落地 → 条件 C 成立 → 能封顶）',
+        centerIsLast && othersFirst && roof.length === 9,
+        `最后一块=(${last.x},${last.z}) 顶层 ${roof.length} 块`);
+}
+
 // ③ manifest 合法：level=flow，codes 全已注册
 {
     const codesOk = (manifest.codes ?? []).every((c) => c === 'OK' || CODES.includes(c));

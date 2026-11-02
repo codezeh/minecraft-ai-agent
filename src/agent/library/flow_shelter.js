@@ -83,10 +83,19 @@ export function shelterBlueprint(feet, material, half = 1) {
             }
         }
     }
-    // 顶（y+2）
+    // 顶（y+2）—— ★ **四边先放、正中最后放**（2026-11-03 用户要求）。
+    //
+    //   为什么顺序重要：`flow_build` 的支撑判据条件 C 要求"四邻里**已经落地**的实心方块"。
+    //   屋顶正中那格底下是空的（她要站里面），所以它只能靠 C 成立。
+    //   先把四边 8 格放好 → 正中放的时候 4 邻必然已落地 → C 成立 → 能封顶。
+    //   如果按原来的遍历顺序，正中可能排在四边之前 → C 不成立 → NO_SUPPORT（真机就是这么失败的）。
+    const roof = [];
     for (let dx = -half; dx <= half; dx++) {
-        for (let dz = -half; dz <= half; dz++) put(cx + dx, cy + 2, cz + dz);
+        for (let dz = -half; dz <= half; dz++) roof.push([cx + dx, cy + 2, cz + dz]);
     }
+    const isCenter = ([x, , z]) => x === cx && z === cz;
+    for (const [x, y, z] of roof.filter((c) => !isCenter(c))) put(x, y, z);   // 四边先
+    for (const [x, y, z] of roof.filter(isCenter)) put(x, y, z);              // 正中最后
     return out;
 }
 

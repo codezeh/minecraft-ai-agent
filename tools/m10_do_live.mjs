@@ -28,7 +28,12 @@ bot.on('error', () => { });
 await new Promise((res) => bot.once('spawn', res));
 await sleep(1200);
 
-const board = new BoardClient({ socket: sock, name: NAME, skills: ['obtain', 'shelter'], timeoutMs: 5000 });
+// ★ 必须报**全部**注册技能 —— 与 agent.js 的 _registeredSkills() 一致。
+//   第一版我只报了 ['obtain','shelter']，于是 board:add 的安全校验①b
+//   （"该 bot 没上报过这个技能"）把需要的 craft/mine 等子单全拒了 →
+//   父单（skill=obtain）成功、子单 0 张。这是我 harness 的错，不是产品 bug。
+const reg = await import('../src/agent/library/composite_registry.js');
+const board = new BoardClient({ socket: sock, name: NAME, skills: reg.SKILL_NAMES, timeoutMs: 5000 });
 await board.hello();
 const { db } = openBoard();
 try { db.exec('DELETE FROM jobs'); } catch { }
@@ -47,8 +52,16 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
 
 // ══ ① !do obtain：贴拆出的子单原文（要 parentId + why）════════════
 {
-    const { obtain } = await import('../src/agent/library/strat_obtain.js');
+    const { obtain, planObtain } = await import('../src/agent/library/strat_obtain.js');
     const agent = { bot, name: NAME, board };
+
+    // ★ 先看 planObtain 到底出了几张（区分"没规划出来" vs "规划了但没下出去"）
+    const inv = {};
+    for (const it of (bot.inventory?.items?.() ?? [])) inv[it.name] = (inv[it.name] ?? 0) + it.count;
+    const plan = planObtain({ item: 'iron_pickaxe', count: 1, inventory: inv, chests: {} });
+    console.log(`  [诊断] planObtain 张数=${plan.plan.length} gaps=${JSON.stringify(plan.gaps)} 背包物品数=${Object.keys(inv).length}`);
+    console.log(`  [诊断] 计划: ${plan.plan.map((p) => p.skill + ':' + (p.args?.item ?? p.args?.ore)).join(', ')}`);
+
     const r = await obtain(agent, 'iron_pickaxe', 1, { board });
     console.log(`\n=== ① !do obtain "item=iron_pickaxe count=1" ===`);
     console.log(`返回: ok=${r.ok} code=${r.code} parentId=${r.data?.parentId ?? '-'} 子单数=${r.data?.jobs?.length ?? 0}`);

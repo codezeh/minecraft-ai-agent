@@ -58,13 +58,38 @@ export const manifest = {
 const GOTO_STAND_BUDGET_MS = 20000;   // 走到站位
 const MIN_WAIT_BUDGET_MS = 3000;
 
+/**
+ * 四邻（同层前后左右）里有没有**已经放好的真·实心方块**（支撑判据的条件 C）。
+ *
+ * ★ 关键：只认**已经存在的方块**，**不认"蓝图里的"**。
+ *   如果认蓝图，4 个邻居会互相证明对方该被允许 → 循环论证 →
+ *   等于"没有任何真支撑也能放"，会造出悬空块。
+ *
+ * 导出它是为了能**直接单测这条承重规则**（不用跑完整个 build 流程）。
+ *
+ * @param {object} bot
+ * @param {{x:number,y:number,z:number}} pos 目标格
+ * @returns {boolean}
+ */
+export function hasPlacedNeighbor(bot, pos) {
+    const NEIGHBORS_4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    return NEIGHBORS_4.some(([dx, dz]) => {
+        const nb = blockAt(bot, { x: pos.x + dx, y: pos.y, z: pos.z + dz });
+        return !!nb && !AIRISH.has(nb.name);
+    });
+}
+
 /** 空气判定（读不到也算"不确定"，由调用方决定）。 */
 const AIRISH = new Set(['air', 'cave_air', 'void_air', 'water', 'lava']);
 
 /** 蓝图排序：自下而上（y 升序），同层由近到远。 */
 function orderBlocks(blocks, origin) {
     const dist = (b) => Math.hypot(b.x - origin.x, b.z - origin.z);
-    return [...blocks].sort((a, b) => (a.y - b.y) || (dist(a) - dist(b)));
+    // ★ 同层内**由远到近**（2026-11-03 修）：原来是近到远，于是"屋顶正中"（dist=0）
+    //   排在同层第一个 —— 它底下是空的、四邻还没放，支撑判据 C 不成立 → NO_SUPPORT。
+    //   改为**先放外圈、最后放正中**：既符合"先砌墙再封顶"的物理，也让 C 条件
+    //   在放正中时必然成立（四邻已落地）。这正是 flow_shelter 封顶需要的行为。
+    return [...blocks].sort((a, b) => (a.y - b.y) || (dist(b) - dist(a)));
 }
 
 /** 材料清单：{ name: 需要的数量 }。 */
@@ -158,8 +183,25 @@ export async function build(bot, blocks, opts = {}) {
         const below = blockAt(bot, belowPos);
         const belowSolid = !!below && !AIRISH.has(below.name);
         const belowInBlueprint = blueprintSet.has(`${belowPos.x},${belowPos.y},${belowPos.z}`);
-        if (!belowSolid && !belowInBlueprint) {
-            unsupported = { pos, below: below?.name ?? null };
+
+        // ── ★ 支撑判据（2026-11-03 用户定的精确条件）─────────────────────
+        //
+        // 满足任一条即可放：
+        //   A) 下方是**实心**方块                            ← 原有
+        //   B) 下方那一格**在蓝图里**（将来会放）              ← 原有
+        //   C) 四邻（同层前后左右）中**至少有一个已经是真·实心方块**
+        //      —— 注意是"**已经放好的真实方块**"，**不认"蓝图里的"**
+        //
+        // 为什么 C 必须要求"已落地"而不是"在蓝图里"：
+        //   如果认蓝图，4 个邻居会**互相证明对方该被允许** → 循环论证，
+        //   等于"没有任何真支撑也能放"，会造出悬空块。
+        //   要求"已落地"就没有这个问题：屋顶正中放的那一刻，4 邻早已放好。
+        //
+        // 这条是 MC 的真实物理：只要贴着**已经存在的**方块就能放。
+        const neighborPlaced = hasPlacedNeighbor(bot, pos);
+
+        if (!belowSolid && !belowInBlueprint && !neighborPlaced) {
+            unsupported = { pos, below: below?.name ?? null, neighborPlaced };
             failed.push({ pos, code: 'NO_SUPPORT' });
             continue;
         }
