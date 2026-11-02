@@ -44,6 +44,11 @@ import { deriveClaims } from './board_claims.js';
 import { makeCtx } from './composite_registry.js';
 import { getSkill } from './composite_registry.js';
 import { jobDeadlineTimeoutMinutes } from './control.js';
+// ★ 2026-11-02 t25：`meetsRequires` **只允许有一份实现**，真身在 board_store.js。
+//   这个文件原来自己又写了一份（且行为与 store 那份相反）—— 典型"两处各叫一个名字"：
+//   claimFor 用的是 store 那份（真正决定能不能领），而这里的抢占/领单判定用的是本地这份，
+//   于是"没配角色的 bot 能不能领"取决于你走哪条路。已改成 import，删掉本地副本。
+import { meetsRequires } from './board_store.js';
 
 // ───────────────────────────────────────────────────────────────────────────
 // 纯函数（不碰 I/O，好离线测）
@@ -104,31 +109,10 @@ export function pickBest(jobList, pos = null) {
     })[0] ?? null;
 }
 
-/**
- * 这张单我有没有资格领（06 §4 的 `requires`）。
- *
- * B2 只做**过滤**（不合格就不领），B3 才在服务端按 profile 的 roles 严格校验。
- * 读不出来的项**不当作"不合格"**（宁可让它试着跑，也别把单永久晾着）。
- *
- * @param {object} job
- * @param {{roles?:string[], items?:string[]}} who
- * @returns {boolean}
- */
-export function meetsRequires(job, who = {}) {
-    const req = job?.requires ?? null;
-    if (!req) return true;
-    const roles = req.roles ?? [];
-    if (Array.isArray(roles) && roles.length) {
-        const have = new Set(who.roles ?? []);
-        if (!roles.some((r) => have.has(r))) return false;
-    }
-    const items = req.items ?? [];
-    if (Array.isArray(items) && items.length) {
-        const have = new Set(who.items ?? []);
-        if (!items.every((i) => have.has(i))) return false;
-    }
-    return true;
-}
+// （本地那份 meetsRequires 已删除 —— 单一真相在 board_store.js，见顶部 import 处的说明。）
+//   但**保留对外导出**：已有单测（board_scheduler_unit）和外部调用按老路径从这里取，
+//   给一个 re-export 而不是再写一份实现 —— 这样"只有一份实现"和"向后兼容"同时成立。
+export { meetsRequires };
 
 // ───────────────────────────────────────────────────────────────────────────
 // 调度器

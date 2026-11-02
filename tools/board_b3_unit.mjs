@@ -262,19 +262,55 @@ const freshDb = () => {
     }
 }
 
-// 15. meetsRequires 纯函数逐条
+// 15. ★ meetsRequires —— requires.roles × who.roles **完整判定矩阵**（表驱动）
+//
+// 为什么要求全矩阵（2026-11-02 t25，captain 要求）：
+//   原来这里只有一行 `[{roles:['miner']}, {}, false, 'bot 无角色']`，
+//   而**文件头第 8 行注释写的是"不配 roles 时谁都能领"** —— 注释与测试互相矛盾，
+//   实现跟着测试走 → **没配角色的 bot 什么单都领不到**（06 §9.4 要求"不配就什么都能领"）。
+//   这是今晚第 3 个「两处各叫一个名字」家族成员，而且最危险：**测试自己把错的行为锁住了**，
+//   于是它被当成"已验证"的证据。→ 改成全矩阵，让每一条语义边界都有断言钉着。
+//
+// 三条语义（也写进实现注释，防"顺手"改坏）：
+//   1) requires.roles 空/未配 → 不受限
+//   2) who.roles 空/未配     → 不受限（本次修的）
+//   3) 两边都配 → **任一命中即可（some，不是 every）**
 {
-    const cases = [
-        [{ requires: null }, {}, true, '无要求'],
-        [{ requires: { roles: ['miner'] } }, {}, false, 'bot 无角色'],
-        [{ requires: { roles: ['miner'] } }, { roles: ['miner'] }, true, '对上'],
-        [{ requires: { roles: ['miner', 'builder'] } }, { roles: ['builder'] }, true, '任一角色对上即可'],
+    const MATRIX = [
+        // [requires.roles,        who.roles,            期望可领, 说明]
+        [undefined,               undefined,            true,  '两边都没配 → 可领'],
+        [[],                      [],                   true,  '两边都是空数组 → 可领'],
+        [undefined,               ['miner'],            true,  '单没要求、bot 有角色 → 可领'],
+        [[],                      ['miner'],            true,  '单要求空、bot 有角色 → 可领'],
+        [['miner'],               undefined,            true,  '★ 单要 miner、bot 没配 → 可领（本次修的）'],
+        [['miner'],               [],                   true,  '★ 单要 miner、bot 空数组 → 可领（本次修的）'],
+        [['miner'],               ['miner'],            true,  '对得上'],
+        [['miner'],               ['builder'],          false, '配了角色但对不上 → 拒'],
+        [['miner', 'farmer'],     ['farmer'],           true,  '★ 任一命中即可（不是全都要）'],
+        [['miner'],               ['builder', 'miner'], true,  '多角色里含一个 → 可领'],
+        [['miner', 'farmer'],     ['builder'],          false, '配了角色但一个都不对 → 拒'],
+    ];
+    const bad = [];
+    for (const [reqRoles, whoRoles, exp, why] of MATRIX) {
+        const job = reqRoles === undefined ? {} : { requires: { roles: reqRoles } };
+        const who = whoRoles === undefined ? {} : { roles: whoRoles };
+        const got = meetsRequires(job, who);
+        if (got !== exp) bad.push({ req: reqRoles, who: whoRoles, exp, got, why });
+    }
+    if (bad.length === 0) {
+        okCase('★ meetsRequires 角色全矩阵（11 组，含"任一命中"与"缺省放开"）', `${MATRIX.length} 组`);
+    } else {
+        badCase('meetsRequires 角色矩阵', bad);
+    }
+
+    // 道具条件（与原用例一致，保留）
+    const itemCases = [
         [{ requires: { items: ['iron_pickaxe'] } }, { items: ['iron_pickaxe'] }, true, '有道具'],
         [{ requires: { items: ['iron_pickaxe'] } }, { items: [] }, false, '缺道具'],
     ];
-    const bad = cases.filter(([job, who, exp]) => meetsRequires(job, who) !== exp);
-    if (bad.length === 0) okCase('meetsRequires 六种情形', `${cases.length} 组`);
-    else badCase('meetsRequires', bad);
+    const bad2 = itemCases.filter(([job, who, exp]) => meetsRequires(job, who) !== exp);
+    if (bad2.length === 0) okCase('meetsRequires 道具条件（2 组）', `${itemCases.length} 组`);
+    else badCase('meetsRequires 道具', bad2);
 }
 
 // ══════════════════════════════════════════════════════════════════════════

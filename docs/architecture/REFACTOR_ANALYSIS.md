@@ -1788,12 +1788,143 @@ control.js:440        {state, lease, result, countAttempt}
 | `water-cross` | 5/5、中位 **30615ms**（各轮 31854/30615/…），**正常带内**（本轮跑前 `rcon list` 确认 0 玩家、跑时在线的是自己的 bot，无并发干扰） |
 | 真机 B2 | `board_b2_live.mjs` **5/5**、`board_b2_brief_live.mjs` **3/3** |
 
-**⑨ B3 待办（本轮不做，记台账）**
+**⑨ B3 待办（B2 时列的，B3 已落地 —— 见下一节）**
 
-1. **`claims` 表填充**（预约）—— 表已建（B1），`_reserveClaims` 目前只在无板时恒成功。
-2. **6 种预约 key**（06 §9.2）。
-3. **`requires` 角色过滤** —— `meetsRequires` 已实现（roles/items），但 `roles` 来源（B3 角色系统）未接。
-4. **多人单拆单**（parentId/kind 已有列，逻辑未做）。
+1. ~~`claims` 表填充~~ → ✅ **B3 已做**（六种 key + TTL，真机查库有行）
+2. ~~6 种预约 key~~ → ✅ **B3 已做**（`block/area/container/station/entity/item`）
+3. ~~`requires` 角色过滤~~ → ✅ **B3 已做**（t25 修了"没配角色=不受限"的语义）
+4. ~~多人单拆单~~ → ✅ **B3 已做**（`splitByCount` / `splitByArea` + 父子收敛）
+
+---
+
+#### M8 B3 验收记录（t25 / 2026-11-02，全部实测）
+
+**① 六种预约 key（06 §9.2）**
+
+`CLAIM_KINDS = block / area / container / station / entity / item`
+
+| key | 格式 | 解析实测 |
+|---|---|---|
+| `block` | `block:100,64,100` | ✅ |
+| `area` | `area:100,64,100:8`（半径） | ✅ |
+| `container` | `container:100,64,100` | ✅ |
+| `station` | `station:furnace@100,64,100`（**名字@坐标**，不是冒号） | ✅（我第一版按 `station:furnace:100,64,100` 测，是**我的样本写错**，实现本身对） |
+| `entity` | `entity:abc-123` | ✅ |
+| `item` | `item:iron_ingot:5` | ✅ |
+
+**冲突判定（共 8 组实测）**
+
+| 场景 | 期望 | 实测 |
+|---|---|---|
+| `area(半径8)` vs 其内部的 `block` | 冲突 | ✅ **跨类型也判** |
+| 远处的 `block` | 不冲突 | ✅ |
+| 两个 `area` 半径都 8、中心距 **恰好 16**（=半径和，相切） | **不冲突** | ✅ **严格 `<`，相切不算重叠** |
+| 中心距 15（略小） | 冲突 | ✅ |
+| 中心距 17（略大） | 不冲突 | ✅ |
+
+**"单 bot 恒成功"没有 if 分支（同一个函数两个方向都验过）**
+
+- 单 bot 连约 **3 个互相重叠**的 key → **全成功**（同 owner 不算冲突）✅
+- 另一个 bot 约到同一片 → **立刻 `CLAIM_CONFLICT`**，且 `conflicts` 明细点名占位的 key ✅
+- 单 bot 继续追加约 → 仍成功（没有隐藏上限）✅
+
+**② 角色过滤（`requires.roles`）—— t25 抓到并修掉一处"注释与实现相反"**
+
+🔴 **缺陷**：`meetsRequires` 原来是 `new Set(who.roles ?? [])` + `!some(...)` → **空角色集合必然"一个都对不上"** →
+**没配角色的 bot 什么带角色的单都领不到**。而该函数的注释自己写着「不配就什么都能领」（06 §9.4），
+atoms 的单测第 269 行甚至把错的行为写成了期望值（`{} → false`）—— **注释说一套、测试写另一套、实现跟着测试走**。
+
+🔴 **更严重**：`meetsRequires` 当时有**两份实现**（`board_store.js:809` 与 `board_scheduler.js:117`），
+且行为相反；`claimFor` 用的是 store 那份（**真正决定能不能领**），scheduler 的抢占/领单判定用本地那份 →
+"没配角色能不能领"取决于走哪条路。
+
+**修法（两处都改，缺一不可）**
+
+| 处 | 改动 |
+|---|---|
+| `board_store.meetsRequires` | 只有"**明确配了角色、且一个都对不上**"才拒：`if (Array.isArray(have) && have.length && !wantRoles.some(r => have.includes(r))) return false;` |
+| `board_scheduler` | **删掉本地副本**，改成 `import { meetsRequires } from './board_store.js'` + `export { meetsRequires }`（**只有一份实现**，同时保留对外导出做兼容） |
+| `tools/board_b3_unit.mjs` | 原来那条 `{} → false` 换成 **11 组完整判定矩阵** |
+
+**完整判定矩阵（11 组，`tools/board_b3_unit.mjs`，全过）**
+
+| `requires.roles` | `who.roles` | 期望 | 实测 |
+|---|---|---|---|
+| 无 | 无 | ✅ 可领 | ✅ |
+| `[]` | `[]` | ✅ 可领 | ✅ |
+| 无 | `['miner']` | ✅ 可领 | ✅ |
+| `[]` | `['miner']` | ✅ 可领 | ✅ |
+| `['miner']` | **无** | ✅ **可领**（本次修的） | ✅ |
+| `['miner']` | **`[]`** | ✅ **可领**（本次修的） | ✅ |
+| `['miner']` | `['miner']` | ✅ 可领 | ✅ |
+| `['miner']` | `['builder']` | ❌ 拒 | ✅ |
+| `['miner','farmer']` | `['farmer']` | ✅ **任一命中即可**（`some` 不是 `every`） | ✅ |
+| `['miner']` | `['builder','miner']` | ✅ 可领 | ✅ |
+| `['miner','farmer']` | `['builder']` | ❌ 拒 | ✅ |
+
+> 三条语义已写进**实现注释**钉死：①`requires.roles` 空 → 不受限；②`who.roles` 空 → 也不受限；
+> ③两边都配 → **任一命中即可（`some`）**，⚠️ 别"顺手"改成 `every`。
+
+**③ 真机 B3（`tools/board_b3_live.mjs`，**7/7 全过**）**
+
+| 断言 | 实测 |
+|---|---|
+| ① 两个 bot 都参与（不同 assignee、各领不同子单） | ✅ `assignee=["b3a","b3b"]` |
+| ② **claims 表真的落了行**（两个 owner、until 在未来） | ✅ 2 行，owners=`["b3a","b3b"]` |
+| ③ 两 bot 的预约 key 无重叠 | ✅ `area:6100,…:8` 与 `area:6124,…:8` 互不冲突 |
+| ④ **TTL 续期真的在走**（until 被 heartbeat 推后） | ✅ `…357082 → …377110`、`…360083 → …370092` |
+| ⑤ **掉线 bot 的预约自动释放**（不永久锁地） | ✅ 残留=[]、别人能约到 |
+| ⑥ 合计产出 ≥ 64 | ✅ 合计 **90**（目标 64） |
+| **⑦ 父单收敛为 done**（06 §11 B3 原文验收项） | ✅ **`parent=done`**，4 张子单全 done |
+
+⑦ 的复跑说明：**本次按原样跑就过了**（不需要改矿密度）—— `board_b3_live.mjs:159` 每块区域本来就填
+`15×3×15 = 675` 块 `iron_ore`，挖 16 个绰绰有余。atoms 那次第 4 张 14/16 blocked 应是**偶发**。
+
+**④ 「静默 no-board」同类排查（t25，结论：**没有第三处**）**
+
+B3 真机最狠的一条是 `ctx.reserve()` 静默走 no-board → jobs 全 done、合计 85、**claims 表 0 行**
+（根因：`makeCtx` 只认 `agent.boardClient`，而 `agent.js` 存的是 `this.board`；调度器也没把板塞进传给 makeCtx 的 agent）。
+
+我逐个验了 `makeCtx` 暴露的 5 个方法在**有板/无板**两种情况下的实际行为，并**直接查库**断言"接口说 ok ⇒ 库里真有东西"：
+
+| ctx 方法 | 有板时（实测） | 无板时（设计） |
+|---|---|---|
+| `reserve` | ✅ **claims 表真有行**（key/owner/until 全对），不走 no-board 分支 | 返回 `{ok:true, data.noBoard:true}` —— **降级但可识别** |
+| `release` | ✅ claims 行真的被删 | 同上，带 `noBoard` |
+| `save` | ✅ checkpoint **真的落库** | 存内存 |
+| `checkpoint` | ✅ 读回刚存的 | 读内存 |
+| `onEvent` | 永远写 trace_bus（不走板），无板也不丢 | 同 |
+
+> 两个调用点都已修好：`makeCtx` 用 `agent?.boardClient ?? agent?.board`；调度器 `_runJob` 把
+> `board`+`boardClient` 都塞进 `agentView`。**结论：这一类已闭合，没有第三处"静默走 no-board"。**
+> **判据（写给以后）**：一个"本该写库"的调用在无板时 no-op，**只有在返回值里带可识别标记（`noBoard:true`）**才算"设计如此"；
+> 否则就是"拿错对象走了降级"——静默降级等于没人会发现问题（今晚反复出现的教训）。
+
+**⑤ 功能未回归（t25 实测）**
+
+| 项 | 结果 |
+|---|---|
+| `unit_all` | **34/34 + 1 跳过**，exit 0（与 06 §11 的期望一致） |
+| `preflight` | 默认 **exit 0**（违规 5 处、0 新增）/ `--strict-api` **exit 1**（Phase 5.4 旧债，**未修绿**）/ `--report-api` exit 0；**116/116** 模块导入 |
+| `atom_all` | **17/18** —— `vine_physics_test` 偶发（见下），其余 17 项全过、244 条真实用例 |
+| `bench_move_actions 5` | **49/55（89.1%）**，与基线一致；失败全 `NO_PATH ×6` |
+
+**⑥ 遗留 / 观察项**
+
+1. 🔴 **`vine_physics_test` 偶发（第 2 次，仍未被修）** —— `爬藤蔓 升高 0.00、前进仍 2.20`（她走到了藤蔓柱，
+   只是爬升没激活），**单跑 3/3 全过**（6.47/6.59/6.82）；t14 已在 `atom_all` 里遇到过一次。
+   根因（t14 已定位）：`installVinePhysics` 在注册表查不到藤蔓时**静默返回空壳**，`setClimbing(true)` 后
+   `isClimbing()` 仍是 false，且返回对象**没有 `installed` 标记**；测试只断言"藤蔓方块就位"、没断言补丁真装上。
+   → **建议修法（仍未落地）**：install 失败返回 `installed:false` 或直接 throw；测试在爬模式前断言 `vine.isClimbing()===true`。
+   **这条现在成了 `atom_all` 稳定性最大的一颗雷**（两次整轮都挂它、单跑从不挂）。
+2. **B3 真机用例偏慢且可能偶发**：单张子单实测 `costMs=427928`（**7 分 8 秒**）才挖 16 个矿。
+   量级解释：`flow_mine` 每次找矿用 `findBlocks(bot, name, 32, 32)`（半径 32/取 32 个），
+   每块矿的走近预算 `APPROACH_BUDGET_MS = 40000`（40 秒）→ **16 × ~27s ≈ 427s**，属"逐块走近"的结构成本，
+   不是矿稀。→ **观察项**：下次 ⑦ 若复现 blocked/超时，按顺序查①造矿时机 ②挖矿中途掉落物没捡
+   ③耗时超 deadline，**不要归给"矿稀"**；若要在意耗时，可考虑"相邻矿批处理"（不逐块重新 approach）。
+3. **`item:` key 是否真被用到**：解析与冲突判定都已验，但**运行路径上没有流程会去约 `item:`**（当前只有 `area` 被 `splitByArea`/流程使用）。
+4. **多 bot 场景的其它未覆盖面**：`container`/`station`/`entity` 三种 key 只验了"解析 + 冲突判定"，
+   **没有真机演练两个 bot 争同一个箱子/工作台/实体**。`requires.items` 也只在离线验证。
 
 ---
 

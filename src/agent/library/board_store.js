@@ -810,11 +810,19 @@ export function meetsRequires(job, who = {}) {
     const req = job?.requires ?? null;
     if (!req) return true;
 
+    // ★ 角色判定三条（2026-11-02 t25 修正；**这是全系统唯一的实现**，别在别处再写一份）：
+    //   1) `requires.roles` 空/未配 → 不受限；
+    //   2) `who.roles` **空/未配** → **也视为不受限**（06 §9.4「不配就什么都能领」）；
+    //      原来写的是 `new Set(who.roles ?? [])` + `!some(...)` → 空集合必然"一个都对不上" →
+    //      没配角色的人**什么带角色的单都领不到**，与上面这段注释和 06 §9.4 正好相反。
+    //      （这是"注释说一套、代码走另一套"的典型，而且旧单测把错的行为写成了期望值。）
+    //   3) 两边都配了 → **任一命中即可**（`some`，不是 `every`）：
+    //      `['miner','farmer']` 对上 `['farmer']` 就够。⚠️ 别"顺手"改成 `every`。
     const wantRoles = Array.isArray(req.roles) ? req.roles : [];
     if (wantRoles.length) {
-        const have = new Set(who.roles ?? []);
-        // 单里要求的角色**只要有一个**对上就行（"miner 或 builder 都能来"）
-        if (!wantRoles.some((r) => have.has(r))) return false;
+        const have = who.roles ?? null;
+        // 只有"明确配了角色、且一个都对不上"才拒；没配 = 不受限
+        if (Array.isArray(have) && have.length && !wantRoles.some((r) => have.includes(r))) return false;
     }
     const wantItems = Array.isArray(req.items) ? req.items : [];
     if (wantItems.length) {
