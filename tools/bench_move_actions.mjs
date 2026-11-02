@@ -133,11 +133,20 @@ bot.once('spawn', async () => {
     await RC(`gamemode survival ${NAME}`);
     await sleep(600);
 
-    /** 清场：把整块场地清成空气 + 一层实心地面 */
+    /** 清场：把整块场地清成空气 + 一层实心地面 + **深层兜底地板** */
     const reset = async () => {
         // ★ 必须切块：/fill 单次上限 32768 格，这里 53×53×25≈70k 会静默失败
         await fillSafe(RC, AX - 26, S, AZ - 26, AX + 26, S + 24, AZ + 26, 'air');
         await fillSafe(RC, AX - 26, G, AZ - 26, AX + 26, G, AZ + 26, 'stone');
+        // ★★ 2026-11-03：**深层兜底地板**，任何场景都掉不出世界。
+        //
+        // 原来只铺 G 这一层、下面是虚空。gap-bridge 自己补了 G-3 的地板，
+        // 但 G-1/G-2 以及 G-3 以下仍是空的 —— 她挖/垫/踩空时照样能穿出去。
+        // 实测：两次基线确认里 gap-bridge #1 都出现"位移 11635 格"，
+        // 服务器日志 `[01:45:40] ma95215 fell out of the world` —— 掉出世界摔死、
+        // 重生在出生点，那一轮就作废（虽然被 tpFlake 检测挡掉不计分，但白跑一轮）。
+        // 铺一层基岩在 G-6：21 格厚的实心兜底，坠落最多掉到这里，不会死。
+        await fillSafe(RC, AX - 26, G - 6, AZ - 26, AX + 26, G - 6, AZ + 26, 'bedrock');
     };
 
     const scenarios = [
