@@ -32,6 +32,9 @@ export const manifest = {
     timeoutMs: 60 * 1000,
 };
 
+/** 等 auto-eat 把嘴里那口吃完的上限（毫秒）。超过就不等了，自己开始吃。 */
+const AUTOEAT_WAIT_MS = 5000;
+
 /**
  * 食物优先级（越高越先吃）。
  *
@@ -106,7 +109,7 @@ export async function eatToFull(bot, opts = {}) {
         // auto-eat 可能正在吃：等它吃完再自己吃（否则互相打断）
         if (bot.autoEat?.isEating) {
             await waitUntil(() => !bot.autoEat.isEating, {
-                timeoutMs: Math.max(1000, Math.min(5000, deadlineMs)),
+                timeoutMs: Math.max(1000, Math.min(AUTOEAT_WAIT_MS, deadlineMs)),
                 intervalMs: 100,
                 bot,
             });

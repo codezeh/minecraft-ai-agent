@@ -50,6 +50,14 @@ export const manifest = {
     timeoutMs: 15 * 60 * 1000,
 };
 
+
+/**
+ * 时间预算（毫秒）。**上限**语义：调用处一律 `Math.min(预算, deadline - now)`，
+ * 所以永远不会越过任务单的 deadline。具名化是为了"要调就只改一处"。
+ */
+const GOTO_STAND_BUDGET_MS = 20000;   // 走到站位
+const MIN_WAIT_BUDGET_MS = 3000;
+
 /** 空气判定（读不到也算"不确定"，由调用方决定）。 */
 const AIRISH = new Set(['air', 'cave_air', 'void_air', 'water', 'lava']);
 
@@ -174,7 +182,7 @@ export async function build(bot, blocks, opts = {}) {
                     kind: 'point', pos: { x: stand.data.pos.x, y: stand.data.pos.y, z: stand.data.pos.z },
                 }, {
                     mapDir,
-                    deadlineMs: Math.max(3000, Math.min((ctx.deadline ?? Date.now() + 20000) - Date.now(), 20000)),
+                    deadlineMs: Math.max(MIN_WAIT_BUDGET_MS, Math.min((ctx.deadline ?? Date.now() + GOTO_STAND_BUDGET_MS) - Date.now(), GOTO_STAND_BUDGET_MS)),
                     arriveTol: 1.5,
                 });
                 if (!walked.ok) {

@@ -25,6 +25,29 @@
  *   - `bot.__chats` / `bot.__equips` / `bot.__goals` 同理，断言"到底调了什么"。
  *
  * 想改某个接口的桩：各处传 `stubs: { chat: () => {...} }` 覆盖，别在这里开后门。
+ *
+ * ───────────────────────────────────────────────────────────────────────────
+ * ★ 写用例时的三个坑（2026-11-02，M7 流程用例踩出来的；都不是被测代码的 bug，
+ *   但每个都会让你以为"代码坏了"。写在这儿，免得下一个人再踩一次）
+ *
+ *   1) **有后置复核的动作，桩必须真的改世界。**
+ *      `act_farm.harvestCrop` / `act_dig.digBlock` / `act_place.placeBlockAt` 都会在操作后
+ *      **再读一次方块**来确认"真的成了"（幽灵方块是真实存在的问题）。
+ *      所以假 bot 的 `dig` 如果只 `count++` 而不把方块从 world 里删掉，
+ *      动作会如实报 `TIMEOUT/DIG_FAIL`，流程就把这一步记成 skip —— 看起来像流程错了。
+ *      正确做法：桩里 `world.set(key, 'air')`（或用下面的 `setBlock`）。
+ *
+ *   2) **需要 Vec3 形状的字段，别给裸对象。**
+ *      `act_attack.attackOnce` 会调 `entity.position.offset(0, height, 0)`；
+ *      `atom_place.placeBlockAt` 会调 `block.position.offset(...)`。
+ *      假实体/假方块只写 `{x,y,z}` 会直接 `TypeError: offset is not a function`。
+ *      正确做法：位置用 `new Vec3(x,y,z)`，或给裸对象补一个 `offset(dx,dy,dz)`。
+ *
+ *   3) **"先给道具再清空 slots"不生效。**
+ *      `makeFakeBot` 在构造时就把 `heldItem = slots[0]` 与 `inventory.count()` 的闭包算好了；
+ *      事后 `bot.inventory.slots = []` 只改了数组，`heldItem` 仍指着旧物品。
+ *      要测"没有这个物品"，请**直接构造时传 `items: []`**，不要事后清空。
+ * ───────────────────────────────────────────────────────────────────────────
  */
 import Vec3 from 'vec3';
 import mcDataFactory from 'minecraft-data';

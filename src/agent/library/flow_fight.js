@@ -26,7 +26,7 @@
 import { ok, fail } from './contract.js';
 import { attackOnce, ATTACK_COOLDOWN_MS } from './act_attack.js';
 // nearestEntity 在 atom_read（读取原子）里 —— 流程可以 import 原子（02 §5 允许）。
-import { nearestEntity } from './atom_read.js';
+import { nearestEntity, entities } from './atom_read.js';
 import { mapDirOf } from './bot_paths.js';
 import { goTo } from './nav_core.js';
 import { escapeUp } from './flow_escape.js';
@@ -51,6 +51,15 @@ export const manifest = {
 /** 近战追击距离（比动作层 maxReach 略大：进到 3 格内才打）。 */
 const CHASE_DIST = 3.2;
 
+/**
+ * 时间预算（毫秒）。**这些都是"上限"，不是"要等这么久"**：
+ * 每次都用 `Math.min(预算, deadline - now)` 取小，所以永远不会越过任务单的 deadline。
+ * 写成具名常量而不是散在调用处，是为了让"改一个地方"真的只改一个地方。
+ */
+const CHASE_BUDGET_MS = 15000;      // 单次追击的预算
+const RETREAT_BUDGET_MS = 20000;    // 撤退（flow_escape）的预算
+const MIN_WAIT_BUDGET_MS = 3000;    // 任何一步至少要给的预算（否则走一步就超时）
+
 /** 睡着等，但不越过 deadline。 */
 async function sleepWithin(ctx, ms) {
     const left = (ctx?.deadline ?? 0) - Date.now();
@@ -65,15 +74,34 @@ function alive(e) {
     return !!e && e.isValid !== false && (e.health == null || e.health > 0);
 }
 
+/**
+ * 附近还剩几个同类目标（**活着**的）。
+ *
+ * 为什么要它：撤退必须让上层知道"敌人还在"。
+ * 只回 `ok({retreated:true})` 的话，未来的 `strat_combat` 会以为打完了、不再追；
+ * 有了 `enemiesLeft` 它才能决定"退到安全距离后要不要回来继续"。
+ * 半径用 32（与追击/感知一致），只数**活着**的（`alive()` 过滤，尸体不算）。
+ */
+function countEnemiesLeft(bot, target, radius = 32) {
+    try {
+        return entities(bot, (e) => alive(e) && matches(e, target), radius).length;
+    } catch {
+        return null;                      // 读不到就说不知道（null），不谎报 0
+    }
+}
+
+/** 实体名/类型是否匹配我们要打的目标。 */
+function matches(e, target) {
+    const n = String(e?.name ?? '');
+    const t = String(e?.type ?? '');
+    const want = String(target ?? '');
+    return n === want || t === want || n.includes(want);
+}
+
 /** 找最近的可打目标（名字匹配；`target` 支持实体名或类型）。 */
 function findTarget(bot, target) {
     try {
-        const ent = nearestEntity(bot, (e) => {
-            if (!alive(e)) return false;
-            const n = String(e.name ?? '');
-            const t = String(e.type ?? '');
-            return n === target || t === target || n.includes(target);
-        }, 32);
+        const ent = nearestEntity(bot, (e) => alive(e) && matches(e, target), 32);
         return ent ?? null;
     } catch {
         return null;
@@ -86,7 +114,7 @@ async function chase(bot, entity, ctx) {
     if (!p) return false;
     const walked = await goTo(bot, { kind: 'point', posXZ: { x: p.x, z: p.z } }, {
         mapDir: mapDirOf(bot),
-        deadlineMs: Math.max(3000, Math.min((ctx?.deadline ?? Date.now() + 15000) - Date.now(), 15000)),
+        deadlineMs: Math.max(MIN_WAIT_BUDGET_MS, Math.min((ctx?.deadline ?? Date.now() + CHASE_BUDGET_MS) - Date.now(), CHASE_BUDGET_MS)),
         arriveTol: CHASE_DIST,
     });
     return walked.ok;
@@ -112,6 +140,8 @@ export async function fight(bot, target, opts = {}) {
     let kills = 0;
     let sawTarget = false;
     let lastCode = null;
+    /** 最后交战过的目标（撤退时带给上层，见 countEnemiesLeft 的注释）。 */
+    let lastTarget = null;
     const MAX_ATTACKS = 200;              // 兜底：防死循环（04 §4.4 第 4 条：循环必须有上限）
     let attacks = 0;
 
@@ -125,15 +155,34 @@ export async function fight(bot, target, opts = {}) {
         if (hp < retreatHp) {
             try {
                 await escapeUp(bot, {
-                    deadlineMs: Math.max(3000, Math.min((ctx.deadline ?? Date.now() + 20000) - Date.now(), 20000)),
+                    deadlineMs: Math.max(MIN_WAIT_BUDGET_MS, Math.min((ctx.deadline ?? Date.now() + RETREAT_BUDGET_MS) - Date.now(), RETREAT_BUDGET_MS)),
                     mapDir: mapDirOf(bot),
                 });
             } catch { /* 逃不出去也照实报撤退了 */ }
-            return ok({ killed: false, kills, want: maxKills, retreated: true, hpAtRetreat: hp });
+            // ★ 撤退也要把"战场情况"交代清楚（captain 2026-11-02 指出）：
+            //   只回 `retreated:true` 的话，上层会以为打完了、不再追。
+            //   这里带上：目标是谁（target/lastTarget）、**还剩几个敌人**（enemiesLeft）、
+            //   以及还差几个才够数（kills/want）。上层据此决定"退到安全处之后要不要回来"。
+            return ok({
+                killed: false,
+                kills,
+                want: maxKills,
+                remaining: Math.max(0, maxKills - kills),   // 还差几个才够数
+                retreated: true,
+                hpAtRetreat: hp,
+                retreatHp,
+                target,                                     // 我们被派去打的是什么（实体名/类型）
+                lastTarget,                                 // 最后交战的那只（名字/类型/坐标），可能为 null
+                enemiesLeft: countEnemiesLeft(bot, target), // 附近还活着几个同类；null = 读不到
+            });
         }
 
         // ── 选目标 ──
         const entity = findTarget(bot, target);
+        if (entity) {
+            // 留个"最后交战的目标"痕迹：撤退时上层要知道**是谁**让我们撤的
+            lastTarget = { name: entity.name ?? null, type: entity.type ?? null, pos: entity.position ? { x: entity.position.x, y: entity.position.y, z: entity.position.z } : null };
+        }
         if (!entity) {
             if (sawTarget || kills > 0) break;        // 打完了/目标没了：正常收尾
             return fail('NO_TARGET', `附近没有 ${target}`, { target, kills, want: maxKills });
@@ -185,12 +234,25 @@ export async function fight(bot, target, opts = {}) {
     }
 
     if (kills >= maxKills) {
-        return ok({ killed: true, kills, want: maxKills, retreated: false, costMs: Date.now() - t0 });
+        return ok({
+            killed: true, kills, want: maxKills, remaining: 0, retreated: false,
+            target, lastTarget, enemiesLeft: countEnemiesLeft(bot, target),
+            costMs: Date.now() - t0,
+        });
     }
     if (kills > 0) {
         // 打了一部分：部分完成用 ok 带数（上层按 kills/want 判断要不要补）
-        return ok({ killed: true, kills, want: maxKills, retreated: false, partial: true, costMs: Date.now() - t0 });
+        return ok({
+            killed: true, kills, want: maxKills, remaining: Math.max(0, maxKills - kills),
+            retreated: false, partial: true,
+            target, lastTarget, enemiesLeft: countEnemiesLeft(bot, target),
+            costMs: Date.now() - t0,
+        });
     }
     return fail(lastCode === 'OUT_OF_REACH' ? 'OUT_OF_REACH' : 'TIMEOUT',
-        `没打死目标（${lastCode ?? 'timeout'}）`, { kills, want: maxKills, costMs: Date.now() - t0 });
+        `没打死目标（${lastCode ?? 'timeout'}）`, {
+            kills, want: maxKills, remaining: Math.max(0, maxKills - kills),
+            target, lastTarget, enemiesLeft: countEnemiesLeft(bot, target),
+            costMs: Date.now() - t0,
+        });
 }

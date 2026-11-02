@@ -39,6 +39,15 @@ export const manifest = {
 const CROPS = ['wheat', 'carrots', 'potatoes', 'beetroots'];
 const MAX_AGE = { wheat: 7, carrots: 7, potatoes: 7, beetroots: 3 };
 
+
+/**
+ * 时间预算（毫秒）。**上限**语义：调用处一律 `Math.min(预算, deadline - now)`，
+ * 所以永远不会越过任务单的 deadline。具名化是为了"要调就只改一处"。
+ */
+const APPROACH_BUDGET_MS = 30000;   // 走到某棵作物/某块地
+const PICKUP_BUDGET_MS = 8000;      // 最后捡掉落物
+const MIN_WAIT_BUDGET_MS = 4000;
+
 /** 作物 → 种子名。 */
 const SEED_OF = { wheat: 'wheat_seeds', carrots: 'carrot', potatoes: 'potato', beetroots: 'beetroot_seeds' };
 
@@ -66,7 +75,7 @@ async function approach(bot, pos, ctx, tol = 3) {
     if (d <= tol) return true;
     const walked = await goTo(bot, { kind: 'point', pos: { x: pos.x, y: pos.y, z: pos.z } }, {
         mapDir: mapDirOf(bot),
-        deadlineMs: Math.max(4000, Math.min((ctx?.deadline ?? Date.now() + 30000) - Date.now(), 30000)),
+        deadlineMs: Math.max(MIN_WAIT_BUDGET_MS, Math.min((ctx?.deadline ?? Date.now() + APPROACH_BUDGET_MS) - Date.now(), APPROACH_BUDGET_MS)),
         arriveTol: 2,
     });
     return walked.ok;
@@ -166,7 +175,7 @@ export async function farm(bot, area, opts = {}) {
         try {
             await collectDrops(bot, { x: area.x, y: area.y, z: area.z }, {
                 radius: radius + 2,
-                deadlineMs: Math.max(2000, Math.min((ctx.deadline ?? Date.now() + 4000) - Date.now(), 8000)),
+                deadlineMs: Math.max(2000, Math.min((ctx.deadline ?? Date.now() + 4000) - Date.now(), PICKUP_BUDGET_MS)),
             });
         } catch { /* 捡不到不影响收割结果 */ }
     }

@@ -333,6 +333,34 @@ function makeEnemy({ hp = 20, x = 2, z = 0, name = 'zombie' } = {}) {
     }
 }
 
+// ── 16b. fight：撤退要交代"战场情况"（目标是谁 / 还剩几个敌人）──────
+//     captain 2026-11-02 指出：只回 ok({retreated:true}) 的话，上层会以为打完了不再追。
+{
+    const mkEnemy = () => makeEnemy({ hp: 20, x: 2, z: 0 });
+    const e1 = mkEnemy(), e2 = mkEnemy();
+    const bot = makeFakeBot({
+        feet: { x: 0, y: 64, z: 0 },
+        stubs: { blockAt: () => ({ name: 'stone', position: { x: 0, y: 63, z: 0 } }) },
+    });
+    bot.health = 3;                                  // 低于 retreatHp
+    bot.entities = { a: e1, b: e2 };                 // 附近两只
+    bot.nearestEntity = () => e1;
+    const r = await fight(bot, 'zombie', { retreatHp: 8, ctx: { deadline: Date.now() + 3000 } });
+    const d = r.data ?? {};
+    const informative = r.ok && d.retreated === true
+        && d.killed === false
+        && d.remaining === 1                          // 还差 1 个才够数
+        && d.target === 'zombie'                      // 被派去打的是什么
+        && d.enemiesLeft === 2                        // ★ 附近还剩几个（上层据此决定要不要回来）
+        && d.hpAtRetreat === 3;
+    if (assertResult('fight 撤退带战场信息', r) && informative) {
+        okCase('fight 撤退 data 含 target/remaining/enemiesLeft（上层知道敌人还在）',
+            `enemiesLeft=${d.enemiesLeft} remaining=${d.remaining} target=${d.target}`);
+    } else {
+        badCase('fight 撤退带战场信息', d);
+    }
+}
+
 // ══════════ flow_build ══════════
 
 /** 造一个建造用假 bot：地面是石头、上方空气。 */

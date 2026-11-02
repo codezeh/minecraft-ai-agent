@@ -53,6 +53,17 @@ const ORE_Y = {
     lapis: 0, emerald: 100, nether_quartz: 32, ancient_debris: 15,
 };
 
+
+/**
+ * 时间预算（毫秒）。**上限**语义：调用处一律 `Math.min(预算, deadline - now)`，
+ * 所以永远不会越过任务单的 deadline。具名化是为了"要调就只改一处"。
+ */
+const DESCEND_BUDGET_MS = 60000;    // 下到目标高度那一次 goTo
+const APPROACH_BUDGET_MS = 40000;   // 走近某一块矿
+const DESCEND_WINDOW_MS = 30000;    // 下潜时额外给的窗口（与预算取小）
+const APPROACH_WINDOW_MS = 30000;   // 走近时额外给的窗口（与预算取小）
+const MIN_WAIT_BUDGET_MS = 4000;    // 每一步最少给的预算
+
 /** 矿名规范化：`iron_ore` / `deepslate_iron_ore` / `iron` 都认。 */
 function oreNames(ore) {
     const base = String(ore ?? '').toLowerCase().replace(/^minecraft:/, '');
@@ -125,7 +136,7 @@ export async function mine(bot, ore, count = 1, opts = {}) {
                 };
                 const walked = await goTo(bot, { kind: 'point', posXZ: dest }, {
                     mapDir: mapDirOf(bot),
-                    deadlineMs: Math.max(4000, Math.min((ctx.deadline ?? Date.now() + 30000) - Date.now(), 60000)),
+                    deadlineMs: Math.max(MIN_WAIT_BUDGET_MS, Math.min((ctx.deadline ?? Date.now() + DESCEND_WINDOW_MS) - Date.now(), DESCEND_BUDGET_MS)),
                     arriveTol: 2,
                 });
                 if (!walked.ok && walked.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
@@ -156,7 +167,7 @@ export async function mine(bot, ore, count = 1, opts = {}) {
                     kind: 'point', pos: { x: block.position.x, y: block.position.y, z: block.position.z },
                 }, {
                     mapDir: mapDirOf(bot),
-                    deadlineMs: Math.max(4000, Math.min((ctx.deadline ?? Date.now() + 30000) - Date.now(), 40000)),
+                    deadlineMs: Math.max(MIN_WAIT_BUDGET_MS, Math.min((ctx.deadline ?? Date.now() + APPROACH_WINDOW_MS) - Date.now(), APPROACH_BUDGET_MS)),
                     arriveTol: 2,
                 });
                 if (!walked.ok) {
