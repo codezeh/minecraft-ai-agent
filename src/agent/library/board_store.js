@@ -338,7 +338,9 @@ export function getJob(db, id) {
 /**
  * 列单。
  *
- * @param {object} filter { states?, mine?, assignee?, skill?, limit? }
+ * @param {object} filter { states?, mine?, assignee?, claimableFor?, skill?, limit? }
+ *   ★ `claimableFor`（2026-11-02 t23 新增）：**可领**语义 —— `assignee IS NULL OR assignee = ?`，
+ *     与 `claimFor()` 的候选条件**逐字一致**。抢占用它，才不会漏掉共享单（assignee=null）。
  */
 export function listJobs(db, filter = {}) {
     const where = [];
@@ -348,6 +350,11 @@ export function listJobs(db, filter = {}) {
         params.push(...filter.states);
     }
     if (filter.assignee) { where.push('assignee = ?'); params.push(filter.assignee); }
+    // ★ 可领 = 共享单（assignee 为空，谁都能领）+ 指派给我的单 —— 与 claimFor 的候选条件保持一致
+    if (filter.claimableFor) {
+        where.push('(assignee IS NULL OR assignee = ?)');
+        params.push(filter.claimableFor);
+    }
     if (filter.skill) { where.push('skill = ?'); params.push(filter.skill); }
     const sql = `SELECT * FROM jobs ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                  ORDER BY priority DESC, createdAt ASC

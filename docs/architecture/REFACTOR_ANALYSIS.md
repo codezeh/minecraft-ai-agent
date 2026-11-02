@@ -1661,6 +1661,142 @@ B 重新领到**同一张单**又挖 9 → 最终 **24/8**；`!jobs` 显示 `min
 
 ---
 
+#### M8 B2 验收记录（t23 / 2026-11-02，全部实测）
+
+**① B2 主循环五步**（`board_scheduler.js` 的 `tick()`，每 tick 只跑一遍、不内部循环）
+
+| 步 | 做什么 | 关键约束 |
+|---|---|---|
+| 0 | **先 `refresh({scope:'claimable'})`** | 收拾残局与抢占都依赖"看到别人/共享的单"（见 ②） |
+| ① | `requeueStaleBrief()` 收拾残局 | **在 autoClaim 判断之前**、且开关关着也做 —— 收残局 ≠ 领新单 |
+| ② | `autoClaim === false` → 直接返回 | 不领新单、不抢占；正在跑的单继续 |
+| ③ | 正忙 → 抢占判定（再 refresh + `_findPreemptor`） | 抢占前必须再拉一次（别人新加的单不在镜像里） |
+| ④ | 空闲 → 先续做自己的 `paused`，再领新单，然后 `reserve → run → finish/release` | 退避中不重领（06 §8） |
+
+**② 🔴 t23 抓到并修掉的核心缺陷：`refresh()` 只拉"我的单" → 抢占对真实场景不生效**
+
+`refresh()` 原来只发 `{mine: this.name}`，服务端 `listJobs({assignee: f.mine})` → `WHERE assignee='me'`
+→ **共享单（assignee=null）和别的 bot 的单永远拿不到** → `_findPreemptor` 看不到 →
+**真正的多 bot 抢占场景压根不工作，而且不报错**。
+
+> 这是"验证场景选错 → 缺陷被绿灯放过"的又一例：atoms 加的 refresh 是**必要但不充分**的，
+> 它验的是"我自己的两张单"（当然能过），而真实抢占目标是**别人/共享的 9 级单**。
+
+**修法（captain 定稿：显式契约，不靠 `??` 隐式穿透）**
+
+| 层 | 改动 |
+|---|---|
+| `board:list` payload | 新增**显式** `scope: 'mine' \| 'claimable' \| 'all'`（默认 `mine`） |
+| `board_server` | 按 scope **显式**决定过滤：`mine` → `assignee=me`；`claimable` → `claimableFor`（`assignee IS NULL OR assignee=me`，**与 `claimFor` 候选条件逐字一致**）；`all` → 不过滤。**未知 scope 回 `ok:false` 报错**，不许静默当 mine/all |
+| `board_store.listJobs` | 新增 `claimableFor` 过滤（`(assignee IS NULL OR assignee = ?)`） |
+| `board_client.refresh({scope})` | 默认 `mine`（语义不变）；**本地也校验**未知 scope 直接 `fail` |
+| `board_scheduler` | **残局回收**与**抢占判定**两处都改成 `refresh({ scope:'claimable' })` |
+
+> 为什么不用 `assignee: null`：`null` 在"过滤条件"这一层天然有歧义（是"不过滤"还是"assignee 为空那些"？），
+> 靠 `??` 不拦 null 的隐式链路太脆 —— 哪天服务端加个默认值就静默退回"只拉自己的单"，症状又是"抢占不触发"这种不报错的。
+
+**语义边界用例**（新增 `tools/board_scope_unit.mjs`，10 用例，已进 `unit_all`）
+
+| # | 断言 | 实测 |
+|---|---|---|
+| 1 | 库里有 `mine(ready)` / `shared(ready,assignee=null)` / `other(assignee=otherBot)`；`refresh({scope:'mine'})` → **只有 mine** | ✅ |
+| 2 | `refresh({scope:'claimable'})` → **mine + shared**，**不含 other** | ✅ |
+| 3 | `refresh({scope:'all'})` → 三张全在 | ✅ |
+| 4 | **未知 scope 报错**（客户端本地拦 + 服务端也拦，绕过 client 直接发也拒） | ✅ 两边都 `fail('未知 scope…')` |
+| 5 | **端到端**：忙在 3 级单 + 库里一张**共享 9 级** ready 单 → `tick()` **必须抢占** | ✅ 修复前 `{"acted":false,"reason":"busy"}`（❗没抢占）；修复后 **`preempt-start` + `preempt-start.id==='J-shared9'` + 3 级单 → paused** |
+
+**③ 真机 B2 五条语义（`tools/board_b2_live.mjs`，5/5）**
+
+| 断言 | 结果 |
+|---|---|
+| ① 抢占后**旧流程没再动身体**（数 server 侧痕迹：1 秒内 trace/位置无变化） | ✅ |
+| ② 被抢占单 `state=paused` 且 **`attempts=0`**（INTERRUPTED 不算失败，从服务端拉真值） | ✅ |
+| ③ 9 级单确实执行（done） | ✅ `job-finished code=OK costMs=14249` |
+| ④ 3 级单 `progress` **不倒退** | ✅ 前=0 后=0 |
+| ⑤ 3 级单能被 **resume**（ready/running/claimed） | ✅ |
+
+事件序列（真机）：`preempt-start(prio9)` → `skip-finish-preempted`（被抢占单**只走 setState(paused)**、绝不走 finish，防收尾逻辑把 paused 抹掉）→ `job-paused-preempted` → `job-claimed(prio9)` → `job-finished(prio9)`。
+`!jobs` 真机输出：`[暂停] mine 优先级3` / `[完成] mine 3/2（超额 1，实际做到 3） 优先级9`（超额标注是 t20 加的，此处正常显示）。
+
+**④ 真机残局回收 + `setAutoClaim` 语义（`tools/board_b2_brief_live.mjs`，3/3）**
+
+| 断言 | 结果 |
+|---|---|
+| ① 悬单确实造出来（`running` + 过期的 `interrupted`） | ✅ |
+| ② **`requeueStaleBrief` 在真机生效**（悬单被退回 `ready`） | ✅ `brief-requeued ids=[j_...19et]` |
+| ③ **`autoClaim=false` 时仍然收拾残局**（收残局 ≠ 领新单） | ✅ |
+
+→ 这三条同时**端到端证明了 `interrupted` 字段修复生效**（B2 抓的那个"字段从来不存在、brief 回收从上线起就不可能生效"）。
+
+**⑤ 「静默丢弃字段」全量交叉核对：没有第二处有害的（一个有价值的否定结论）**
+
+方法（脚本 `t23_patch_audit.mjs`）：抽所有 `updateJob(...)` / `.update(...)` 调用的**顶层 key**，
+与 `PATCHABLE` / **真实表列（PRAGMA table_info）** / `JSON_COLS` 求差集。
+
+写入方全量（3 处）：
+```
+board_server.js:200   {checkpoint}
+control.js:280        {state, lease, interrupted}
+control.js:440        {state, lease, result, countAttempt}
+```
+
+| 检查 | 结果 |
+|---|---|
+| A) 写了但 updateJob 不收（不在 PATCHABLE、也无特判） | **只有 `countAttempt`** |
+| B) 其中连表里都没这一列的 | 同上（`countAttempt`） |
+| C) 有列但不可 patch、且有写入方在写 | （无） |
+| D) 该按 JSON 存却没进 JSON_COLS | （无） |
+
+- **`lease` 不是问题（我第一版误报过）**：`updateJob` 在 `PATCHABLE` 检查**之前**对 `lease` 有特判
+  （`{lease:null}` → 清 `lease_owner`/`lease_until`）。实测确认租约真的被清掉。
+- **`countAttempt:false` 是死字段**（`control.js:440` 死亡暂停路径）→ **已删**，并在注释里写明：
+  "`updateJob` 根本不碰 `attempts`，所以这个字段从来没起过作用；'死亡不算 attempts'靠的是**这里不走 `finish()`**，
+  不是靠这个字段"。留着会让下一个人以为它在起作用。
+
+> **结论**：`interrupted` 那类是**孤例**，没有第二处有害的静默丢弃。
+> 但这次核对本身值得留 —— 它是"两个地方都以为自己在管同一件事"这个型的**机械检查手段**（差集为空才算过）。
+
+**⑥ t23 修复汇总**
+
+| 文件 | 改动 |
+|---|---|
+| `board_store.js` | `listJobs` 新增 `claimableFor`（`assignee IS NULL OR assignee = ?`，与 `claimFor` 候选一致） |
+| `board_server.js` | `board:list` 支持显式 `scope`（mine/claimable/all），**未知 scope 报错** |
+| `board_client.js` | `refresh({scope})` 显式契约 + 本地校验；不再依赖 `??` 隐式穿透 |
+| `board_scheduler.js` | 残局回收 + 抢占判定两处改 `refresh({scope:'claimable'})` |
+| `control.js` | 删掉死字段 `countAttempt:false` 并注释说明 |
+| `tools/board_scope_unit.mjs` | **新增**：5 组语义边界 / 10 个断言（含共享单抢占端到端） |
+
+**⑦ 四项「待 M8」的最终销账状态**
+
+| 项 | 状态 | 依据 |
+|---|---|---|
+| `applyStop()` 在 `board=null` 时空操作 | **✅ 销账（null 分支保留为降级护栏）** | B1/B2 让 `agent.board` 生产上是真 client；实测有板时真的发 `board:update`。`board=null` 只作断线降级路径存在，必须保留 |
+| `requeueStaleBrief()` 无调用方 | **✅ 销账（t23 真机验证）** | 现由 `board_scheduler.tick()` 每 tick 调用；真机 3/3 证明悬单被退回 ready，且 `autoClaim=false` 时仍生效 |
+| 死亡捡单（`onDeath` → 8 级单） | **✅ 有执行路径** | `_runJob` 已接；B2 的 tick 会通过 `claimFor` 领到 8 级单（与 9 级抢占同一路径） |
+| 任务单 deadline（`jobDeadlineTimeoutMinutes`/`runJobAction`） | **✅ 有执行路径** | `_runJob` 按 `job.deadline` 传给流程；deadline 到期由流程自身 timeout 收尾 |
+| 无人值守长跑（B2 调度循环持续 tick） | ⏳ 需看 `agent.js` 是否起了循环（**t23 未验**） | 调度器本身每 tick 只跑一遍（"空闲不空转"），由外部驱动；驱动处需另行确认 |
+
+**⑧ 功能未回归（t23 实测）**
+
+| 项 | 结果 |
+|---|---|
+| `unit_all` | **33/33 + 1 跳过**，exit 0（任务书写 32；多出的 1 是 t23 新增的 `board_scope_unit`） |
+| `preflight` | 默认 **exit 0**（违规 5 处、**0 新增**）/ `--strict-api` **exit 1**（Phase 5.4 旧债，**未修绿**）/ `--report-api` exit 0；**115/115** 模块导入 |
+| `atom_all` | **18/18**，真实 **244 条**用例 0 FAIL |
+| `bench_move_actions 5` | **49/55（89.1%）**，与基线一致；失败全 `NO_PATH ×6`（down5×5 已知边界 + dig-through r1）；`climb-ladder` 中位 **1964ms**（atoms 报 1967ms，一致）；`digdown` **5/5** `digdownSeen=true`、`execActions={"digdown":1}`、`y −57→−60` |
+| `water-cross` | 5/5、中位 **30615ms**（各轮 31854/30615/…），**正常带内**（本轮跑前 `rcon list` 确认 0 玩家、跑时在线的是自己的 bot，无并发干扰） |
+| 真机 B2 | `board_b2_live.mjs` **5/5**、`board_b2_brief_live.mjs` **3/3** |
+
+**⑨ B3 待办（本轮不做，记台账）**
+
+1. **`claims` 表填充**（预约）—— 表已建（B1），`_reserveClaims` 目前只在无板时恒成功。
+2. **6 种预约 key**（06 §9.2）。
+3. **`requires` 角色过滤** —— `meetsRequires` 已实现（roles/items），但 `roles` 来源（B3 角色系统）未接。
+4. **多人单拆单**（parentId/kind 已有列，逻辑未做）。
+
+---
+
 ## 6. 文件组织结构（目标）
 
 > ⚠️ 2026-11-01：本节的子目录方案被 [`02_actions.md §5`](02_actions.md) 的**前缀方案**取代：`library/` 保持平铺，靠文件名前缀区分层级

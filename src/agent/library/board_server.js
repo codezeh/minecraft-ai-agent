@@ -141,13 +141,38 @@ export function attachBoardServer(deps = {}) {
             try {
                 const f = filter ?? {};
                 const states = f.state ? [f.state] : (Array.isArray(f.states) ? f.states : null);
+
+                // ★ 2026-11-02（t23，captain 拍板）：`scope` 是**显式契约**，不许靠隐式过滤穿透。
+                //
+                //   为什么要有它：客户端原来只会发 `{mine: 自己}`，服务端 `assignee = 自己` 一过滤，
+                //   **共享单（assignee=null）与别的 bot 的单永远拿不到** → 抢占/残局回收对
+                //   真实场景（别人挂的 9 级单）完全不生效，而且**不报错**。
+                //   （"验证场景选错 → 缺陷被绿灯放过"：它只验了"我自己的两张单"。）
+                //
+                //   语义（三档，**未知 scope 必须报错**，不许默默当成 mine 或 all）：
+                //     mine      —— 只看指派给我的（默认，保持旧语义）
+                //     claimable —— 可领的：**共享单（assignee 为空）+ 指派给我的**（与 claimFor 候选一致）
+                //     all       —— 全部（仅面板/调试用）
+                const scope = f.scope ?? 'mine';
+                let listFilter;
+                if (scope === 'mine') {
+                    listFilter = { assignee: f.mine ?? null };
+                } else if (scope === 'claimable') {
+                    listFilter = { claimableFor: f.mine ?? null };
+                    if (!listFilter.claimableFor) return ack(cb, { ok: false, reason: "scope='claimable' 需要 mine（bot 名）" });
+                } else if (scope === 'all') {
+                    listFilter = {};
+                } else {
+                    return ack(cb, { ok: false, reason: `未知 scope「${scope}」（只能是 mine / claimable / all）` });
+                }
+
                 const jobs = listJobs(db, {
                     states,
-                    assignee: f.mine ?? null,
+                    ...listFilter,
                     skill: f.skill ?? null,
                     limit: f.limit,
                 });
-                ack(cb, { ok: true, jobs });
+                ack(cb, { ok: true, jobs, scope });
             } catch (e) {
                 ack(cb, { ok: false, reason: String(e?.message ?? e) });
             }

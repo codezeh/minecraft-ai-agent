@@ -223,7 +223,9 @@ export class BoardScheduler {
         //   调度器连续 tick 20 秒都没动它。
         //   （这也说明 B2 的"镜像要靠自己 refresh"这条必须在**每个读板的地方**都记得做，
         //     不能只在抢占那一处补。）
-        try { await this.boardClient?.refresh?.({}); } catch { /* 拉不到就按旧镜像判 */ }
+        // ★ scope:'claimable' —— 残局回收要看到**别人/上次会话**悬着的单（共享单 assignee=null）。
+        //   只 refresh({})（scope 默认 'mine'）会服务端过滤成 `assignee=我自己` → 那种单永远看不到。
+        try { await this.boardClient?.refresh?.({ scope: 'claimable' }); } catch { /* 拉不到就按旧镜像判 */ }
 
         let requeued = [];
         try {
@@ -251,7 +253,9 @@ export class BoardScheduler {
             //   **别人新加的单它根本不知道**。于是 `_findPreemptor()` 在镜像里翻不到
             //   那张 9 级单 → 抢占永远不触发（实测：9 级单一直停在 `可领`）。
             //   这和 B1 那个 `board:get` payload 形状 bug 是同一类"镜像/真相不一致"。
-            try { await this.boardClient?.refresh?.({}); } catch { /* 拉不到就按旧镜像判 */ }
+            // ★ scope:'claimable' —— 抢占目标通常是**共享单**（assignee=null）或别人的 9 级单；
+            //   只 refresh({})（默认 scope='mine'）服务端会 `assignee=我自己` 一过滤 → 看不到 → 抢占永不触发。
+            try { await this.boardClient?.refresh?.({ scope: 'claimable' }); } catch { /* 拉不到就按旧镜像判 */ }
             const preemptor = await this._findPreemptor();
             if (!preemptor) return { acted: false, reason: 'busy', requeued };
             const done = await this._preempt(preemptor);

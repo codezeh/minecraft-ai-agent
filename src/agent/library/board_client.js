@@ -229,12 +229,33 @@ export class BoardClient {
         return r;
     }
 
-    /** 强制从服务端拉一遍（同步 `list()` 读的就是这份）。 */
+    /**
+     * 强制从服务端拉一遍（同步 `list()` 读的就是这份）。
+     *
+     * ★ 2026-11-02（t23，captain 拍板）：**`scope` 是显式契约，不许靠 `??` 隐式穿透**。
+     *
+     *   原来的写法只发 `{mine: 自己}`，服务端 `assignee = 自己` 一过滤 →
+     *   **共享单（assignee=null）和别的 bot 的单永远拿不到** → 抢占/残局回收对真实场景
+     *   （别人挂的 9 级单）完全不生效，而且**不报错**。
+     *
+     *   scope 三档（服务端也按它显式过滤，未知 scope 会**报错**而不是默认放行）：
+     *     'mine'      —— 只看指派给我的（**默认**，保持旧语义）
+     *     'claimable' —— 可领的：共享单 + 指派给我的（**用于抢占判定 / 残局回收**）
+     *     'all'       —— 全部（仅面板/调试）
+     *
+     *   为什么不用 `assignee: null` 表达"可领"：`null` 在过滤条件这一层天然有歧义
+     *   （"不过滤"还是"assignee 为空那些"？），换成显式 scope 语义才没有歧义。
+     *
+     * @param {{scope?:'mine'|'claimable'|'all', states?:string[], limit?:number}} filter
+     */
     async refresh(filter = {}) {
-        const r = await this._call('board:list', {
-            mine: filter.assignee ?? this.name,
-            states: filter.states ?? null,
-        });
+        const scope = filter.scope ?? 'mine';
+        if (!['mine', 'claimable', 'all'].includes(scope)) {
+            return fail('INTERNAL', `未知 scope「${scope}」（只能是 mine / claimable / all）`, { scope });
+        }
+        const payload = { scope, mine: this.name, states: filter.states ?? null };
+        if (Number.isFinite(filter.limit)) payload.limit = filter.limit;
+        const r = await this._call('board:list', payload);
         if (!r.ok) return r;
         const jobs = r.data?.jobs ?? [];
         for (const job of jobs) {

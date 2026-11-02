@@ -441,7 +441,11 @@ export function onDeath(agent, { message = null, pos = null, cause = null, now =
                 state: JOB_STATE.PAUSED,
                 lease: null,
                 result: { code: 'DIED', at: now },
-                countAttempt: false,
+                // 注：这里原来还有 `countAttempt: false` —— 已删（2026-11-02 t23）。
+                //   `updateJob` 根本不碰 `attempts`（它只按 PATCHABLE 拼 SET），所以那个字段
+                //   **从来没起过作用**，而且不在白名单/表列里，属于"写了但静默丢弃"的死字段。
+                //   想让"死亡不算 attempts"成立，靠的是**这里不走 finish()**（走的是 updateJob），
+                //   不是靠这个字段。留着只会让下一个人以为它在起作用。
             });
             paused.push(job.id);
         } catch { /* 单条失败不影响其它单 */ }
