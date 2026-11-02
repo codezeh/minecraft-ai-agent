@@ -52,4 +52,17 @@ export function botDirOf(agentOrBot) {
     return `./bots/${botNameOf(agentOrBot)}`;
 }
 
+/**
+ * 任务板库目录（**全系统同一个板库，不属于任何一只 bot**）。
+ *
+ * 为什么是 `bots/_board`：06 §3 定的位置。下划线开头表示"不是某只 bot 的名字"，
+ * 免得跟 `bots/<botName>/` 混。加这个函数是为了不让板库路径散落成第三处
+ * （前面已经有 mapDir 抄 11 遍、mode 列表三套的教训）。
+ *
+ * @returns {string} 形如 `./bots/_board`
+ */
+export function boardDirOf() {
+    return './bots/_board';
+}
+
 export { botNameOf };

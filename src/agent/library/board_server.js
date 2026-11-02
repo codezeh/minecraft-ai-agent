@@ -1,0 +1,261 @@
+/**
+ * 任务板 socket 事件（M8 B1，06 §14，设计见 M8_实施设计.md §3.2）。
+ *
+ * **只做三件事：校验参数 → 调 board_store → 回 ack。**
+ * 业务逻辑（状态机、attempts 计数、完成判据）一律在 `board_store.js`，
+ * 这里只做"翻译 + 安检"。这条边界很重要：如果 socket 层开始判状态机，
+ * 就会出现"库里一套、socket 又一套"，而两套迟早对不上。
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 安全三条（06 §10 原文，逐条落地）：
+ *   ① `skill` 只能是该 bot **自己报上来的注册名**（`board:hello` 里的 skills），
+ *      不能是任意函数名 —— 否则等于把整个模块命名空间暴露给命令层。
+ *   ② `args` 按该技能的 `manifest.params` 校验，不合格**直接拒、不进库**。
+ *   ③ 参数在服务端**再校验一遍**（不信任 agent 传来的东西）：
+ *      agent 侧的 board_client 已经校验过一次，这里仍要独立校验 ——
+ *      因为 socket 是外部可达的，别人可以绕过 client 直接发事件。
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * 事件名与 ack 形状严格按 06 §14；ack 5 秒没回由 **client 侧**超时（服务端不主动超时）。
+ */
+import {
+    addJob, getJob, listJobs, claimFor, heartbeat, finish, setState, updateJob,
+    expireLeases, JOB_STATE,
+} from './board_store.js';
+
+/** 单个 bot 上报的能力（`board:hello` 记下来，用于校验 add 的 skill）。 */
+const botRegistry = new Map();   // bot -> { skills:Set, roles:[], at }
+
+/** 心跳/租约扫描间隔（06 §6：租约 30 秒，每 10 秒续租；这里 5 秒扫一次过期）。 */
+const SCAN_MS = 5000;
+
+/**
+ * 校验一张要入库的单（安全 ①②③）。
+ *
+ * @param {object} db
+ * @param {object} job      agent 传来的任务单
+ * @param {object} opts     { registry, validateArgs }
+ *   registry      技能名 → manifest（来自 composite_registry 的注册表）
+ *   validateArgs  (manifest, argsString|object) → {ok, args|error}
+ * @returns {{ok:true, job:object} | {ok:false, reason:string}}
+ */
+export function validateIncomingJob(job, opts = {}) {
+    if (!job || typeof job !== 'object') return { ok: false, reason: '任务单必须是对象' };
+
+    // ① skill 必须是注册名
+    const skill = String(job.skill ?? '').trim();
+    if (!skill) return { ok: false, reason: '缺少 skill' };
+    const registry = opts.registry ?? null;
+    if (registry && !registry.has(skill)) {
+        return { ok: false, reason: `skill「${skill}」不在注册表里（可用：${[...registry.keys()].join(' ')}）` };
+    }
+
+    // ③ 参数独立校验（不信任 agent 传来的 args）
+    if (opts.validateArgs) {
+        const v = opts.validateArgs(skill, job.args);
+        if (!v.ok) return { ok: false, reason: `参数不合格：${v.error}` };
+        job = { ...job, args: v.args };
+    }
+
+    // 数值字段的边界（也是 ③：别人可以塞 priority=999）
+    const priority = Number(job.priority ?? 5);
+    if (!Number.isFinite(priority) || priority < 0 || priority > 9) {
+        return { ok: false, reason: `priority 必须是 0-9（现在 ${job.priority}）` };
+    }
+    return { ok: true, job: { ...job, skill, priority, kind: job.kind ?? 'personal' } };
+}
+
+/**
+ * 把 `board:*` 事件挂到一个 socket.io 实例上。
+ *
+ * @param {object} deps
+ *   io          socket.io 实例（mindserver 的 getIO()）
+ *   db          已打开的 board_store 库
+ *   registry    Map<skill, manifest>
+ *   validateArgs (skill, args) → {ok, args|error}
+ *   now         () => number（测试可注入假时钟）
+ *   broadcast   (event, payload) => void（默认用 io.emit；测试可换成收集器）
+ * @returns {{stop:Function}} 停掉租约扫描
+ */
+export function attachBoardServer(deps = {}) {
+    const {
+        io,
+        db,
+        registry = null,
+        validateArgs = null,
+        now = () => Date.now(),
+        broadcast = (event, payload) => { try { io?.emit?.(event, payload); } catch { /* 没人听就算了 */ } },
+    } = deps;
+
+    if (!io || !db) throw new Error('attachBoardServer 需要 io 和 db');
+
+    /** 统一的 ack 包装：把内部 {ok,code} 转成 ack 形状，并保证**永远**回 ack（不许卡死客户端）。 */
+    const ack = (cb, payload) => {
+        try { cb?.(payload); } catch { /* ack 抛错不影响服务端 */ }
+    };
+
+    /** 单子变了就推一条 `board:changed`（06 §14：mindserver → agent 只推这一个）。 */
+    const changed = (job, reason = '') => {
+        if (job) broadcast('board:changed', { id: job.id, state: job.state, priority: job.priority, reason });
+    };
+
+    io.on('connection', (socket) => {
+        // ── hello：记下这只 bot 能干什么 ────────────────────────────────
+        socket.on('board:hello', (payload, cb) => {
+            const bot = String(payload?.bot ?? '').trim();
+            const skills = Array.isArray(payload?.skills) ? payload.skills : [];
+            if (!bot) return ack(cb, { ok: false, reason: '缺少 bot' });
+            botRegistry.set(bot, { skills: new Set(skills), roles: payload?.roles ?? [], at: now() });
+            ack(cb, { ok: true, jobs: listJobs(db, { assignee: bot }).length });
+        });
+
+        // ── add：校验 → 入库 → 推 changed ───────────────────────────────
+        socket.on('board:add', (job, cb) => {
+            try {
+                // ① 先问"这个技能在注册表里存在吗"（全局第一道）
+                const v = validateIncomingJob(job, { registry, validateArgs });
+                if (!v.ok) return ack(cb, { ok: false, reason: v.reason });
+
+                // ①b 再问"这只 bot 上报过它吗"（第二道，按 bot 的能力）
+                //   顺序有讲究：先说"没这个技能"，再说"你的 bot 不会这个"——
+                //   反过来的话，一个根本不存在的技能名会报成"你的 bot 没上报过它"，
+                //   排查方向就错了（去找 bot 的能力表，而实际是名字写错了）。
+                const assignee = v.job.assignee ?? null;
+                if (assignee && botRegistry.has(assignee)) {
+                    const reg = botRegistry.get(assignee);
+                    if (!reg.skills.has(String(v.job.skill))) {
+                        return ack(cb, { ok: false, reason: `「${assignee}」没上报过技能「${v.job.skill}」` });
+                    }
+                }
+
+                const created = addJob(db, v.job, { now: now() });
+                changed(created, 'added');
+                ack(cb, { ok: true, id: created.id, job: created });
+            } catch (e) {
+                ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        // ── list ────────────────────────────────────────────────────────
+        socket.on('board:list', (filter, cb) => {
+            try {
+                const f = filter ?? {};
+                const states = f.state ? [f.state] : (Array.isArray(f.states) ? f.states : null);
+                const jobs = listJobs(db, {
+                    states,
+                    assignee: f.mine ?? null,
+                    skill: f.skill ?? null,
+                    limit: f.limit,
+                });
+                ack(cb, { ok: true, jobs });
+            } catch (e) {
+                ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        // ── get（控制层契约里有它）───────────────────────────────────────
+        //
+        // ★ 2026-11-02 真机验收抓到的 bug：这里原来写 `(id, cb)`，即要求 payload 是**裸 id**，
+        //   而 client 发的是 `{ id }`（和其余所有事件一致）→ `String({id})` 变成
+        //   "[object Object]" → getJob 恒返回 null。
+        //   症状很隐蔽：`board.get()` 永远拿到 null，控制层的 `resolveJob` 就恒走降级 ——
+        //   与"没有板"看起来一模一样，但板是好的。
+        //   现在两种形状都认（裸 id 也兼容），免得以后有人按旧形状调用。
+        socket.on('board:get', (payload, cb) => {
+            try {
+                const id = (payload && typeof payload === 'object') ? payload.id : payload;
+                ack(cb, { ok: true, job: getJob(db, String(id ?? '')) });
+            } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        // ── claim：原子领单 ─────────────────────────────────────────────
+        socket.on('board:claim', (payload, cb) => {
+            try {
+                const bot = String(payload?.bot ?? '').trim();
+                if (!bot) return ack(cb, { ok: false, reason: '缺少 bot' });
+                const job = claimFor(db, bot, { now: now() });
+                if (job) changed(job, 'claimed');
+                ack(cb, { ok: true, job });
+            } catch (e) {
+                ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        // ── heartbeat：续租 + 进度 ──────────────────────────────────────
+        socket.on('board:heartbeat', (payload, cb) => {
+            try {
+                const r = heartbeat(db, String(payload?.id ?? ''), String(payload?.bot ?? ''), {
+                    now: now(), progress: payload?.progress ?? null,
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code ?? 'LEASE_LOST' });
+                ack(cb, { ok: true, job: r.job });
+            } catch (e) {
+                ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        // ── checkpoint：存断点（不动状态）─────────────────────────────
+        socket.on('board:checkpoint', (payload, cb) => {
+            try {
+                const r = updateJob(db, String(payload?.id ?? ''), { checkpoint: payload?.checkpoint ?? null }, { now: now() });
+                ack(cb, r.ok ? { ok: true } : { ok: false, reason: r.message ?? r.code });
+            } catch (e) {
+                ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        // ── finish：按结果决定去哪（规则②③在 store 里）──────────────────
+        socket.on('board:finish', (payload, cb) => {
+            try {
+                const r = finish(db, String(payload?.id ?? ''), payload?.result ?? {}, { now: now() });
+                if (!r.ok) return ack(cb, { ok: false, reason: r.message ?? r.code });
+                changed(r.job, `finish:${r.next}`);
+                ack(cb, { ok: true, job: r.job, next: r.next, counted: r.counted });
+            } catch (e) {
+                ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        // ── set-state：cancel / pause / resume / 被抢占退回 ─────────────
+        socket.on('board:set-state', (payload, cb) => {
+            try {
+                const r = setState(db, String(payload?.id ?? ''), String(payload?.state ?? ''), { now: now() });
+                if (!r.ok) return ack(cb, { ok: false, reason: r.message ?? r.code });
+                changed(r.job, payload?.reason ?? 'set-state');
+                ack(cb, { ok: true, job: r.job });
+            } catch (e) {
+                ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        // ── update：控制层契约里的 update(id, patch) ────────────────────
+        socket.on('board:update', (payload, cb) => {
+            try {
+                const r = updateJob(db, String(payload?.id ?? ''), payload?.patch ?? {}, { now: now() });
+                if (!r.ok) return ack(cb, { ok: false, reason: r.message ?? r.code });
+                changed(r.job, 'updated');
+                ack(cb, { ok: true, job: r.job });
+            } catch (e) {
+                ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+    });
+
+    // ── 租约过期扫描（06 §6：掉线的 bot 30 秒后单子自动回 ready）───────
+    const scanTimer = setInterval(() => {
+        try {
+            const recovered = expireLeases(db, now());
+            for (const id of recovered) changed(getJob(db, id), 'lease-expired');
+        } catch { /* 扫描失败不该让进程崩 */ }
+    }, SCAN_MS);
+    try { scanTimer.unref?.(); } catch { /* 不让定时器阻止进程退出 */ }
+
+    return {
+        stop() { try { clearInterval(scanTimer); } catch { /* ignore */ } },
+        /** 诊断：谁上报了什么能力。 */
+        registrySnapshot() { return new Map(botRegistry); },
+    };
+}
+
+/** 状态常量再导出（服务端与 client 共用同一份，避免字符串两处写）。 */
+export { JOB_STATE };

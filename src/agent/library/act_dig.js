@@ -173,8 +173,16 @@ export function canDigWithInventory(bot, block) {
 
     const items = bot.inventory?.items?.() ?? [];
     // Pickaxe covers stone-family blocks (the common case when digging down).
-    const pick = items.find(i => /_pickaxe$/.test(i.name));
-    if (pick) {
+    //
+    // ★ 2026-11-02 真机验收抓到的 bug：原来只取**第一把**镐 `.find()`，
+    //   那把磨损了就判定"挖不动"——哪怕背包里还有 5 把全新的。
+    //   实测症状：同一个 bot 名反复重启后背包里堆了 6 把镐（有的磨秃了），
+    //   第一把恰好是旧的 → `canDigWithInventory` 返回 false → `flow_mine` 报
+    //   NO_TOOL「没有合适的镐」→ 单子被正确判 blocked，但**其实她完全挖得动**。
+    //   （这和本项目反复踩的"只看第一个"是同一类错。）
+    //   改成"**任意一把**还能用就算有工具"。
+    const picks = items.filter(i => /_pickaxe$/.test(i.name));
+    for (const pick of picks) {
         // A pickaxe with almost no durability left is as good as none.
         const max = pick.maxDurability ?? 0;
         const used = pick.durabilityUsed ?? 0;

@@ -47,6 +47,10 @@ export const OWNER_ONLY_COMMANDS = Object.freeze([
     '!givePlayer',       // 给东西（会真的把自己的家当送人）
     '!startConversation',// bot 之间分工走任务板（08 §3），这条只留给主人调试
     '!endConversation',
+    // M8 B1（2026-11-02 用户决策①）：`!addJob` 只给主人。
+    // 理由：它会用 skill+args 直接驱动流程（采集/建造/战斗），"派活"比"聊天/走/跟"重得多，
+    // 而且绕过了 !newAction 的白名单约束。信任级只保留看和取消。
+    '!addJob',
 ]);
 
 /**
@@ -78,7 +82,7 @@ export const TRUSTED_COMMANDS = Object.freeze([
     // 非破坏性控制（停下来、待机、别说话、设目标）
     '!stop', '!stay', '!stfu', '!goal', '!endGoal',
     // 任务板（未实现的先登记，见上面注释）
-    '!do', '!listSkills', '!jobs', '!addJob', '!addSharedJob',
+    '!do', '!listSkills', '!jobs', '!cancelJob', '!addSharedJob',
     '!cancelJob', '!pauseJob', '!resumeJob',
 ]);
 

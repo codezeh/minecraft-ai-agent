@@ -7,6 +7,12 @@ import * as mindcraft from './mindcraft.js';
 import * as procCtrl from './proc_control.js';
 import { allowLocalOnly } from './local_only.js';
 import { readFileSync, existsSync, readdirSync } from 'fs';
+// M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
+// 板放 agent 里别的 bot 看不见；放这里就只有一个写者，省掉多进程锁）。
+import { openBoard } from '../agent/library/board_store.js';
+import { attachBoardServer } from '../agent/library/board_server.js';
+// 注册表与参数解析器：服务端复用 **agent 侧同一份**（参数规则只能有一个真相）。
+import * as compositeRegistry from '../agent/library/composite_registry.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Mindserver is:
@@ -59,6 +65,37 @@ export function createMindServer(host_public = false, port = 8080) {
         // 只放本机连接（第一轮审查）：只绑 localhost 挡不住浏览器网页直连 WebSocket，见 local_only.js
         allowRequest: allowLocalOnly,
     });
+
+    // ── 任务板（M8 B1）─────────────────────────────────────────────────
+    //
+    // 失败**绝不许**阻止 mindserver 启动：板是可选能力，没有它 agent 照样能聊天/走/挖。
+    // 所以整块 try 住，出错就把 board 留成 null，`board:*` 事件自然没人应答
+    // （client 侧会收到 ack 超时 → TIMEOUT → agent 保持 board=null 走降级）。
+    let boardHandle = null;
+    try {
+        const board = openBoard();
+        if (board.rebuilt) {
+            console.log(`[任务板] 库损坏已重建空库${board.backup ? `（坏文件留在 ${board.backup}）` : ''}`);
+        }
+        // 注册表与参数校验器从 agent 侧借（**同一份**真相：服务端校验和 !do 用的是同一个解析器）
+        const reg = compositeRegistry;
+        const registry = new Map((reg.SKILL_NAMES ?? []).map((n) => [n, reg.getSkill(n)?.manifest ?? {}]));
+        boardHandle = attachBoardServer({
+            io,
+            db: board.db,
+            registry,
+            validateArgs: (skill, args) => {
+                const manifest = reg.getSkill(skill)?.manifest;
+                if (!manifest) return { ok: false, error: `没有叫 ${skill} 的技能` };
+                // args 可能是对象（上层已解析）或字符串（直接来的）——统一走 parseSkillArgs
+                const parsed = reg.parseSkillArgs(manifest, typeof args === 'string' ? args : toArgString(args));
+                return parsed.ok ? { ok: true, args: parsed.args } : { ok: false, error: parsed.error };
+            },
+        });
+        console.log(`[任务板] 已启用（${registry.size} 个技能可派单，库 ${board.path}）`);
+    } catch (e) {
+        console.log(`[任务板] 启动失败，按"没有板"继续：${String(e?.message ?? e).slice(0, 160)}`);
+    }
 
     // Serve static files
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -525,6 +562,19 @@ function removeListener(listener_socket) {
 }
 
 // Optional: export these if you need access to them from other files
+/**
+ * 把 `{count: 4, block: 'oak_log'}` 转回 `count=4 block=oak_log`。
+ *
+ * 为什么绕一圈：服务端要复用 **agent 侧同一个** `parseSkillArgs`（参数规则只有一个真相）。
+ * 但那个解析器的入参是字符串，而 socket 传过来的可能是对象 —— 转一下，别为对象再写一份校验。
+ */
+function toArgString(args) {
+    if (args == null || typeof args !== 'object') return '';
+    return Object.entries(args)
+        .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : v}`)
+        .join(' ');
+}
+
 export const getIO = () => io;
 export const getServer = () => server;
 export const numStateListeners = () => agent_listeners.length;

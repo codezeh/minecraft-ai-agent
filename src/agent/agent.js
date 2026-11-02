@@ -17,6 +17,9 @@ import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
 import { addBrowserViewer } from './vision/browser_viewer.js';
 import { serverProxy, sendOutputToServer } from './mindserver_proxy.js';
+// M8 B1：任务板客户端（agent 侧薄封装）。连不上就保持 this.board = null，
+// 与控制层已有的"没有单要动"降级完全一致（06 §9.2 末：单 bot 和多机走同一套）。
+import { BoardClient } from './library/board_client.js';
 import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
@@ -25,6 +28,27 @@ import { log, validateNameFormat, handleDisconnection } from './connection_handl
 import { onDeath } from './library/control.js';
 
 export class Agent {
+    /**
+     * 上报给任务板的技能名（= composite_registry 的注册名）。
+     *
+     * 单独一个方法而不是内联：服务端用这份清单做安全①校验（只能派这些技能），
+     * 以后加技能时"这里忘了同步"会直接表现成"新技能派不了单"，一眼能看出来。
+     */
+    async _registeredSkills() {
+        try {
+            // 动态 import（不是顶层静态 import）：
+            //   composite_registry 加载时会校验所有 manifest，**不合格会 throw**。
+            //   那个校验是对的（启动即失败），但它不该阻止 **agent 启动** ——
+            //   任务板只是可选能力，没有板她照样能聊天/走/挖。
+            //   所以这里 catch 住，退化成"没有可派单的技能"（= 服务端只允许 add 时全部拒绝）。
+            const reg = await import('./library/composite_registry.js');
+            return reg?.SKILL_NAMES ?? [];
+        } catch (e) {
+            console.log(`[任务板] 注册表加载失败，本次不上报任何技能：${String(e?.message ?? e).slice(0, 120)}`);
+            return [];
+        }
+    }
+
     async start(load_mem=false, init_message=null, count_id=0) {
         this.last_sender = null;
         this.count_id = count_id;
@@ -39,6 +63,36 @@ export class Agent {
         this.prompter = new Prompter(this, settings.profile);
         this.name = (this.prompter.getName() || '').trim();
         console.log(`Initializing agent ${this.name}...`);
+
+        // ★ M8 B1（2026-11-02）：接任务板。
+        //
+        // 顺序很关键：`this.name` 必须在上面那行**之后**才可用（它来自 profile），
+        // 而 board 的个人单是按 name 过滤的 —— 所以接线放在这里，不能放构造里。
+        //
+        // **连不上就保持 null**（下面 catch / !ok 分支）：控制层对 `board === null`
+        // 已经写好了完整降级（`applyStop()` 空操作、`reserve/release` 恒成功），
+        // 行为与加板之前**逐行一致**。不维护"有板/无板"两条业务路径（06 §9.2）。
+        this.board = null;
+        try {
+            const skills = await this._registeredSkills();
+            const client = new BoardClient({
+                socket: serverProxy?.socket ?? null,
+                name: this.name,
+                skills,
+                roles: settings.profile?.roles ?? [],
+            });
+            const hello = await client.hello();
+            if (hello.ok) {
+                this.board = client;
+                console.log(`[任务板] 已连接（${skills.length} 个技能可派单）`);
+            } else {
+                console.log(`[任务板] 未连接（${hello.code} ${hello.message ?? ''}），控制层降级为"没有单要动"`);
+            }
+        } catch (e) {
+            // 板出错**绝不许拖垮 agent 启动**
+            console.log(`[任务板] 连接失败：${String(e?.message ?? e).slice(0, 120)}，按"没有板"继续`);
+            this.board = null;
+        }
 
         // 启动自检：permissions.owner 没配时明确提示，别让"危险命令静默不可用"变成谜。
         // 默认状态（不配 owner）按 08 §5 是"人人信任级"：聊天/走/跟/采集/制作/建造/存取都能用，

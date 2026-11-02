@@ -2,7 +2,7 @@ import * as skills from '../library/skills.js';
 // 复合技能注册表（基础设施，不带前缀）。commands 层只许 import 流程/查询/基础设施 ——
 // 这条 import 合规；**严禁**在 commands 里 import act_* / atom_*（M4 前缀规矩会拦）。
 import { mapDirOf } from '../library/bot_paths.js';
-import { getSkill, runSkill } from '../library/composite_registry.js';
+import { getSkill, runSkill, parseSkillArgs } from '../library/composite_registry.js';
 import settings from '../settings.js';
 import convoManager from '../conversation.js';
 import { formatActionResult } from '../library/contract.js';
@@ -786,6 +786,113 @@ export const actionsList = [
             }
             // 08 §4 的一行式回报：code + count/want + failed 摘要
             return formatActionOutcome(name, codeReturn, result);
+        }
+    },
+    // ══════════════════════════════════════════════════════════════════════
+    // M8 B1：任务板三条命令（06 §14 / 08 §5）
+    //
+    // 权限（用户 2026-11-02 决策①）：`!addJob` **只给主人**（它会用 skill+args 直接驱动
+    // 流程，"派活"比聊天/走/跟重得多，且绕过了 !newAction 的白名单）；`!jobs`/`!cancelJob`
+    // 信任级即可（看和取消都不改变世界）。
+    //
+    // 参数错一律返回**人话且不带 code**（沿用 !do 的做法）：带了 code 模型会当成
+    // "运行失败"去重试，而参数错重试多少次都是一样的答案。
+    // ══════════════════════════════════════════════════════════════════════
+    {
+        name: '!addJob',
+        description: 'Add a task-board job for this bot to do (owner only). Args are key=value, e.g. "block=oak_log count=16".',
+        params: {
+            'skill': { type: 'string', description: 'Composite skill name (see !listSkills).' },
+            'args': { type: 'string', description: 'Parameters as a key=value string, e.g. "block=oak_log count=16".' },
+            'priority': { type: 'integer', description: '0-9, default 5. Higher runs first.', optional: true },
+        },
+        perform: async function (agent, skill, args, priority) {
+            const board = agent.board;
+            if (!board) {
+                return '!addJob 没执行：任务板没连上（mindserver 未连通）。现在可以直接用 !do 跑一次。';
+            }
+            const entry = getSkill(skill);
+            if (!entry) {
+                return `!addJob 没执行：没有叫 ${skill} 的复合技能。先 !listSkills 看有哪些。`;
+            }
+
+            // 参数用和 !do 完全相同的解析器 —— 两个入口的规则必须一样，
+            // 否则"!do 能跑的 args，!addJob 却拒"会让人以为任务板坏了。
+            const parsed = parseSkillArgs(entry.manifest, args ?? '');
+            if (!parsed.ok) {
+                return `!addJob 没执行：${parsed.error}`;
+            }
+
+            const prio = Number.isFinite(Number(priority)) ? Math.max(0, Math.min(9, Number(priority))) : 5;
+            const r = await board.add({
+                kind: 'personal',
+                title: `${skill} ${args ?? ''}`.trim(),
+                skill,
+                args: parsed.args,
+                priority: prio,
+                source: `player:${agent.last_sender ?? 'unknown'}`,
+                assignee: agent.name,
+                state: 'ready',
+            });
+            if (!r.ok) {
+                return `!addJob 没执行：${r.message}（${r.code}）`;
+            }
+            const id = r.data?.id ?? r.data?.job?.id ?? '?';
+            return `已下单项 ${id}：${skill} ${args ?? ''}（优先级 ${prio}）。用 !jobs 看进度。`;
+        }
+    },
+    {
+        name: '!jobs',
+        description: 'List task-board jobs: mine plus claimable shared ones, with state and progress.',
+        params: {},
+        perform: async function (agent) {
+            const board = agent.board;
+            if (!board) {
+                return '!jobs：任务板没连上（mindserver 未连通），现在没有单可看。!do 仍然可用。';
+            }
+            // 拉一次最新的（同步 list() 读的是本地镜像，命令要的是此刻真相）
+            try { await board.refresh?.({}); } catch { /* 拉不到就用镜像 */ }
+            const jobs = board.list?.({}) ?? [];
+            if (!jobs.length) return '!jobs：现在没有任务单。用 !addJob 下一张。';
+
+            const STATE_ZH = {
+                pending: '待就绪', ready: '可领', claimed: '已领', running: '在做',
+                paused: '暂停', blocked: '卡住', done: '完成', failed: '失败', cancelled: '取消',
+            };
+            const lines = jobs.slice(0, 24).map((j) => {
+                const p = j.progress;
+                // 进度只在真的报了 count/want 时才显示，不编造
+                const prog = (p && Number.isFinite(p.count) && Number.isFinite(p.want) && p.want > 0)
+                    ? ` ${p.count}/${p.want}`
+                    : '';
+                const why = j.state === 'blocked' && j.result?.message ? `（${j.result.message.slice(0, 40)}）` : '';
+                return `- ${j.id} [${STATE_ZH[j.state] ?? j.state}] ${j.skill}${prog} 优先级${j.priority}${why}`;
+            });
+            const more = jobs.length > 24 ? ` …还有 ${jobs.length - 24} 张` : '';
+            return `!jobs（${jobs.length} 张）：` + String.fromCharCode(10) + lines.join(String.fromCharCode(10)) + more;
+        }
+    },
+    {
+        name: '!cancelJob',
+        description: 'Cancel a task-board job by its id (see !jobs).',
+        params: {
+            'id': { type: 'string', description: 'Job id, e.g. j_20261102_0001.' },
+        },
+        perform: async function (agent, id) {
+            const board = agent.board;
+            if (!board) {
+                return '!cancelJob 没执行：任务板没连上（mindserver 未连通）。';
+            }
+            // 先看有没有这张单，没有就直说（而不是让服务端报一句看不懂的）
+            const cur = board.get?.(id);
+            if (!cur) {
+                return `!cancelJob 没执行：没有叫 ${id} 的单。先 !jobs 看有哪些。`;
+            }
+            const r = await board.setState?.(id, 'cancelled', 'player');
+            if (!r?.ok) {
+                return `!cancelJob 没执行：${r?.message ?? '取消失败'}（${r?.code ?? '?'}）`;
+            }
+            return `已取消 ${id}（${cur.skill}）。`;
         }
     },
 ];
