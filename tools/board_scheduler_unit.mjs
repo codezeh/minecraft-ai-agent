@@ -447,6 +447,71 @@ function makeRunner({ clock, actions, durations = {}, onBody = null }) {
     }
 }
 
+// 10b. ★ 抢占前必须 refresh：别人新加的单本地镜像看不见（真机缺陷回归）──
+//   真机验收抓到：`board_client` 的镜像只因"自己的操作 + board:changed(只更新已知单)"而变，
+//   **别的客户端新加的单它不知道** → `_findPreemptor()` 翻不到 → 抢占永不触发。
+//   用例：镜像里只有自己的单；"服务端"多了一张 9 级单（只有 refresh 才能拿到）→
+//         调用 tick() 必须能抢到它。
+{
+    const clock = makeClock();
+    // 服务端真相：一张 3 级（我在跑）+ 一张 9 级（别人刚加）
+    const serverJobs = new Map([
+        ['low', { id: 'low', state: JOB_STATE.CLAIMED, skill: 'mine', args: {}, priority: 3 }],
+        ['high', { id: 'high', state: JOB_STATE.READY, skill: 'collect', args: {}, priority: 9 }],
+    ]);
+    // 本地镜像：**故意不含 high**（模拟"别人的单我不知道"）
+    const mirror = new Map([
+        ['low', { id: 'low', state: JOB_STATE.CLAIMED, skill: 'mine', args: {}, priority: 3 }],
+    ]);
+    let refreshCalls = 0;
+    const board = {
+        list: (f = {}) => {
+            const src = [...mirror.values()];
+            return src.filter((j) => !f.states || f.states.includes(j.state)).map((j) => ({ ...j }));
+        },
+        get: (id) => (mirror.get(id) ? { ...mirror.get(id) } : null),
+        async refresh() {
+            refreshCalls++;
+            // refresh = 从服务端拉最新：把 serverJobs 灌进镜像
+            for (const [id, j] of serverJobs) mirror.set(id, { ...j });
+            return { ok: true };
+        },
+        async claim() {
+            const cand = [...serverJobs.values()].find((j) => j.state === JOB_STATE.READY);
+            if (!cand) return { ok: true, data: { job: null } };
+            cand.state = JOB_STATE.CLAIMED;
+            return { ok: true, data: { job: { ...cand } } };
+        },
+        async setState(id, state, reason) {
+            const j = serverJobs.get(id) ?? mirror.get(id);
+            if (j) { j.state = state; if (state === JOB_STATE.PAUSED) j.pausedReason = reason; }
+            if (mirror.has(id)) mirror.get(id).state = state;
+            return { ok: true, data: { job: j ? { ...j } : null } };
+        },
+        async heartbeat() { return { ok: true }; },
+        async finish() { return { ok: true }; },
+        async update() { return { ok: true }; },
+    };
+
+    const actions = makeFakeActions();
+    actions.state.executing = true;
+    actions.state.currentJobId = 'low';
+    const runs = [];
+    const runSkill = async (_a, skill) => { runs.push(skill); return { ok: true, code: 'OK', data: { count: 1, want: 1 } }; };
+
+    const sched = new BoardScheduler({ agent: { name: 'tester' }, board, actions, runSkill, now: clock.now, sleep: clock.sleep });
+    sched.currentJobId = 'low';
+
+    const r = await sched.tick();
+    const good = refreshCalls > 0 && runs.includes('collect') && serverJobs.get('low').state === JOB_STATE.PAUSED;
+    if (good) {
+        okCase('★ 抢占前 refresh：别人的新单能被看见并抢占（镜像不一致的回归）',
+            `refreshCalls=${refreshCalls} runs=${runs.join('>')} low=${serverJobs.get('low').state}`);
+    } else {
+        badCase('★ 抢占前 refresh', { refreshCalls, runs, low: serverJobs.get('low').state, reason: r.reason });
+    }
+}
+
 // 11. ★ 抢占时旧流程还在跑（killed）→ **绝不开新动作**（高危点①）
 {
     const clock = makeClock();

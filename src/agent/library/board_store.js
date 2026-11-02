@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     maxAttempts INTEGER NOT NULL DEFAULT ${DEFAULT_MAX_ATTEMPTS},
     lease_owner TEXT, lease_until INTEGER,
     progress TEXT, checkpoint TEXT, result TEXT,
+    interrupted TEXT,
     notBefore INTEGER, repeat_ms INTEGER,
     dependsOn TEXT,
     createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
@@ -185,7 +186,7 @@ export function openBoard(dir = boardDirOf()) {
 // 行 ↔ 对象
 // ───────────────────────────────────────────────────────────────────────────
 
-const JSON_COLS = new Set(['args', 'requires', 'claims', 'progress', 'checkpoint', 'result', 'dependsOn']);
+const JSON_COLS = new Set(['args', 'requires', 'claims', 'progress', 'checkpoint', 'result', 'dependsOn', 'interrupted']);
 
 /** DB 行 → 任务单对象（字段名与 06 §4 一致）。 */
 export function rowToJob(row) {
@@ -298,9 +299,9 @@ export function addJob(db, job, opts = {}) {
 function insertJobRow(db, job, id, state, now) {
     db.prepare(`INSERT INTO jobs
         (id, kind, parentId, title, skill, args, why, priority, source, assignee, requires, claims,
-         state, attempts, maxAttempts, lease_owner, lease_until, progress, checkpoint, result,
+         state, attempts, maxAttempts, lease_owner, lease_until, progress, checkpoint, result, interrupted,
          notBefore, repeat_ms, dependsOn, createdAt, updatedAt)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         id,
         job.kind ?? 'personal',
         job.parentId ?? null,
@@ -320,6 +321,7 @@ function insertJobRow(db, job, id, state, now) {
         j(job.progress ?? null),
         j(job.checkpoint ?? null),
         j(job.result ?? null),
+        j(job.interrupted ?? null),
         job.notBefore ?? null,
         job.repeat?.everyMs ?? null,
         j(job.dependsOn ?? null),
@@ -522,12 +524,15 @@ export function finish(db, id, result = {}, opts = {}) {
     const attempts = counted ? job.attempts + 1 : job.attempts;
     db.prepare(`UPDATE jobs
         SET state=?, attempts=?, lease_owner=NULL, lease_until=NULL,
-            progress=?, checkpoint=?, result=?, updatedAt=?
+            progress=?, checkpoint=?, result=?, interrupted=?, updatedAt=?
         WHERE id=?`).run(
         next, attempts,
         j(progress ?? job.progress),
         j(result.checkpoint ?? job.checkpoint),
         j({ ok: okFlag, code, message: result.message ?? '', at: now }),
+        // 回到 ready 时清掉 interrupted（与 control.js 的 requeue 语义一致）；
+        // 其它状态保留（paused 时要留着"被打断的原因/时刻"）
+        next === JOB_STATE.READY ? null : j(result.interrupted ?? job.interrupted),
         now, id,
     );
     return { ok: true, job: getJob(db, id), next, counted };
@@ -581,7 +586,13 @@ export function setState(db, id, state, opts = {}) {
  * 只允许改白名单字段 —— 防止调用方顺手把 id/createdAt 改掉。
  */
 const PATCHABLE = new Set(['state', 'priority', 'progress', 'checkpoint', 'result', 'assignee',
-    'lease_owner', 'lease_until', 'notBefore', 'repeat_ms', 'title', 'why', 'args', 'requires', 'claims']);
+    'lease_owner', 'lease_until', 'notBefore', 'repeat_ms', 'title', 'why', 'args', 'requires', 'claims',
+    // ★ 2026-11-02 B2 真机验收发现的缺陷：`control.js` 早就在写 `patch.interrupted`
+    //   （planStop 记"被打断的时刻"），`requeueStaleBrief()` 也在读 `job.interrupted.at`，
+    //   但**库里没有这一列、白名单也不许写** → 字段被**静默丢弃** →
+    //   brief 超时回收机制**从上线起就不可能生效**（读到的永远是 undefined）。
+    //   这正是"两个地方都以为自己在管同一件事、实际谁都没管"的典型。
+    'interrupted']);
 
 export function updateJob(db, id, patch = {}, opts = {}) {
     const now = opts.now ?? Date.now();

@@ -214,6 +214,17 @@ export class BoardScheduler {
         //   理由：`requeueStaleBrief` 是把"已经被打断、悬着没人管"的单捡回 ready，
         //   属于**收拾残局**，不是"领新单"。玩家喊停时更该收拾干净 ——
         //   否则他一说"继续"，那些悬着的 brief 单永远回不来。
+        // ★ 收拾残局前也要**先拉一次**。
+        //
+        //   真机验收抓到的第二个"镜像不一致"缺陷（与抢占那个同类）：
+        //   `requeueStaleBrief()` 读的是 `board.list(...)` = **本地镜像**，
+        //   而"被别的进程/上一次会话打断、悬着"的单**不在我的镜像里** →
+        //   它一辈子也捡不回来。实测：库里造一张 running+过期 interrupted 的单，
+        //   调度器连续 tick 20 秒都没动它。
+        //   （这也说明 B2 的"镜像要靠自己 refresh"这条必须在**每个读板的地方**都记得做，
+        //     不能只在抢占那一处补。）
+        try { await this.boardClient?.refresh?.({}); } catch { /* 拉不到就按旧镜像判 */ }
+
         let requeued = [];
         try {
             requeued = requeueStaleBrief({
@@ -233,6 +244,14 @@ export class BoardScheduler {
 
         // ── A) 手上正有动作在跑 → 看要不要抢占 ──────────────────────────
         if (this.actions?.executing) {
+            // ★ 抢占前必须**主动拉一次** ready 单的最新快照。
+            //
+            //   真机验收抓到的缺陷（2026-11-02）：`board_client` 的本地镜像只会因
+            //   "自己发起的操作" 和 `board:changed`（它只更新**已知**的单）而变；
+            //   **别人新加的单它根本不知道**。于是 `_findPreemptor()` 在镜像里翻不到
+            //   那张 9 级单 → 抢占永远不触发（实测：9 级单一直停在 `可领`）。
+            //   这和 B1 那个 `board:get` payload 形状 bug 是同一类"镜像/真相不一致"。
+            try { await this.boardClient?.refresh?.({}); } catch { /* 拉不到就按旧镜像判 */ }
             const preemptor = await this._findPreemptor();
             if (!preemptor) return { acted: false, reason: 'busy', requeued };
             const done = await this._preempt(preemptor);

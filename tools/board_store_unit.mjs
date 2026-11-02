@@ -385,6 +385,36 @@ const freshDb = () => {
     }
 }
 
+// ── 15d. ★ interrupted 字段必须能存能读（brief 回收机制的前提）──────
+//   真机验收抓到的缺陷：`control.js` 早就在写 `patch.interrupted`、
+//   `requeueStaleBrief()` 也在读 `job.interrupted.at`，但库里**没有这一列**、
+//   白名单也不许写 → 字段被静默丢弃 → brief 超时回收从上线起就没生效过。
+//   这条用例锁住"写得进、读得出、能清掉"。
+{
+    const { db } = freshDb();
+    const job = addJob(db, { title: 'brief', skill: 'mine', assignee: 'alpha' });
+    claimFor(db, 'alpha');
+
+    const at = 1_700_000_000_000;
+    const w = updateJob(db, job.id, { state: JOB_STATE.RUNNING, interrupted: { reason: 'brief', at } }, { now: at });
+    const readBack = getJob(db, job.id);
+
+    // 清掉（requeueStaleBrief 就是这么清的）
+    updateJob(db, job.id, { state: JOB_STATE.READY, interrupted: null }, { now: at + 1 });
+    const cleared = getJob(db, job.id);
+
+    const good = w.ok
+        && readBack.interrupted?.at === at
+        && readBack.interrupted?.reason === 'brief'
+        && cleared.interrupted == null;
+    if (good) {
+        okCase('★ interrupted 字段写得进/读得出/能清掉（brief 回收的前提）',
+            `at=${readBack.interrupted?.at} → cleared=${cleared.interrupted}`);
+    } else {
+        badCase('★ interrupted 字段往返', { ok: w.ok, readBack: readBack.interrupted, cleared: cleared.interrupted });
+    }
+}
+
 // ── 16. 库损坏 → 自动重建空库（用户决策②），坏文件留证 ─────────────
 {
     const dir = join(DIR, 'corrupt');
