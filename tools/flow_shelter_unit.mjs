@@ -1,5 +1,5 @@
 /** t31：flow_shelter 离线用例（蓝图形状 / 材料判断 / 透传 build / idle_planner 接线）。 */
-import { shelterBlueprint, shelter, manifest } from '../src/agent/library/flow_shelter.js';
+import { shelterBlueprint, capCell, shelter, manifest } from '../src/agent/library/flow_shelter.js';
 import { decideIdle, isIdle, IDLE } from '../src/agent/library/idle_planner.js';
 import { CODES } from '../src/agent/library/contract.js';
 import { SKILL_NAMES } from '../src/agent/library/composite_registry.js';
@@ -12,12 +12,17 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
 
 // ① 蓝图默认形状（2026-11-03 缩小）：3×3、**1 层墙 + 顶 = 17 格**，中间留空
 {
+    // ★ 2026-11-03：屋顶正中**不在蓝图里**了 —— 它由 capCell() 单独"先出后封"。
+    //   所以蓝图 = 墙 8 + 顶圈 8 = 16，另加 1 格正中 = 17。
     const bp = shelterBlueprint({ x: 0.5, y: 64, z: 0.5 }, 'cobblestone', 3, { floor: 'never' });
     const inner = bp.filter((b) => b.x === 0 && b.z === 0 && b.y === 64);
     const byY = bp.reduce((a, b) => { a[b.y] = (a[b.y] || 0) + 1; return a; }, {});
-    check('① 蓝图默认 = 墙8 + 顶9 = 17 格（不铺地板），中间留空能站人',
-        bp.length === 17 && inner.length === 0 && byY[64] === 8 && byY[65] === 9,
-        `共${bp.length} 层分布=${JSON.stringify(byY)} 中空=${inner.length}`);
+    const cap = capCell({ x: 0.5, y: 64, z: 0.5 });
+    const capInBp = bp.some((b) => b.x === cap.x && b.y === cap.y && b.z === cap.z);
+    check('① 蓝图 = 墙8 + 顶圈8 = 16（正中由 capCell 另封，不在蓝图内），中间留空能站人',
+        bp.length === 16 && inner.length === 0 && byY[64] === 8 && byY[65] === 8
+        && !capInBp && cap.x === 0 && cap.y === 65 && cap.z === 0,
+        `共${bp.length} 层=${JSON.stringify(byY)} 中空=${inner.length} cap=(${cap.x},${cap.y},${cap.z}) 在蓝图内=${capInBp}`);
 }
 
 // ①b floor:'auto' 只在脚下不实心时补 1 块地板
@@ -25,7 +30,7 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     const air = shelterBlueprint({ x: 0.5, y: 64, z: 0.5 }, 'cobblestone', 3, { floor: 'auto', underBlockName: 'air' });
     const solid = shelterBlueprint({ x: 0.5, y: 64, z: 0.5 }, 'cobblestone', 3, { floor: 'auto', underBlockName: 'stone' });
     check('①b floor=auto：脚下是空气补 1 块；脚下已实心就不补',
-        air.length === 18 && solid.length === 17, `air=${air.length} solid=${solid.length}`);
+        air.length === 17 && solid.length === 16, `air=${air.length} solid=${solid.length}`);
 }
 
 // ② 墙是完整外圈 8 格（封闭，不露天）
@@ -33,19 +38,14 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     const bp = shelterBlueprint({ x: 0.5, y: 64, z: 0.5 }, 'stone', 3, { floor: 'never' });
     const wall = bp.filter((b) => b.y === 64).length;
     const roof = bp.filter((b) => b.y === 65).length;
-    check('② 墙 8 格外圈 + 顶 9 格（封闭，不露天）', wall === 8 && roof === 9, `墙${wall}/8 顶${roof}/9`);
+    check('② 墙 8 格外圈 + 顶圈 8 格（+正中另封 = 9，封闭不露天）', wall === 8 && roof === 8, `墙${wall}/8 顶圈${roof}/8`);
 }
 
-// ②b ★ 屋顶正中**最后放**（这样条件 C 的"4 邻已落地"必然成立，才能封顶）
+// ②b ★ capCell 指向屋顶正中（她头顶那列）—— 这就是"必须出门才能封"的那一格
 {
-    const bp = shelterBlueprint({ x: 0.5, y: 64, z: 0.5 }, 'cobblestone', 3, { floor: 'never' });
-    const roof = bp.filter((b) => b.y === 65);
-    const last = roof[roof.length - 1];
-    const centerIsLast = last.x === 0 && last.z === 0;
-    const othersFirst = roof.slice(0, -1).every((b) => !(b.x === 0 && b.z === 0));
-    check('②b ★ 屋顶正中最后放（保证 4 邻已落地 → 条件 C 成立 → 能封顶）',
-        centerIsLast && othersFirst && roof.length === 9,
-        `最后一块=(${last.x},${last.z}) 顶层 ${roof.length} 块`);
+    const cap = capCell({ x: 3.5, y: 70, z: -2.5 });
+    check('②b ★ capCell 指向头顶列正中（y+1）—— 必须出门才能封的那格',
+        cap.x === 3 && cap.y === 71 && cap.z === -3, `cap=(${cap.x},${cap.y},${cap.z})`);
 }
 
 // ③ manifest 合法：level=flow，codes 全已注册
