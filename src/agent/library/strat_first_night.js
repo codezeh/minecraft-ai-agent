@@ -31,7 +31,14 @@ export const FIRST_NIGHT = Object.freeze({
     DUSK_LEAD: 2000,         // 提前量：12000 起就该准备遮蔽了
     WOOD_TARGET: 8,          // 够做 工作台(4木板) + 木镐(3木板+2棍) + 余量
     FOOD_MIN: 6,             // 食物少于这个数就吃/补
-    MAX_TOTAL_JOBS: 12,      // ★ 全局闸：本策略一共最多拆 12 张子单
+    // ★★ 为什么需要这道全局闸（2026-11-03 用户要求写明）：
+    //   `strat_obtain` 的闸（MAX_DEPTH=6 / MAX_JOBS=30）是 **per-call 的** ——
+    //   `plan`/`hitDepth`/`hitJobs`/`seen` 全是 `planObtain` 的**局部变量**，
+    //   每次调用各自算一份，**不存在跨调用的共享预算**。
+    //   所以本策略里 4 个 `obtain` 步骤理论上可各展开 30 张 = **120 张子单**。
+    //   台账已记：**任何"调多次 obtain"的策略都必须自己加全局总闸**，
+    //   `strat_obtain` 不提供（也不该它提供 —— 那需要跨调用共享状态，是设计变更）。
+    MAX_TOTAL_JOBS: 12,
 });
 
 /**
