@@ -92,8 +92,8 @@ if (process.argv[2] === '--agent') {
         // ★ 关键：矿层要**避开她站的那一格**，否则 /fill 会把她 entomb 在里面 →
         //   窒息死亡 → 服务端清空背包 → mine 读到 items=[] → 假 NO_TOOL。
         await RC(`fill ${bx - 4} ${by} ${bz - 4} ${bx + 4} ${by + 1} ${bz + 4} iron_ore`);
-        await RC(`fill ${bx} ${by} ${bz} ${bx} ${by + 1} ${bz} air`);
-        await RC(`fill ${bx} ${by - 1} ${bz} ${bx} ${by - 1} ${bz} stone`);
+        // 共用函数：保住她自己站的那一格（否则 /fill 会把她活埋 → 窒息 → 背包清空 → 假 NO_TOOL）
+        await keepBotCellClear(RC, { x: bx, y: by, z: bz });
         await sleep(1200);
         console.log(`AGENT_ARENA at ${bx},${by},${bz}`);
     } catch (e) { console.log('AGENT_ARENA_ERR', String(e?.message ?? e).slice(0, 80)); }

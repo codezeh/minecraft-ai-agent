@@ -34,6 +34,38 @@ export class Agent {
      * 单独一个方法而不是内联：服务端用这份清单做安全①校验（只能派这些技能），
      * 以后加技能时"这里忘了同步"会直接表现成"新技能派不了单"，一眼能看出来。
      */
+    /**
+     * 起任务板调度器（M8 B2，06 §8）。
+     *
+     * 节奏由这里的定时器决定，`tick()` 本身只跑**一遍**（"空闲时不空转"）。
+     * tick 之间能响应"玩家喊停 / 进程退出"，所以中断不会被一次长循环拖住。
+     *
+     * 没有板 / 起不来 → 静默跳过（板是可选能力，不能拖垮 agent）。
+     */
+    async _startScheduler() {
+        if (this.scheduler || !this.board) return;
+        try {
+            // 动态 import：与 `_registeredSkills()` 同样的理由 —— 模块加载期若抛错
+            // （比如某个 manifest 不合格），不该阻止 agent 启动。
+            const { BoardScheduler } = await import('./library/board_scheduler.js');
+            this.scheduler = new BoardScheduler({
+                agent: this,
+                board: this.board,
+                actions: this.actions,
+            });
+            const EVERY = 3000;   // 3 秒一拍：够快响应新单，又不至于空转刷日志
+            this._schedulerTimer = setInterval(() => {
+                this.scheduler.tick().catch((e) => {
+                    console.log(`[调度器] tick 出错：${String(e?.message ?? e).slice(0, 120)}`);
+                });
+            }, EVERY);
+            try { this._schedulerTimer.unref?.(); } catch { /* 不阻止进程退出 */ }
+            console.log('[调度器] 已启动（每 3 秒一拍）');
+        } catch (e) {
+            console.log(`[调度器] 启动失败：${String(e?.message ?? e).slice(0, 140)}`);
+        }
+    }
+
     async _registeredSkills() {
         try {
             // 动态 import（不是顶层静态 import）：
@@ -85,6 +117,8 @@ export class Agent {
             if (hello.ok) {
                 this.board = client;
                 console.log(`[任务板] 已连接（${skills.length} 个技能可派单）`);
+                // ★ M8 B2：板连上就起调度器（否则 B2 就是死代码，跟 B1 的 server 一样）
+                await this._startScheduler();
             } else {
                 console.log(`[任务板] 未连接（${hello.code} ${hello.message ?? ''}），控制层降级为"没有单要动"`);
             }

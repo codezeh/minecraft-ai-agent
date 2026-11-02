@@ -34,6 +34,7 @@ const UNITS = [
     'board_nofallback_unit',     // M8 B1：无板降级回归（board=null 行为与加板前一致）
     'board_cmd_unit',            // M8 B1：!addJob/!jobs/!cancelJob 三条命令 + 权限 + 参数校验
     'flow_mine_notool_unit',     // t21：mine 的 NO_TOOL 假失败 + 三态判据（读不到≠没工具）
+    'board_scheduler_unit',      // M8 B2：调度主循环 / 抢占规则 / autoClaim / requeueStaleBrief
     'board_payload_unit',        // M8 B1（t20 补）：10 个 board:* 事件的 payload 形状（表驱动，防"[object Object]"式恒 null）
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
     'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）

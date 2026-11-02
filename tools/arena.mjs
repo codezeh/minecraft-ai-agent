@@ -94,6 +94,32 @@ export async function tpSafe(RC, bot, name, x, y, z, opts = {}) {
  * @param {object} opts  { halfSize=16, y0=-64, y1=64, groundY=-61 }
  * @returns {Promise<{x:number, z:number, groundY:number, release:Function}>}
  */
+/**
+ * 造地形时**保住 bot 自己站的那一格**（今晚踩了几次）。
+ *
+ * 为什么需要：`/fill` 会**无差别覆盖**，包括 bot 站的位置。
+ *   实测事故（M8 B1 验收）：`fill iron_ore` 把 bot 自己也埋了进去 →
+ *   窒息死亡 → 服务端清空背包 → 流程读到 `inventory.items()=[]` →
+ *   误报"没有工具"（`NO_TOOL`）→ 任务板判 blocked。
+ *   表面看是"挖矿工具判据有 bug"，实际是**造场地把她活埋了**。
+ *
+ * 用法：填完地形后调一次，把 bot 脚下那格恢复成空气、下面铺一层实心。
+ *
+ * @param {Function} RC   rcon 调用
+ * @param {{x:number,y:number,z:number}} feet  bot 的**脚位**（`bot.entity.position`）
+ * @param {object} [opts] { floor='stone', headClear=2 }
+ */
+export async function keepBotCellClear(RC, feet, opts = {}) {
+    const { floor = 'stone', headClear = 2 } = opts;
+    if (!feet || !Number.isFinite(feet.x)) return;
+    const x = Math.floor(feet.x), y = Math.floor(feet.y), z = Math.floor(feet.z);
+    // 脚下是实心（别让她掉下去），身体那几格是空气（别憋死）
+    await RC(`setblock ${x} ${y - 1} ${z} ${floor}`);
+    for (let dy = 0; dy <= headClear; dy++) {
+        await RC(`setblock ${x} ${y + dy} ${z} air`);
+    }
+}
+
 export async function rentArena(RC, slot = 'default', opts = {}) {
     const { halfSize = 16, y0 = -64, y1 = 64, groundY = -61 } = opts;
     const base = ARENA_SLOTS[slot] ?? ARENA_SLOTS.default;
