@@ -25,6 +25,8 @@ import { ok, fail } from './contract.js';
 import { moveToXZ } from './nav_pathfinder.js';
 import { digBlock, isDiggable, canDigWithInventory } from './act_dig.js';
 import { climbUp, climbDown, isClimbable } from './act_climb.js';
+// 坠落/虚空反射（2026-11-02）：落点下方没支撑就拒绝走过去
+import { fallRisk } from './query_safe.js';
 import { scanSphere, stats3d, columnSurfaces, T } from './terrain3d.js';
 import { plan3D } from './path_3d.js';
 import { ensureTraced } from './trace_bus.js';
@@ -325,6 +327,34 @@ export async function execStep(bot, step, opts = {}) {
             if (landing && landing.t === T.LAVA) {
                 onEvent({ type: 'unsafe-landing', x: step.x, y: step.y, z: step.z });
                 return { ok: false, code: 'UNSAFE', message: `落点 (${step.x},${step.y},${step.z}) 是危险面` };
+            }
+
+            // ★★★ 2026-11-02（用户指出"悬崖等危险区域按理要有条件反射"）：**坠落/虚空反射**。
+            //
+            // 上面那条只拦岩浆。悬崖和虚空**从来没拦过**，实测吃过两次亏：
+            //   ① gap-bridge：沟下面是虚空，她搭不过去就掉出世界摔死
+            //      （日志 `ma67453 fell out of the world`），重生在出生点 → 那一轮变成
+            //      "从出生点往 10000 格外走"，还被误判成传送失败。
+            //   ② digdown 接 stepInto 后：她站 1 格厚盖板上，走出边缘掉下去 → 重规划
+            //      → 再走回来 → 无限循环卡死 13 分钟。
+            //
+            // 判据用 `fallRisk`（query_safe）：从落点往下找最近的**能站**的面，
+            // 落差 > maxDrop（默认 4，与 path_3d 的 maxDrop 对齐）或整列无面（虚空）就拒。
+            // 注意 CLIMBABLE 不算落脚点（T 的注释里写明它"不是落脚点"）。
+            const risk = fallRisk(bot, mapDir, { x: step.x, y: targetFeetY, z: step.z });
+            if (risk.ok && risk.data && risk.data.safe === false) {
+                onEvent({
+                    type: 'unsafe-fall', x: step.x, y: step.y, z: step.z,
+                    drop: risk.data.drop, voidBelow: risk.data.voidBelow, why: risk.data.reason,
+                });
+                return {
+                    ok: false, code: 'UNSAFE',
+                    message: `落点 (${step.x},${step.y},${step.z}) 站不住：${risk.data.reason}`,
+                };
+            }
+            if (!risk.ok) {
+                // fallRisk 自己出错（比如 cell 非法）：不拦，但留痕
+                onEvent({ type: 'fall-check-error', x: step.x, y: step.y, z: step.z, code: risk.code, msg: risk.message });
             }
         } catch (e) {
             // 查不到就不拦，但要留痕：原来这里是空 catch，D14 就是这么藏住的

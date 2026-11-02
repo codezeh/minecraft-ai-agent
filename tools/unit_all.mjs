@@ -32,6 +32,7 @@ const UNITS = [
     'control_reasons_unit',      // M2：停的原因 → 任务单去哪 + D17/D18/D19/D10（控制层）
     'detect_trapped_unit',       // 被困判据（面积/封顶/出口/地表）
     'exec_landing_unit',         // D14 落点检查真的执行（岩浆面拦，水面照走）
+    'fall_risk_unit',            // 坠落/虚空反射（悬崖与虚空要拒绝；列无数据不算虚空）
     'exec_step_dig_unit',        // D2 挖邻列 / 液体不假成功
     'exec_step_y_unit',          // D1 y 语义（脚位 vs 面位）
     'mindserver_local_only_unit', // socket 只放本机连接（第一轮安全项）

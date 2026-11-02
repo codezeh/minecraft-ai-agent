@@ -22,6 +22,8 @@ import Vec3 from 'vec3';
 import { ok, fail } from './contract.js';
 import { blockAt } from './query_perceive.js';
 import * as worldModel from './world_model.js';
+// 坠落反射要用地形库的列查询与类型常量（2026-11-02）
+import { columnSurfaces, T } from './terrain3d.js';
 // 危险方块白名单（用注册表名，不写死数字 id）
 const HAZARD_BLOCK_NAMES = [
     'lava', 'fire', 'soul_fire', 'magma_block', 'campfire', 'soul_campfire',
@@ -165,4 +167,85 @@ export function isSafe(bot, target = null, opts = {}) {
             ? '没有已知风险（预检，不等于保证）'
             : '有已知风险',
     });
+}
+
+/**
+ * 「站上去会不会掉下去」—— 坠落/虚空反射。
+ *
+ * ═══════════════════════════════════════════════════════════════════
+ * 为什么补这个（2026-11-02，用户指出"悬崖等危险区域按理要有条件反射"）
+ *
+ * 实测吃过两次亏，都是这一类完全没检查造成的：
+ *   ① `gap-bridge` 场景：沟挖到 y=G 而下面是虚空，她搭不过去就**掉出世界摔死**
+ *      （服务器日志 `ma67453 fell out of the world`），重生在出生点，
+ *      于是那一轮变成"从出生点往 10000 格外走"，被误判成传送失败。
+ *   ② `digdown` 场景接入 `stepInto` 后：她站在 1 格厚盖板上，按 forward 走出边缘
+ *      掉下去 → 重新规划 → 再走回来 → 无限循环（卡死 13 分钟）。
+ *
+ * 原来只有 `executor` 里那条落点检查，而它**只拦岩浆**（T.LAVA），
+ * 悬崖和虚空根本没拦；`isSafe()` 的文档也明写"不覆盖：脚下会不会塌"。
+ *
+ * 定位同样重要：**这是反射，不是规划**。它只回答"这一格能不能站"，
+ * 不负责找替代路线——找路是 path_3d 的事。所以判据要保守但便宜。
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * @param {object} bot
+ * @param {string} mapDir terrain3d 库目录
+ * @param {{x:number,y:number,z:number}} cell 目标"脚位"格子
+ * @param {object} opts
+ *   maxDrop      允许的最大下落深度（格），默认 4 —— 与 path_3d 的 maxDrop 对齐
+ * @returns {ActionResult}
+ *   ok → data: { safe, drop, voidBelow, reason }
+ *   `drop` = 从该格往下到最近支撑面的距离（0 = 脚下就是实心）
+ */
+export function fallRisk(bot, mapDir, cell, opts = {}) {
+    const { maxDrop = 4 } = opts;
+    if (!mapDir) return fail('INTERNAL', 'fallRisk 需要 mapDir（没有地形库就不做坠落判断）');
+    if (!cell || !Number.isFinite(cell.x) || !Number.isFinite(cell.y) || !Number.isFinite(cell.z)) {
+        return fail('NO_TARGET', 'fallRisk 的 cell 必须是 {x,y,z} 数字');
+    }
+
+    const x = Math.floor(cell.x), y = Math.floor(cell.y), z = Math.floor(cell.z);
+    let surfaces;
+    try {
+        surfaces = columnSurfaces(mapDir, x, z);
+    } catch (e) {
+        // 查不到就不拦（与落点检查的既有口径一致），但要留痕
+        return ok({ safe: true, drop: null, voidBelow: false, reason: '地形库读不到，跳过坠落判断', unknown: true });
+    }
+    if (!surfaces.length) {
+        // ★ 「这列没有数据」≠「下面是虚空」。
+        //   区块没加载 / 还没扫描过的列，`columnSurfaces` 同样返回空数组。
+        //   把"不知道"当成"确定是虚空"，会把所有未扫描区域的移动全拦死 ——
+        //   这正是今晚反复出现的同一类错（"不知道"被当成"知道它坏"，
+        //   与 vine 补丁 `installed:false` vs `undefined` 是同族）。
+        //   所以：无数据 → 不拦，但显式标记 unknown，让上层能区分。
+        return ok({
+            safe: true, drop: null, voidBelow: false, unknown: true,
+            reason: `(${x},${z}) 这列没有地形数据（可能未加载/未扫描）—— 不做坠落判断`,
+        });
+    }
+
+    // 该格下方最近的"能站"的面。CLIMBABLE **不是落脚点**（见 T 的注释），排除。
+    // WATER / SUBMERGED 能落（会掉进水里），算"有支撑"但记下类型供上层参考。
+    const standable = surfaces.filter((s) => s.t !== T.CLIMBABLE && s.y < y);
+    if (!standable.length) {
+        return ok({ safe: false, drop: null, voidBelow: true, reason: `(${x},${y},${z}) 下方没有可落的面 —— 虚空` });
+    }
+    const nearest = standable.reduce((a, b) => (b.y > a.y ? b : a));
+    const drop = y - 1 - nearest.y;   // 脚位 y 的下方一格开始算
+
+    if (drop > maxDrop) {
+        return ok({
+            safe: false, drop, voidBelow: false, supportType: nearest.t, supportY: nearest.y,
+            reason: `从 (${x},${y},${z}) 掉下去是 ${drop} 格（上限 ${maxDrop}），支撑面在 y=${nearest.y}`,
+        });
+    }
+    // ★ 2026-11-02：这里原来还有一条 `drop > probeDepth → 当虚空`。
+    //   删掉它：既然**已经找到了支撑面**，落差多少就是 maxDrop 一个判据的事；
+    //   再叠一条 probeDepth 会变成"更严但没有理由"的第二重限制 ——
+    //   maxDrop=20 时 9 格落差照样被 probeDepth=8 判成虚空（单测用例 9 抓到）。
+    //   probeDepth 只在"完全找不到支撑面"时才有意义，那种情况上面已经 return 了。
+    //   两个判据说同一件事就容易互相打脸，这是本项目的老毛病。
+    return ok({ safe: true, drop, voidBelow: false, supportType: nearest.t, supportY: nearest.y, reason: '有支撑，落差不超上限' });
 }
