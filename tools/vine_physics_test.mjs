@@ -42,26 +42,43 @@ bot.on('kicked', (r) => console.log('KICKED', JSON.stringify(r).slice(0, 90)));
 bot.once('spawn', async () => {
     await sleep(2500);
 
-    // ★ 2026-11-02（verify 定位的偶发根因）：**先断言补丁真装上了**。
+    // ★★ 2026-11-02 修（vine 偶发的真正根因）：
     //
-    // 以前这里只断言"藤蔓方块就位"（blockAt 读到 vine），从没断言物理补丁装上了。
-    // 于是注册表尚未就绪时，`installVinePhysics` 静默返回空壳 →
-    // 「补丁没装」被伪装成「她爬不上去」，表现为"前进距离恒 2.20、只有 dy 不同"，
-    // 单跑 3/3 过、整轮偶发 1/18 挂。
+    // `installVinePhysics(bot)` 在 **spawn 之前**调用，那时 `bot.registry` 可能还没
+    // 加载方块表 → `vineIds.size === 0` → 返回 `installed:false` 的空壳，
+    // **而且之后再也不重试**。表现就是"整轮偶发挂、单跑从不挂"
+    // （单跑时服务器刚起、注册表反而更快就绪）。
     //
-    // 判据：`installed` 必须是 true；再 `setClimbing(true)` 后 `isClimbing()` 必须为 true。
-    // 不满足就直接判失败并说清是脚手架问题，**不许算成"爬不上去"的行为失败**。
-    if (vine.installed !== true) {
-        console.log(`FAIL 脚手架：藤蔓物理补丁没装上（vine.installed=${vine.installed}）——`
-            + `注册表可能还没就绪。这不是"爬不上去"的行为失败，是测试前置没满足。`);
+    // 上一版只做到"断言失败并说清是脚手架问题"——那只是**让失败可读**，
+    // 并没有修掉偶发。现在改成 **spawn 后等注册表就绪再重装**：
+    // 轮询到 `registry.blocksByName` 里有藤蔓，然后重新 install 一次。
+    //
+    // 为什么要轮询而不是再 sleep 一次：`sleep` 是猜时间，注册表什么时候到齐不确定；
+    // 轮询的是**我们真正等的那个条件**（blocksByName 里有没有 vine）。
+    let vineApi = vine;
+    const vineNames = ['vine', 'cave_vines', 'cave_vines_plant', 'weeping_vines', 'twisting_vines'];
+    for (let i = 0; i < 40 && vineApi.installed !== true; i++) {
+        const reg = bot.registry?.blocksByName ?? {};
+        const ready = vineNames.some((n) => reg[n]);
+        if (ready) {
+            // 注册表到齐了 → 重新装一次（旧的空壳会被替换掉）
+            vineApi = installVinePhysics(bot);
+            if (vineApi.installed === true) break;
+        }
+        await sleep(250);
+    }
+
+    if (vineApi.installed !== true) {
+        console.log(`FAIL 脚手架：等了 10 秒藤蔓物理补丁仍没装上（installed=${vineApi.installed}）——`
+            + `注册表始终没有 vine 类方块。这不是"爬不上去"的行为失败，是服务器/版本问题。`);
         process.exit(1);
     }
-    vine.setClimbing(true);
-    if (vine.isClimbing() !== true) {
+    vineApi.setClimbing(true);
+    if (vineApi.isClimbing() !== true) {
         console.log('FAIL 脚手架：setClimbing(true) 之后 isClimbing() 仍为 false —— 补丁没真正接管。');
         process.exit(1);
     }
-    vine.setClimbing(false);
+    vineApi.setClimbing(false);
     await RC(`op ${NAME}`);
     await RC(`gamemode creative ${NAME}`);
     await sleep(1200);
@@ -90,7 +107,7 @@ bot.once('spawn', async () => {
 
     /** 站到墙前，按 forward 一段时间，返回 (y 升高, x 前进) */
     const pushInto = async (label, climbing, seconds = 3.5) => {
-        vine.setClimbing(climbing);
+        vineApi.setClimbing(climbing);
         await RC(`tp ${NAME} ${(p.x + 0.5).toFixed(2)} ${p.y} ${(p.z + 0.5).toFixed(2)}`);
         await sleep(1600);
         await bot.lookAt(new Vec3(W + 0.5, bot.entity.position.y + 1.6, p.z + 0.5));
@@ -128,7 +145,7 @@ bot.once('spawn', async () => {
     const LX = p.x - 2;
     await RC(`fill ${LX} ${p.y} ${p.z} ${LX} ${p.y + 5} ${p.z} ladder[facing=east]`);
     await sleep(800);
-    vine.setClimbing(false);
+    vineApi.setClimbing(false);
     await RC(`tp ${NAME} ${(LX + 0.5).toFixed(2)} ${p.y} ${(p.z + 0.5).toFixed(2)}`);
     await sleep(1500);
     const s0 = bot.entity.position.clone();
