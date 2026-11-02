@@ -314,6 +314,43 @@ export class BoardClient {
         return r;
     }
 
+    // ── B3：预约（06 §9.2）+ 断点读写（makeCtx 用）────────────────────
+
+    /**
+     * 预约一批资源。冲突时返回 `CLAIM_CONFLICT`（流程按 onFail 换目标）。
+     *
+     * ★ 单 bot 恒成功不是这里保证的 —— 是**store 的判据**（"有没有别的 owner"）
+     *   在单 bot 时天然成立。这里不做任何特判，否则就是两条路径。
+     */
+    async reserve(id, keys) {
+        const r = await this._call('board:reserve', { id: String(id), owner: this.name, keys });
+        if (!r.ok && r.data?.code === 'CLAIM_CONFLICT') {
+            // 把 conflicts 透给上层（流程要据此换目标）
+            return fail('CLAIM_CONFLICT', r.message, { conflicts: r.data.conflicts ?? [], id, keys });
+        }
+        return r;
+    }
+
+    async release(id, keys = null) {
+        return this._call('board:release', { id: String(id), owner: this.name, keys });
+    }
+
+    /** 这张单持有哪些预约（诊断）。 */
+    async claims(id = null) {
+        return this._call('board:claims', id ? { id: String(id) } : {});
+    }
+
+    /** 读断点（makeCtx 的 ctx.checkpoint）。 */
+    async getCheckpoint(id, key = 'default') {
+        const r = await this._call('board:get-checkpoint', { id: String(id), key });
+        return r.ok ? (r.data?.checkpoint ?? null) : null;
+    }
+
+    /** 存断点（makeCtx 的 ctx.save）。 */
+    async saveCheckpoint(id, key, value) {
+        return this._call('board:save-checkpoint', { id: String(id), key, value });
+    }
+
     /** 是否连上过（诊断用）。 */
     get connected() { return this._connected; }
 }

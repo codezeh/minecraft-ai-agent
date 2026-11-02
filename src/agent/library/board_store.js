@@ -28,6 +28,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { boardDirOf } from './bot_paths.js';
+import { claimsConflict, normalizeClaimKeys, parseClaimKey } from './board_claims.js';
 
 /** 任务单状态（06 §4 原表，别自造）。 */
 export const JOB_STATE = Object.freeze({
@@ -107,11 +108,17 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, priority, createdAt);
 CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(lease_until);
 
--- 预约表：B1 建表但不填（B3 才真正用，06 §9.2）
+-- 预约表（06 §9.2）。B1 建表未填，B3 起真正使用：
+--   id    = 持有它的任务单 id
+--   key   = block:x,y,z / area:x,y,z:r / container: / station: / entity: / item:
+--   owner = 哪只 bot（冲突判定按 owner 区分"自己"与"别人"）
+--   until = TTL 到期时刻；跟着 heartbeat 续期，过期由 expireClaims 清掉
 CREATE TABLE IF NOT EXISTS claims (
     id TEXT NOT NULL, key TEXT NOT NULL, owner TEXT, until INTEGER,
     PRIMARY KEY (id, key)
 );
+CREATE INDEX IF NOT EXISTS idx_claims_key ON claims(key);
+CREATE INDEX IF NOT EXISTS idx_claims_until ON claims(until);
 `;
 
 /**
@@ -414,6 +421,8 @@ function convergeIfSatisfied(db, id, now, reason = 'satisfied') {
 export function claimFor(db, bot, opts = {}) {
     const now = opts.now ?? Date.now();
     const leaseMs = opts.leaseMs ?? LEASE_MS;
+    /** 这只 bot 的能力（角色 / 背包物品），用于 `requires` 过滤（B3，06 §9.4）。 */
+    const who = { roles: opts.roles ?? [], items: opts.items ?? [] };
 
     // 候选：ready 且（个人单是我的 或 多人单没指派）；notBefore 已到
     const cands = db.prepare(`
@@ -422,12 +431,20 @@ export function claimFor(db, bot, opts = {}) {
           AND (assignee IS NULL OR assignee = ?)
           AND (notBefore IS NULL OR notBefore <= ?)
         ORDER BY (assignee = ?) DESC, priority DESC, createdAt ASC
-        LIMIT 8`).all(bot, now, bot);
+        LIMIT 16`).all(bot, now, bot);
 
     for (const c of cands) {
         // ★ 先看"是不是已经跑够了"：跑够的直接收敛成 done，**不派发**（t20 修的就是这里）
         const converged = convergeIfSatisfied(db, c.id, now, 'claim-sweep');
         if (converged) continue;
+
+        // ★ B3 资格过滤（06 §9.4）：角色/物品不满足 → 跳过这张，继续看下一张。
+        //   注意顺序：**在原子 UPDATE 之前**过滤，抢不到的不该白占 leases。
+        const candJob = getJob(db, c.id);
+        if (!candJob) continue;
+        if (!meetsRequires(candJob, who)) continue;
+        // ★ dependsOn：前置没 done → 这张还不能领（06 §9.1 按工序拆单）
+        if (!dependsSatisfied(db, candJob)) continue;
         // 原子抢：**这一条**就是全部关键。changes===1 → 我抢到了；0 → 别人先抢走了，试下一个
         const r = db.prepare(`
             UPDATE jobs SET state='claimed', assignee=?, lease_owner=?, lease_until=?, updatedAt=?
@@ -645,4 +662,316 @@ export function countJobs(db, state = null) {
         ? db.prepare('SELECT COUNT(*) AS n FROM jobs WHERE state=?').get(state)
         : db.prepare('SELECT COUNT(*) AS n FROM jobs').get();
     return Number(r?.n ?? 0);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 预约（B3，06 §9.2）—— 单 bot 恒成功，且**没有第二条路径**
+// ───────────────────────────────────────────────────────────────────────────
+
+/** 预约的默认 TTL（与租约同步：30 秒，跟着 heartbeat 续期）。 */
+export const CLAIM_TTL_MS = LEASE_MS;
+
+/**
+ * 抢占一批预约（原子：要么全拿到，要么一个都不占）。
+ *
+ * ★★ **"单 bot 恒成功"是怎么保证的 —— 关键：没有 if 分支**
+ *
+ *   判据只有一条：**同一个 key 上，有没有"别的 owner"持有的未过期预约**。
+ *   · 单 bot 时，库里所有预约的 owner 都是自己 → 永远查不到"别人" → 必然成功。
+ *   · 多 bot 时，同样的代码就会查到别人 → 返回 CLAIM_CONFLICT。
+ *
+ *   所以**不需要** `if (bots.length === 1) return ok(...)` —— 那种写法会让单机/多机
+ *   变成两条路径（06 §9.2 明令禁止），而且单机路径永远不会被真实冲突检验到，
+ *   等到上多机才发现是另一套行为。
+ *
+ * @param {object} db
+ * @param {string} jobId 持有它的单
+ * @param {string} owner 哪只 bot
+ * @param {string[]} keys
+ * @param {object} [opts] { now, ttlMs }
+ * @returns {{ok:true, reserved:string[], until:number} | {ok:false, code:string, conflicts:string[], message:string}}
+ */
+export function reserve(db, jobId, owner, keys, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const ttlMs = opts.ttlMs ?? CLAIM_TTL_MS;
+    const norm = normalizeClaimKeys(keys);
+    if (!norm.ok) return { ok: false, code: 'INTERNAL', conflicts: [], message: norm.error };
+    if (!norm.keys.length) return { ok: true, reserved: [], until: now + ttlMs };
+
+    // 先清掉过期预约（否则死掉的 bot 会永久占着 —— 06 §9.2 "bot 掉线自动释放"）
+    expireClaims(db, now);
+
+    // 查"别人持有的未过期预约"，逐个跟我要的 key 比（**跨类型**也比）
+    const live = db.prepare(
+        'SELECT id, key, owner, until FROM claims WHERE until > ? AND (owner IS NULL OR owner <> ?)',
+    ).all(now, owner);
+
+    const conflicts = [];
+    for (const want of norm.keys) {
+        const mine = parseClaimKey(want);
+        if (!mine.ok) { conflicts.push(want); continue; }
+        for (const held of live) {
+            if (held.id === jobId) continue;                 // 同一张单自己的旧预约
+            const theirs = parseClaimKey(held.key);
+            if (theirs.ok && claimsConflict(mine, theirs)) {
+                conflicts.push(want);
+                break;
+            }
+        }
+    }
+
+    if (conflicts.length) {
+        // **全有或全无**：一个都不占（否则半占着会把别人堵死）
+        return {
+            ok: false, code: 'CLAIM_CONFLICT', conflicts,
+            message: `预约冲突：${conflicts.join(', ')} 已被别人占着`,
+        };
+    }
+
+    const until = now + ttlMs;
+    const stmt = db.prepare('INSERT INTO claims (id, key, owner, until) VALUES (?,?,?,?) '
+        + 'ON CONFLICT(id, key) DO UPDATE SET owner=excluded.owner, until=excluded.until');
+    for (const k of norm.keys) stmt.run(jobId, k, owner, until);
+    return { ok: true, reserved: norm.keys, until };
+}
+
+/**
+ * 放掉预约（不传 keys = 放掉这张单的全部）。
+ * @returns {{ok:true, released:number}}
+ */
+export function release(db, jobId, owner, keys = null) {
+    if (Array.isArray(keys) && keys.length) {
+        const norm = normalizeClaimKeys(keys);
+        const list = norm.ok ? norm.keys : [];
+        let n = 0;
+        for (const k of list) {
+            const r = db.prepare('DELETE FROM claims WHERE id=? AND (owner IS NULL OR owner = ?) AND key=?')
+                .run(jobId, owner, k);
+            n += Number(r.changes ?? 0);
+        }
+        return { ok: true, released: n };
+    }
+    const r = db.prepare('DELETE FROM claims WHERE id=? AND (owner IS NULL OR owner = ?)').run(jobId, owner);
+    return { ok: true, released: Number(r.changes ?? 0) };
+}
+
+/**
+ * 清掉过期预约（bot 掉线后它的预约自然失效）。
+ * @returns {string[]} 被清掉的 key（诊断用）
+ */
+export function expireClaims(db, now = Date.now()) {
+    const rows = db.prepare('SELECT key FROM claims WHERE until IS NOT NULL AND until <= ?').all(now);
+    if (!rows.length) return [];
+    db.prepare('DELETE FROM claims WHERE until IS NOT NULL AND until <= ?').run(now);
+    return rows.map((r) => r.key);
+}
+
+/**
+ * 续期这张单持有的全部预约（heartbeat 时调）。
+ * @returns {number} 续了几条
+ */
+export function renewClaims(db, jobId, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const ttlMs = opts.ttlMs ?? CLAIM_TTL_MS;
+    const r = db.prepare('UPDATE claims SET until=? WHERE id=?').run(now + ttlMs, jobId);
+    return Number(r.changes ?? 0);
+}
+
+/** 列预约（诊断/断言用）。 */
+export function listClaims(db, jobId = null) {
+    const rows = jobId
+        ? db.prepare('SELECT * FROM claims WHERE id=? ORDER BY key').all(jobId)
+        : db.prepare('SELECT * FROM claims ORDER BY id, key').all();
+    return rows.map((r) => ({
+        id: r.id,
+        key: r.key,
+        owner: r.owner,
+        until: r.until,
+        parsed: parseClaimKey(r.key),
+    }));
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 资格（B3，06 §9.4）：角色 / 物品 / dependsOn
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * 这只 bot 有没有资格领这张单。
+ *
+ * ★ **缺省行为**：单里没写 `requires.roles` → **谁都能领**（06 §9.4："不配就什么都能领"）。
+ *   这条很重要：如果把"bot 没配 roles"当成"不满足"，新装的 bot 会一张多人单都领不到，
+ *   表现成"任务板不工作"。
+ *
+ * @param {object} job
+ * @param {{roles?:string[], items?:string[]}} who
+ * @returns {boolean}
+ */
+export function meetsRequires(job, who = {}) {
+    const req = job?.requires ?? null;
+    if (!req) return true;
+
+    const wantRoles = Array.isArray(req.roles) ? req.roles : [];
+    if (wantRoles.length) {
+        const have = new Set(who.roles ?? []);
+        // 单里要求的角色**只要有一个**对上就行（"miner 或 builder 都能来"）
+        if (!wantRoles.some((r) => have.has(r))) return false;
+    }
+    const wantItems = Array.isArray(req.items) ? req.items : [];
+    if (wantItems.length) {
+        const have = new Set(who.items ?? []);
+        if (!wantItems.every((i) => have.has(i))) return false;
+    }
+    return true;
+}
+
+/** 前置单是否都已完成（`dependsOn`）。 */
+export function dependsSatisfied(db, job) {
+    const deps = Array.isArray(job?.dependsOn) ? job.dependsOn : [];
+    if (!deps.length) return true;
+    for (const depId of deps) {
+        const dep = getJob(db, depId);
+        if (!dep) return false;                  // 前置不存在 → 不放行（宁可不领也不要乱跑）
+        if (dep.state !== JOB_STATE.DONE) return false;
+    }
+    return true;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 父子单收敛（B3，06 §9.1）
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * 按子单状态收敛父单。
+ *
+ * 规则（06 §9.1）：
+ *   · 所有子单 `done` → 父单 `done`
+ *   · 有子单 `failed` 且没有还能再试的子单 → 父单 `blocked`
+ *
+ * @returns {{changed:boolean, parent?:object, reason?:string}}
+ */
+export function rollupParent(db, parentId, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const parent = getJob(db, parentId);
+    if (!parent) return { changed: false, reason: 'no-parent' };
+    if ([JOB_STATE.DONE, JOB_STATE.CANCELLED].includes(parent.state)) {
+        return { changed: false, reason: 'parent-terminal' };
+    }
+
+    const children = db.prepare('SELECT * FROM jobs WHERE parentId = ?').all(parentId).map(rowToJob);
+    if (!children.length) return { changed: false, reason: 'no-children' };
+
+    const allDone = children.every((c) => c.state === JOB_STATE.DONE);
+    if (allDone) {
+        const r = setState(db, parentId, JOB_STATE.DONE, { now });
+        return { changed: r.ok, parent: r.job, reason: 'all-children-done' };
+    }
+
+    const failed = children.filter((c) => c.state === JOB_STATE.FAILED);
+    const stillAlive = children.some((c) => [
+        JOB_STATE.READY, JOB_STATE.CLAIMED, JOB_STATE.RUNNING, JOB_STATE.PAUSED,
+    ].includes(c.state));
+    if (failed.length && !stillAlive) {
+        const r = setState(db, parentId, JOB_STATE.BLOCKED, { now });
+        return { changed: r.ok, parent: r.job, reason: `children-failed(${failed.length})` };
+    }
+    return { changed: false, reason: 'in-progress' };
+}
+
+/**
+ * 拆单：按**数量**拆成 N 张子单（06 §9.1 第一种）。
+ *
+ * @param {object} db
+ * @param {object} parentSpec { title, skill, args, countKey, total, parts, priority, source, requires, claimsFor }
+ * @returns {{ok:true, parent:object, children:object[]}}
+ */
+export function splitByCount(db, parentSpec = {}, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const total = Math.max(1, Math.floor(Number(parentSpec.total) || 1));
+    const parts = Math.max(1, Math.floor(Number(parentSpec.parts) || 1));
+    const countKey = parentSpec.countKey ?? 'count';
+    const baseArgs = parentSpec.args ?? {};
+
+    // 父单：一个不干活的壳（skill 为空），等子单收敛
+    const parent = addJob(db, {
+        kind: 'shared',
+        title: parentSpec.title ?? `拆单：${parentSpec.skill}`,
+        skill: null,
+        args: { ...baseArgs, [countKey]: total },
+        priority: parentSpec.priority ?? 5,
+        source: parentSpec.source ?? 'panel',
+        assignee: null,
+        requires: parentSpec.requires ?? null,
+        claims: null,
+        state: JOB_STATE.RUNNING,
+    }, { now });
+
+    const children = [];
+    const per = Math.floor(total / parts);
+    let remainder = total - per * parts;
+    for (let i = 0; i < parts; i++) {
+        const n = per + (remainder > 0 ? 1 : 0);
+        if (remainder > 0) remainder--;
+        if (n <= 0) continue;
+        children.push(addJob(db, {
+            kind: 'shared',
+            parentId: parent.id,
+            title: `${parentSpec.title ?? parentSpec.skill} (${i + 1}/${parts})`,
+            skill: parentSpec.skill,
+            args: { ...baseArgs, [countKey]: n },
+            priority: parentSpec.priority ?? 5,
+            source: `strat:${parent.id}`,
+            assignee: null,
+            requires: parentSpec.requires ?? null,
+            claims: parentSpec.claimsFor ? parentSpec.claimsFor(i) : null,
+            state: JOB_STATE.READY,
+        }, { now }));
+    }
+    return { ok: true, parent, children };
+}
+
+/**
+ * 拆单：按**区域**切成网格（06 §9.1 第二种）。
+ *
+ * @param {object} db
+ * @param {object} spec { title, skill, args, center:{x,y,z}, size, cell=16, priority }
+ */
+export function splitByArea(db, spec = {}, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const c = spec.center ?? { x: 0, y: 64, z: 0 };
+    const size = Math.max(1, Math.floor(Number(spec.size) || 32));
+    const cell = Math.max(1, Math.floor(Number(spec.cell) || 16));
+    const cells = Math.max(1, Math.ceil(size / cell));
+    const half = Math.floor(size / 2);
+
+    const parent = addJob(db, {
+        kind: 'shared',
+        title: spec.title ?? `拆区：${spec.skill}`,
+        skill: null,
+        args: { ...spec.args, area: { x: c.x, y: c.y, z: c.z, size } },
+        priority: spec.priority ?? 5,
+        source: spec.source ?? 'panel',
+        state: JOB_STATE.RUNNING,
+    }, { now });
+
+    const children = [];
+    for (let gx = 0; gx < cells; gx++) {
+        for (let gz = 0; gz < cells; gz++) {
+            const x = c.x - half + gx * cell + Math.floor(cell / 2);
+            const z = c.z - half + gz * cell + Math.floor(cell / 2);
+            const r = Math.ceil(cell / 2);
+            children.push(addJob(db, {
+                kind: 'shared',
+                parentId: parent.id,
+                title: `${spec.title ?? spec.skill} [${gx},${gz}]`,
+                skill: spec.skill,
+                args: { ...spec.args, center: { x, y: c.y, z }, radius: r },
+                priority: spec.priority ?? 5,
+                source: `strat:${parent.id}`,
+                // ★ 每块**预约自己的区域** —— 这就是"两个 bot 不会在同一片地方干"的机制
+                claims: [`area:${x},${c.y},${z}:${r}`],
+                state: JOB_STATE.READY,
+            }, { now }));
+        }
+    }
+    return { ok: true, parent, children };
 }

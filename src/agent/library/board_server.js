@@ -21,6 +21,8 @@
 import {
     addJob, getJob, listJobs, claimFor, heartbeat, finish, setState, updateJob,
     expireLeases, JOB_STATE,
+    // B3：预约（06 §9.2）+ 父子收敛（06 §9.1）
+    reserve, release, renewClaims, expireClaims, listClaims, rollupParent,
 } from './board_store.js';
 
 /** 单个 bot 上报的能力（`board:hello` 记下来，用于校验 add 的 skill）。 */
@@ -198,7 +200,14 @@ export function attachBoardServer(deps = {}) {
             try {
                 const bot = String(payload?.bot ?? '').trim();
                 if (!bot) return ack(cb, { ok: false, reason: '缺少 bot' });
-                const job = claimFor(db, bot, { now: now() });
+                // ★ B3（06 §9.4）：用**服务端记下的** roles 做资格判断，
+                //   不信任 agent 传来的 roles（socket 外部可达，可以自己说自己是 miner）。
+                const reg = botRegistry.get(bot);
+                const job = claimFor(db, bot, {
+                    now: now(),
+                    roles: reg?.roles ?? [],
+                    items: Array.isArray(payload?.items) ? payload.items : [],
+                });
                 if (job) changed(job, 'claimed');
                 ack(cb, { ok: true, job });
             } catch (e) {
@@ -213,6 +222,8 @@ export function attachBoardServer(deps = {}) {
                     now: now(), progress: payload?.progress ?? null,
                 });
                 if (!r.ok) return ack(cb, { ok: false, code: r.code ?? 'LEASE_LOST' });
+                // ★ B3：心跳同时也是**预约续期**的时刻（06 §9.2 "跟着 heartbeat 续期"）
+                try { renewClaims(db, String(payload?.id ?? ''), { now: now() }); } catch { /* 续不上不影响心跳 */ }
                 ack(cb, { ok: true, job: r.job });
             } catch (e) {
                 ack(cb, { ok: false, reason: String(e?.message ?? e) });
@@ -235,6 +246,15 @@ export function attachBoardServer(deps = {}) {
                 const r = finish(db, String(payload?.id ?? ''), payload?.result ?? {}, { now: now() });
                 if (!r.ok) return ack(cb, { ok: false, reason: r.message ?? r.code });
                 changed(r.job, `finish:${r.next}`);
+                // ★ B3：单结束了就放掉它的预约（失败/完成都不该再占着资源）
+                try { release(db, r.job.id, r.job.lease?.owner ?? String(payload?.bot ?? ''), null); } catch { /* ignore */ }
+                // ★ B3：父子收敛（06 §9.1）—— 有 parentId 就顺手推进父单
+                if (r.job.parentId) {
+                    try {
+                        const up = rollupParent(db, r.job.parentId, { now: now() });
+                        if (up.changed) changed(up.parent, `rollup:${up.reason}`);
+                    } catch { /* ignore */ }
+                }
                 ack(cb, { ok: true, job: r.job, next: r.next, counted: r.counted });
             } catch (e) {
                 ack(cb, { ok: false, reason: String(e?.message ?? e) });
@@ -251,6 +271,61 @@ export function attachBoardServer(deps = {}) {
             } catch (e) {
                 ack(cb, { ok: false, reason: String(e?.message ?? e) });
             }
+        });
+
+        // ── reserve / release：预约（B3，06 §9.2）──────────────────────
+        //
+        // ack 形状与 06 §14 对齐：ok 时 `{ok:true, reserved|released, until}`；
+        // 冲突时 `{ok:false, code:'CLAIM_CONFLICT', conflicts:[...]}` —— 流程按 onFail 换目标。
+        socket.on('board:reserve', (payload, cb) => {
+            try {
+                const id = String(payload?.id ?? '');
+                const owner = String(payload?.owner ?? '').trim();
+                if (!id || !owner) return ack(cb, { ok: false, reason: '缺少 id/owner' });
+                const r = reserve(db, id, owner, payload?.keys ?? [], { now: now() });
+                ack(cb, r.ok
+                    ? { ok: true, reserved: r.reserved, until: r.until }
+                    : { ok: false, code: r.code, conflicts: r.conflicts, reason: r.message });
+            } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        socket.on('board:release', (payload, cb) => {
+            try {
+                const id = String(payload?.id ?? '');
+                const owner = String(payload?.owner ?? '').trim();
+                if (!id || !owner) return ack(cb, { ok: false, reason: '缺少 id/owner' });
+                const r = release(db, id, owner, payload?.keys ?? null);
+                ack(cb, { ok: true, released: r.released });
+            } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        // ── checkpoint 读写（makeCtx 的 ctx.checkpoint/save 走这两个）──────
+        socket.on('board:get-checkpoint', (payload, cb) => {
+            try {
+                const job = getJob(db, String(payload?.id ?? ''));
+                if (!job) return ack(cb, { ok: false, reason: '没有这张单' });
+                const key = String(payload?.key ?? 'default');
+                const cp = job.checkpoint ?? null;
+                ack(cb, { ok: true, checkpoint: (cp && typeof cp === 'object') ? (cp[key] ?? null) : cp });
+            } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        socket.on('board:save-checkpoint', (payload, cb) => {
+            try {
+                const id = String(payload?.id ?? '');
+                const job = getJob(db, id);
+                if (!job) return ack(cb, { ok: false, reason: '没有这张单' });
+                const key = String(payload?.key ?? 'default');
+                const cur = (job.checkpoint && typeof job.checkpoint === 'object') ? job.checkpoint : {};
+                const r = updateJob(db, id, { checkpoint: { ...cur, [key]: payload?.value ?? null } }, { now: now() });
+                ack(cb, r.ok ? { ok: true } : { ok: false, reason: r.message ?? r.code });
+            } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        // ── 诊断：这张单持有哪些预约 ──────────────────────────────────
+        socket.on('board:claims', (payload, cb) => {
+            try { ack(cb, { ok: true, claims: listClaims(db, payload?.id ? String(payload.id) : null) }); }
+            catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
         });
 
         // ── update：控制层契约里的 update(id, patch) ────────────────────
@@ -271,6 +346,8 @@ export function attachBoardServer(deps = {}) {
         try {
             const recovered = expireLeases(db, now());
             for (const id of recovered) changed(getJob(db, id), 'lease-expired');
+            // ★ B3：顺带清过期预约（bot 掉线后它的预约要自动释放，06 §9.2）
+            try { expireClaims(db, now()); } catch { /* ignore */ }
         } catch { /* 扫描失败不该让进程崩 */ }
     }, SCAN_MS);
     try { scanTimer.unref?.(); } catch { /* 不让定时器阻止进程退出 */ }

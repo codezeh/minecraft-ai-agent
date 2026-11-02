@@ -35,6 +35,7 @@ const UNITS = [
     'board_cmd_unit',            // M8 B1：!addJob/!jobs/!cancelJob 三条命令 + 权限 + 参数校验
     'flow_mine_notool_unit',     // t21：mine 的 NO_TOOL 假失败 + 三态判据（读不到≠没工具）
     'board_scheduler_unit',      // M8 B2：调度主循环 / 抢占规则 / autoClaim / requeueStaleBrief
+    'board_b3_unit',             // M8 B3：多人单拆单 / 6 种预约 key + TTL / 角色过滤 / dependsOn
     'board_payload_unit',        // M8 B1（t20 补）：10 个 board:* 事件的 payload 形状（表驱动，防"[object Object]"式恒 null）
     'board_scope_unit',          // M8 B2（t23 补）：refresh({scope}) 语义边界 —— mine/claimable/all + 未知报错 + 共享单抢占端到端
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）

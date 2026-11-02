@@ -40,6 +40,7 @@
  */
 
 import { JOB_STATE, jobsBusy, requeueStaleBrief, STOP_REASONS } from './control.js';
+import { deriveClaims } from './board_claims.js';
 import { makeCtx } from './composite_registry.js';
 import { getSkill } from './composite_registry.js';
 import { jobDeadlineTimeoutMinutes } from './control.js';
@@ -330,7 +331,9 @@ export class BoardScheduler {
 
     // ── step 3：预约（冲突 → 全部释放 + 退避）────────────────────────
     async _reserveClaims(job, ctx) {
-        const keys = Array.isArray(job?.claims) ? job.claims : [];
+        // ★ B3：单里显式给了 claims 就用；没给就按 args **推导**（能推就推、推不出不猜）。
+        //   这样采集/挖掘/存取这类单不用每个流程手写预约。
+        const keys = deriveClaims(job);
         if (!keys.length) return { ok: true, reserved: [] };
         const reserved = [];
         for (const key of keys) {
@@ -341,8 +344,10 @@ export class BoardScheduler {
                 for (const got of reserved) {
                     try { await ctx.release(got); } catch { /* ignore */ }
                 }
-                this.onEvent({ type: 'reserve-conflict', id: job.id, key, code: r?.code });
-                return { ok: false, code: r?.code ?? 'CLAIM_CONFLICT', reserved: [] };
+                this.onEvent({ type: 'reserve-conflict', id: job.id, key, code: r?.code, conflicts: r?.data?.conflicts });
+                // ★ 06 §9.2：冲突返回 CLAIM_CONFLICT，**流程按 onFail 换目标**。
+                //   调度器这里不重试同一张单（换目标该由流程决定），而是把单退回 ready 让别人试。
+                return { ok: false, code: r?.code ?? 'CLAIM_CONFLICT', conflicts: r?.data?.conflicts ?? [], reserved: [] };
             }
             reserved.push(key);
         }

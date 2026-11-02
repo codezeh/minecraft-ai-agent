@@ -365,7 +365,11 @@ export function makeCtx(agent, job = null, manifest = null) {
 
     // 断点：有单走任务板客户端，没单存内存
     const mem = { checkpoint: null };
-    const board = agent?.boardClient ?? null;
+    // ★ B3 修：原来只认 `agent.boardClient`，而 `agent.js` 里存的是 `this.board` —— 两处字段名不一致，
+    //   于是 `ctx.reserve/checkpoint` **永远走 no-board 分支**（恒成功/存内存），
+    //   预约从来没真正经过任务板。这类"两个名字指同一个东西"的错在本项目反复出现。
+    //   这里两个都认，以实际接上的那个为准。
+    const board = agent?.boardClient ?? agent?.board ?? null;
 
     return {
         jobId,
