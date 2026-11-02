@@ -1185,7 +1185,27 @@ async function skillName(bot, goal, context = {}) {
 
 #### M6 P0 验收记录（t14 / 2026-11-02，全部实测）
 
+> 🔴 **M6 起新增的验收项（2026-11-02 由 t17 真机抽验的教训得出，务必执行）**
+>
+> **「每个动作的后置判据，在真机上到底读不读得到？」**
+>
+> 起因：`act_attack.attackOnce` 的后置判据是"被打的血量下降了"，而
+> **mineflayer 默认不暴露生物血量** —— `entity.health` 对僵尸/牛是 `undefined`（只有玩家有）。
+> 于是判据永远不成立，每次挥击都被判"挥了但没掉血"，`flow_fight` 一拳也打不出去。
+>
+> 这个 bug **离线假 bot 永远发现不了**（假 bot 的 `entity.health` 是我们自己给的），
+> **bench 也发现不了**（`bench_move_actions` 不碰 fight/mine 路径）。所以它一路绿灯活到真机抽验。
+>
+> **从 M6 起，每个动作的验收必须多问一句**：它的后置判据读的是**引擎真的提供的**数据吗？
+> 如果是"读不到"的情况，动作必须如实返回（如 `ok({damaged:null, verified:false})`），
+> **不许把"读不到"当成"没发生"**（那会谎报失败），也不许当成"发生了"（那会谎报成功）。
+>
+> 同类已修案例：`equip` 读不到护甲槽 → `ok + verified:false`；
+> `vine_physics.installed` 查不到藤蔓 → `installed:false` 且 `isClimbing()` 恒 false；
+> `flow_fight.enemiesLeft` 数不到 → `null` 而不是 `0`。
+
 **① 11 个动作清单 + 失败码（每一条都实测过返回形态）**
+
 
 | 动作 | 文件 | 用到的失败码 | 关键语义（为什么是这些码） |
 |---|---|---|---|
