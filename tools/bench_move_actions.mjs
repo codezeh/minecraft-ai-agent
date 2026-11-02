@@ -362,6 +362,24 @@ bot.once('spawn', async () => {
 
         // ---- 真跑 ----
         for (let round = 1; round <= ROUNDS; round++) {
+            // ★★ 2026-11-03（verify 定位的结构性问题）：**每轮重建场地**。
+            //
+            // 原来 `build()` 在每个场景开头只跑一次，5 轮共用同一份场地。
+            // 而 water-cross 最"破坏性"：`clear-feet` 挖掉脚下水块、反复 pillar/垫方块
+            // → **r1 的扰动留在池子里，r2 面对的已不是原始几何**。
+            //
+            // 实测证据（两轮连跑都挂在同一位置，不是抖动）：
+            //   t25 r2: NO_REACH 38851ms  moved 9.6   pillar-attempt 26  oscillation 1
+            //   t27 r2: NO_REACH 50981ms  moved 12.5  pillar-attempt 38  clear-feet 14
+            //   两次的 r1/r3/r4/r5 都过。
+            // 后果：`48/55` 里那 1 个失败是**被自己上一轮挖坏的地形**造成的，
+            // 不是代码回归 —— 这会污染每一次基线对比。
+            //
+            // 重建放在 tp 之前：先把场地恢复原状，再把她传到起点，5 轮才真正独立。
+            // （干跑扫描在轮循环之前、用的是原始场景，不受影响。）
+            await sc.build();
+            await sleep(400);
+
             const sx = AX + sc.start.dx, sz = AZ + sc.start.dz;
             const dx = AX + sc.dest.dx, dz = AZ + sc.dest.dz;
             const tpOk = await tpSafe(RC, bot, NAME, sx, S + (sc.start.up ?? 0), sz);
