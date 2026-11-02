@@ -264,7 +264,7 @@ export async function build(bot, blocks, opts = {}) {
             failed.push({ pos, code: again.code });
             continue;
         }
-        failed.push({ pos, code: r.code });
+        failed.push({ pos, code: r.code, reason: r.data?.reason ?? null });
     }
 
     // ── 完成判据：逐格读回和蓝图一致（卡片原文）──
@@ -290,6 +290,31 @@ export async function build(bot, blocks, opts = {}) {
         try { await ctx.save?.({ done: blocks.length }); } catch { /* 存不下不影响结果 */ }
         return ok(data);
     }
-    // 没建完：时间到 / 有失败块
-    return fail('TIMEOUT', `还差 ${mismatched.length} 块没放好`, data);
+    // ── 没建完：**如实分类**（2026-11-03 用户要求）────────────────────
+    //
+    // ★ 原来这里**一律**返回 TIMEOUT —— 那是**说谎**：
+    //   真机实测 `shelter` 17 格只用 952ms 就"TIMEOUT"了，根本没超时，
+    //   真相是"有一格在当前几何下放不了"（自己站在那列）。
+    //   用 TIMEOUT 会让上层"加时间重试"，而加多久都放不上。
+    //   （这和 `harvestCrop` 报 TIMEOUT 其实是挖不动、`deposit` 报 INTERNAL
+    //     其实是 id 传 null 是同一类"错误码说谎"。）
+    const blockedOwnBody = (failed ?? []).filter((f) => f.reason === 'own-body-column' || f.code === 'BLOCKED');
+    const deadlineHit = Date.now() >= (ctx.deadline ?? Infinity);
+
+    if (blockedOwnBody.length && !deadlineHit) {
+        return fail('BLOCKED', `${blockedOwnBody.length} 格放不了（我站在那儿，换个站位再放）`, {
+            ...data,
+            reason: 'own-body-column',
+            blocked: blockedOwnBody,
+        });
+    }
+    if (!deadlineHit && (failed ?? []).length) {
+        // 有失败块但没超时：这是"这些格子放不了"，不是"时间不够"
+        return fail('BLOCKED', `${failed.length} 格放不了（见 failed 明细）`, {
+            ...data,
+            reason: 'placement-failed',
+        });
+    }
+    // 真的耗尽 deadline 才是 TIMEOUT
+    return fail('TIMEOUT', `还差 ${mismatched.length} 块没放好（到时间上限了）`, data);
 }

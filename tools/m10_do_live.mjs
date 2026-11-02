@@ -89,22 +89,24 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     // ★ 方块证据：数周围是不是真的多了一圈墙 + 顶
     const p2 = bot.entity.position;
     const cx = Math.floor(p2.x), cy = Math.floor(p2.y), cz = Math.floor(p2.z);
+    // ★ 按**当前**蓝图形状数（2026-11-03 缩小后：墙在 cy、顶在 cy+1）。
+    //   第一版还按旧的"墙两层(cy,cy+1)+顶cy+2"数，所以显示"顶0/9"——那是探针过时，不是没搭。
     let walls = 0, roof = 0;
     for (let dx = -1; dx <= 1; dx++) {
         for (let dz = -1; dz <= 1; dz++) {
             const edge = Math.abs(dx) === 1 || Math.abs(dz) === 1;
-            if (!edge) continue;
-            for (const y of [cy, cy + 1]) {
-                const b = bot.blockAt(new (await import('vec3')).default(cx + dx, y, cz + dz));
-                if (b && b.name !== 'air') walls++;
+            if (edge) {
+                const wb = bot.blockAt(new (await import('vec3')).default(cx + dx, cy, cz + dz));
+                if (wb && wb.name !== 'air') walls++;
             }
-            const rb = bot.blockAt(new (await import('vec3')).default(cx + dx, cy + 2, cz + dz));
+            const rb = bot.blockAt(new (await import('vec3')).default(cx + dx, cy + 1, cz + dz));
             if (rb && rb.name !== 'air') roof++;
         }
     }
-    console.log(`   方块证据：外圈墙 ${walls}/16 格非空气，顶 ${roof}/9 格非空气`);
-    check('② !do shelter 真的搭起来了（墙 + 顶方块证据）', r.ok && walls >= 12 && roof >= 7,
-        `墙=${walls}/16 顶=${roof}/9`);
+    console.log(`   方块证据：外圈墙 ${walls}/8 格非空气，顶 ${roof}/9 格非空气`);
+    console.log(`   可观测数据：placed=${r.data?.placed}/${r.data?.total} costMs=${r.data?.costMs} remaining=${r.data?.remaining}`);
+    check('② !do shelter 真的搭起来了（ok=true + 墙/顶全齐）', r.ok && walls === 8 && roof === 9,
+        `墙=${walls}/8 顶=${roof}/9 placed=${r.data?.placed}/${r.data?.total}`);
 }
 
 console.log(`\n${pass}/${pass + fails} 条通过`);

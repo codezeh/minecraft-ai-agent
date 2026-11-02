@@ -74,9 +74,18 @@ export async function placeBlockAt(bot, pos, item, opts = {}) {
     if (!itemStack) return fail('NO_ITEM', `背包里没有 ${item}`);
 
     // 不往自己脚下/头上放
+    //
+    // ★ 2026-11-03（用户要求）：这里原来报 `OCCUPIED`，而 `OCCUPIED` 在别处意味着
+    //   "那块被**别的方块**占了"，上层会去 digBlock 然后重试 —— 但"我自己站在那儿"
+    //   靠挖是解决不了的，正确做法是**换个站位**。
+    //   所以改成 `BLOCKED` + `data.reason='own-body-column'`：
+    //     BLOCKED 的语义就是"现在做不了，换个办法"，正是"换个站位"。
     const feet = floorPos(bot.entity.position);
     if (v.x === feet.x && v.z === feet.z && (v.y === feet.y || v.y === feet.y + 1)) {
-        return fail('OCCUPIED', '我就站在那儿，放不了');
+        return fail('BLOCKED', '我就站在那儿，放不了（换个站位再放）', {
+            pos: { x: v.x, y: v.y, z: v.z },
+            reason: 'own-body-column',
+        });
     }
 
     // 选支撑面（必须在距离判定之前：目标格是空气，raycast 看不见空气，
