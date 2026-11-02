@@ -450,8 +450,11 @@ function buildBot({ items = [{ name: 'cobblestone', type: 4, count: 32, slot: 0 
 {
     const names = ['eat', 'mine', 'farm', 'fight', 'build'];
     const missing = names.filter((n) => !SKILL_NAMES.includes(n) || !getSkill(n));
-    if (missing.length === 0 && SKILL_NAMES.length === 14) {
-        okCase('eat/mine/farm/fight/build 已注册（共 14 个技能）', SKILL_NAMES.join(','));
+    // ★ 不要写死总数（M10 加了 obtain/tool_tier 就成了 16，这条就假红了）。
+    //   断言"这 5 个必须在、且总数不少于 14"——以后加技能不该让这条红，
+    //   但"某个技能被误删"必须红。
+    if (missing.length === 0 && SKILL_NAMES.length >= 14) {
+        okCase('eat/mine/farm/fight/build 已注册（技能总数 ≥14）', `共 ${SKILL_NAMES.length} 个`);
     } else {
         badCase('五个新流程已注册', { missing, total: SKILL_NAMES.length });
     }

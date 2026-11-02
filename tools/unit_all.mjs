@@ -41,6 +41,8 @@ const UNITS = [
     'code_hints_unit',           // M9：code_hints 覆盖全部 38 个码 + 一行 ≤200 字格式
     'protect_owner_unit',        // M9：护主判定（跟随才生效/不打苦力怕玩家/6-8格/收手四条）
     'idle_planner_unit',         // M9：空闲三定义 + 08 §6.1 三层顺序
+    'strat_obtain_unit',         // M10：strat_obtain 来源顺序 + ★防无限展开 + 不碰身体
+    'strat_tool_tier_unit',      // M10：strat_tool_tier 不跳档 / 已够直接 ok / 三件工具
     'board_payload_unit',        // M8 B1（t20 补）：10 个 board:* 事件的 payload 形状（表驱动，防"[object Object]"式恒 null）
     'board_scope_unit',          // M8 B2（t23 补）：refresh({scope}) 语义边界 —— mine/claimable/all + 未知报错 + 共享单抢占端到端
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）

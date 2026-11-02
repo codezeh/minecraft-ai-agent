@@ -126,25 +126,50 @@ const bad = (n, a) => { fails++; console.log(`FAIL ${n} ${JSON.stringify(a)}`); 
 }
 
 // ── ⑤ protect_owner 真机：跟随中主人在场+僵尸 → 会打 ────────────────
+//
+// ★ 2026-11-03 t29 修正（captain 拍板）：原来这里是**用例造的几何超标**——
+//   僵尸被刷在主人上下 3.6 格，而 `protect_owner.js:63` 有
+//   `if (dy > PROTECT.VERTICAL_SLACK) continue;`（VERTICAL_SLACK=3）→
+//   **按设计**排除、reason='no-threat'。也就是说旧用例期望 `act=true` 本身是错的，
+//   它测的是一个"几何上不可能触发"的分支。
+//   修法：① 刷完把僵尸**tp 到与主人同一层**（再等它落定，不让重力把它拉下去）；
+//         ② 断言几何真的在阈值内（dy ≤ 3、dist ≤ 6）—— 几何不对就明确"验收无效"，不许当通过；
+//         ③ 再断言 act=true 且 reason='threat-near-owner'。
 {
-    // 真机侧只看"现场数据能不能被采到并得出该打的结论"（判定本身离线已 11 条）
     await RC(`summon zombie ${bx + 1.5} ${by} ${bz + 1.5}`).catch(() => { });
+    await sleep(600);
+    // 让重力先落定，再把它拉到主人同一层（否则会落在下面的方块上，dy 超标）
+    await RC(`tp @e[type=zombie,limit=1] ${bx + 1.5} ${by} ${bz + 1.5}`).catch(() => { });
     await sleep(1200);
+    await RC(`tp @e[type=zombie,limit=1] ${bx + 1.5} ${by} ${bz + 1.5}`).catch(() => { });
+    await sleep(600);
+
     const zombie = Object.values(bot.entities).find((e) => e?.name === 'zombie');
-    // 用 bot 自己当"主人位置"（主人不在线，用她的位置代表"主人就在旁边"）
     const cand = zombie ? [{
         id: zombie.id, name: zombie.name,
         distToOwner: zombie.position.distanceTo(bot.entity.position),
         dyToOwner: Math.abs(zombie.position.y - bot.entity.position.y),
     }] : [];
-    const followingTrue = decideProtect({ following: true, selfHp: bot.health, candidates: cand, now: Date.now() });
-    const followingFalse = decideProtect({ following: false, selfHp: bot.health, candidates: cand, now: Date.now() });
     console.log(`  现场候选=${JSON.stringify(cand)}`);
-    if (followingTrue.act && !followingFalse.act) {
-        ok('⑤ 真机现场：跟随时会打僵尸、不跟随时不管',
-            `跟随=${followingTrue.reason} 不跟随=${followingFalse.reason}`);
+
+    // ② 先验"几何本身合格"，否则后面的断言等于在测一个不可能触发的分支
+    const g = cand[0];
+    const geoOk = !!g && g.distToOwner <= 6 && g.dyToOwner <= 3;
+    if (!geoOk) {
+        bad('⑤ 前置：僵尸几何必须在阈值内（dist≤6 且 dy≤3）', g ?? '没有僵尸实体');
     } else {
-        bad('⑤ 护主真机判定', { followingTrue, followingFalse, cand });
+        ok('⑤ 前置：僵尸几何在阈值内（真实几何，不是造的假输入）',
+            `dist=${g.distToOwner.toFixed(2)} dy=${g.dyToOwner.toFixed(2)}`);
+
+        // ③ 真实几何下必须判"该打"
+        const followingTrue = decideProtect({ following: true, selfHp: bot.health, candidates: cand, now: Date.now() });
+        const followingFalse = decideProtect({ following: false, selfHp: bot.health, candidates: cand, now: Date.now() });
+        check('⑤ 真实几何下：跟随时 act=true 且 reason=threat-near-owner',
+            followingTrue.act === true && followingTrue.reason === 'threat-near-owner',
+            `act=${followingTrue.act} reason=${followingTrue.reason}`);
+        check('⑤ 不跟随时不管（act=false, reason=not-following）',
+            followingFalse.act === false && followingFalse.reason === 'not-following',
+            `act=${followingFalse.act} reason=${followingFalse.reason}`);
     }
 }
 
