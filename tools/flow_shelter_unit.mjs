@@ -1,5 +1,5 @@
 /** t31：flow_shelter 离线用例（蓝图形状 / 材料判断 / 透传 build / idle_planner 接线）。 */
-import { shelterBlueprint, capCell, isOutsideShelter, shelter, manifest } from '../src/agent/library/flow_shelter.js';
+import { shelterBlueprint, shelterBuildOrder, capCell, isOutsideShelter, shelter, manifest } from '../src/agent/library/flow_shelter.js';
 import { decideIdle, isIdle, IDLE } from '../src/agent/library/idle_planner.js';
 import { CODES } from '../src/agent/library/contract.js';
 import { SKILL_NAMES } from '../src/agent/library/composite_registry.js';
@@ -66,6 +66,52 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     const wrong = cases.filter(([x, z, exp]) => isOutsideShelter(x, z, 0, 0) !== exp);
     check('②c ★ isOutsideShelter 用 OR：（纯单方向跳出也算出格，否则 holdKey 永远等不到）',
         wrong.length === 0, `${cases.length} 组全对`);
+}
+
+// ═══ ★★ 几何断言（用户要求：先离线证明顺序，别上真机才发现）═══
+{
+    const feet = { x: 0.5, y: 64, z: 0.5 };
+    const order = shelterBuildOrder(feet, 'cobblestone', 3, { floor: 'never' });
+    const cx = 0, cy = 64, cz = 0;
+
+    // 她可能站的合法位置：正中 + 内空（3×3 内空只有正中 1 格）
+    const bodyColumns = [[cx, cz]];                    // 身体列 = 正中
+    const onBodyColumn = (b) => bodyColumns.some(([x, z]) => b.x === x && b.z === z);
+
+    // ① wall2 / roofRing 的 pos **不在**任何合法站位的身体列上
+    const risky = order.filter((b) => ['wall2', 'roofRing'].includes(b.phase))
+        .filter(onBodyColumn);
+    check('★① wall2 / roofRing 都不在她身体列上（所以她能在屋里先放完）',
+        risky.length === 0, risky.length ? JSON.stringify(risky) : `${order.filter(b => ['wall2','roofRing'].includes(b.phase)).length} 块全部安全`);
+
+    // ② cap 的 pos **在**正中列（所以必须最后放、且人在屋外）
+    const cap = order.find((b) => b.phase === 'cap');
+    const capInCenter = cap && cap.x === cx && cap.z === cz && cap.y === cy + 2;
+    check('★② cap 在正中列（y+2）→ 必须最后放、且必须人在屋外',
+        !!capInCenter, cap ? `cap=(${cap.x},${cap.y},${cap.z})` : '(无 cap)');
+
+    // ③ sealDoor 的 pos **不在**正中列（所以能在屋里放）
+    const door = order.filter((b) => b.phase === 'sealDoor');
+    const doorOk = door.length === 2 && door.every((b) => !onBodyColumn(b));
+    check('★③ sealDoor 不在正中列（横向 ±1）→ 能在屋里从里面封',
+        doorOk, door.map((b) => `(${b.x},${b.y},${b.z})`).join(' '));
+
+    // ④ 总数对得上、无重复无缺
+    const byPhase = order.reduce((a, b) => { a[b.phase] = (a[b.phase] || 0) + 1; return a; }, {});
+    const keys = new Set(order.map((b) => `${b.x},${b.y},${b.z}`));
+    const noDup = keys.size === order.length;
+    check('★④ 总数 25 = wall1·7 + wall2·7 + roofRing·8 + cap·1 + sealDoor·2，且无重复',
+        order.length === 25 && byPhase.wall1 === 7 && byPhase.wall2 === 7
+        && byPhase.roofRing === 8 && byPhase.cap === 1 && byPhase.sealDoor === 2 && noDup,
+        `共${order.length} ${JSON.stringify(byPhase)} 无重复=${noDup}`);
+}
+
+// ★⑤ 内空高度：cy 与 cy+1 都必须没有方块（她身高 1.8，少一层就是活埋）
+{
+    const order = shelterBuildOrder({ x: 0.5, y: 64, z: 0.5 }, 'cobblestone', 3, { floor: 'never' });
+    const inBody = order.filter((b) => b.x === 0 && b.z === 0 && (b.y === 64 || b.y === 65));
+    check('★⑤ 内空 cy/cy+1 两格都没有方块（墙必须 2 层，1 层=把她压头上）',
+        inBody.length === 0, inBody.length ? JSON.stringify(inBody) : '两格都空');
 }
 
 // ③ manifest 合法：level=flow，codes 全已注册

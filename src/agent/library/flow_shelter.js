@@ -66,78 +66,110 @@ function pickMaterial(bot, want) {
  * @returns {Array<{x:number,y:number,z:number,name:string}>}
  */
 export function shelterBlueprint(feet, material, size = 3, opts = {}) {
+    // 兼容旧签名：返回"除了 cap 之外"的所有块（= wall1 + wall2 + roofRing + sealDoor）
+    return shelterBuildOrder(feet, material, size, opts)
+        .filter((b) => b.phase !== 'cap')
+        .map((b) => ({ x: b.x, y: b.y, z: b.z, name: b.name }));
+}
+
+/**
+ * ★ **小屋的有序建造计划**（2026-11-03 用户定的 B 方案 + 封门）。
+ *
+ * 输出 **有序** 的 `[{x,y,z,name,phase}]`，phase ∈
+ *   `wall1` → `wall2` → `roofRing` → `cap` → `sealDoor`
+ *
+ * ── 为什么要这个顺序（几何核过的）────────────────────────────────────
+ *   · 墙 2 层（cy、cy+1）：她身高 1.8，脚 cy 头 cy+1，所以内空必须 2 格高。
+ *     **绝不 1 层** —— 1 层会把顶圈压在她头上（= 活埋，B1 那次同类事故）。
+ *   · 墙里**留一个 1×2 门洞**（wall1/wall2 各少 1 块）：她要能走出去。
+ *   · 顶圈在 cy+2、±1 环上 —— **不在她身体列**（身体列是正中），所以她**在屋里就能放**。
+ *   · `cap` 正中在她身体列 → **在屋里放不了**（act_place 正确拒绝）→ 必须**出去再放**。
+ *   · 她走门洞出去 → 封 cap → **走回屋里** → 再从**里面**封门洞那 2 块
+ *     （门洞在 ±1 横向，不在她身体列 → 屋里放合法）。
+ *
+ * ── 结果：封闭壳 + 人在屋里 ==
+ *
+ * @param {{x:number,y:number,z:number}} feet 她的脚位（圆心 = 她的列）
+ * @param {string} material
+ * @param {number} size 边长（3 = 3×3，内空 1 格）
+ * @param {object} opts { floor:'auto'|'always'|'never', underBlockName, doorSide:'+x'|'-x'|'+z'|'-z' }
+ * @returns {Array<{x:number,y:number,z:number,name:string,phase:string}>}
+ */
+export function shelterBuildOrder(feet, material, size = 3, opts = {}) {
     const cx = Math.floor(feet.x), cy = Math.floor(feet.y), cz = Math.floor(feet.z);
     const n = Math.max(3, Math.min(7, Math.floor(Number(size) || 3)));
     const half = Math.floor(n / 2);
     const out = [];
-    const put = (x, y, z) => out.push({ x, y, z, name: material });
+    const push = (x, y, z, phase) => out.push({ x, y, z, name: material, phase });
 
-    // ── 地板（可选）─────────────────────────────────────────────────
-    // ★ 默认**不铺**：脚下通常已经是地面，铺 9 块纯属浪费（第一夜要快）。
-    //   `floor:'always'` 才铺满；`'auto'` 只在脚下那格不是实心时补 1 块。
+    // ── 地板（可选）：默认不铺（省块数只能从这里省，不能从她身高里省）──
     const floorMode = String(opts.floor ?? 'auto');
     if (floorMode === 'always') {
         for (let dx = -half; dx <= half; dx++) {
-            for (let dz = -half; dz <= half; dz++) put(cx + dx, cy - 1, cz + dz);
+            for (let dz = -half; dz <= half; dz++) push(cx + dx, cy - 1, cz + dz, 'floor');
         }
     } else if (floorMode === 'auto') {
-        const under = opts.underBlockName ?? null;      // 调用方传"脚下那格是什么"
+        const under = opts.underBlockName ?? null;
         const solid = under && !['air', 'cave_air', 'void_air', 'water', 'lava'].includes(under);
-        if (!solid) put(cx, cy - 1, cz);               // 只在需要时补 1 块
+        if (!solid) push(cx, cy - 1, cz, 'floor');
     }
 
-    // ── 墙：**2 层**（y、y+1）的外圈 ────────────────────────────────
-    //
-    // ★★ 2026-11-03 真机 + 几何复查抓到的严重错误：我一度把它缩成**1 层墙**，
-    //   于是内空只有 1 格高 —— 而她身高 1.8（脚在 cy、头在 cy+1）→
-    //   **顶圈正好落在她头顶那一格** → 她被困在盒子里，`forward+jump` 8 秒也出不来
-    //   （真机证据：`reason=still-inside outsLength=4 costMs=8978`）。
-    //   这和 B1 那次"活埋 → 窒息 → 背包清空 → 假 NO_TOOL"是**同一类事故**：
-    //   把人封在方块里。**任何时候都不能让墙+顶占掉她身体的两格。**
-    //
-    //   所以墙必须是 2 层（voxel 层的常识：站着的生物需要 2 格空间）。
-    //   省块数要从"不铺地板"和"3×3 而不是更大"来省，**不能从她的身高里省**。
-    for (const y of [cy, cy + 1]) {
-        for (let dx = -half; dx <= half; dx++) {
-            for (let dz = -half; dz <= half; dz++) {
-                const edge = Math.abs(dx) === half || Math.abs(dz) === half;
-                if (!edge) continue;                   // 中间留空（她站在里面，2 格高）
-                put(cx + dx, y, cz + dz);
-            }
+    // ── 门洞位置：沿某个方向的外圈那一列（1×2：wall1 和 wall2 各一块）──
+    const doorSide = String(opts.doorSide ?? '+x');
+    const doorAt = {
+        '+x': { x: cx + half, z: cz },
+        '-x': { x: cx - half, z: cz },
+        '+z': { x: cx, z: cz + half },
+        '-z': { x: cx, z: cz - half },
+    }[doorSide] ?? { x: cx + half, z: cz };
+
+    // ── 外圈坐标（按层）──
+    const ring = [];
+    for (let dx = -half; dx <= half; dx++) {
+        for (let dz = -half; dz <= half; dz++) {
+            if (Math.abs(dx) === half || Math.abs(dz) === half) ring.push([cx + dx, cz + dz]);
         }
     }
+    const isDoor = ([x, z]) => x === doorAt.x && z === doorAt.z;
 
-    // ── 顶（**cy+2**，墙 2 层之上）的四边 ─────────────────────────
+    // ── wall1（cy）：留门洞 ──
+    for (const [x, z] of ring) {
+        if (isDoor([x, z])) continue;
+        push(x, cy, z, 'wall1');
+    }
+    // ── wall2（cy+1）：同一位置也留门洞（1×2 门）──
+    for (const [x, z] of ring) {
+        if (isDoor([x, z])) continue;
+        push(x, cy + 1, z, 'wall2');
+    }
+    // ── roofRing（cy+2）：四边 + 除正中外的内部 ──
     const roof = [];
     for (let dx = -half; dx <= half; dx++) {
-        for (let dz = -half; dz <= half; dz++) roof.push([cx + dx, cy + 2, cz + dz]);
+        for (let dz = -half; dz <= half; dz++) roof.push([cx + dx, cz + dz]);
     }
-    const isCenter = ([x, , z]) => x === cx && z === cz;
-    for (const [x, y, z] of roof.filter((c) => !isCenter(c))) put(x, y, z);
+    for (const [x, z] of roof) {
+        if (x === cx && z === cz) continue;          // 正中 = cap，单独最后放
+        push(x, cy + 2, z, 'roofRing');
+    }
+    // ── cap：顶的正中（她身体列）→ 必须人在屋外才放 ──
+    push(cx, cy + 2, cz, 'cap');
+    // ── sealDoor：最后从屋里把门洞补上（在 ±1 横向，不在她身体列）──
+    push(doorAt.x, cy, doorAt.z, 'sealDoor');
+    push(doorAt.x, cy + 1, doorAt.z, 'sealDoor');
+
     return out;
 }
 
 /**
- * 最后要"出门才能封"的那一格：屋顶正中（正好在她头顶那列）。
- *
- * ★ 为什么要单独拿出来（2026-11-03）：`act_place.js` 明确拒绝往**自己身体所在列**
- *   （`feet.y` 或 `feet.y+1`）放方块 —— 这是正确的安全规则（往身上放会把方块卡进身体，
- *   B1 那次"活埋→窒息→背包清空→假 NO_TOOL"就是这类事故）。
- *   而 3×3 带 1×1 内空时，屋顶正中**必然**在她头顶列 → **站在屋里永远封不上**。
- *   所以流程必须：搭完墙+顶圈 → **走到屋外相邻一格** → 封正中 → 再回屋。
- */
-/**
  * "她是否已经走到屋外"——**判定必须用 OR，不是 AND**。
  *
  * ★ 2026-11-03 真机抓到我自己的逻辑 bug：
- *   原来写 `Math.abs(dx) > 1 && Math.abs(dz) > 1`（两个轴都要出格）。
- *   但她是从屋里**朝一个方向**跳出去的（比如纯 +x），`dz` 恒为 0 →
- *   谓词**永远不可能为真** → `holdKey` 一直等到超时 → 报 `still-inside`。
- *   真机证据：`reason=still-inside outsLength=4`（四个方向都有空气格，场地没问题）。
+ *   原来写 `Math.abs(dx) > 1 && Math.abs(dz) > 1`（两轴都要出格）。
+ *   但她是从屋里**朝一个方向**走出去的（比如纯 +x），`dz` 恒为 0 →
+ *   谓词**永远不可能为真** → 一直等到超时，报 `still-inside`。
+ *   真机证据：`reason=still-inside outsLength=4`（四方向都有空气格，场地没问题）。
  *
- *   墙在 ±1，所以"出格"的正确条件是**任一轴超过 1** 即可。
- *
- * @returns {boolean}
+ *   墙在 ±1，所以"出格"的正确条件是**任一轴超过 1**。
  */
 export function isOutsideShelter(px, pz, cx, cz) {
     const dx = Math.abs(Math.floor(px) - cx);
@@ -163,120 +195,168 @@ export function capCell(feet, size = 3) {
 export async function shelter(bot, opts = {}) {
     const ctx = opts.ctx ?? { deadline: Date.now() + manifest.timeoutMs };
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
+    const t0 = Date.now();
 
     const feet = bot?.entity?.position;
     if (!feet || !Number.isFinite(feet.x)) return fail('NO_TARGET', '读不到自己的位置');
-    // 脚下要读得到（否则是没加载，别在虚空里搭屋子）
     const below = blockAt(bot, { x: Math.floor(feet.x), y: Math.floor(feet.y) - 1, z: Math.floor(feet.z) });
     if (!below) return fail('NO_TARGET', '脚下那格读不到（区块没加载？）');
 
-    const t0 = Date.now();
     const material = pickMaterial(bot, opts.block ?? null);
     if (!material) {
         return fail('NO_ITEM', '没有能当墙的材料（先弄点圆石/木头）', { missing: { cobblestone: 20 } });
     }
+    if (countItem(bot, material) <= 0) {
+        return fail('NO_ITEM', `没有 ${material} 了`, { missing: { [material]: 25 } });
+    }
 
-    // size 默认 3（内空 1 格）；要更大的显式传
     const size = Math.max(3, Math.min(7, Math.floor(Number(opts.size) || 3)));
-    const blocks = shelterBlueprint(feet, material, size, {
+    const order = shelterBuildOrder(feet, material, size, {
         floor: opts.floor ?? 'auto',
         underBlockName: below?.name ?? null,
+        doorSide: opts.doorSide ?? '+x',
+    });
+    const need = order.length;
+
+    // 按 phase 分组，**严格按 1–7 的顺序执行**
+    const byPhase = (ph) => order.filter((b) => b.phase === ph);
+    const fail2 = (code, msg, extra = {}) => fail(code, msg, {
+        material, want: need, total: need, costMs: Date.now() - t0, ...extra,
     });
 
-    // 材料够不够？先粗算（flow_build 还会再精算一次，双保险）
-    const need = blocks.length;
-    const have = countItem(bot, material);
-    if (have <= 0) {
-        return fail('NO_ITEM', `没有 ${material} 了`, { missing: { [material]: need } });
-    }
-
-    // 交给 flow_build：它负责排序/站位/防踩空/读回校验
-    const r = await build(bot, blocks, { ctx });
-
-    // ── ★ 先出后封（2026-11-03 用户选定的方案）──────────────────────
-    //
-    // 墙 + 顶圈放完，最后剩**屋顶正中**那一格 —— 它正好在她头顶列，
-    // `act_place` 会（正确地）拒绝。所以：
-    //   ① 走到**屋外相邻一格**
-    //   ② 确认真的出格了（不是"看起来走开了"）
-    //   ③ 封正中 + 逐格读回校验
-    //   ④ 走回屋里（进屋是普通移动，不必再校验）
-    //
-    // 只在"墙+顶圈都成了、就差正中"时才走这条路；其它失败原样透传。
-    const cap = capCell(feet, size);
-    const capDone = (() => {
-        const cur = blockAt(bot, cap);
-        return !!cur && cur.name !== 'air' && !['cave_air', 'void_air'].includes(cur.name);
-    })();
-
-    let capped = capDone;
-    let capNote = capDone ? 'already-sealed' : null;
-    if (!capDone && placedCount0(r) >= blocks.length - 1) {
-        const seals = await sealRoofCenter(bot, cap, material, ctx);
-        capped = seals.ok;
-        capNote = seals.ok ? 'sealed-outside' : seals.reason;
-        if (seals.ok) {
-            // ★ 封上了：虽然 build 那一步是"17 缺 1"，但整体已经达成"能过夜"的目标。
-            //   所以这里返回 ok，并在 data 里如实写清"正中是先出后封补上的"。
-            return ok({
-                material,
-                placed: placedCount0(r) + 1,
-                want: need, total: need,
-                sealedBy: 'exit-then-cap',
-                note: '墙 + 顶圈 + 正中全部就位（正中是先走到屋外再封的）',
-                costMs: Date.now() - t0,
-            });
-        }
-        if (!seals.ok) {
-            // 封不上就如实报，不假装成功
-            return fail(seals.code ?? 'BLOCKED', `墙和顶圈搭好了，但屋顶正中封不上：${seals.message ?? ''}`, {
-                material, want: need, total: need,
-                placed: placedCount0(r) + (seals.placed ?? 0),
-                remaining: seals.ok ? 0 : 1,
-                // ★ 这两个字段回答"到底是哪种失败"（用户明确要求打出来）：
-                //   reason='no-outside-spot' → 屋外没空气格（**造场地的问题**）
-                //   reason='still-inside'    → 有地方站但没跳出去（**移动的问题**）
-                reason: seals.reason ?? null,
-                outsLength: seals.outsLength ?? null,
-                costMs: Date.now() - t0,
+    // ── 步骤 1–3：墙1 → 墙2 → 顶圈（都在屋里能放；cap 与 sealDoor 除外）──
+    const indoor = [...byPhase('wall1'), ...byPhase('wall2'), ...byPhase('roofRing'),
+        ...byPhase('floor')];
+    if (indoor.length) {
+        const r1 = await build(bot, indoor.map((b) => ({ x: b.x, y: b.y, z: b.z, name: b.name })), { ctx });
+        const done1 = Number(r1?.data?.placed ?? 0);
+        if (!r1.ok) {
+            return fail2(r1.code ?? 'BLOCKED', `墙/顶圈没搭完：${r1.message ?? ''}`, {
+                placed: done1, remaining: Math.max(0, need - done1),
+                failed: r1.data?.failed ?? [], reason: r1.data?.reason ?? 'indoor-build',
             });
         }
     }
-    if (r.ok) {
-        return ok({
-            material,
-            placed: r.data?.placed ?? need,
-            want: need,
-            note: '小屋搭好了（3×3 封闭壳）',
+
+    // ── 步骤 4–6：出门洞 → 封 cap → 走回屋里 → 封门洞 ──
+    const cap = byPhase('cap')[0];
+    const door = byPhase('sealDoor');
+
+    // 4) 从门洞走出去（门洞是 1×2 空，直接走/跳；不调 goTo）
+    const walkOut = await leaveThroughDoor(bot, feet, size, opts.doorSide ?? '+x', ctx, cap);
+    if (!walkOut.ok) {
+        return fail2(walkOut.code, `没能从门洞走出去：${walkOut.message ?? ''}`, {
+            placed: need - 3, remaining: 3, reason: walkOut.reason ?? null,
+            outsLength: walkOut.outsLength ?? null,
         });
     }
 
-    // ★ 把"预算不够"变成可观测的（2026-11-03 用户要求）：
-    //   `placed/total/costMs` 一眼看出是"没放完"（placed 接近 total、costMs 顶到 timeout）
-    //   还是"卡住了"（placed 很小但时间用光 / 频繁失败）。
-    const costMs = Date.now() - t0;
-    const placedCount = Number(r.data?.placed ?? 0);
-    const observable = {
-        material, want: need, total: need,
-        placed: placedCount, costMs,
-        remaining: Math.max(0, need - placedCount),
-        ...(r.data ?? {}),
-    };
+    // 5) 从屋外封 cap 正中
+    if (cap) {
+        const { placeBlockAt } = await import('./act_place.js');
+        const put = await placeBlockAt(bot, { x: cap.x, y: cap.y, z: cap.z }, material, {});
+        const cur = blockAt(bot, { x: cap.x, y: cap.y, z: cap.z });
+        const sealed = !!cur && !['air', 'cave_air', 'void_air'].includes(cur.name);
+        if (!put.ok || !sealed) {
+            return fail2(put.code ?? 'BLOCKED', `屋顶正中封不上：${put.message ?? '读回不是目标方块'}`, {
+                placed: need - 3, remaining: 3 + (sealed ? 0 : 0),
+                reason: put.data?.reason ?? 'cap-failed',
+            });
+        }
+    }
 
-    // 透传 build 的码；但把"材料不够"说清楚（那是上层该去 obtain 的信号）
-    if (r.code === 'NO_ITEM') {
-        return fail('NO_ITEM', `材料不够搭小屋：${r.message ?? ''}`, {
-            ...observable,
-            missing: r.data?.missing ?? { [material]: need },
+    // 6) 走回屋里 → 从里面封门洞（门洞在 ±1 横向，不在她身体列 → 合法）
+    const back = await reenterThroughDoor(bot, feet, size, opts.doorSide ?? '+x', ctx);
+    if (!back.ok) {
+        return fail2(back.code, `没能走回屋里：${back.message ?? ''}`, {
+            placed: need - 2, remaining: 2, reason: back.reason ?? null,
         });
     }
-    if (r.code === 'TIMEOUT') {
-        return fail('TIMEOUT',
-            `小屋没搭完：${placedCount}/${need} 块，用了 ${Math.round(costMs / 1000)} 秒`
-            + `（${placedCount >= need - 2 ? '差一点没放完' : '中途卡住了'}）`, observable);
+    if (door.length) {
+        const r2 = await build(bot, door.map((b) => ({ x: b.x, y: b.y, z: b.z, name: b.name })), { ctx });
+        const done2 = Number(r2?.data?.placed ?? 0);
+        if (!r2.ok || done2 < door.length) {
+            return fail2(r2.code ?? 'BLOCKED', `门洞没封上：${r2.message ?? ''}`, {
+                placed: need - door.length + done2, remaining: door.length - done2,
+                failed: r2.data?.failed ?? [], reason: r2.data?.reason ?? 'seal-door',
+            });
+        }
     }
-    return fail(r.code ?? 'INTERNAL', r.message ?? '搭小屋失败', observable);
+
+    // 完工：封闭壳 + 人在屋里
+    return ok({
+        material, placed: need, want: need, total: need,
+        sealed: true, insideAfter: true,
+        note: '小屋搭好了：墙2层 + 顶 + 门洞已从里面封上（人在屋里）',
+        costMs: Date.now() - t0,
+    });
 }
+
+/**
+ * 步骤 4：从门洞走出去。
+ *
+ * ★ 不调 `goTo`（2 格穿门洞是原子层的活，3D 规划对它既慢又依赖地形数据）。
+ *   做法：朝门的方向看 → holdKey(forward)（门洞 1×2 空，直接走；必要时带 jump）
+ *   → **轮询确认真的出格**。
+ */
+async function leaveThroughDoor(bot, feet, size, doorSide, ctx, capCellRef) {
+    const cx = Math.floor(feet.x), cy = Math.floor(feet.y), cz = Math.floor(feet.z);
+    const dir = { '+x': [1, 0], '-x': [-1, 0], '+z': [0, 1], '-z': [0, -1] }[doorSide] ?? [1, 0];
+    const { lookAtPoint } = await import('./atom_input_mouse.js');
+    const { holdKey } = await import('./atom_input_move.js');
+
+    try {
+        await lookAtPoint(bot, {
+            x: bot.entity.position.x + dir[0] * 2,
+            y: bot.entity.position.y + 1.2,
+            z: bot.entity.position.z + dir[1] * 2,
+        }, { force: true });
+    } catch { /* 看不过去照走 */ }
+
+    const outside = () => isOutsideShelter(bot.entity.position.x, bot.entity.position.z, cx, cz);
+    // 门洞在地面层，直接走即可；带上 jump 以防 1 格台阶
+    const walk = await holdKey(bot, ['forward', 'jump'], {
+        until: () => outside(),
+        timeout: Math.max(2000, Math.min((ctx?.deadline ?? Date.now() + 8000) - Date.now(), 8000)),
+    });
+    const outFeet = bot.entity.position;
+    if (!outside()) {
+        return {
+            ok: false, code: 'OUT_OF_REACH', reason: 'still-inside',
+            message: `从门洞没走出去（holdKey=${walk.ok ? 'ok' : walk.code}，脚位 `
+                + `${Math.floor(outFeet.x)},${Math.floor(outFeet.z)}；门槛 |dx|>1 或 |dz|>1）`,
+            outsLength: null,
+        };
+    }
+    return { ok: true };
+}
+
+/** 步骤 6：从门洞走回屋里（同样不调 goTo）。 */
+async function reenterThroughDoor(bot, feet, size, doorSide, ctx) {
+    const cx = Math.floor(feet.x), cy = Math.floor(feet.y), cz = Math.floor(feet.z);
+    const dir = { '+x': [-1, 0], '-x': [1, 0], '+z': [0, -1], '-z': [0, 1] }[doorSide] ?? [-1, 0];
+    const { lookAtPoint } = await import('./atom_input_mouse.js');
+    const { holdKey } = await import('./atom_input_move.js');
+
+    try {
+        await lookAtPoint(bot, {
+            x: bot.entity.position.x + dir[0] * 2,
+            y: bot.entity.position.y + 1.2,
+            z: bot.entity.position.z + dir[1] * 2,
+        }, { force: true });
+    } catch { /* ignore */ }
+
+    const inside = () => !isOutsideShelter(bot.entity.position.x, bot.entity.position.z, cx, cz);
+    const walk = await holdKey(bot, ['forward', 'jump'], {
+        until: () => inside(),
+        timeout: Math.max(2000, Math.min((ctx?.deadline ?? Date.now() + 8000) - Date.now(), 8000)),
+    });
+    if (!inside()) {
+        return { ok: false, code: 'OUT_OF_REACH', reason: 'still-outside', message: `没能走回屋里（holdKey=${walk.ok ? 'ok' : walk.code}）` };
+    }
+    return { ok: true };
+}
+
 
 /** 从 build 的返回里数"放上了几块"（ok 或失败都可能带）。 */
 function placedCount0(r) {
