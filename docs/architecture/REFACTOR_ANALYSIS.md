@@ -1645,15 +1645,19 @@ B 重新领到**同一张单**又挖 9 → 最终 **24/8**；`!jobs` 显示 `min
 | `unit_all` | **31/31 + 1 跳过**，exit 0（任务书写的是 29；实际多 2 —— atoms 新增 `act_p1_unit`/`flow_p1_unit`，我按第 4 条加了 `board_payload_unit`，都是**新增用例**不是失败） |
 | `preflight` | 默认 **exit 0**（违规 5 处、**0 新增**）/ `--strict-api` **exit 1**（Phase 5.4 旧债，**未修绿**）/ `--report-api` exit 0；**114/114** 模块导入 |
 | `atom_all` | **18/18**，真实 **244 条**用例 0 FAIL |
-| `bench_move_actions 5` | **49/55（89.1%）**，与基线一致；失败全 `NO_PATH ×6`（down5×5 已知边界 + dig-through r1）；`climb-ladder` 中位 **1950ms**；`digdown` **5/5** `digdownSeen=true`、`execActions={"digdown":1}`、`y −57→−60` |
+| `bench_move_actions 5` | **49/55（89.1%）**，与基线一致；失败全 `NO_PATH ×6`（down5×5 已知边界 + dig-through r1）；`climb-ladder` 中位 **2061ms**；`digdown` **5/5** `digdownSeen=true`、`execActions={"digdown":1}`、`y −57→−60` |
 
-> 🔴 **`water-cross` 本轮数据作废（并发踩场地）**：本轮跑到 `water-cross` 时，25566 上有**另一个 bot**
-> （`skc79700`，不是我的；atoms 当时在跑 t21 的真机），bench 的固定 arena（`10000,6000`）
-> 被两个 bot 同时 `fillSafe` 互相清填 —— 该场景中位 31416ms 正常、但单轮出现 **85144ms** 离群。
-> **处置**：`water-cross` 这一轮**不计入"与基线一致"的结论**；其余 **10 个场景**都在基线带内，
-> 总通过率 49/55 也与基线一致。**之后需在无人占用的窗口重跑一次干净 bench 作为最终数。**
+> 🔴 **`water-cross` 曾因并发作废，已重跑干净窗口**（保留这段是因为它是今晚第 N 次同一个坑）：
+> 第一次跑时 25566 上有**另一个 bot**（`skc79700`，不是我的；atoms 当时在跑 t21 的真机），
+> bench 的固定 arena（`10000,6000`）被两个 bot 同时 `fillSafe` 互相清填 ——
+> 该场景中位 31416ms 正常、但单轮出现 **85144ms** 离群 → **那一轮数据作废**（已归档 `*.t20-b1-contaminated.jsonl`）。
+>
+> **重跑（确认 25566 只有自己）**：`water-cross` **5/5、中位 19219ms**（各轮 29013/16382/19219/37140/18710），
+> 离群消失；总通过率仍 **49/55**。→ **最终数取重跑这轮**。
+>
 > 纪律（captain 记）：**调度器/任务板这类"多进程"改动上线后，真机测试必须严格串行** ——
-> 现在真的可能有多个 bot 同时在跑，arena 只有一个。
+> 现在真的可能有多个 bot 同时在跑，而 arena 只有一个。跑前先 `rcon list` 确认 0 玩家，
+> 跑时确认在线的是**自己的 bot**（bench 的 bot 名是 `ma<时间戳>`）。
 
 ---
 
