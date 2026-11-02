@@ -118,6 +118,18 @@ CREATE TABLE IF NOT EXISTS claims (
     PRIMARY KEY (id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_claims_key ON claims(key);
+-- 共享数据（B4，06 §9.3）：地标 / 危险点 / 箱子内容。三种 kind 共用一张表。
+--   kind = 'landmark' | 'danger' | 'chest'
+--   key  = 名字（地标）/ "x,z"（危险）/ "x,y,z"（箱子）
+--   value= JSON（形状按 kind 不同，读的人自己知道）
+CREATE TABLE IF NOT EXISTS shared (
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    owner TEXT,
+    updatedAt INTEGER NOT NULL,
+    PRIMARY KEY (kind, key)
+);
 CREATE INDEX IF NOT EXISTS idx_claims_until ON claims(until);
 `;
 
@@ -992,4 +1004,159 @@ export function splitByArea(db, spec = {}, opts = {}) {
         }
     }
     return { ok: true, parent, children };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 共享数据（B4，06 §9.3）：地标 / 危险点 / 箱子内容
+//
+// ★ 为什么 `terrain3d` **不在**这里（06 §9.3 原文，抄下来免得以后有人"顺手"合并）：
+//   「3D 地形库 `terrain3d`：每个 bot 一份 SQLite —— **暂不共享**：
+//     多进程写同一个 SQLite 要处理 WAL 和 busy 重试，收益不值。」
+//   也就是说：任务是低频、小体积、必须一致的东西（共享）；地形是高频、大体积、
+//   每只 bot 各扫各的本来就不同（不共享）。**不要**把 terrain3d 搬进来。
+// ───────────────────────────────────────────────────────────────────────────
+
+/** 共享数据的三种 namespace（06 §9.3）。 */
+export const SHARED_KINDS = Object.freeze(['landmark', 'danger', 'chest']);
+
+/**
+ * 写一条共享数据（upsert）。
+ *
+ * `key` 的语义按 kind 不同：
+ *   landmark → 名字（'home' / 'mine_entrance'）
+ *   danger   → `x,z`（危险是点+半径）
+ *   chest    → `x,y,z`（箱子按坐标唯一）
+ */
+export function putShared(db, kind, key, value, opts = {}) {
+    const now = opts.now ?? Date.now();
+    if (!SHARED_KINDS.includes(kind)) return { ok: false, code: 'INTERNAL', message: `未知共享种类 ${kind}` };
+    if (key == null || String(key) === '') return { ok: false, code: 'NO_TARGET', message: '共享数据需要 key' };
+    const owner = opts.owner ?? null;
+    db.prepare(`INSERT INTO shared (kind, key, value, owner, updatedAt) VALUES (?,?,?,?,?)
+        ON CONFLICT(kind, key) DO UPDATE SET value=excluded.value, owner=excluded.owner, updatedAt=excluded.updatedAt`)
+        .run(String(kind), String(key), JSON.stringify(value ?? null), owner, now);
+    return { ok: true, kind, key: String(key) };
+}
+
+/** 读一条（没有返回 null）。 */
+export function getShared(db, kind, key) {
+    const row = db.prepare('SELECT * FROM shared WHERE kind=? AND key=?').get(String(kind), String(key));
+    return row ? sharedRowToObj(row) : null;
+}
+
+/** 列某一类的全部（`kind` 为空则全部）。 */
+export function listShared(db, kind = null) {
+    const rows = kind
+        ? db.prepare('SELECT * FROM shared WHERE kind=? ORDER BY updatedAt DESC').all(String(kind))
+        : db.prepare('SELECT * FROM shared ORDER BY kind, updatedAt DESC').all();
+    return rows.map(sharedRowToObj);
+}
+
+/** 删一条。 */
+export function delShared(db, kind, key) {
+    const r = db.prepare('DELETE FROM shared WHERE kind=? AND key=?').run(String(kind), String(key));
+    return { ok: true, deleted: Number(r.changes ?? 0) };
+}
+
+/**
+ * 找"哪个箱子有这个物品"（B4 验收核心：A 存的，B 不开箱就能知道）。
+ *
+ * @returns {Array<{key:string, pos:{x,y,z}, count:number, owner:string|null}>}
+ */
+export function findItemInSharedChests(db, itemName, opts = {}) {
+    const want = String(itemName ?? '');
+    if (!want) return [];
+    const minCount = Number(opts.minCount ?? 1);
+    const out = [];
+    for (const row of listShared(db, 'chest')) {
+        const items = row.value?.items ?? row.value?.contents ?? null;
+        if (!items || typeof items !== 'object') continue;
+        const n = Number(items[want] ?? 0);
+        if (Number.isFinite(n) && n >= minCount) {
+            out.push({ key: row.key, pos: row.value?.pos ?? parseChestKey(row.key), count: n, owner: row.owner });
+        }
+    }
+    // 多的排前面（和 landmarks.findItemInChests 的口径一致）
+    return out.sort((a, b) => b.count - a.count);
+}
+
+function parseChestKey(key) {
+    const p = String(key ?? '').split(',').map(Number);
+    if (p.length !== 3 || p.some((v) => !Number.isFinite(v))) return null;
+    return { x: p[0], y: p[1], z: p[2] };
+}
+
+function sharedRowToObj(row) {
+    let value = null;
+    try { value = row.value == null ? null : JSON.parse(row.value); } catch { value = null; }
+    return { kind: row.kind, key: row.key, value, owner: row.owner, updatedAt: row.updatedAt };
+}
+
+/**
+ * 一次性把旧的分域文件搬进板库（**搬完就废弃旧文件，不两边都读**）。
+ *
+ * 为什么要搬：B1–B3 之前地标/危险/箱子在 `bots/<name>/memory/*.json`，每只 bot 各一份，
+ * 于是 A 记的箱子 B 看不见（B4 要解决的就是这个）。
+ *
+ * 规则（06 §9.3 + 用户要求"不许两份真相"）：
+ *   · 每个 namespace 只搬一次（板库里已有该 namespace 的任何行就跳过，幂等）
+ *   · 搬完在返回值里报告搬了多少条
+ *   · **旧文件不删**（保留作事故取证），但**代码路径不再读它** —— 这一点写在下面各 API 的注释里
+ *
+ * @param {object} db
+ * @param {object} bot
+ * @param {object} reader { readStore(bot, ns) } 注入，避免 store 反向依赖 agent 侧
+ * @returns {{moved:object, skipped:string[]}}
+ */
+export function migrateLocalToBoard(db, bot, reader, opts = {}) {
+    const moved = {};
+    const skipped = [];
+    const now = opts.now ?? Date.now();
+    const hasAny = (kind) => {
+        const r = db.prepare('SELECT COUNT(*) AS n FROM shared WHERE kind=?').get(kind);
+        return Number(r?.n ?? 0) > 0;
+    };
+
+    // 地标（sites + storage）
+    if (hasAny('landmark')) skipped.push('landmark');
+    else {
+        let n = 0;
+        const sites = (() => { try { return reader.readStore(bot, 'sites') || []; } catch { return []; } })();
+        for (const s of (Array.isArray(sites) ? sites : [])) {
+            if (!s || !Number.isFinite(s.x)) continue;
+            putShared(db, 'landmark', s.name ?? `site_${s.x}_${s.z}`, s, { now });
+            n++;
+        }
+        const storage = (() => { try { return reader.readStore(bot, 'storage') || null; } catch { return null; } })();
+        if (storage && Number.isFinite(storage.x)) { putShared(db, 'landmark', 'storage', storage, { now }); n++; }
+        moved.landmark = n;
+    }
+
+    // 危险点
+    if (hasAny('danger')) skipped.push('danger');
+    else {
+        const dangers = (() => { try { return reader.readStore(bot, 'dangers') || []; } catch { return []; } })();
+        let n = 0;
+        for (const d of (Array.isArray(dangers) ? dangers : [])) {
+            if (!d || !Number.isFinite(d.x)) continue;
+            putShared(db, 'danger', `${Math.floor(d.x)},${Math.floor(d.z)}`, d, { now });
+            n++;
+        }
+        moved.danger = n;
+    }
+
+    // 箱子（landmarks 的 chests 文件 —— 注意**不是** flow_store 那个 map 形状的）
+    if (hasAny('chest')) skipped.push('chest');
+    else {
+        const chests = (() => { try { return reader.readStore(bot, 'chests') || []; } catch { return []; } })();
+        let n = 0;
+        for (const c of (Array.isArray(chests) ? chests : [])) {
+            if (!c || !Number.isFinite(c.x)) continue;
+            const key = `${Math.floor(c.x)},${Math.floor(c.y)},${Math.floor(c.z)}`;
+            putShared(db, 'chest', key, { pos: { x: c.x, y: c.y, z: c.z }, items: c.contents ?? {}, category: c.category ?? null, note: c.note ?? '' }, { now });
+            n++;
+        }
+        moved.chest = n;
+    }
+    return { moved, skipped };
 }

@@ -66,6 +66,58 @@ export class Agent {
         }
     }
 
+    /**
+     * B4 一次性迁移：本 bot 的旧 memory 分域文件 → 任务板库（06 §9.3）。
+     *
+     * 幂等：板库里已有该 kind 的任何行就跳过。**不会**因为多启动几次而重复搬。
+     * 旧文件不删（留作事故取证），但**代码路径不再读它** —— 见 flow_store 的注释。
+     */
+    async _migrateSharedOnce() {
+        if (!this.board || this._sharedMigrated) return;
+        this._sharedMigrated = true;
+        try {
+            const [store, mem, botPaths] = await Promise.all([
+                import('./library/board_store.js'),
+                import('./library/memory_store.js'),
+                import('./library/bot_paths.js'),
+            ]);
+            // 板库由 mindserver 持有；agent 这边只能"请求迁移"——但迁移是一次性的、
+            // 小数据量，为了不让 agent 直连库（那会变成第二个写者），
+            // 这里只上报"我有旧数据待迁"，实际写库由 board:shared-put 完成。
+            const reader = { readStore: (b, ns) => mem.readStore(b, ns) };
+            const pending = ['landmark', 'danger', 'chest'];
+            for (const kind of pending) {
+                // 先问板库有没有；有就跳过（幂等）
+                const cur = await this.board.sharedList?.(kind);
+                if (cur?.ok && (cur.data?.items ?? []).length > 0) continue;
+                // 把本地旧数据经 board 写进去
+                const pull = (ns) => { try { return mem.readStore(this.bot, ns) ?? null; } catch { return null; } };
+                if (kind === 'landmark') {
+                    for (const s of (pull('sites') ?? [])) {
+                        if (Number.isFinite(s?.x)) await this.board.sharedPut('landmark', s.name ?? `site_${s.x}_${s.z}`, s);
+                    }
+                    const st = pull('storage');
+                    if (Number.isFinite(st?.x)) await this.board.sharedPut('landmark', 'storage', st);
+                } else if (kind === 'danger') {
+                    for (const d of (pull('dangers') ?? [])) {
+                        if (Number.isFinite(d?.x)) await this.board.sharedPut('danger', `${Math.floor(d.x)},${Math.floor(d.z)}`, d);
+                    }
+                } else if (kind === 'chest') {
+                    // 只搬 landmarks 形状（数组）；flow_store 的 map 形状是历史噪音，不搬
+                    for (const c of (pull('chests') ?? [])) {
+                        if (!Number.isFinite(c?.x)) continue;
+                        const key = `${Math.floor(c.x)},${Math.floor(c.y)},${Math.floor(c.z)}`;
+                        await this.board.sharedPut('chest', key, {
+                            pos: { x: c.x, y: c.y, z: c.z }, items: c.contents ?? {}, category: c.category ?? null, note: c.note ?? '',
+                        });
+                    }
+                }
+            }
+        } catch (e) {
+            console.log(`[共享数据] 迁移跳过：${String(e?.message ?? e).slice(0, 120)}`);
+        }
+    }
+
     async _registeredSkills() {
         try {
             // 动态 import（不是顶层静态 import）：
@@ -119,6 +171,10 @@ export class Agent {
                 console.log(`[任务板] 已连接（${skills.length} 个技能可派单）`);
                 // ★ M8 B2：板连上就起调度器（否则 B2 就是死代码，跟 B1 的 server 一样）
                 await this._startScheduler();
+                // ★ B4：把这只 bot 旧的地标/危险/箱子分域文件**一次性**搬进板库。
+                //   搬完代码路径就只读板库（旧文件保留作取证，但不再读）。
+                //   放在板连上之后、调度器之后：搬不动也不该阻止 agent 干活。
+                try { await this._migrateSharedOnce(); } catch { /* 迁移失败不影响启动 */ }
             } else {
                 console.log(`[任务板] 未连接（${hello.code} ${hello.message ?? ''}），控制层降级为"没有单要动"`);
             }

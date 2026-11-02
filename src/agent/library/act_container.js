@@ -196,17 +196,56 @@ export function windowItems(bot) {
 // ───────────────────────────────────────────────────────────────────────────
 
 /** 背包里有多少个某物（动作层自己算，不借道别的动作）。 */
+/**
+ * 玩家背包里有多少个某物。
+ *
+ * ★★ 与 `winCount` 同一个坑的另一半（2026-11-02 真机）：**开着容器窗口时**，
+ *   `bot.inventory.items()` 读出来的可能已经混进容器格子（不同 mineflayer 版本行为不同）。
+ *   实测：存了 16 个进箱子后 `bot.inventory` 仍报 16（其实背包已经空了），
+ *   于是 `stored = 16-16 = 0` → 假失败。
+ *
+ *   做法：**窗口开着**就按官方语义从 `win.slots` 的 `inventoryStart..inventoryEnd`
+ *   那一段数（那一段就是玩家背包）；窗口没开才用 `bot.inventory`。
+ */
 function invCount(bot, name) {
+    const win = bot.currentWindow;
+    if (win && Number.isFinite(win.inventoryStart) && Array.isArray(win.slots)) {
+        const end = Number.isFinite(win.inventoryEnd) ? win.inventoryEnd : win.slots.length;
+        return (win.slots.slice(win.inventoryStart, end) || [])
+            .filter((i) => i?.name === name)
+            .reduce((n, i) => n + (i.count ?? 0), 0);
+    }
     return (bot.inventory?.items?.() ?? [])
         .filter((i) => i?.name === name)
         .reduce((n, i) => n + (i.count ?? 0), 0);
 }
 
-/** 当前窗口（容器一侧）里有多少个某物。 */
+/**
+ * 当前窗口**容器那一侧**有多少个某物。
+ *
+ * ★★ 2026-11-02 真机查明的**第三个** bug：原来用的是 `win.slots`（整个窗口 0..62），
+ *   而箱子窗口的布局是 `[0..26]=箱子格子, [27..62]=玩家背包`。
+ *   于是"箱子里有多少圆石"把**玩家背包里的**也数进去了 →
+ *   存取之后 `stored = invBefore - invAfter` 恒为 0 或被污染 →
+ *   明明搬成功了却报 `INVENTORY_FULL`（假失败）。
+ *
+ *   正确读法是 `win.containerItems()` —— mineflayer 专门给"容器自己的格子"的接口，
+ *   不含玩家背包。用 `win.type === 'minecraft:generic_9x3'` 也能算区间，但直接用官方接口最稳。
+ */
 function winCount(bot, name) {
     const win = bot.currentWindow;
     if (!win) return 0;
-    return (win.slots || [])
+    let list;
+    try {
+        // 优先官方接口：只返回容器自己的格子
+        list = typeof win.containerItems === 'function' ? win.containerItems() : null;
+    } catch { list = null; }
+    if (!Array.isArray(list)) {
+        // 退路：按 inventoryStart 切出容器区间（不含玩家背包）
+        const start = Number.isFinite(win.inventoryStart) ? win.inventoryStart : 0;
+        list = (win.slots || []).slice(0, start);
+    }
+    return list
         .filter((i) => i?.name === name)
         .reduce((n, i) => n + (i.count ?? 0), 0);
 }
@@ -220,6 +259,96 @@ function winCount(bot, name) {
  *   NO_ITEM       背包里没有这件东西
  *   INVENTORY_FULL 容器放不下了（存进去的比要存的少）
  */
+/**
+ * 等"背包/容器计数"落定（服务端回包是异步的，`await win.deposit()` 回来时**还没刷新**）。
+ *
+ * ★★ 这是修 `.type`→`.id` 之后暴露的**第二个** bug（2026-11-02 真机）：
+ *   转移其实**成功了**（实测箱内 0→16），但紧接着读 `invCount/winCount` 拿到的是
+ *   **旧值** → `stored = invBefore - invAfter = 0` → 被判成 `INVENTORY_FULL`
+ *   （"没能存进去（容器可能满了）"）—— **假失败**。
+ *   这正是 M6 立的那条："后置判据读的是引擎真的提供的数据吗"。
+ *
+ * 做法：短轮询（不睡死），一旦读到的计数符合预期就返回；超时则把最后一次读到的值返回，
+ * 由调用方按**真实**读数判断（而不是按"没变"就断定失败）。
+ *
+ * @param {() => boolean} isSettled 判定"已经落定"的条件
+ * @param {object} opts { timeoutMs=800, intervalMs=50 }
+ * @returns {Promise<boolean>} 是否在超时前落定
+ */
+export async function waitCountsSettled(isSettled, opts = {}) {
+    const { timeoutMs = 800, intervalMs = 50 } = opts;
+    const t0 = Date.now();
+    for (;;) {
+        try { if (isSettled()) return true; } catch { /* 读不到就再等 */ }
+        if (Date.now() - t0 >= timeoutMs) return false;
+        await new Promise((r) => setTimeout(r, intervalMs));
+    }
+}
+
+/**
+ * 把物品名解析成**minecraft-data 的数字 id**。
+ *
+ * ★★ 2026-11-02 真机查明的根因（`deposit`/`withdraw` 从 B1 起就是废的）：
+ *   原来这里写的是 `bot.registry?.itemsByName?.[item]?.type` —— 但 minecraft-data 的
+ *   物品对象只有 `{id, name, displayName, stackSize}`，**没有 `type` 字段**
+ *   → `?.type` 恒为 `undefined` → `?? null` → `win.deposit(null, null, n)`。
+ *   于是 mineflayer 在 `findItemRange(..., itemType=null)` 里一个都找不到，
+ *   `window.selectedItem` 一直是 null，最后撞上它内部的断言
+ *   `assert.notStrictEqual(window.selectedItem.type, null)` ——
+ *   报出来的错是 `Expected "actual" to be strictly unequal to: null`。
+ *
+ *   **注意这个错报得很误导**：字面上像是"窗口没开好"，实际是**物品 id 传成了 null**。
+ *   我也是先按"窗口"方向查过（`inventoryStart` 实测是 27，完全正常）才定位到这里的。
+ *
+ * @returns {number|null} 数字 id；查不到返回 null（调用方必须处理，不许硬传）
+ */
+export function itemIdOf(bot, item) {
+    const name = String(item ?? '');
+    if (!name) return null;
+    const byName = bot?.registry?.itemsByName?.[name];
+    if (byName) {
+        // 兼容两种形状：minecraft-data 用 id；个别地方暴露的是 type（旧版/别的包装）
+        const id = byName.id ?? byName.type;
+        if (Number.isFinite(id)) return id;
+    }
+    // 退路：从**背包**或**当前打开的容器**里正在显示的那个物品反查 id。
+    //   （取东西时物品在容器里、不在背包里，所以窗口也要查。）
+    try {
+        const inv = bot?.inventory?.items?.() ?? [];
+        const hitInv = inv.find((i) => i?.name === name);
+        if (hitInv && Number.isFinite(hitInv.type)) return hitInv.type;
+    } catch { /* ignore */ }
+    try {
+        const slots = bot?.currentWindow?.slots ?? [];
+        const hitWin = slots.find((i) => i?.name === name);
+        if (hitWin && Number.isFinite(hitWin.type)) return hitWin.type;
+    } catch { /* ignore */ }
+    return null;
+}
+
+/**
+ * 校验"这个窗口真的可以搬东西"（M6 那条：**没开成不许当成开成了**）。
+ *
+ * mineflayer 的 `inventoryStart/inventoryEnd` 是它按窗口类型算出来的；
+ * 为 null 说明窗口没被正确初始化。与其等它内部 assert 崩掉（报一个看不出所以然的错），
+ * 不如在这里明确报错。
+ *
+ * @returns {{ok:true} | {ok:false, code:string, message:string}}
+ */
+export function assertUsableWindow(bot, win) {
+    if (!win) return { ok: false, code: 'WINDOW_CLOSED', message: '没有打开的容器（先开箱）' };
+    const start = win.inventoryStart;
+    const end = win.inventoryEnd;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || !Array.isArray(win.slots)) {
+        return {
+            ok: false, code: 'INTERNAL',
+            message: `窗口没被正确初始化（inventoryStart=${start}, inventoryEnd=${end}, `
+                + `slots=${win.slots?.length ?? 'n/a'}）—— 这个容器可能不是标准箱子`,
+        };
+    }
+    return { ok: true };
+}
+
 export async function deposit(bot, item, n = 1) {
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!item) return fail('NO_TARGET', '没说要存什么');
@@ -227,6 +356,14 @@ export async function deposit(bot, item, n = 1) {
     if (!win) return fail('WINDOW_CLOSED', '没有打开的容器（先开箱再存）', { item });
     if (typeof win.deposit !== 'function') {
         return fail('INTERNAL', '这个窗口不支持 deposit（不是容器？）', { item });
+    }
+    // ★ 先确认窗口真的可用（没开成就别往下走，别让 mineflayer 内部 assert 崩）
+    const usable = assertUsableWindow(bot, win);
+    if (!usable.ok) return fail(usable.code, usable.message, { item });
+    // ★ 物品 id 必须解析得到（原来是 `.type` → 恒 null → deposit 必然失败）
+    const itemType = itemIdOf(bot, item);
+    if (itemType == null) {
+        return fail('NO_ITEM', `解析不出物品 id（${item} 不在注册表里？）`, { item });
     }
 
     const want = Math.max(1, Math.floor(Number(n) || 1));
@@ -236,22 +373,29 @@ export async function deposit(bot, item, n = 1) {
     const take = Math.min(want, invBefore);
     const winBefore = winCount(bot, item);
     try {
-        await win.deposit(bot.registry?.itemsByName?.[item]?.type ?? null, null, take);
+        await win.deposit(itemType, null, take);
     } catch (e) {
         const msg = String(e?.message ?? e);
         if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item });
         return fail('INTERNAL', msg, { error: msg, item });
     }
 
+    // ★ 先等计数落定（否则读到旧值 → 假失败）
+    await waitCountsSettled(() => invCount(bot, item) < invBefore || winCount(bot, item) > winBefore);
     const invAfter = invCount(bot, item);
     const winAfter = winCount(bot, item);
     const stored = invBefore - invAfter;
 
     // 两边计数必须对上（存了多少，背包就少多少、箱子就多多少）
     if (stored <= 0) {
-        return fail('INVENTORY_FULL', `没能存进去（容器可能满了）`, {
-            item, want, stored: 0, invBefore, invAfter, winBefore, winAfter,
-        });
+        // 一个都没动：这时候才可能是"真的满"。但要区分"到点还没刷新"——
+        // 已经等过 settle，所以这里按真实读数下结论，并标 verified 便于上层判断。
+        const chestGrew = winAfter > winBefore;
+        return fail('INVENTORY_FULL',
+            chestGrew ? `只进了 ${winAfter - winBefore} 个（背包计数没同步）` : `没能存进去（容器可能满了）`, {
+                item, want, stored: 0, invBefore, invAfter, winBefore, winAfter,
+                verified: chestGrew ? false : true,
+            });
     }
     if (stored < take) {
         return fail('INVENTORY_FULL', `只存进去 ${stored}/${take}（容器满了）`, {
@@ -278,6 +422,14 @@ export async function withdraw(bot, item, n = 1) {
     if (typeof win.withdraw !== 'function') {
         return fail('INTERNAL', '这个窗口不支持 withdraw（不是容器？）', { item });
     }
+    // ★ 与 deposit 同样的两道：窗口真的可用 + 物品 id 解析得到
+    //   （withdraw 走的是同一套 transfer，`.type` 那个错的同一个根因）
+    const usable = assertUsableWindow(bot, win);
+    if (!usable.ok) return fail(usable.code, usable.message, { item });
+    const itemType = itemIdOf(bot, item);
+    if (itemType == null) {
+        return fail('NO_ITEM', `解析不出物品 id（${item} 不在注册表里？）`, { item });
+    }
 
     const want = Math.max(1, Math.floor(Number(n) || 1));
     const winBefore = winCount(bot, item);
@@ -286,21 +438,26 @@ export async function withdraw(bot, item, n = 1) {
     const take = Math.min(want, winBefore);
     const invBefore = invCount(bot, item);
     try {
-        await win.withdraw(bot.registry?.itemsByName?.[item]?.type ?? null, null, take);
+        await win.withdraw(itemType, null, take);
     } catch (e) {
         const msg = String(e?.message ?? e);
         if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item });
         return fail('INTERNAL', msg, { error: msg, item });
     }
 
+    // ★ 同样先等计数落定
+    await waitCountsSettled(() => winCount(bot, item) < winBefore || invCount(bot, item) > invBefore);
     const invAfter = invCount(bot, item);
     const winAfter = winCount(bot, item);
     const taken = winBefore - winAfter;
 
     if (taken <= 0) {
-        return fail('INVENTORY_FULL', `没能取出来（背包可能满了）`, {
-            item, want, taken: 0, invBefore, invAfter, winBefore, winAfter,
-        });
+        const invGrew = invAfter > invBefore;
+        return fail('INVENTORY_FULL',
+            invGrew ? `只取出 ${invAfter - invBefore} 个（箱子计数没同步）` : `没能取出来（背包可能满了）`, {
+                item, want, taken: 0, invBefore, invAfter, winBefore, winAfter,
+                verified: invGrew ? false : true,
+            });
     }
     if (taken < take) {
         return fail('INVENTORY_FULL', `只取出来 ${taken}/${take}（背包满了）`, {

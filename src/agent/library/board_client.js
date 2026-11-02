@@ -351,6 +351,29 @@ export class BoardClient {
         return this._call('board:save-checkpoint', { id: String(id), key, value });
     }
 
+    // ── B4：共享数据（06 §9.3）地标 / 危险点 / 箱子内容 ────────────────
+
+    async sharedPut(kind, key, value) {
+        return this._call('board:shared-put', { kind, key, value, owner: this.name });
+    }
+
+    async sharedList(kind = null) {
+        return this._call('board:shared-list', kind ? { kind } : {});
+    }
+
+    async sharedGet(kind, key) {
+        return this._call('board:shared-get', { kind, key });
+    }
+
+    async sharedDel(kind, key) {
+        return this._call('board:shared-del', { kind, key });
+    }
+
+    /** ★ B4 验收核心：不开箱就知道哪个箱子有某物品。 */
+    async sharedFindItem(item, minCount = 1) {
+        return this._call('board:shared-find-item', { item, minCount });
+    }
+
     /** 是否连上过（诊断用）。 */
     get connected() { return this._connected; }
 }

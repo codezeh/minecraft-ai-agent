@@ -304,17 +304,32 @@ function assertResult(name, r) {
 
 // ── 15. deposit：正常存取，两边计数对上 ───────────────────────────────
 {
-    const winSlots = [];
     const bot = makeFakeBot({ items: [{ name: 'coal', type: 1, count: 5, slot: 0 }] });
-    // 真身是 bot.inventory.slots（假 bot 的 items() 返回它），必须改同一个数组
-    bot.currentWindow = {
-        slots: winSlots,
-        deposit: async (_t, _m, n) => {
-            const it = bot.inventory.slots.find((i) => i.name === 'coal');
-            it.count -= n;
-            winSlots.push({ name: 'coal', count: n });
-        },
+    // ★ 假窗口要**忠实**：真实箱子窗口有 inventoryStart/End + containerItems()。
+    //   旧假窗口没有这些 → 正好把"计数口径"的 bug 藏住了（真机上才爆）。
+    //   slots[0..2] = 容器 3 格，[3..5] = 玩家背包 3 格。
+    // ★ 真实客户端开窗时会把**玩家背包镜像进窗口的 [inventoryStart..inventoryEnd) 段**。
+    //   假窗口也必须镜像，否则"背包计数"恒为 0（旧假窗口没镜像 → 把计数口径的 bug 藏住了）。
+    const win = {
+        slots: [null, null, null, null, null, null],   // [0..2]=容器, [3..5]=背包镜像
+        inventoryStart: 3,
+        inventoryEnd: 6,
+        containerItems() { return win.slots.slice(0, 3); },
     };
+    const mirror = () => {
+        for (let i = 0; i < 3; i++) {
+            const src = bot.inventory.slots[i];
+            win.slots[3 + i] = src ? { name: src.name, type: src.type, count: src.count } : null;
+        }
+    };
+    win.deposit = async (_t, _m, n) => {
+        const it = bot.inventory.slots.find((i) => i.name === 'coal');
+        it.count -= n;
+        win.slots[0] = { name: 'coal', type: it.type, count: ((win.slots[0]?.count) ?? 0) + n };
+        mirror();
+    };
+    bot.currentWindow = win;
+    mirror();
     const r = await deposit(bot, 'coal', 3);
     const counted = r.ok && r.data.stored === 3 && r.data.invAfter === 2 && r.data.winAfter === 3;
     if (assertResult('deposit 成功', r) && counted) {
@@ -327,7 +342,14 @@ function assertResult(name, r) {
 // ── 16. withdraw：容器里没有 → NO_ITEM ───────────────────────────────
 {
     const bot = makeFakeBot({ items: [] });
-    bot.currentWindow = { slots: [{ name: 'coal', count: 3 }], withdraw: async () => {} };
+    // 忠实假窗口（含 inventoryStart/End + containerItems）—— 旧假窗口缺这些字段，
+    // 正好把"容器侧计数把背包算进去"的 bug 藏住了。
+    bot.currentWindow = {
+        slots: [{ name: 'coal', type: 1, count: 3 }, null, null],
+        inventoryStart: 1, inventoryEnd: 3,
+        containerItems() { return this.slots.slice(0, 1); },
+        withdraw: async () => { },
+    };
     const r = await withdraw(bot, 'iron_ingot', 1);
     if (assertResult('withdraw 容器里没有', r) && !r.ok && r.code === 'NO_ITEM') {
         okCase('withdraw 容器里没有该物 → NO_ITEM', r.code);
@@ -338,12 +360,18 @@ function assertResult(name, r) {
 
 // ── 17. withdraw：正常取出 ───────────────────────────────────────────
 {
-    const winSlots = [{ name: 'iron_ingot', count: 4 }];
     const bot = makeFakeBot({ items: [{ name: 'iron_ingot', type: 1, count: 0, slot: 0 }] });
-    bot.currentWindow = { slots: winSlots, withdraw: async () => {
-        winSlots[0].count -= 2;
-        bot.inventory.slots[0].count += 2;     // 同一个数组
-    } };
+    const win = {
+        slots: [{ name: 'iron_ingot', type: 1, count: 4 }, null],   // [0]=容器, [1]=背包镜像
+        inventoryStart: 1, inventoryEnd: 2,
+        containerItems() { return win.slots.slice(0, 1); },
+        withdraw: async () => {
+            win.slots[0].count -= 2;
+            bot.inventory.slots[0].count += 2;
+            win.slots[1] = { name: 'iron_ingot', type: 1, count: bot.inventory.slots[0].count };
+        },
+    };
+    bot.currentWindow = win;
     const r = await withdraw(bot, 'iron_ingot', 2);
     const counted = r.ok && r.data.taken === 2 && r.data.invAfter === 2 && r.data.winAfter === 2;
     if (assertResult('withdraw 成功', r) && counted) {

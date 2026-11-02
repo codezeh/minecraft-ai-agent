@@ -23,6 +23,8 @@ import {
     expireLeases, JOB_STATE,
     // B3：预约（06 §9.2）+ 父子收敛（06 §9.1）
     reserve, release, renewClaims, expireClaims, listClaims, rollupParent,
+    // B4：共享数据（06 §9.3）
+    putShared, getShared, listShared, delShared, findItemInSharedChests,
 } from './board_store.js';
 
 /** 单个 bot 上报的能力（`board:hello` 记下来，用于校验 add 的 skill）。 */
@@ -325,6 +327,40 @@ export function attachBoardServer(deps = {}) {
         // ── 诊断：这张单持有哪些预约 ──────────────────────────────────
         socket.on('board:claims', (payload, cb) => {
             try { ack(cb, { ok: true, claims: listClaims(db, payload?.id ? String(payload.id) : null) }); }
+            catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        // ── 共享数据（B4，06 §9.3）：地标 / 危险点 / 箱子内容 ────────────
+        //
+        // 只有 mindserver 写库（与任务单同一原则）。agent 一律经这里读写，
+        // **不许绕过板库直接读 bots/<name>/memory/*.json**（否则又是两条路径）。
+        socket.on('board:shared-put', (payload, cb) => {
+            try {
+                const r = putShared(db, String(payload?.kind ?? ''), payload?.key, payload?.value, {
+                    now: now(), owner: payload?.owner ?? null,
+                });
+                ack(cb, r.ok ? { ok: true } : { ok: false, reason: r.message ?? r.code });
+            } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        socket.on('board:shared-list', (payload, cb) => {
+            try { ack(cb, { ok: true, items: listShared(db, payload?.kind ? String(payload.kind) : null) }); }
+            catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        socket.on('board:shared-get', (payload, cb) => {
+            try { ack(cb, { ok: true, item: getShared(db, String(payload?.kind ?? ''), payload?.key) }); }
+            catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        socket.on('board:shared-del', (payload, cb) => {
+            try { ack(cb, { ok: true, deleted: delShared(db, String(payload?.kind ?? ''), payload?.key).deleted }); }
+            catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        // ★ B4 验收用的那条查询：**不开箱**就知道哪个箱子有这个物品
+        socket.on('board:shared-find-item', (payload, cb) => {
+            try { ack(cb, { ok: true, hits: findItemInSharedChests(db, payload?.item, { minCount: payload?.minCount }) }); }
             catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
         });
 

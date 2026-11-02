@@ -4,7 +4,7 @@
  * 卡片原文：
  *   plan：选箱子（指定的 > 记忆里同类的 > 最近的）→ `reserve container:…` → `goTo`
  *         → `openContainer` → 逐项 `deposit` / `withdraw` → `finally` 里 `closeContainer`
- *         → 更新箱子记忆（`bots/<名字>/memory/chests.json`）
+ *         → 更新箱子记忆（**B4 起搬进任务板库**，见下）
  *   onFail：存时箱子满（`INVENTORY_FULL`）→ replan 换下一个箱子，都满了才 abort；
  *           取时背包满 → abort 带 `{count, want}`；没有箱子 → `NO_TARGET`
  *   完成：两边计数对上
@@ -18,14 +18,19 @@
  *   · `NO_TARGET`（附近没箱子）/ 参数错 → **abort**
  *   · `INTERRUPTED` → 立刻返回，不重试
  *
- * 路径：箱子记忆用 `botDirOf(bot) + '/memory/chests.json'`，**不自己拼 bots/<名字>/…**（唯一真相在 bot_paths）。
+ * 路径/存储（B4，06 §9.3）：箱子内容现在写在**任务板库**（mindserver 侧唯一写库），
+ *   经 `board_client.sharedPut('chest', ...)` 读写 —— 这样**别的 bot 也能看到**
+ *   （B4 验收："A 存进箱子的东西，B 不开箱就知道在哪个箱子"）。
+ *   ★ 旧实现是这里自己 `readFileSync/writeFileSync` 写 `bots/<name>/memory/chests.json`，
+ *     而 `landmarks.js` 也管同一个文件、但用的是**另一种数据形状**（数组 vs 这里用的 map）——
+ *     两个写者会互相覆盖。B4 把这一路彻底删掉，不再有第二个真相。
+ *   ★ 没有任务板时（mindserver 都没连上）**不写**：宁可少一条记忆，也不要再长出第二份文件。
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+// B4：不再直接读写 chests.json（那是第二个真相），走任务板。
 import { ok, fail } from './contract.js';
 import { openContainer, closeContainer, deposit, withdraw } from './act_container.js';
 import { countItem, blockAt } from './query_perceive.js';
-import { mapDirOf, botDirOf } from './bot_paths.js';
+import { mapDirOf } from './bot_paths.js';
 import { goTo } from './nav_core.js';
 
 /** 存/取共用的 manifest 字段（两个技能各有一份，避免"共用对象被改"的坑）。 */
@@ -49,42 +54,38 @@ function manifestOf(name, summary, extraCodes) {
 export const manifestStore = manifestOf('store', '把背包里的东西存进箱子', []);
 export const manifestFetch = manifestOf('fetch', '从箱子里取出东西', []);
 
-/** 箱子记忆文件（唯一真相在 bot_paths；这里只拼文件名）。 */
-function chestMemoryPath(bot) {
-    try {
-        return join(botDirOf(bot), 'memory', 'chests.json');
-    } catch {
-        return null;
-    }
+/** 找这只 bot 手上的任务板（没有就 null —— 没板时不写任何记忆，见文件头）。 */
+function boardOf(bot) {
+    return bot?.agent?.board ?? bot?.board ?? null;
 }
 
-/** 读箱子记忆（读不到就空表，不崩）。 */
-function readChestMemory(bot) {
-    const p = chestMemoryPath(bot);
-    if (!p) return {};
+/**
+ * 更新箱子内容记忆（B4：写进任务板库，**全 bot 共享**）。
+ *
+ * 语义：`delta` 是增量（存 +N / 取 -N）。先读板上的现值再叠加，
+ * 避免把别的 bot 记进去的其它物品覆盖掉。
+ *
+ * 尽力而为：写不进去不影响本次存取结果（记忆是优化，不是交易的成败条件）。
+ */
+async function rememberChest(bot, pos, delta) {
+    const board = boardOf(bot);
+    if (!board?.sharedPut) return;                       // 没板就不写（不退回本地文件）
     try {
-        return JSON.parse(readFileSync(p, 'utf8')) ?? {};
-    } catch {
-        return {};
-    }
-}
-
-/** 更新箱子记忆（尽力而为：写不进去不影响本次存取结果）。 */
-function rememberChest(bot, pos, delta) {
-    const p = chestMemoryPath(bot);
-    if (!p) return;
-    try {
-        const mem = readChestMemory(bot);
         const key = `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
-        const cur = mem[key] ?? { pos: { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) }, items: {} };
+        const cur = await board.sharedGet('chest', key);
+        const prev = cur?.ok ? (cur.data?.item?.value ?? null) : null;
+        const items = { ...(prev?.items ?? {}) };
         for (const [name, n] of Object.entries(delta ?? {})) {
-            const next = (cur.items?.[name] ?? 0) + n;
-            if (next > 0) cur.items[name] = next;
-            else if (cur.items) delete cur.items[name];
+            const next = (items[name] ?? 0) + n;
+            if (next > 0) items[name] = next;
+            else delete items[name];
         }
-        mem[key] = cur;
-        mkdirSync(dirname(p), { recursive: true });
-        writeFileSync(p, JSON.stringify(mem, null, 2), 'utf8');
+        await board.sharedPut('chest', key, {
+            pos: { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },
+            items,
+            owner: board.name ?? bot?.username ?? null,
+            at: Date.now(),
+        });
     } catch { /* 记忆写不进不影响主流程 */ }
 }
 
@@ -180,7 +181,7 @@ export async function store(bot, item, count = 1, opts = {}) {
         try {
             const r = await deposit(bot, item, target);
             if (r.ok) {
-                rememberChest(bot, chest.position, { [item]: Number(r.data?.stored ?? 0) });
+                await rememberChest(bot, chest.position, { [item]: Number(r.data?.stored ?? 0) });
                 return ok({ item, want, stored: Number(r.data?.stored ?? 0), chest: chest.position });
             }
             if (r.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
@@ -242,7 +243,7 @@ export async function fetch(bot, item, count = 1, opts = {}) {
         try {
             const r = await withdraw(bot, item, want);
             if (r.ok) {
-                rememberChest(bot, chest.position, { [item]: -Number(r.data?.taken ?? 0) });
+                await rememberChest(bot, chest.position, { [item]: -Number(r.data?.taken ?? 0) });
                 return ok({ item, want, taken: Number(r.data?.taken ?? 0), chest: chest.position });
             }
             if (r.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');

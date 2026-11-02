@@ -229,6 +229,47 @@ function storeBot({ inv = [{ name: 'coal', type: 11, count: 8, slot: 0 }], chest
     return bot;
 }
 
+/**
+ * 造一个**忠实**的假箱子窗口（真窗口有 inventoryStart/End + containerItems()）。
+ *
+ * ★ 为什么必须忠实：旧假窗口只有 `slots`，于是"容器侧计数把玩家背包也算进去"、
+ *   "开窗时 backpack 计数不降"这两个 bug 在离线全绿、真机全废。
+ *   现在窗口把容器 3 格与背包 3 格分开，并让背包段跟随 `bot.inventory.slots` 镜像。
+ */
+function makeChestWindow(bot, { containerSlots = 3, playerSlots = 3, depositImpl = null, withdrawImpl = null } = {}) {
+    const win = {
+        slots: new Array(containerSlots + playerSlots).fill(null),
+        inventoryStart: containerSlots,
+        inventoryEnd: containerSlots + playerSlots,
+        containerItems() { return win.slots.slice(0, containerSlots); },
+    };
+    const mirror = () => {
+        for (let i = 0; i < playerSlots; i++) {
+            const src = bot.inventory.slots[i];
+            win.slots[containerSlots + i] = src
+                ? { name: src.name, type: src.type, count: src.count } : null;
+        }
+    };
+    win.mirror = mirror;
+    win.deposit = async (t, m, n) => {
+        if (depositImpl) return depositImpl(win, t, m, n);
+        const it = bot.inventory.slots.find((i) => i.count > 0);
+        if (it) it.count -= n;
+        const slot = win.slots.findIndex((x) => !x) >= 0 ? win.slots.findIndex((x) => !x) : 0;
+        win.slots[slot] = { name: it?.name ?? 'coal', type: it?.type ?? 1, count: ((win.slots[slot]?.count) ?? 0) + n };
+        mirror();
+    };
+    win.withdraw = async (t, m, n) => {
+        if (withdrawImpl) return withdrawImpl(win, t, m, n);
+        const src = win.slots.slice(0, containerSlots).find((x) => x && x.count > 0);
+        if (src) src.count -= n;
+        const dst = bot.inventory.slots.find((x) => x.name === src?.name);
+        if (dst) dst.count += n;
+        mirror();
+    };
+    return win;
+}
+
 // ── 10. store：背包里没有 → NO_ITEM ────────────────────────────────
 {
     const bot = storeBot({ inv: [] });
@@ -260,14 +301,8 @@ function storeBot({ inv = [{ name: 'coal', type: 11, count: 8, slot: 0 }], chest
     const bot = storeBot({
         extraStubs: {
             openContainer: async () => {
-                bot.currentWindow = {
-                    slots: winSlots,
-                    deposit: async (_t, _m, n) => {
-                        const it = bot.inventory.slots.find((i) => i.name === 'coal');
-                        it.count -= n;
-                        winSlots.push({ name: 'coal', count: n });
-                    },
-                };
+                bot.currentWindow = makeChestWindow(bot);
+                bot.currentWindow.mirror();
                 return { ok: true };
             },
         },
@@ -284,7 +319,8 @@ function storeBot({ inv = [{ name: 'coal', type: 11, count: 8, slot: 0 }], chest
     const bot = storeBot({
         extraStubs: {
             openContainer: async () => {
-                bot.currentWindow = { slots: [], deposit: async () => { /* 存不进 */ } };
+                bot.currentWindow = makeChestWindow(bot, { depositImpl: async () => { /* 存不进 */ } });
+                bot.currentWindow.mirror();          // 背包段要镜像，否则背包计数读到 0
                 return { ok: true };
             },
         },
@@ -300,10 +336,9 @@ function storeBot({ inv = [{ name: 'coal', type: 11, count: 8, slot: 0 }], chest
     const bot = storeBot({
         extraStubs: {
             openContainer: async () => {
-                bot.currentWindow = {
-                    slots: [{ name: 'coal', count: 8 }],
-                    withdraw: async () => { /* 背包满，取不出 */ },
-                };
+                bot.currentWindow = makeChestWindow(bot, { withdrawImpl: async () => { /* 背包满，取不出 */ } });
+                bot.currentWindow.slots[0] = { name: 'coal', type: 11, count: 8 };
+                bot.currentWindow.mirror();
                 return { ok: true };
             },
         },
@@ -321,13 +356,9 @@ function storeBot({ inv = [{ name: 'coal', type: 11, count: 8, slot: 0 }], chest
         inv: [{ name: 'coal', type: 11, count: 0, slot: 0 }],
         extraStubs: {
             openContainer: async () => {
-                bot.currentWindow = {
-                    slots: winSlots,
-                    withdraw: async () => {
-                        winSlots[0].count -= 2;
-                        bot.inventory.slots[0].count += 2;
-                    },
-                };
+                bot.currentWindow = makeChestWindow(bot);
+                bot.currentWindow.slots[0] = { name: 'coal', type: 11, count: 8 };
+                bot.currentWindow.mirror();
                 return { ok: true };
             },
         },
