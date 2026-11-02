@@ -26,6 +26,7 @@ import { findBlocks } from './query_perceive.js';
 import { countItem } from './query_perceive.js';
 import { mapDirOf } from './bot_paths.js';
 import { goTo } from './nav_core.js';
+import { collectDrops } from './flow_pickup.js';
 
 /** 复合技能 manifest（04 §4.1）。 */
 export const manifest = {
@@ -74,6 +75,30 @@ function oreNames(ore) {
     return [...names];
 }
 
+/**
+ * 矿石方块 → **掉落物**物品名。
+ *
+ * ★ 2026-11-02 真机抽验抓到的第二处谎报：原来用"方块名"当背包计数键，
+ *   可是挖 `iron_ore` 掉的是 `raw_iron`（方块和物品不是同一个名字）。
+ *   于是 `countItem('iron_ore')` 永远是 0 → 流程报 `gained:0`，
+ *   而实际上她背包里已经有 raw_iron 了。
+ *
+ * 规则：`X_ore` → `raw_X`（铁/金/铜），钻石/红石/青金石/绿宝石/煤炭直接同名。
+ * 表里没有的，退回"按方块名数"（老行为，至少不会崩）。
+ */
+const ORE_DROP = {
+    iron_ore: 'raw_iron', deepslate_iron_ore: 'raw_iron',
+    gold_ore: 'raw_gold', deepslate_gold_ore: 'raw_gold',
+    copper_ore: 'raw_copper', deepslate_copper_ore: 'raw_copper',
+    coal_ore: 'coal', deepslate_coal_ore: 'coal',
+    diamond_ore: 'diamond', deepslate_diamond_ore: 'diamond',
+    emerald_ore: 'emerald', deepslate_emerald_ore: 'emerald',
+    redstone_ore: 'redstone', deepslate_redstone_ore: 'redstone',
+    lapis_ore: 'lapis_lazuli', deepslate_lapis_ore: 'lapis_lazuli',
+    nether_quartz_ore: 'quartz',
+    ancient_debris: 'ancient_debris',
+};
+
 /** 现在所在的高度。 */
 function feetY(bot) {
     return Math.floor(bot.entity?.position?.y ?? 0);
@@ -99,8 +124,12 @@ export async function mine(bot, ore, count = 1, opts = {}) {
     if (!ore) return fail('NO_TARGET', '没说要挖什么矿');
 
     const names = oreNames(ore);
-    // 计数基准：所有可能的矿石名合计（deepslate 变体也算）
-    const countAll = () => names.reduce((n, name) => n + countItem(bot, name), 0);
+    // 计数键：**掉落物名**（挖 iron_ore 得到的是 raw_iron，不是 iron_ore）。
+    // 有的矿方块名和物品名相同（diamond_ore → diamond），所以两种都数，取大。
+    const dropNames = [...new Set(names.map((n) => ORE_DROP[n] ?? n))];
+    const countAll = () =>
+        dropNames.reduce((n, name) => n + countItem(bot, name), 0)
+        + names.reduce((n, name) => n + countItem(bot, name), 0);
     const before = countAll();
     const startY = feetY(bot);
     const wantY = ORE_Y[String(ore).toLowerCase().replace(/^minecraft:/, '').replace(/_ore$/, '')];
@@ -189,22 +218,47 @@ export async function mine(bot, ore, count = 1, opts = {}) {
         }
     }
 
+    // ★ 挖完必须**捡**（卡片原文："有就 digBlock + 捡"）。
+    //
+    // 2026-11-02 真机抽验抓到的 bug：原来只把 `mined`（digBlock 成功次数）当完成判据，
+    // 挖下来的矿**掉在地上没捡**，背包 0→0，流程却报 `ok{mined:2}` —— 谎报成功。
+    // 现在挖够数就先 collectDrops，再用**背包增量**作为真正的完成判据。
+    let picked = false;
+    if (mined >= want) {
+        try {
+            await collectDrops(bot, { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z }, {
+                countFn: () => countAll(),
+                radius: 10,
+                deadlineMs: Math.max(3000, Math.min((ctx.deadline ?? Date.now() + 10000) - Date.now(), 10000)),
+            });
+            picked = true;
+        } catch { /* 捡不到就照实报（下面按背包增量判）*/ }
+    }
+
     const gained = countAll() - before;
-    const done = Math.max(mined, gained);
+    // 完成判据：**背包真的多了**才算；`mined` 只作为"挖了几个"的附加信息带出去
+    const done = gained;
 
     if (done >= want) {
-        return ok({ ore, count: done, want, mined: done, costMs: Date.now() - t0 });
+        return ok({ ore, count: done, want, mined, gained, picked, costMs: Date.now() - t0 });
+    }
+    // 挖到了但没捡到（掉落物滚走了/被水冲了）：这是"挖到没拿到"，要如实说，
+    // 不能拿 mined 冒充 count —— 上层看到 count 会以为背包里有了。
+    if (mined >= want && gained < want) {
+        return fail('NO_ITEM', `挖了 ${mined} 个 ${ore}，但只捡到 ${gained} 个（掉落物没到手）`, {
+            ore, count: gained, want, mined, gained, picked, costMs: Date.now() - t0,
+        });
     }
 
     // 没到够数：区分"根本没有矿" / "走不过去" / "太深了"
     if (!sawAnyOre || lastCode === 'NO_TARGET') {
-        return fail('NO_TARGET', `附近没有 ${ore}`, { ore, count: done, want });
+        return fail('NO_TARGET', `附近没有 ${ore}`, { ore, count: done, want, mined, gained });
     }
     if (lastCode === 'OUT_OF_REACH') {
-        return fail('OUT_OF_REACH', `${ore} 在那儿但过不去`, { ore, count: done, want });
+        return fail('OUT_OF_REACH', `${ore} 在那儿但过不去`, { ore, count: done, want, mined, gained });
     }
     // 太深 / 时间到 —— 卡片要求 TIMEOUT + {count, want}
     return fail('TIMEOUT', `挖到深度/时间上限，只挖到 ${done}/${want} 个 ${ore}`, {
-        ore, count: done, want, startY, endY: feetY(bot), maxDepth, costMs: Date.now() - t0,
+        ore, count: done, want, mined, gained, startY, endY: feetY(bot), maxDepth, costMs: Date.now() - t0,
     });
 }

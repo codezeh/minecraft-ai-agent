@@ -228,15 +228,40 @@ export async function attackOnce(bot, target, opts = {}) {
         return fail(swing.code === 'NO_TARGET' ? 'NO_TARGET' : 'INTERNAL', swing.message, { error: swing.data?.error });
     }
 
-    // 后置：掉血或死了才算真的打到（服务端偶尔吞包）
+    // 后置：掉血或死了才算真的打到（服务端偶尔吞包）。
+    //
+    // ★ 2026-11-02 真机抽验抓到的坑：**mineflayer 默认不暴露生物血量**。
+    //   对僵尸/牛这些 mob，`entity.health` 是 `undefined`（只有玩家有）。
+    //   原来的判据 `hpBefore != null && hpAfter < hpBefore` 因此**永远不成立** →
+    //   每次挥击都被判成 `BLOCKED「挥了但没掉血」`，`flow_fight` 就一拳也打不出去
+    //   （真机实测：对着 1 格外的僵尸连挥 5 次全是 BLOCKED）。
+    //
+    //   修法沿用 `act_items.equip` 的先例：**读不到状态就说"没法验证"，不谎报成功、
+    //   也不谎报失败**。三档：
+    //     hp 读得到 且 掉了     → ok(damaged:true)
+    //     hp 读得到 且 没掉     → BLOCKED（这次确实没造成伤害：无敌帧/被挡）
+    //     hp 读不到（mob 常态） → ok(verified:false)，把"发过挥击"这件事实报上去
     await sleep(120);
     const hpAfter = entity.health ?? null;
-    const damaged = (hpBefore != null && hpAfter != null && hpAfter < hpBefore)
-        || entity.isValid === false;
-    if (!damaged) {
-        return fail('BLOCKED', `挥了但目标没掉血（可能是无敌帧/被挡住）`, {
-            name: entity.name ?? null, hpBefore, hpAfter, costMs: Date.now() - t0,
+    const hpReadable = hpBefore != null && hpAfter != null;
+    const died = entity.isValid === false;
+
+    if (died) {
+        return ok({ target: entity.name ?? null, hpBefore, hpAfter, damaged: true, killed: true, verified: true, costMs: Date.now() - t0 });
+    }
+    if (!hpReadable) {
+        // mob 血量读不到：只能确认"挥击已发出"，不能确认伤害。**不假装**
+        return ok({
+            target: entity.name ?? null, hpBefore, hpAfter,
+            damaged: null, verified: false,
+            note: '这个实体不暴露血量（mineflayer 对 mob 默认如此），无法确认掉血',
+            costMs: Date.now() - t0,
         });
     }
-    return ok({ target: entity.name ?? null, hpBefore, hpAfter, damaged: true, costMs: Date.now() - t0 });
+    if (hpAfter < hpBefore) {
+        return ok({ target: entity.name ?? null, hpBefore, hpAfter, damaged: true, verified: true, costMs: Date.now() - t0 });
+    }
+    return fail('BLOCKED', `挥了但目标没掉血（可能是无敌帧/被挡住）`, {
+        name: entity.name ?? null, hpBefore, hpAfter, verified: true, costMs: Date.now() - t0,
+    });
 }

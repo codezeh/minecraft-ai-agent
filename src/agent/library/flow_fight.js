@@ -142,6 +142,16 @@ export async function fight(bot, target, opts = {}) {
     let lastCode = null;
     /** 最后交战过的目标（撤退时带给上层，见 countEnemiesLeft 的注释）。 */
     let lastTarget = null;
+    /**
+     * 当前目标是否**已经被我们打到过**。
+     *
+     * 为什么要记：目标"消失"有两种原因 ——
+     *   ① 被我们打死了，但 `alive()` 那一瞬读到的是旧状态 / 尸体已被移除 → 应该算一杀
+     *   ② 它自己走远了/被别的生物打死了 → 不该算我们杀的
+     * 现有信息分不清这两者；**打到过**是唯一能拿到的最强证据，宁可算成"打死了"也不谎报失败。
+     * （2026-11-02 真机抽验：僵尸消失后流程报 TIMEOUT+kills:0，但 lastTarget 明明记录着它。）
+     */
+    let hitCurrent = false;
     const MAX_ATTACKS = 200;              // 兜底：防死循环（04 §4.4 第 4 条：循环必须有上限）
     let attacks = 0;
 
@@ -179,12 +189,19 @@ export async function fight(bot, target, opts = {}) {
 
         // ── 选目标 ──
         const entity = findTarget(bot, target);
+        if (entity && lastTarget && (lastTarget.id !== entity.id)) hitCurrent = false;  // 换了目标就重置
         if (entity) {
             // 留个"最后交战的目标"痕迹：撤退时上层要知道**是谁**让我们撤的
             lastTarget = { name: entity.name ?? null, type: entity.type ?? null, pos: entity.position ? { x: entity.position.x, y: entity.position.y, z: entity.position.z } : null };
         }
         if (!entity) {
-            if (sawTarget || kills > 0) break;        // 打完了/目标没了：正常收尾
+            if (hitCurrent) {
+                // 我们打到过的那只不见了 → 算一杀（见 hitCurrent 的注释）
+                kills++;
+                hitCurrent = false;
+                continue;
+            }
+            if (sawTarget || kills > 0) break;        // 没打到过就消失：正常收尾
             return fail('NO_TARGET', `附近没有 ${target}`, { target, kills, want: maxKills });
         }
         sawTarget = true;
@@ -199,7 +216,8 @@ export async function fight(bot, target, opts = {}) {
         // ── 挥一次。冷却没好就**等够时间**，不空转 ──
         const r = await attackOnce(bot, { kind: 'entity', entity });
         if (r.ok) {
-            if (!alive(entity)) kills++;
+            hitCurrent = true;                        // 打到了（不管死没死）
+            if (!alive(entity)) { kills++; hitCurrent = false; }
             else {
                 // 打中了但没死：等一个冷却再打（动作自己会返回 NOT_READY 也行，但这里主动节流）
                 if (!(await sleepWithin(ctx, ATTACK_COOLDOWN_MS))) break;
