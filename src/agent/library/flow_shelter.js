@@ -254,7 +254,13 @@ export async function shelter(bot, opts = {}) {
     // 5) 从屋外封 cap 正中
     if (cap) {
         const { placeBlockAt } = await import('./act_place.js');
-        const put = await placeBlockAt(bot, { x: cap.x, y: cap.y, z: cap.z }, material, {});
+        // ★ 2026-11-03 真机 + 三数诊断定位：原来这里传的是**裸 {x,y,z}**，
+        //   而 `act_place.placeBlockAt` 第一行就 `normalizeTarget(pos)` ——
+        //   裸对象归一化返回 **null** → 直接 `NO_TARGET「目标位置无效」`。
+        //   所谓"那格读不到"从头到尾是我传参形状错了，**不是加载问题**
+        //   （诊断实测：blockAt(false)=air、blockAt(true)=air、getColumnAt=有 → 全都在）。
+        //   全仓库的调用约定是 `{ kind:'block', pos:{x,y,z} }`，这里补齐。
+        const put = await placeBlockAt(bot, { kind: 'block', pos: { x: cap.x, y: cap.y, z: cap.z } }, material, {});
         const cur = blockAt(bot, { x: cap.x, y: cap.y, z: cap.z });
         const sealed = !!cur && !['air', 'cave_air', 'void_air'].includes(cur.name);
         if (!put.ok || !sealed) {
@@ -273,6 +279,11 @@ export async function shelter(bot, opts = {}) {
         });
     }
     if (door.length) {
+        // ★ 2026-11-03 真机（reason=own-body-column）抓到：她刚穿过门洞进来，
+        //   **人还站在门洞那一列**，直接封门就会被"不往自己身体列放"正确拒绝。
+        //   所以先让她**走到屋里正中**，再封门（门洞在 ±1 横向，那时就不在她身体列了）。
+        await stepToCenter(bot, feet, ctx);
+
         const r2 = await build(bot, door.map((b) => ({ x: b.x, y: b.y, z: b.z, name: b.name })), { ctx });
         const done2 = Number(r2?.data?.placed ?? 0);
         if (!r2.ok || done2 < door.length) {
@@ -463,4 +474,32 @@ async function sealRoofCenter(bot, cap, material, ctx) {
         message: put.ok ? '放下去了但读回不是目标方块' : (put.message ?? ''),
         placed: sealed ? 1 : 0,
     };
+}
+
+/**
+ * 让站到屋里正中去（封门前必须做）。
+ *
+ * 为什么：她是从门洞走进来的，人还**站在门洞那一列**；
+ * 而 `act_place` 正确地拒绝往"自己身体列"放方块 —— 不先挪开，封门必然
+ * 报 `BLOCKED + reason='own-body-column'`（真机实测过）。
+ */
+async function stepToCenter(bot, feet, ctx) {
+    const cx = Math.floor(feet.x), cy = Math.floor(feet.y), cz = Math.floor(feet.z);
+    const f = bot.entity.position;
+    if (Math.floor(f.x) === cx && Math.floor(f.z) === cz) return true;   // 已经在正中
+
+    const { lookAtPoint } = await import('./atom_input_mouse.js');
+    const { holdKey } = await import('./atom_input_move.js');
+    try {
+        await lookAtPoint(bot, { x: cx + 0.5, y: f.y + 1.2, z: cz + 0.5 }, { force: true });
+    } catch { /* ignore */ }
+    await holdKey(bot, ['forward'], {
+        until: () => {
+            const p = bot.entity.position;
+            return Math.floor(p.x) === cx && Math.floor(p.z) === cz;
+        },
+        timeout: Math.max(1500, Math.min((ctx?.deadline ?? Date.now() + 5000) - Date.now(), 5000)),
+    });
+    const p = bot.entity.position;
+    return Math.floor(p.x) === cx && Math.floor(p.z) === cz;
 }

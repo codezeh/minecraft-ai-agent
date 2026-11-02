@@ -81,7 +81,25 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
 // ══ ② !do shelter：贴方块证据（不只接口 ok）══════════════════════
 {
     await RC(`give ${NAME} cobblestone 64`); await sleep(1200);
-    const { shelter } = await import('../src/agent/library/flow_shelter.js');
+    const shelterMod = await import('../src/agent/library/flow_shelter.js');
+    const { shelter } = shelterMod;
+
+    // ★ 用户要求的三个数（封 cap 前先打）：
+    //   ① cap 的绝对坐标 vs 她当时的脚位取整（查 cy 有没有算错）
+    //   ② bot.blockAt(v,false) vs (v,true)（force 能否加载）
+    //   ③ bot.world.getColumnAt(v)（chunk 到底加载没）
+    const V3 = (await import('vec3')).default;
+    {
+        const f = bot.entity.position;
+        const capProbe = shelterMod.capCell({ x: f.x, y: f.y, z: f.z });
+        const vv = new V3(capProbe.x, capProbe.y, capProbe.z);
+        const noForce = (() => { try { return bot.blockAt(vv, false); } catch (e) { return 'THREW:' + e.message; } })();
+        const withForce = (() => { try { return bot.blockAt(vv, true); } catch (e) { return 'THREW:' + e.message; } })();
+        const col = (() => { try { return bot.world?.getColumnAt?.(vv) ?? null; } catch (e) { return 'THREW:' + e.message; } })();
+        console.log(`  [诊断①] 她脚位=(${Math.floor(f.x)},${Math.floor(f.y)},${Math.floor(f.z)}) cap=(${capProbe.x},${capProbe.y},${capProbe.z})`);
+        console.log(`  [诊断②] blockAt(false)=${noForce ? (noForce.name ?? 'obj') : 'null'}  blockAt(true)=${withForce ? (withForce.name ?? 'obj') : 'null'}`);
+        console.log(`  [诊断③] getColumnAt=${col ? '有' : 'null'}`);
+    }
     const r = await shelter(bot, { block: 'cobblestone', radius: 1, ctx: { deadline: Date.now() + 180000 } });
     console.log(`\n=== ② !do shelter ===`);
     console.log(`返回: ok=${r.ok} code=${r.code} material=${r.data?.material} placed=${r.data?.placed}/${r.data?.want}`);
@@ -96,19 +114,25 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
         for (let dz = -1; dz <= 1; dz++) {
             const edge = Math.abs(dx) === 1 || Math.abs(dz) === 1;
             if (edge) {
-                const wb = bot.blockAt(new (await import('vec3')).default(cx + dx, cy, cz + dz));
-                if (wb && wb.name !== 'air') walls++;
+                // 墙 2 层：两层都算（除门洞那列）
+                for (const wy of [cy, cy + 1]) {
+                    const wb = bot.blockAt(new (await import('vec3')).default(cx + dx, wy, cz + dz));
+                    if (wb && wb.name !== 'air') walls++;
+                }
             }
-            const rb = bot.blockAt(new (await import('vec3')).default(cx + dx, cy + 1, cz + dz));
+            // ★ 顶在 cy+2（墙 2 层之上）—— 第一版数 cy+1，所以永远显示"顶 0/9 / 8/9"
+            const rb = bot.blockAt(new (await import('vec3')).default(cx + dx, cy + 2, cz + dz));
             if (rb && rb.name !== 'air') roof++;
         }
     }
-    console.log(`   方块证据：外圈墙 ${walls}/8 格非空气，顶 ${roof}/9 格非空气`);
+    console.log(`   方块证据：外圈墙(2层) ${walls}/16 格非空气，顶 ${roof}/9 格非空气`);
     console.log(`   可观测数据：placed=${r.data?.placed}/${r.data?.total} costMs=${r.data?.costMs} remaining=${r.data?.remaining}`);
     // ★ 用户明确要求：把 reason 和 outsLength 都打出来
     console.log(`   [诊断] reason=${r.data?.reason ?? '(null)'} outsLength=${r.data?.outsLength ?? '(null)'} code=${r.code}`);
-    check('② !do shelter 真的搭起来了（ok=true + 墙/顶全齐）', r.ok && walls === 8 && roof === 9,
-        `墙=${walls}/8 顶=${roof}/9 placed=${r.data?.placed}/${r.data?.total}`);
+    // 门洞已从里面封上 → 墙应是 2 层共 16 格全部非空气；顶 9 格全部非空气
+    check('② !do shelter 真的搭起来了（ok=true + 墙16/16 + 顶9/9 + 门已封）',
+        r.ok && walls === 16 && roof === 9 && r.data?.sealed === true && r.data?.insideAfter === true,
+        `墙=${walls}/16 顶=${roof}/9 placed=${r.data?.placed}/${r.data?.total} 门已封=${r.data?.sealed} 人在屋里=${r.data?.insideAfter}`);
 }
 
 console.log(`\n${pass}/${pass + fails} 条通过`);

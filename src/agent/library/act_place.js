@@ -55,7 +55,40 @@ export async function placeBlockAt(bot, pos, item, opts = {}) {
     const v = floorPos(pos);
 
     const target = blockAt(bot, v);
-    if (!target) return fail('NO_TARGET', '那个位置读不到方块');
+    if (!target) {
+        // ★★ 2026-11-03（用户查出）：这里原来报 `NO_TARGET`，**码用错了**。
+        //
+        //   `blockAt` = `bot.blockAt(v, false) ?? null`，而 `bot.blockAt` **只在那个 chunk
+        //   没加载时**才返回 null（方块是空气时返回 air 对象，不是 null）。
+        //   所以这情况的真相是"**那块还没加载**"，不是"你给的位置不对"。
+        //   而 CODES 里**本来就有** `NO_DATA`（第 22 条：目标格未加载，读不到方块）。
+        //
+        //   两个码对上层的意思完全不同：
+        //     NO_TARGET → "位置不对" → 上层会去**改坐标**（越改越远）
+        //     NO_DATA   → "还没加载" → 上层会**走近/等它加载**再试
+        //   用错就会把上层引到错误的处置上（和 OCCUPIED→BLOCKED 那次同一类）。
+        //
+        //   注：`force` 试加载由调用方通过 `opts.force` 选择（见下），不在这里偷偷改行为。
+        if (opts.force) {
+            try {
+                const forced = bot.blockAt?.(new Vec3(v.x, v.y, v.z), true);      // true = 尝试加载
+                if (forced) {
+                    // 加载出来了 → 继续往下走（把 target 当成它）
+                    return await placeBlockAt(bot, { kind: 'block', pos: { x: v.x, y: v.y, z: v.z } }, item, { ...opts, force: false });
+                }
+            } catch { /* 加载失败就按 NO_DATA 如实报 */ }
+        }
+        return fail('NO_DATA', '那个位置还没加载，读不到方块（走近一点或稍后再试）', {
+            pos: { x: v.x, y: v.y, z: v.z },
+            reason: 'unloaded',
+            // 诊断三件套（用户要求）：force 能不能拿到 + chunk 列在不在
+            forceLoaded: (() => { try { return !!bot.blockAt?.(new Vec3(v.x, v.y, v.z), true); } catch { return null; } })(),
+            hasColumn: (() => { try { return !!bot.world?.getColumnAt?.(new Vec3(v.x, v.y, v.z)); } catch { return null; } })(),
+            botFeet: bot.entity?.position
+                ? { x: Math.floor(bot.entity.position.x), y: Math.floor(bot.entity.position.y), z: Math.floor(bot.entity.position.z) }
+                : null,
+        });
+    }
     // 幂等分支：字段集必须和正常成功路径一致（support 也要给），
     // 否则上层用同一个读取路径会拿到 undefined（实测测试就挂在"返回 support"这条）
     if (target.name === item) {
