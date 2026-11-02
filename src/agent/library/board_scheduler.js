@@ -259,7 +259,24 @@ export class BoardScheduler {
 
         // step 2：领新单
         const claimed = await this._claimNext();
-        if (!claimed) return { acted: false, reason: 'idle', requeued };
+        if (!claimed) {
+            // ★ M9（08 §6.1）：**真的空闲**（没单可领、没反射、30 秒没人说话）时
+            //   才让 idle_planner 自己找事做。它自己找的单 source='self'、优先级 ≤2，
+            //   玩家一下命令就让路。
+            try {
+                const { idleTick } = await import('./idle_planner.js');
+                const verdict = await idleTick(this.agent, {
+                    now,
+                    jobsBusy: () => (this.boardClient?.list?.({ states: [JOB_STATE.READY, JOB_STATE.CLAIMED, JOB_STATE.RUNNING] }) ?? []).length > 0,
+                    reflectionBusy: () => !!this.actions?.executing,
+                    enqueue: async (job) => {
+                        await this.boardClient?.add?.({ ...job, kind: 'personal', assignee: this.agent?.name ?? null });
+                    },
+                });
+                if (verdict?.action !== 'nothing') this.onEvent({ type: 'idle-plan', action: verdict.action, reason: verdict.reason });
+            } catch { /* 空闲规划失败不影响调度 */ }
+            return { acted: false, reason: 'idle', requeued };
+        }
 
         // step 3–5：reserve → 跑 → finish/release
         const ran = await this._runJob(claimed, now);

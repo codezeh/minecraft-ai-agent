@@ -1,4 +1,10 @@
 import * as skills from './library/skills.js';
+import { decideProtect, shouldRelease, PROTECT } from './library/protect_owner.js';
+import { attackOnce } from './library/act_attack.js';
+import { idleTick } from './library/idle_planner.js';
+
+/** 护主时"放弃过的目标 → 忽略到什么时候"（07 §3.1：30 秒内不再管）。 */
+const protectIgnored = new Map();
 import * as world from './library/world.js';
 import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
@@ -225,6 +231,77 @@ const modes_list = [
                     await skills.defendSelf(agent.bot, 8);
                 });
             }
+        }
+    },
+    {
+        // ★ M9（07 §3.1）：护主。**排在 self_defense 后面**（列表顺序 = 优先级，
+        //   modes.js 的 update() 遇到正在跑的就停）。
+        name: 'protect_owner',
+        description: 'Protect the owner while following them. Interrupts follow.',
+        // 只打断跟随（07 §3.1："跟随单还是 claimed，打完接着跟"）
+        interrupts: ['action:followPlayer', 'job:follow'],
+        on: true,
+        active: false,
+        update: async function (agent) {
+            // 门禁：没在跟随主人 → 什么都不做（self_defense 只保护她自己）
+            const following = !!agent.follow_target;
+            const owner = agent.prompter?.profile?.permissions?.owner ?? null;
+            if (!following || !owner || agent.follow_target !== owner) return;
+
+            const ownerEnt = agent.bot.players?.[owner]?.entity;
+            if (!ownerEnt) return;
+
+            const now = Date.now();
+            const selfHp = Number(agent.bot.health ?? 20);
+            // 收集"敌对且在主人附近"的候选
+            const candidates = [];
+            for (const e of Object.values(agent.bot.entities ?? {})) {
+                if (!e || e === agent.bot.entity) continue;
+                if (!mc.isHostile(e)) continue;
+                const d = e.position.distanceTo(ownerEnt.position);
+                candidates.push({
+                    id: e.id, name: e.name,
+                    distToOwner: d,
+                    dyToOwner: Math.abs((e.position?.y ?? 0) - (ownerEnt.position?.y ?? 0)),
+                });
+            }
+
+            const verdict = decideProtect({
+                following: true,
+                ownerHurt: !!agent._ownerHurtAt && (now - agent._ownerHurtAt < 3000),
+                selfHp,
+                candidates,
+                ignored: protectIgnored,
+                now,
+            });
+            if (!verdict.act) return;
+
+            const target = agent.bot.entities?.[verdict.target.id];
+            if (!target) return;
+
+            say(agent, `Protecting ${owner}! (${verdict.reason})`);
+            execute(this, agent, async () => {
+                const t0 = Date.now();
+                try {
+                    // 打断跟随（brief：打完接着跟，07 §4）
+                    await agent.actions?.stop?.('brief');
+                    while (Date.now() - t0 < PROTECT.MAX_FIGHT_MS) {
+                        const alive = agent.bot.entities?.[verdict.target.id];
+                        const rel = shouldRelease({
+                            targetAlive: !!alive,
+                            distToOwner: alive ? alive.position.distanceTo(ownerEnt.position) : 0,
+                            foughtMs: Date.now() - t0,
+                            selfHp: Number(agent.bot.health ?? 20),
+                        });
+                        if (rel.stop) break;
+                        const r = await attackOnce(agent.bot, { kind: 'entity', entity: alive });
+                        if (!r.ok && r.code !== 'NOT_READY') break;
+                    }
+                } finally {
+                    // 放弃过的目标 30 秒内不再管
+                    protectIgnored.set(verdict.target.id, Date.now() + PROTECT.IGNORE_MS);
+                }
+            });
         }
     },
     {

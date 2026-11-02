@@ -9,7 +9,16 @@ import { formatActionResult } from '../library/contract.js';
 import { follow as followTask, goToPlayer as goToPlayerTask } from '../library/flow_follow.js';
 import { collect as collectTask } from '../library/flow_collect.js';
 import { resolveCollectTarget } from '../library/collect_targets.js';
-import { placeBlockAt } from '../library/act_place.js';
+// ★ M9（08 §3）：`!placeHere` 改走 `flow_build`。
+//   原来这里直接 `import { placeBlockAt } from act_place.js` —— 那是 Phase 5.4 的旧债
+//   （**commands 层不许 import 动作/原子**，M4 前缀规矩），本次销掉。
+import { build as buildTask } from '../library/flow_build.js';
+import { collect as collectFlow } from '../library/flow_collect.js';
+import { craft as craftFlow } from '../library/flow_craft.js';
+import { smelt as smeltFlow } from '../library/flow_smelt.js';
+import { store as storeFlow, fetch as fetchFlow } from '../library/flow_store.js';
+import { eatToFull } from '../library/flow_eat.js';
+import { fight as fightFlow } from '../library/flow_fight.js';
 import { placePlatform } from '../library/flow_platform.js';
 
 /**
@@ -226,13 +235,22 @@ export const actionsList = [
             'follow_dist': {type: 'float', description: 'The distance to follow from.', domain: [0, Infinity]}
         },
         perform: runAsAction(async (agent, player_name, follow_dist) => {
-            if (settings.companion_mode) {
+            // ★ D23（2026-11-03）：**删掉 companion_mode 开关**（08 §5.2 的长期方向）。
+            //   原来 `settings.companion_mode` 不在 `settings_spec.json` 里 →
+            //   面板一保存 profile 就把它删掉 → 这里恒为 falsy → 永远走**旧的** skills 路径，
+            //   新流程（flow_follow）等于白写。这是"两处各叫一个名字、实际谁都没用上"的又一例。
+            //   现在只有一条路：走 flow_follow。
+            // ★ M9（07 §3.1）：follow 开始时记下目标、结束时清掉 ——
+            //   `protect_owner` 靠这个判断"我现在是不是在跟主人"。没有它护主只能靠猜。
+            agent.follow_target = String(player_name ?? '');
+            try {
                 return await followTask(agent.bot, player_name, {
                     distance: follow_dist ?? 3,
                     mapDir: mapDirOf(agent),
                 });
+            } finally {
+                agent.follow_target = null;      // 跟随结束就清掉（07 §3.1 原文）
             }
-            await skills.followPlayer(agent.bot, player_name, follow_dist);
         }, true)
     },
     {
@@ -356,7 +374,8 @@ export const actionsList = [
         description: 'Eat/drink the given item.',
         params: {'item_name': { type: 'ItemName', description: 'The name of the item to consume.' }},
         perform: runAsAction(async (agent, item_name) => {
-            await skills.consume(agent.bot, item_name);
+            // M9（08 §3）：吃到饱的循环归流程；这一条命令只要"吃一个能吃饱"的效果
+            await eatToFull(agent.bot, { food: item_name });
         })
     },
     {
@@ -375,7 +394,8 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of items to put in the chest.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, item_name, num) => {
-            await skills.putInChest(agent.bot, item_name, num);
+            // M9（08 §3）：箱子的选箱/开窗/记忆归 flow_store
+            await storeFlow(agent.bot, item_name, num);
         })
     },
     {
@@ -386,7 +406,8 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of items to take.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, item_name, num) => {
-            await skills.takeFromChest(agent.bot, item_name, num);
+            // M9（08 §3）
+            await fetchFlow(agent.bot, item_name, num);
         })
     },
     {
@@ -437,7 +458,8 @@ export const actionsList = [
             //
             // 现在先把类别名解析成具体方块名，两条分支都用解析后的结果。
             const resolved = resolveCollectTarget(type, agent.bot.registry);
-            if (settings.companion_mode) {
+            // ★ D23：删掉 companion_mode 开关，永远走新流程
+            {
                 const t = resolved;
                 if (!t) {
                     return { ok: false, code: 'NO_TARGET', message: `我不认识「${type}」，说具体点？比如 橡木/丛林木/石头` };
@@ -492,7 +514,8 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of times to craft the recipe. This is NOT the number of output items, as it may craft many more items depending on the recipe.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, recipe_name, num) => {
-            await skills.craftRecipe(agent.bot, recipe_name, num);
+            // M9（08 §3）：配方/工作台/补料判断归 flow_craft
+            await craftFlow(agent.bot, recipe_name, num);
         })
     },
     {
@@ -503,7 +526,8 @@ export const actionsList = [
             'num': { type: 'int', description: 'The number of times to smelt the item.', domain: [1, Number.MAX_SAFE_INTEGER] }
         },
         perform: runAsAction(async (agent, item_name, num) => {
-            let success = await skills.smeltItem(agent.bot, item_name, num);
+            // M9（08 §3）：熔炉/燃料/等待归 flow_smelt
+            const success = await smeltFlow(agent.bot, item_name, num);
             if (success) {
                 setTimeout(() => {
                     agent.cleanKill('Safely restarting to update inventory.');
@@ -529,13 +553,13 @@ export const actionsList = [
             'z': { type: 'float', description: 'Optional z coordinate to place at.', domain: [-Infinity, Infinity] }
         },
         perform: runAsAction(async (agent, type, x, y, z) => {
-            if (settings.companion_mode) {
-                const hasCoords = [x, y, z].every(v => typeof v === 'number' && Number.isFinite(v));
-                const pos = hasCoords ? { x, y, z } : frontBlockPos(agent.bot);
-                return await placeBlockAt(agent.bot, { kind: 'block', pos }, type);
-            }
-            let pos = agent.bot.entity.position;
-            await skills.placeBlock(agent.bot, type, pos.x, pos.y, pos.z);
+            // ★ D23：删掉 companion_mode 开关（旧的 skills.placeBlock 分支一并去掉）
+            const hasCoords = [x, y, z].every(v => typeof v === 'number' && Number.isFinite(v));
+            const pos = hasCoords ? { x, y, z } : frontBlockPos(agent.bot);
+            // M9（08 §3）：单块放置走 flow_build（它自己会算材料/支撑/站位）
+            // —— 这样 commands 层再也不碰 act_*。
+            const r = await buildTask(agent.bot, [{ x: pos.x, y: pos.y, z: pos.z, name: type }]);
+            return r.ok;
         })
     },
     {
@@ -558,7 +582,8 @@ export const actionsList = [
         description: 'Attack and kill the nearest entity of a given type.',
         params: {'type': { type: 'string', description: 'The type of entity to attack.'}},
         perform: runAsAction(async (agent, type) => {
-            await skills.attackNearest(agent.bot, type, true);
+            // M9（08 §3）：选目标/追击/冷却节流/低血撤退归 flow_fight
+            await fightFlow(agent.bot, type, { maxKills: 1 });
         })
     },
     {

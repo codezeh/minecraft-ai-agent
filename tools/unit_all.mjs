@@ -38,6 +38,9 @@ const UNITS = [
     'board_b3_unit',             // M8 B3：多人单拆单 / 6 种预约 key + TTL / 角色过滤 / dependsOn
     'board_b4_unit',             // M8 B4：共享地标/危险点/箱子内容 + 迁移幂等 + 单一真相
     'container_fix_unit',        // act_container 三个真机 bug 回归（.id 解析 / 窗口校验 / 计数口径）
+    'code_hints_unit',           // M9：code_hints 覆盖全部 38 个码 + 一行 ≤200 字格式
+    'protect_owner_unit',        // M9：护主判定（跟随才生效/不打苦力怕玩家/6-8格/收手四条）
+    'idle_planner_unit',         // M9：空闲三定义 + 08 §6.1 三层顺序
     'board_payload_unit',        // M8 B1（t20 补）：10 个 board:* 事件的 payload 形状（表驱动，防"[object Object]"式恒 null）
     'board_scope_unit',          // M8 B2（t23 补）：refresh({scope}) 语义边界 —— mine/claimable/all + 未知报错 + 共享单抢占端到端
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
