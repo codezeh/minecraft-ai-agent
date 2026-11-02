@@ -4,6 +4,32 @@ import { ItemGoal } from './item_goal.js';
 import { BuildGoal } from './build_goal.js';
 import { itemSatisfied, rotateXZ } from './utils.js';
 import * as skills from '../library/skills.js';
+
+/**
+ * ★★ M10 收尾（2026-11-03）：**NPC 自己的执行循环已关闭**（08 §7 原文要求）。
+ *
+ * 08 §7 原文：
+ *   > `NPCContoller`（`npc/controller.js`）按 profile 的目标自己建造/采集，**直接调旧 `skills.*`**。
+ *   > 它的需求图（`item_goal.js`）给 `strat_obtain` 用；**它自己的执行循环在 `strat_obtain`
+ *   > 能用之后关掉**。
+ *
+ * 为什么要关（两条实质冲突，不是洁癖）：
+ *   1. **和 `idle_planner` 打架**：08 §6.1 的 idle_planner 也会在空闲时自己找事做。
+ *      两个都在空闲时动手 → 谁先谁后不确定，而且她会同时被两边驱动。
+ *   2. **绕过任务板**：它直接 `skills.moveAway/collectBlock/useDoor` 动身体，
+ *      **不可中断、不进预约、不记进度** —— 玩家喊停也停不下来（07 §5 的僵尸动作）。
+ *
+ * ★ 怎么恢复（用户要回滚时改这一处就行）：
+ *   把下面这个标志改回 `true`，或者把 `init()` 里 `this.agent.bot.on('idle', ...)` 那段
+ *   整块的 `if (!NPC_EXEC_LOOP_ENABLED) return;` 首行删掉。
+ *   两种方式等价；改标志更安全（不用碰事件注册）。
+ *
+ * ★ 保留了什么（没有删文件、没有砍能力）：
+ *   · `item_goal.js` 的需求图数据能力**完全保留** —— `strat_obtain` 用的就是同一批数据源
+ *   · `init()` 里**读 construction json、铺平 blocks 数组**那段照旧跑（那是数据准备，不动身体）
+ *   · `setGoal()` 等对外接口照旧（模型/任务板仍可设目标，只是不再"自己偷偷执行"）
+ */
+const NPC_EXEC_LOOP_ENABLED = false;
 import * as world from '../library/world.js';
 import * as mc from '../../utils/mcdata.js';
 
@@ -66,6 +92,9 @@ export class NPCContoller {
         }
 
         this.agent.bot.on('idle', async () => {
+            // ★ M10：执行循环已关闭（理由与恢复方式见文件头 NPC_EXEC_LOOP_ENABLED）。
+            //   这里保留事件注册本身（不删监听器），只短路 —— 这样恢复时只改一个标志。
+            if (!NPC_EXEC_LOOP_ENABLED) return;
             if (this.data.goals.length === 0 && !this.data.curr_goal) return;
             // Wait a while for inputs before acting independently
             await new Promise((resolve) => setTimeout(resolve, 5000));

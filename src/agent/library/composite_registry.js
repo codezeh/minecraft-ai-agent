@@ -36,6 +36,7 @@ import { manifest as manifestMine, mine as runMine } from './flow_mine.js';
 import { manifest as manifestFarm, farm as runFarm } from './flow_farm.js';
 import { manifest as manifestFight, fight as runFight } from './flow_fight.js';
 import { manifest as manifestBuild, build as runBuild } from './flow_build.js';
+import { manifest as manifestShelter, shelter as runShelter } from './flow_shelter.js';
 // M10 策略层（04 §6.3）：只拆子单、不自己做动作。
 import { manifestObtain, obtain as runObtain } from './strat_obtain.js';
 import { manifestToolTier, toolTier as runToolTier } from './strat_tool_tier.js';
@@ -48,10 +49,11 @@ import { manifestToolTier, toolTier as runToolTier } from './strat_tool_tier.js'
  * **适配只搬参数，不改流程内部逻辑**。timeout 一律按 ctx.deadline 折算（07 §8：
  * 内层不超过外层剩余时间）。
  */
-// 注册表的构成（**16 个**，都是"能自己跑完一件事"的流程）：
+// 注册表的构成（**17 个**，都是"能自己跑完一件事"的流程）：
 //   collect / follow / pickup / platform / escape（M5）
 //   craft / smelt / store / fetch（M7 P0 第一批，2026-11-02）
 //   eat / mine / farm / fight / build（M7 P0 第二批，2026-11-02）
+//   shelter（M10，2026-11-03）—— flow；解锁 idle_planner 第 1 层的"天黑没地方待"
 //   obtain / tool_tier（M10 策略层，2026-11-03）—— level:'strat'，只拆子单
 // 没有进表的两个，都是**只有 plan、没有 run** 的内部帮手（04 §4.4 要求 manifest 描述的是
 // "一个能执行并返回 ActionResult 的技能"）：
@@ -143,6 +145,11 @@ const ENTRIES = [
         // manifest 统一校验 + 让 !listSkills 能列出它（模型能知道有这个能力）。
         manifest: manifestBuild,
         run: (bot, args, ctx) => runBuild(bot, args.blocks, { ctx }),
+    },
+    // ── M10（2026-11-03）：小屋流程（strat_first_night 的前置）─────────────
+    {
+        manifest: manifestShelter,
+        run: (bot, args, ctx) => runShelter(bot, { block: args.block, radius: args.radius, ctx }),
     },
     // ── M10 策略层：只拆子单、等结果，不自己做动作（04 §6.3）────────────
     {

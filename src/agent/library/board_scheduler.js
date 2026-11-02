@@ -265,8 +265,17 @@ export class BoardScheduler {
             //   玩家一下命令就让路。
             try {
                 const { idleTick } = await import('./idle_planner.js');
+                // ★ 必须把"现在有哪些流程可用"传进去，否则 idle_planner 第 1 层
+                //   永远看到空集合 → "天黑没地方待→shelter" 那条分支永远不走（死分支）。
+                //   这里从注册表实时取（加流程时自动生效，不用改两处）。
+                let availableSkills = [];
+                try {
+                    const reg = await import('./composite_registry.js');
+                    availableSkills = reg.SKILL_NAMES ?? [];
+                } catch { /* 取不到就当没有（第 1 层会跳过，退回第 2/3 层） */ }
                 const verdict = await idleTick(this.agent, {
                     now,
+                    state: { availableSkills },
                     jobsBusy: () => (this.boardClient?.list?.({ states: [JOB_STATE.READY, JOB_STATE.CLAIMED, JOB_STATE.RUNNING] }) ?? []).length > 0,
                     reflectionBusy: () => !!this.actions?.executing,
                     enqueue: async (job) => {

@@ -43,6 +43,8 @@ const UNITS = [
     'idle_planner_unit',         // M9：空闲三定义 + 08 §6.1 三层顺序
     'strat_obtain_unit',         // M10：strat_obtain 来源顺序 + ★防无限展开 + 不碰身体
     'strat_tool_tier_unit',      // M10：strat_tool_tier 不跳档 / 已够直接 ok / 三件工具
+    'flow_shelter_unit',         // t31：flow_shelter 蓝图形状 + 材料判断 + idle_planner 死分支接线
+    'idle_fakeclock_unit',       // t31：idle_planner 假时钟（30s 阈值 / 有单不规划 / 5min 节流）
     'board_payload_unit',        // M8 B1（t20 补）：10 个 board:* 事件的 payload 形状（表驱动，防"[object Object]"式恒 null）
     'board_scope_unit',          // M8 B2（t23 补）：refresh({scope}) 语义边界 —— mine/claimable/all + 未知报错 + 共享单抢占端到端
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
