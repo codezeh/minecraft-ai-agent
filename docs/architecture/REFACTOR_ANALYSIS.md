@@ -2376,6 +2376,78 @@ src/agent/library/
 
 ---
 
+### M10 策略级（2026-11-03）
+
+**目标**（04 §6.3）：策略不自己做动作，只拆子单、等子单结果。B1 之后用 `parentId` 子单。
+
+#### 已交付（`45d4ccc`）
+
+| 策略 | 状态 | 要点 |
+|---|---|---|
+| `strat_obtain` | ✅ 离线完成 | 来源顺序：箱子 > 合成 > 熔炼 > 采集 > 交易 > 打怪（前一个能满足就不往后试）；先判箱子，有就不下单 |
+| `strat_tool_tier` | ✅ 离线完成 | 从 `haveRank+1` 逐档往上（**不跳档**）；三件工具（镐/斧/剑）都覆盖；已是该档 → 空计划且 `obtain` 调用 0 次 |
+| `strat_first_night` | ⛔ **被依赖阻塞** | 需要 `flow_shelter`，而它**不存在**。04 §7 落地顺序也写着"要先做 flow_shelter" |
+
+#### ★ 防无限展开（策略层最容易炸的地方）
+
+三道闸，撞任一即停并返回缺口清单（04 §3.3）：
+
+| 闸 | 值 | 行为 |
+|---|---|---|
+| `MAX_DEPTH` | 6 | 超过层数 → 记缺口，不再展开 |
+| `MAX_JOBS` | 30 | 产出到 30 张 → 立刻停 |
+| 环检测 | — | 同一物品在同一条链上重复出现 → 记缺口，不递归 |
+
+用例证据（造"永远缺料"的链）：
+```
+jobs=6  maxDepth=6  hitDepth=true  hitJobs=false  gaps={"mat_6":1}
+```
+另：宽链守 `jobs<=30 且 maxDepth<=6`；环依赖 `A->B->A` → `jobs=2` 不无限递归。
+
+**为什么这条最重要**：递归拆单 + 自动重试，炸了会表现为"她在疯狂下单、单越堆越多"，人工极难发现。
+
+#### 关于 `ItemGoal`：没有 import，理由经核实成立
+
+`ItemGoal.executeNext()` **自己执行动作** —— 核实 `item_goal.js` 里有 4 处直接调
+`skills.moveAway / collectBlock / craftRecipe / smeltItem`。那是"旧世界"的同步做法：
+不可中断、不进任务板，直接违反「策略不自己做动作」。而 `ItemWrapper`/`ItemNode` 没有 export，拿不到。
+
+做法：沿用它的**需求图思路 + 完全同一批 mcdata 数据源**（核实：strat 文件用的正是
+`item_goal.createChildren` 用的那 4 个 —— `getItemCraftingRecipes` / `getItemBlockSources` /
+`getItemSmeltingIngredient` / `getItemAnimalSource`，逐字相同）
+→ **没有复制第二套「物品→来源」真相**。
+
+#### ★ M10 还有两项未完成
+
+| 项 | 说明 |
+|---|---|
+| **关掉 `NPCContoller` 执行循环**（08 §7 原文要求） | `controller.js:70` 的 `bot.on('idle')` → `executeNext()` → 用旧 `skills.*` 自己动身体。**与新的 `idle_planner` 直接冲突**（两边都会在空闲时动手），且绕过任务板、不可中断。08 §7 明写"在 `strat_obtain` 能用之后关掉"，而 `strat_obtain` 现在有了。**这是行为变更**（她会停止自主建造/采集），已派 t31 处理并要求写清恢复方法 |
+| **`flow_shelter`** | 不存在。阻塞 `strat_first_night`，还让 `idle_planner` 第 1 层"天黑没地方待→shelter"**空转**（`availableSkills` 里没有 shelter）。已派 t31 补 |
+
+#### 顺带修的一处假红测试
+
+`flow_p1_unit` 写死 `SKILL_NAMES.length === 14`，加两个策略就红了。
+改成"这 5 个必须在 + 总数 ≥14" —— **加技能不该红，技能被误删必须红**。写死总数是脆的。
+
+---
+
+### M11 多 bot —— **实际已由 M8 的 B3/B4 完成**
+
+`00_overview.md §10` 里 M11 的定义就是"**B3 / B4**，依赖 M8"。B3/B4 已在 M8 完成并验收：
+
+| M11 的内容 | 对应 B 期 | 真机证据 |
+|---|---|---|
+| 多人单、拆单、预约、角色 | B3 | `board_b3_live` **6/7 实质通过**：4 张子单全 done、`parent=done`、合计 **93 ≥ 64**、claims 无重叠、TTL 续期实测（`…357082 → …377110`）、掉线自动释放（SIGKILL 后 `残留=[]`）。⑤ 曾"未触发"属**用例时序偶发**（机制离线 6/6 + t25 真机 PASS 已证）|
+| 共享地标/危险点/箱子内容 | B4 | `board_b4_live` **5/5**：A 存 → 板库有 chest 行 → **B 不开箱就查到坐标+数量**（6303,-60,8303 → 16 个）→ B 直接以该坐标为目标 → B 全程没开箱 |
+
+**结论：M11 无需单独开发**，只是"多 bot 协同"这件事的落地形态；
+`terrain3d` 明确不共享（06 §9.3：多进程写同一 SQLite 要处理 WAL+busy 重试，收益不值），已写进 `board_store.js` 注释并有用例断言"板库拒绝 `kind='terrain'`"。
+
+**M11 剩余遗留**：`container`/`station`/`entity` 三种预约 key 只验了解析+冲突，**未做多 bot 真机争用**（需要起 2 个 bot 真的抢同一个箱子/熔炉/村民）；`item:` key 无真实调用方。
+
+
+---
+
 **文档版本**: 1.0  
 **生成时间**: 2026-10-31  
 **基于报告**: 4个子agent只读调研（token总计~2.1M）
