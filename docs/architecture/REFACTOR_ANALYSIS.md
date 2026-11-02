@@ -1406,6 +1406,106 @@ preflight 前缀规矩仍是 **5 处**（4 处旧债 + `act_use→openContainer`
 2. **`flow_collect_plan` / `flow_clear` 没有 `run()`**（归属：**M7 P0 流程**）——
    要让它们成为可执行技能得补 `run()` + manifest，那属于新能力，不在 M5。
 
+#### M7 第一批验收记录（t18 / 2026-11-02，全部实测；基准提交 `a62bbe0`）
+
+> **验收基准说明**：本节所有结论都在**提交态 `a62bbe0`**（M7 第一批，注册表 **9** 个技能）上复现，
+> 用独立 worktree 跑的。原因：验收期间工作区正被 M7 第二批占用（`flow_eat/mine/farm/fight/build` 为未跟踪文件、
+> 注册表已被改成 14 个）—— 若直接在主仓跑，测到的是**半成品状态**，不能当结论。
+> 第二批（`6c4da70` 9→14、`2342a11` 再改）不在本任务范围，另行验收。
+
+**① 三个流程与 04 §6.1 卡片逐条对应**
+
+| 卡片要求 | 实测 |
+|---|---|
+| `flow_craft`：`recipesAll` 空 → `NO_RECIPE`（abort） | ✅ `flow_craft.js:110` `return fail('NO_RECIPE', ...)`，在 plan 第 1 步就返回 |
+| `flow_craft`：有配方但 `recipesFor` 空 → `NO_ITEM` + `data.missing` | ✅ `missingFor()` 逐项算差额，返回 `{缺失物: 差几个}` 交给 `strat_obtain` |
+| `flow_craft`：缺工作台先合一个再放 | ✅ `tableSpotFor()` + 背包没有工作台时先 `craftOnce` 合 4 木板→工作台 |
+| `flow_craft`：`goTo` 经 `nav_core` | ✅ `import { goTo } from './nav_core.js'`（:27），不自己走 pathfinder |
+| `flow_smelt`：`POLL_MS = 10s` | ✅ `export const POLL_MS = 10000`（:51） |
+| `flow_smelt`：燃料优先级 煤>木炭>木板>原木 | ✅ `const FUEL_ORDER = ['coal','charcoal','oak_planks','oak_log']`（:54）+ `pickFuel` 按序取第一个有货的 |
+| `flow_smelt`：**等待是流程职责、不是动作职责** | ✅ 双向实测：`furnaceCollect` 函数体里 `sleep/setTimeout/waitUntil/waitFor/POLL` **0 处**；`flow_smelt` 里 `sleepWithinDeadline` **2 处** |
+| `flow_store`/`flow_fetch`：`finally` 里关窗 | ✅ 实测：存侧开窗 2 次 → **关窗 2 次**（`finally` 关窗次数 = 开窗次数） |
+
+**② 等待策略实测（自己造 deadline，不看代码猜）**
+
+| deadline | 实测耗时 | 结论 |
+|---|---|---|
+| `now + 800ms` | **801ms** | 没有睡到 `POLL_MS`（10000ms），也没睡过头 |
+| `now + 1500ms` | **1503ms** | 同上，误差 ≤3ms |
+
+`sleepWithinDeadline` 的实现是 `Math.min(ms, deadline - now)`，`left <= 0` 直接返回 0；
+`flow_smelt` 的轮询循环每圈先算 `left = ctx.deadline - Date.now()`，`left <= 0` 就 `break`。
+**这条是"卡十分钟"的唯一来源，已亲眼确认它不会越过 deadline。**
+
+**③ 两种 `INVENTORY_FULL` 的不对称（重点，用"数开箱次数"验方向）**
+
+判据是"换个做法能不能解决"：取的时候背包满，**换个大箱子也没用**（背包满跟箱子多大无关），所以必须 abort。
+
+| 方向 | 期望 | 实测（自己数 `openContainer` 调用次数） |
+|---|---|---|
+| **存**：容器满 | 换下一个箱子（可恢复） | ✅ 3 个箱子时**开了 2 次**（第 2 个之后要走去第 3 个，我的 stub 没有地图库所以 `walkTo` 失败而收尾），最终 `INVENTORY_FULL`「箱子都存不下了（试了 2 个）」→ **确实在换箱子续试** |
+| **取**：背包满 | **立刻 abort** | ✅ 3 个箱子时**只开了 1 次**（`opened=[1]`），立刻 `INVENTORY_FULL` → **没有"换箱子继续试"** |
+
+代码位置也一致：存侧 `flow_store.js:187-190` 是 `storefull++; lastCode='INVENTORY_FULL'; continue;`（继续下一个箱子），
+取侧 `:249-251` 是直接 `return fail('INVENTORY_FULL', '背包满了，取出来没地方放（先腾背包）')`。
+
+**④ 可恢复 vs abort 全表（按"换个做法能不能解决"）**
+
+| 码 | 处置 | 实测 |
+|---|---|---|
+| `OCCUPIED`（熔炉在炼别人的） | 可恢复：换熔炉 | ✅ `smelt` 换下一个熔炉；`furnaceLoad` 本身不抢（见 M6 记录的 15 条用例） |
+| `WINDOW_CLOSED` | 可恢复：重开（最多 2 次） | ✅ `flow_store.js` 内层 `for (attempt=0; attempt<2 && !win; attempt++)` |
+| `INVENTORY_FULL`（存） | 可恢复：换箱子；都满才 abort | ✅ 见上表 |
+| `INVENTORY_FULL`（取） | **abort** | ✅ 见上表 |
+| `NO_ITEM` | abort + `data.missing` | ✅ `flow_craft`/`flow_smelt` 都带 `missing` |
+| `NO_RECIPE` | abort（永远做不出） | ✅ 见 ① |
+| `INTERRUPTED` | **立刻返回，不重试** | ✅ 见下 |
+
+**`INTERRUPTED` 四条独立实测（这条最要命：重试 = 用户喊停停不下来）**
+
+| 场景 | 期望 | 实测 |
+|---|---|---|
+| `store` 一开始就 `interrupt_code=1` | 一个箱子都不开、立刻返回 | ✅ `open=0`、`INTERRUPTED`、耗时 **0ms** |
+| `store` 开完第 1 个箱后被中断 | 不再试第 2 个 | ✅ `open=1`、`INTERRUPTED` |
+| `smelt` 一开始就中断 | 立刻 `INTERRUPTED` | ✅ |
+| （对照）M6 的 `furnaceLoad`/`harvestCrop` 等动作 | 入口先查 `interrupt_code` | ✅ M6 记录里已验 |
+
+**⑤ 注册表闸门仍然有效**
+
+- 我独立塞假码：`validateRegistry([{manifest: {...craft, codes:[...,'MADE_UP_CODE_XYZ']}, run}])`
+  → **`ok:false`**、`problems: ["[craft] codes 里的 MADE_UP_CODE_XYZ 没在 CODES 注册"]` ✅ 闸门有效
+- 提交态 `!listSkills` = **9 个**：`collect follow pickup platform escape craft smelt store fetch` ✅（与任务书一致）
+- `!do` 参数错 `code` = **`null`** + `data.paramError=true`（实测 `craft` 传 `count=99999` → 「参数 count 要 1..64（现在 99999）」）✅
+
+**⑥ 功能未回归（在 `a62bbe0` 上跑，真机）**
+
+- `unit_all` **24/24 + 1 跳过**，exit 0
+- `preflight`：默认 **exit 0**（违规 5 处、**0 新增**）/ `--strict-api` **exit 1**（Phase 5.4 旧债，**未修绿**）/ `--report-api` exit 0；**106/106** 模块导入
+- `atom_all` **18/18**，真实 **244 条**用例 0 FAIL；**`vine_physics_test` 本轮 7/7 通过**（与 t14 定位的"偶发=补丁因注册表未就绪而静默空壳"一致）
+- `bench_move_actions 5` → **49/55（89.1%）**，与基线 49/55 一致；失败全 `NO_PATH ×6`（down5×5 已知边界 + dig-through r1）
+- `climb-ladder` 中位 **1988ms**（各轮 1987/2000/1988/2015/1889；atoms 报 2001）
+- `digdown` **5/5** `digdownSeen=true`、`execActions={"digdown":1}`、`y −57→−60`
+
+**⑦ 关于 `climb-ladder` 慢 3~5% 的复核结论：认可"抖动"，且能给出结构性理由**
+
+- **模块图完全不相交**：`bench_move_actions.mjs` 只 import `mineflayer` / `mineflayer-pathfinder` / `vec3` / `fs` / `path` /
+  `./rcon.mjs` / `./arena.mjs` / `position_guard` / `executor.walkTo` / `terrain3d` / `path_3d`；
+  `executor.js` 的 import 里**没有 `skills.js`、没有任何 `flow_*`**；`nav_core` / `nav_pathfinder` / `path_3d` 同样不 import 这三个流程。
+  → **M7 这三个流程在 bench 的调用路径上根本不会被加载，更不会被执行**，不可能是它导致变慢。
+- 时间线也支持"漂移而非跳变"：`climb-ladder` 中位 1947（t14）→1947/1956（t12）→1971（t12 复跑）→1976（t18 主仓）→**1988（t18 worktree）**，
+  是一条缓慢上移的带，而不是 M7 提交后的一次抬升。
+- 结论：**同意"抖动"**。但提醒一句：这条已经从 1905 漂到 1988（+4.4%），若后面继续单向上移，值得单独查服务器 TPS 与实体残留，而不是一直归给噪声。
+
+**⑧ M7 剩余流程的待办状态**
+
+| 流程 | 状态 |
+|---|---|
+| `flow_collect` / `flow_collect_plan` / `flow_clear` / `flow_follow` / `flow_pickup` / `flow_platform` / `flow_escape` | ✅ 已注册（M5） |
+| `flow_craft` / `flow_smelt` / `flow_store` / `flow_fetch` | ✅ 本批（`a62bbe0`） |
+| `flow_eat` / `flow_mine` / `flow_farm` / `flow_fight` / `flow_build` | ⏳ 第二批（`6c4da70`，注册表 9→14）—— **不在本任务范围，待单独验收** |
+| `flow_collect_plan` / `flow_clear` 补 `run()` | ⏳ 仍无 `run()`，要成为可执行技能属新能力（M7 后续） |
+| `flow_collect` 与 `flow_collect_plan` 合并 | ⏳ 未合并（见 Phase R 待办 4） |
+
 ---
 
 ### Phase B: 任务板（2026-11-01 新增）
