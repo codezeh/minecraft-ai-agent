@@ -96,7 +96,13 @@ bot.once('spawn', async () => {
     // 7) 不往自己脚下放 → OCCUPIED
     const feet = bot.entity.position.floored();
     const r7 = await placeBlockAt(bot, { kind: 'block', pos: { x: feet.x, y: feet.y, z: feet.z } }, 'dirt');
-    check('不往脚下放', r7.code === 'OCCUPIED' || r7.code === 'NO_SUPPORT', `code=${r7.code}`);
+    // ★ 2026-11-03：原来断言 OCCUPIED，但那是**用错码** ——
+    //   "我自己站在那儿"挖不掉（OCCUPIED 会让上层去 digBlock），必须换站位。
+    //   已改为 BLOCKED + data.reason='own-body-column'（用户定的）。
+    //   NO_SUPPORT 也仍然接受（不同几何下可能先撞支撑）。
+    check('不往脚下放 → BLOCKED(own-body-column) 或 NO_SUPPORT',
+        (r7.code === 'BLOCKED' && r7.data?.reason === 'own-body-column') || r7.code === 'NO_SUPPORT',
+        `code=${r7.code} reason=${r7.data?.reason ?? '-'}`);
 
     console.log(`\nplace 原子：${pass} PASS / ${fail_} FAIL`);
     bot.quit();
