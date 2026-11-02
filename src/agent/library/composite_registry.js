@@ -40,6 +40,7 @@ import { manifest as manifestShelter, shelter as runShelter } from './flow_shelt
 // M10 策略层（04 §6.3）：只拆子单、不自己做动作。
 import { manifestObtain, obtain as runObtain } from './strat_obtain.js';
 import { manifestToolTier, toolTier as runToolTier } from './strat_tool_tier.js';
+import { manifest as manifestFirstNight, firstNight as runFirstNight } from './strat_first_night.js';
 
 /**
  * 注册项 = manifest + 执行入口。
@@ -49,12 +50,12 @@ import { manifestToolTier, toolTier as runToolTier } from './strat_tool_tier.js'
  * **适配只搬参数，不改流程内部逻辑**。timeout 一律按 ctx.deadline 折算（07 §8：
  * 内层不超过外层剩余时间）。
  */
-// 注册表的构成（**17 个**，都是"能自己跑完一件事"的流程）：
+// 注册表的构成（**18 个**，都是"能自己跑完一件事"的流程）：
 //   collect / follow / pickup / platform / escape（M5）
 //   craft / smelt / store / fetch（M7 P0 第一批，2026-11-02）
 //   eat / mine / farm / fight / build（M7 P0 第二批，2026-11-02）
 //   shelter（M10，2026-11-03）—— flow；解锁 idle_planner 第 1 层的"天黑没地方待"
-//   obtain / tool_tier（M10 策略层，2026-11-03）—— level:'strat'，只拆子单
+//   obtain / tool_tier / first_night（M10 策略层，2026-11-03）—— level:'strat'，只拆子单
 // 没有进表的两个，都是**只有 plan、没有 run** 的内部帮手（04 §4.4 要求 manifest 描述的是
 // "一个能执行并返回 ActionResult 的技能"）：
 //   · flow_collect_plan —— flow_collect 的内部实现（planCollect / makeHandlers / climbByTunneling）
@@ -159,6 +160,10 @@ const ENTRIES = [
     {
         manifest: manifestToolTier,
         run: (bot, args, ctx) => runToolTier(ctx?.agent ?? bot, args.target, {}),
+    },
+    {
+        manifest: manifestFirstNight,
+        run: (bot, args, ctx) => runFirstNight(ctx?.agent ?? bot, { maxJobs: args.maxJobs }),
     },
 ];
 
