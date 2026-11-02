@@ -30,6 +30,12 @@ import { manifest as manifestEscape, escapeUp as runEscapeUp } from './flow_esca
 import { manifest as manifestCraft, craft as runCraft } from './flow_craft.js';
 import { manifest as manifestSmelt, smelt as runSmelt } from './flow_smelt.js';
 import { manifestStore as manifestStore, manifestFetch as manifestFetch, store as runStore, fetch as runFetch } from './flow_store.js';
+// M7 P0 第二批（2026-11-02）：吃 / 挖 / 农 / 打 / 建。
+import { manifest as manifestEat, eatToFull as runEat } from './flow_eat.js';
+import { manifest as manifestMine, mine as runMine } from './flow_mine.js';
+import { manifest as manifestFarm, farm as runFarm } from './flow_farm.js';
+import { manifest as manifestFight, fight as runFight } from './flow_fight.js';
+import { manifest as manifestBuild, build as runBuild } from './flow_build.js';
 
 /**
  * 注册项 = manifest + 执行入口。
@@ -39,9 +45,10 @@ import { manifestStore as manifestStore, manifestFetch as manifestFetch, store a
  * **适配只搬参数，不改流程内部逻辑**。timeout 一律按 ctx.deadline 折算（07 §8：
  * 内层不超过外层剩余时间）。
  */
-// 注册表的构成（**8 个**，都是"能自己跑完一件事"的流程）：
+// 注册表的构成（**14 个**，都是"能自己跑完一件事"的流程）：
 //   collect / follow / pickup / platform / escape（M5）
-//   craft / smelt / store / fetch（M7 P0，2026-11-02 加）
+//   craft / smelt / store / fetch（M7 P0 第一批，2026-11-02）
+//   eat / mine / farm / fight / build（M7 P0 第二批，2026-11-02）
 // 没有进表的两个，都是**只有 plan、没有 run** 的内部帮手（04 §4.4 要求 manifest 描述的是
 // "一个能执行并返回 ActionResult 的技能"）：
 //   · flow_collect_plan —— flow_collect 的内部实现（planCollect / makeHandlers / climbByTunneling）
@@ -108,6 +115,30 @@ const ENTRIES = [
     {
         manifest: manifestFetch,
         run: (bot, args, ctx) => runFetch(bot, args.item, args.count, { ctx }),
+    },
+    // ── M7 P0 第二批：吃 / 挖 / 农 / 打 / 建 ─────────────────────────
+    {
+        manifest: manifestEat,
+        run: (bot, args, ctx) => runEat(bot, { food: args.food, targetFood: args.targetFood, ctx }),
+    },
+    {
+        manifest: manifestMine,
+        run: (bot, args, ctx) => runMine(bot, args.ore, args.count, { maxDepth: args.maxDepth, ctx }),
+    },
+    {
+        manifest: manifestFarm,
+        run: (bot, args, ctx) => runFarm(bot, args.area, { crop: args.crop, seed: args.seed, ctx }),
+    },
+    {
+        manifest: manifestFight,
+        run: (bot, args, ctx) => runFight(bot, args.target, { maxKills: args.maxKills, retreatHp: args.retreatHp, ctx }),
+    },
+    {
+        // build 的参数是方块数组，`!do` 的 key=value 串表达不了（04 §4.5 不允许 JSON）——
+        // 所以它**不经 !do 调用**，由流程/策略层直接传数组。这里保留注册项是为了
+        // manifest 统一校验 + 让 !listSkills 能列出它（模型能知道有这个能力）。
+        manifest: manifestBuild,
+        run: (bot, args, ctx) => runBuild(bot, args.blocks, { ctx }),
     },
 ];
 
