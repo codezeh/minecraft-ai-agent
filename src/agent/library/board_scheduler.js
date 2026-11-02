@@ -358,7 +358,19 @@ export class BoardScheduler {
     // ── step 4+5：跑单、心跳、finish、release ─────────────────────────
     async _runJob(job, now) {
         const board = this.boardClient;
-        const ctx = makeCtx(this.agent, job, getSkill(job.skill)?.manifest ?? null);
+        // ★ 必须把板**塞进传给 makeCtx 的 agent** 上。
+        //
+        //   真机验收抓到的第 3 个"两处各叫一个名字"缺陷（前两个：makeCtx 读 boardClient、
+        //   agent.js 存 board；interrupted 字段）。这里的情况是：调度器自己持有 `this.boardClient`，
+        //   而 `makeCtx(agent, ...)` 是去 `agent.boardClient ?? agent.board` 找板的 ——
+        //   调用方传进来的 agent 对象**没有 .board/.boardClient** →
+        //   `ctx.reserve()` 静默走了 no-board 分支（恒成功 no-op）→
+        //   **预约从来没真正写过库**（真机实测：jobs 全 done、合计 85，但 claims 表 0 行）。
+        //   修法：用一份"带板的 agent 视图"构造 ctx，不改调用方的对象。
+        const agentView = this.boardClient
+            ? { ...this.agent, board: this.boardClient, boardClient: this.boardClient }
+            : this.agent;
+        const ctx = makeCtx(agentView, job, getSkill(job.skill)?.manifest ?? null);
 
         // step 3
         const res = await this._reserveClaims(job, ctx);

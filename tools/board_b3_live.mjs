@@ -56,7 +56,14 @@ if (process.argv[2] === '--agent') {
     await new Promise((res) => bot.once('spawn', res));
     await sleep(1200);
 
-    // 每个 bot 给一把镐 + 一堆垫脚石（不 fill 在自己身上）
+    // ★ 上线后先 tp 到分配的区域（否则她在世界出生点，附近没矿 → mine 直接 NO_TARGET。
+    //   第一版就是这么空跑的：两个 bot 都领到了单，但 0 秒就失败。）
+    const HOME = JSON.parse(process.env.B3_HOME || 'null');
+    if (HOME) {
+        await RC(`tp ${NAME} ${HOME.x + 0.5} ${HOME.y} ${HOME.z + 0.5}`);
+        await sleep(1200);
+    }
+    // 每个 bot 给一把镐（不 fill 在自己身上）
     await RC(`clear ${NAME}`).catch(() => { });
     await sleep(300);
     await RC(`give ${NAME} iron_pickaxe 1`);
@@ -134,83 +141,147 @@ log(`父单 ${parent.id}，子单 ${children.length} 张，每张 count=16`);
 for (const c of children) log(`  ${c.id} claims=${JSON.stringify(c.claims)}`);
 
 // ── 起两个 bot ─────────────────────────────────────────────────────
-const procs = BOTS.map((name) => {
-    const p = spawn(process.execPath, [SELF, '--agent', name], { stdio: ['ignore', 'pipe', 'pipe'] });
+const procs = BOTS.map((name, i) => {
+    const p = spawn(process.execPath, [SELF, '--agent', name], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, B3_HOME: JSON.stringify(cells[i]) },
+    });
     p.stdout.on('data', (d) => process.stdout.write(`  ${d}`));
     p.stderr.on('data', (d) => { const s = String(d); if (!/walkTo|nav/.test(s)) process.stderr.write(`  [err] ${s}`); });
     return p;
 });
 await sleep(9000);
 
-// 每个 bot 在自己那块区域造矿（造完立刻 keepBotCellClear，不埋人）
+// 每块区域造矿（bot 已 tp 过去了；造完立刻清出她自己那格，不埋人）
 for (let i = 0; i < BOTS.length; i++) {
     const c = cells[i];
-    await fillSafe(RC, c.x - 6, c.y, c.z - 6, c.x + 6, c.y + 2, c.z + 6, 'iron_ore');
-    // 把她自己那格清出来
-    try {
-        const posOut = await RC(`data get entity ${BOTS[i]} Pos`);
-        const m = String(posOut).match(/\[([-\d.]+)d?, ?([-\d.]+)d?, ?([-\d.]+)d?\]/);
-        if (m) {
-            const [, px, py, pz] = m;
-            await RC(`setblock ${Math.floor(+px)} ${Math.floor(+py) - 1} ${Math.floor(+pz)} stone`);
-            for (let dy = 0; dy <= 2; dy++) await RC(`setblock ${Math.floor(+px)} ${Math.floor(+py) + dy} ${Math.floor(+pz)} air`);
-        }
-    } catch { /* ignore */ }
+    await fillSafe(RC, c.x - 7, c.y - 1, c.z - 7, c.x + 7, c.y - 1, c.z + 7, 'stone');   // 地板
+    await fillSafe(RC, c.x - 7, c.y, c.z - 7, c.x + 7, c.y + 2, c.z + 7, 'iron_ore');     // 矿
+    await RC(`setblock ${Math.floor(c.x)} ${c.y - 1} ${Math.floor(c.z)} stone`).catch(() => { });
+    for (let dy = 0; dy <= 2; dy++) await RC(`setblock ${Math.floor(c.x)} ${c.y + dy} ${Math.floor(c.z)} air`).catch(() => { });
 }
 log('场地已就绪（每块区域一片铁矿）');
 
-// ── 等两个 bot 领单并跑完（最多 6 分钟）────────────────────────────
-log('\n=== 等两个 bot 领单/开采 ===');
+// ── 阶段1：两个 bot 领单 + 开采；claims 一律**经 server 查**（不走父进程直连库）──
+//
+// ★ 第一版失败原因：父进程用自己那条 DatabaseSync 连接 `listClaims(db)` 读，
+//   而写是 mindserver 那条连接干的 —— WAL 下两条连接看到的快照不同，
+//   于是明明有预约，父进程读到 0 行（②③④ 全挂）。改成走 socket 查服务端真值。
+log('\n=== 阶段1：等两个 bot 领单/开采 ===');
 const t0 = Date.now();
 let done = 0;
-while (Date.now() - t0 < 360000) {
-    await sleep(5000);
-    const all = listJobs(db, {});
-    done = all.filter((j) => j.parentId === parent.id && j.state === JOB_STATE.DONE).length;
-    const claimed = all.filter((j) => j.parentId === parent.id && [JOB_STATE.CLAIMED, JOB_STATE.RUNNING].includes(j.state)).length;
+let snap1 = null, snap2 = null, snapAt1 = 0;
+
+const claimsVia = async () => {
+    const r = await probe.claims();
+    return (r.ok ? (r.data?.claims ?? []) : []).map((x) => ({ key: x.key, owner: x.owner, until: x.until }));
+};
+
+while (Date.now() - t0 < 600000) {
+    await sleep(4000);
+    const now = Date.now();
+    const allJ = listJobs(db, {});
+    done = allJ.filter((j) => j.parentId === parent.id && j.state === JOB_STATE.DONE).length;
+
+    if (!snap1) {
+        const c = await claimsVia();
+        if (c.length >= 2 && c.some((x) => x.owner === 'b3a') && c.some((x) => x.owner === 'b3b')) {
+            snap1 = c; snapAt1 = now;
+            log(`  [快照1] ${JSON.stringify(snap1)}`);
+        }
+    }
+    if (snap1 && !snap2 && now - snapAt1 > 14000) {
+        snap2 = await claimsVia();
+        log(`  [快照2] ${JSON.stringify(snap2)}`);
+    }
     if (done >= PARTS) break;
-    if (Date.now() - t0 > 30000 && claimed === 0 && done === 0) {
-        log('  （30 秒了还没有人领到单，继续等…）');
+}
+log(`阶段1 完成：子单 ${done}/${PARTS}`);
+
+// ── 阶段2：掉线释放演练（单独造一张单让 b3a 领，再 kill 它）──
+log('\n=== 阶段2：掉线释放演练 ===');
+const offJob = store.addJob(db, {
+    kind: 'shared', title: '掉线演练', skill: 'mine',
+    args: { ore: 'iron', count: 16, maxDepth: 8 },
+    priority: 7, claims: ['area:6200,-60,8100:8'], state: JOB_STATE.READY,
+});
+let killResult = null;
+let killKeys = [];
+{
+    // 等 b3a 领到它并预约上（查 server）
+    let claimed = false;
+    for (let i = 0; i < 20; i++) {
+        await sleep(2000);
+        const c = await claimsVia();
+        const mine = c.filter((x) => x.owner === 'b3a' && x.key === 'area:6200,-60,8100:8');
+        if (mine.length) { killKeys = mine.map((x) => x.key); claimed = true; break; }
+    }
+    if (claimed) {
+        log(`  b3a 已占 ${killKeys.join(',')}，现在 SIGKILL 掉它`);
+        try { procs[0].kill('SIGKILL'); } catch { }
+        const killAt = Date.now();
+        // 等 TTL（30s）+ 扫描（5s）
+        while (Date.now() - killAt < 45000) await sleep(3000);
+        const after = await claimsVia();
+        const still = after.filter((c) => killKeys.includes(c.key));
+        // 再证一步：b3b 现在能不能把这个 key 约上（走 server）
+        const tryRes = await probe.reserve(offJob.id, killKeys);
+        let canTake = tryRes.ok === true;
+        if (canTake) await probe.release(offJob.id, killKeys);
+        killResult = { stillHeld: still.map((x) => ({ key: x.key, owner: x.owner })), canTake };
+        log(`  [掉线后] 残留=${JSON.stringify(killResult.stillHeld)} 别人能否约到=${canTake}`);
+    } else {
+        log('  b3a 没领到演练单（可能已退出），跳过');
     }
 }
-log(`子单完成 ${done}/${PARTS}`);
 
 // ── 断言 ───────────────────────────────────────────────────────────
 const all = listJobs(db, {});
 const kids = all.filter((j) => j.parentId === parent.id);
-const claims = listClaims(db);
+const c1 = snap1 ?? [];
 
-// ① 两个 bot 领到了不同的子单
 const assignees = new Set(kids.map((k) => k.assignee).filter(Boolean));
-push('① 至少两个 bot 参与（不同 assignee）', assignees.size >= 2,
-    `assignee=${JSON.stringify([...assignees])}`);
+push('① 两个 bot 都参与（不同 assignee，各领不同子单）', assignees.size >= 2,
+    `assignee=${JSON.stringify([...assignees])} 子单=${JSON.stringify(kids.map((k) => [k.id.slice(-4), k.assignee]))}`);
 
-// ② claims 无重叠（两两不冲突）
+const ownersOk = c1.some((c) => c.owner === 'b3a') && c1.some((c) => c.owner === 'b3b');
+const untilFuture = c1.length > 0 && c1.every((c) => Number(c.until) > snapAt1);
+push('② claims 表真的落了行（两个 owner、until 在未来）', ownersOk && untilFuture,
+    `${c1.length} 行 owners=${JSON.stringify([...new Set(c1.map((c) => c.owner))])}`);
+
 let overlaps = [];
-for (let i = 0; i < claims.length; i++) {
-    for (let j = i + 1; j < claims.length; j++) {
-        if (claims[i].owner !== claims[j].owner && claimsConflict(claims[i].key, claims[j].key)) {
-            overlaps.push([claims[i].key, claims[j].key]);
-        }
+for (let i = 0; i < c1.length; i++) {
+    for (let j = i + 1; j < c1.length; j++) {
+        if (c1[i].owner !== c1[j].owner && claimsConflict(c1[i].key, c1[j].key)) overlaps.push([c1[i].key, c1[j].key]);
     }
 }
-push('② 两个 bot 的预约**无重叠**（不砍同一棵树）', overlaps.length === 0,
-    overlaps.length ? JSON.stringify(overlaps) : `${claims.length} 条预约，两两不冲突`);
+push('③ 两个 bot 的预约 key 无重叠（不砍同一棵树）', c1.length >= 2 && overlaps.length === 0,
+    overlaps.length ? JSON.stringify(overlaps) : `${c1.length} 条互不冲突：${c1.map((c) => c.key).join(' | ')}`);
 
-// ③ 合计 ≥ 64
+const renewed = [];
+for (const a of c1) {
+    const b = (snap2 ?? []).find((x) => x.key === a.key && x.owner === a.owner);
+    if (b && Number(b.until) > Number(a.until)) renewed.push(`${a.key}:${a.until}→${b.until}`);
+}
+push('④ TTL 续期真的在走（until 被 heartbeat 推后）', renewed.length > 0,
+    renewed.length ? renewed.join('; ') : '未观察到续期');
+
+push('⑤ 掉线 bot 的预约自动释放（不永久锁地）',
+    !!(killResult && (killResult.stillHeld ?? []).length === 0 && killResult.canTake === true),
+    killResult ? `残留=${JSON.stringify(killResult.stillHeld)} 别人能约=${killResult.canTake}` : '未触发');
+
 const totalCount = kids.reduce((n, k) => n + Number(k.progress?.count ?? 0), 0);
-push('③ 合计产出 ≥ 64', totalCount >= TOTAL, `合计=${totalCount}（目标 ${TOTAL}）`);
+push('⑥ 合计产出 ≥ 64', totalCount >= TOTAL, `合计=${totalCount}（目标 ${TOTAL}）`);
 
-// ④ 父单收敛 done
 const parentNow = getJob(db, parent.id);
-push('④ 父单收敛为 done', parentNow?.state === JOB_STATE.DONE, `parent=${parentNow?.state}`);
+push('⑦ 父单收敛为 done', parentNow?.state === JOB_STATE.DONE, `parent=${parentNow?.state}`);
 
 log('\n──────── 最终状态 ────────');
 for (const k of kids) {
     log(`  ${k.id} [${k.state}] assignee=${k.assignee ?? '-'} claims=${JSON.stringify(k.claims)} progress=${JSON.stringify(k.progress)}`);
 }
 log(`  parent ${parent.id} [${parentNow?.state}]`);
-log(`  claims: ${JSON.stringify(claims.map((c) => ({ key: c.key, owner: c.owner })))}`);
+
 
 log('\n════════════ B3 真机断言 ════════════');
 const failed = results.filter((r) => !r.pass);

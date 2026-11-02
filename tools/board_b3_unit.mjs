@@ -344,6 +344,28 @@ const freshDb = () => {
     }
 }
 
+// 17b. ★ 子单 blocked 也要顶起父单（真机验收补的缺口）
+//   原来 rollupParent 只处理 failed；blocked 的子单会让父单**永远停在 running**（静默卡死）。
+{
+    const db = freshDb();
+    const { parent, children } = splitByCount(db, {
+        title: '两半', skill: 'mine', args: {}, countKey: 'count', total: 2, parts: 2,
+    });
+    claimFor(db, 'b1', {});
+    finish(db, children[0].id, { ok: true, code: 'OK', progress: { count: 1, want: 1 } });
+    // 另一个直接 blocked（NO_TOOL 就是这类）
+    claimFor(db, 'b2', {});
+    finish(db, children[1].id, { ok: false, code: 'NO_TOOL', progress: { count: 0, want: 1 } });
+    const childState = getJob(db, children[1].id).state;
+    rollupParent(db, parent.id);
+    const parentState = getJob(db, parent.id).state;
+    if (childState === JOB_STATE.BLOCKED && parentState === JOB_STATE.BLOCKED) {
+        okCase('★ 子单 blocked → 父单 blocked（不会永远停在 running）', `child=${childState} parent=${parentState}`);
+    } else {
+        badCase('★ 子单 blocked 顶起父单', { childState, parentState });
+    }
+}
+
 // 18. ★ dependsOn：前置未 done 时子单不可领
 {
     const db = freshDb();

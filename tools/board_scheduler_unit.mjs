@@ -512,6 +512,43 @@ function makeRunner({ clock, actions, durations = {}, onBody = null }) {
     }
 }
 
+// 10c. ★ ctx.reserve 必须真的打到板上（真机缺陷回归）
+//   真机验收抓到：调度器自己持有 boardClient，但 `makeCtx(agent)` 是去 agent.board 找板的，
+//   而调用方传的 agent 没有 .board → `ctx.reserve()` 静默走 no-board 分支（恒成功 no-op）
+//   → jobs 全 done、合计 85，但 **claims 表 0 行**：预约从来没写进库。
+//   这条用例断言：调度器跑完一张带 claims 的单，**board.reserve 被调用过**。
+{
+    const clock = makeClock();
+    const reserveCalls = [];
+    const board = makeFakeBoard([
+        { id: 'j1', state: JOB_STATE.READY, skill: 'mine', args: { count: 2 }, priority: 5,
+          claims: ['area:0,64,0:8'] },
+    ]);
+    // 在假板上挂 reserve/release，记录调用
+    // ★ 签名必须和真 `BoardClient.reserve(id, keys)` 一致（owner 是 client 内部自己填的）。
+    //   我第一版写成 (id, owner, keys) 三参，于是"keys 里有没有 area:..."这条断言永远假 ——
+    //   那是假板写错，不是代码错。
+    board.reserve = async (id, keys) => { reserveCalls.push({ id, keys }); return { ok: true, reserved: keys, until: clock.now() + 30000 }; };
+    board.release = async (id, keys) => { reserveCalls.push({ id, op: 'release', keys }); return { ok: true }; };
+
+    const actions = makeFakeActions();
+    const { runSkill } = makeRunner({ clock, actions, durations: { steps: 1 } });
+    // ★ 关键：传进来的 agent **故意不带 .board**（模拟真实调用方）——
+    //   调度器必须自己把板塞进给 makeCtx 的视图里，否则 ctx.reserve 就是空操作。
+    const sched = new BoardScheduler({
+        agent: { name: 'tester' }, board, actions, runSkill, now: clock.now, sleep: clock.sleep,
+    });
+    await sched.tick();
+
+    const reserved = reserveCalls.filter((c) => !c.op && Array.isArray(c.keys) && c.keys.includes('area:0,64,0:8'));
+    if (reserved.length > 0) {
+        okCase('★ ctx.reserve 真的打到板上（预约真的写库，不是 no-op）',
+            `reserve 调用 ${reserved.length} 次 keys=${JSON.stringify(reserved[0].keys)}`);
+    } else {
+        badCase('★ ctx.reserve 没打到板上（走了 no-board 分支）', { reserveCalls });
+    }
+}
+
 // 11. ★ 抢占时旧流程还在跑（killed）→ **绝不开新动作**（高危点①）
 {
     const clock = makeClock();

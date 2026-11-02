@@ -403,16 +403,26 @@ export function makeCtx(agent, job = null, manifest = null) {
             return true;
         },
 
-        /** 资源预约：**没有任务板时恒成功**（M8 之前都走这条，06 §9.2）。 */
+        /**
+         * 资源预约（06 §9.2）：**没有任务板时恒成功**（M8 之前都走这条）。
+         *
+         * ★ 参数形状（2026-11-02 B3 真机 + 单测两处都抓到过）：
+         *   单个 key 是**字符串**，而 `board_client.reserve(id, keys)` 要的是**数组**。
+         *   原来直接 `board.reserve(jobId, _key)` → 字符串被当成 owner、keys 变 undefined
+         *   → `normalizeClaimKeys` 报"claims 必须是数组" → INTERNAL（或静默 no-op）。
+         *   这里统一包成数组，并且**同时接受**单个 key 与 key 数组两种入参。
+         */
         async reserve(_key) {
-            if (board?.reserve) return board.reserve(jobId, _key);
-            return { ok: true, code: 'OK', message: '', data: { jobId, key: _key, noBoard: true } };
+            const keys = Array.isArray(_key) ? _key : [_key];
+            if (board?.reserve) return board.reserve(jobId, keys);
+            return { ok: true, code: 'OK', message: '', data: { jobId, keys, noBoard: true } };
         },
 
-        /** 释放预约：同上。 */
+        /** 释放预约：同上（形状一致）。 */
         async release(_key) {
-            if (board?.release) return board.release(jobId, _key);
-            return { ok: true, code: 'OK', message: '', data: { jobId, key: _key, noBoard: true } };
+            const keys = Array.isArray(_key) ? _key : [_key];
+            if (board?.release) return board.release(jobId, keys);
+            return { ok: true, code: 'OK', message: '', data: { jobId, keys, noBoard: true } };
         },
     };
 }

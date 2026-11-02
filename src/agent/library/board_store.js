@@ -867,9 +867,19 @@ export function rollupParent(db, parentId, opts = {}) {
     }
 
     const failed = children.filter((c) => c.state === JOB_STATE.FAILED);
+    const blocked = children.filter((c) => c.state === JOB_STATE.BLOCKED);
     const stillAlive = children.some((c) => [
         JOB_STATE.READY, JOB_STATE.CLAIMED, JOB_STATE.RUNNING, JOB_STATE.PAUSED,
     ].includes(c.state));
+
+    // ★ 2026-11-02 B3 真机验收补：**blocked 的子单也要能顶起父单**。
+    //   原来只处理了 `failed`。实测：一张子单变 `blocked`（比如料不够/工具没了），
+    //   父单既不是 done 也不是 blocked，就**永远停在 running** ——
+    //   没人会再推进它，表现为"这个任务永远不结束"（静默卡死，比报错更难查）。
+    if (blocked.length && !stillAlive) {
+        const r = setState(db, parentId, JOB_STATE.BLOCKED, { now });
+        return { changed: r.ok, parent: r.job, reason: `children-blocked(${blocked.length})` };
+    }
     if (failed.length && !stillAlive) {
         const r = setState(db, parentId, JOB_STATE.BLOCKED, { now });
         return { changed: r.ok, parent: r.job, reason: `children-failed(${failed.length})` };
