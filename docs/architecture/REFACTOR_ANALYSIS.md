@@ -2030,6 +2030,142 @@ B3 真机最狠的一条是 `ctx.reserve()` 静默走 no-board → jobs 全 done
 
 ---
 
+#### M9 接驳层验收（t29 / 2026-11-03，全部实测）
+
+**① ★ 全仓「假 PASS」排查：没有残留（用脚本扫 167 个 tools/*.mjs）**
+
+**方法**：抽所有工具脚本的自定义辅助函数定义（906 个），按**两条同时成立**判可疑：
+A) 函数体里没有依赖形参的 `if`/三元；B) **调用点把布尔表达式**（`===`/`!==`/`&&`/`Array.isArray`/裸 `!`/比较）
+传给了它的第 2/3 参。
+
+```
+真判条件的辅助函数：106 个
+纯上报函数（体内无 if，但调用点没传布尔条件）：452 个 —— 正常
+可疑：4 个 → 逐一人工核，全是"解析器自己误报"
+```
+
+**4 个误报的原因（记下来，免得下次重跑被 4 个红点误导）**：
+1. `badCase(name, actual)` —— 布尔算子出现在**证据模板串**里（`` `...${x === null ? ...}` ``），那是文本不是条件；
+2. `check(name, cond, evidence, actual)` **两处** —— 实现是**单行箭头** `cond ? okCase(...) : badCase(...)`，
+   **真判**，是我的花括号提取器漏了简洁箭头；
+3. `rec(type, extra)` —— 那是**记录器**不是断言。
+
+**另外两种"假 PASS"形状也查了，都没有**：恒真条件 `if (true)` / `if ('…')` → **0 处**；
+`catch { pass++ }` 吞断言 → **0 处**。
+
+**atoms 自曝那处已修**：`tools/m9_smoke_live.mjs:58` 现在是
+`const check = (n, cond, e) => { if (cond) ok(n, e); else bad(n, e); }` —— 真判；
+文件里剩下的 `ok(...)` 调用都在 `if (...) { ok() } else { bad() }` 分支内，是正常上报用法。
+
+> **结论：这一类在全仓没有第二处。** 但这次排查的方法本身值得留（脚本扫 + 两条同时成立 + 人工核误报）。
+
+**② `code_hints` 覆盖与格式（独立断言，不只信它那条用例）**
+
+- **覆盖 38/38**：`CODES` 38 个码，`hintedCodes()` 38 个，`CODES.filter(c => !hasHintFor(c))` = **0**。
+- **抽查 3 个码的 hint 是否可执行**（不是"再试一次"这种废话）：
+  `NO_PATH → "过不去：换个目标；连着两次还是不行就问玩家"`、
+  `INVENTORY_FULL → "背包满了：先 !do \"store\" 把东西存起来"`（点名叫具体流程）、
+  `NOT_READY → "时机不对（比如作物还没熟、还没烧完）：等一会再试"`。
+- **格式实测**：造 **600+ 字**的长 message → 输出**正好 200 字、单行、「建议：」完整保留**；
+  无 message 时也产出带建议的一行（60 字）。
+  → **实现顺序是对的**：先给 head+code+进度+建议留预算，message 用剩余空间。
+  如果反过来（先拼好再整体截断），建议必然被吃掉 —— 那正是 atoms 第一版栽的坑。
+
+**③ 命令改路由的行为等价性 + 可观测证据（"怎么证明走的是 flow，不是旧 skills.\*"）**
+
+| 证据 | 内容 |
+|---|---|
+| **1. 命令层已无旧调用** | 剥离注释后，`skills.collectBlock(` / `skills.placeBlock(` / `skills.followPlayer(` / `skills.craftRecipe(` / `skills.smeltItem(` / `skills.attackNearest(` / `skills.putInChest(` / `skills.takeFromChest(` 在 `commands/actions.js` **0 处真实调用**（只剩注释里的历史说明） |
+| **2. 六条命令都 import + 调用了对应 flow** | `!collectBlocks→collectTask(flow_collect)`、`!craftRecipe→craftFlow`、`!putInChest→storeFlow`、`!placeHere→buildTask(flow_build)`、`!attack→fightFlow`、`!followPlayer→followTask` —— 六个「import 存在 + 调用存在」全部为真 |
+| **3. flow 有 `onEvent` 通道、旧 `skills.*` 没有** | `flow_collect.collect` / `flow_build.build` / `flow_store.store` 的签名与内部都用 `onEvent`/`ctx`；而 `skills.collectBlock` **没有** `onEvent` → **事件本身就是"走了 flow"的指纹** |
+| **4. 真机可观测事件** | 我自己跑的 `m9_smoke_live`：`!attack` 返回 `[!attack] 失败 NO_TARGET。建议：附近没有目标…`（flow_fight + code_hints 的措辞，旧 `skills.attackNearest` 不产生这种格式）；`!collectBlocks` 失败行带「建议」且 ≤200 字 |
+
+**bench 行为等价性（逐场景）**：`bench 5` 实测 **45/55（81.8%）**，与 M9 期基线 **45/55 一致**，
+**且逐场景构成也一致**（`dig-through` 两边都是 **0/5**；存档 4 次 M9 期基线：45/55、44/54、45/55、45/55 —— 可复现）。
+`climb-ladder` 中位 **1928ms**（≈1900 ✔）、`water-cross` 中位 **28491ms**（落在 27000–35000 区间 ✔）。
+
+> **为什么必须写"逐场景构成也一致"而不是笼统的"一致"**：
+> 总数一样但**构成变了**就是两回事 —— 那会掩盖"某个场景能力变了、另一个场景恰好补回来"。
+> 本次恰好两边都是 `dig-through 0/5`，但**这个核对动作本身不能省**（与"atoms 报的唯一未过项被换掉了"同一类警觉）。
+
+**关于 `dig-through` 4/5 → 0/5 的口径更正（2026-11-03，重要，别记反）**
+
+我最初把 4/5→0/5 归因成「bench 环境改动（`2ebea3a` 在 `G-6` 铺 bedrock）」，**这个归因是错的**，现更正：
+
+- **真因是 `59b22b0`（每轮重建场地）**。提交说明原文：「旧基线一直在"复用上一轮挖的洞"，测的不是能力」。
+- **铁证**（旧归档 `pre-t6.jsonl` 的 dig-through 逐轮）：
+  ```
+  round 1      ok=false  remain=7.5   ← 完好墙，挖不穿
+  round 2      ok=true   remain=0.6   ← 走的是 r1 挖的洞
+  round 3..10  ok=true   remain=0.6~0.8
+  ```
+  而 `bench_move_actions.mjs` **文档自己就写着**：dig-through「能挖 1 格（动作里有 dig）但随后 NO_PATH，**挖不穿**」。
+- 所以历史上的 **4/5、21/27、24/27 全部测的是"能不能走过上一轮挖的洞"** —— 是**假分数**。
+  每轮重建后 5 轮都面对完好墙 → **`0/5` 才是真实能力**。
+- **`2ebea3a`（`G-6` 铺 bedrock）与 dig-through 无关**：墙在 `G+1..G+2`（地面以上），bedrock 在 `G-6`，不相干；
+  它解决的是另一个问题（她挖/垫/踩空会掉出世界）。
+
+> **结论**：`49→45` 这 4 分确实全部来自 `dig-through` 一个场景，但那是**「从假分数回到真分数」**，
+> **不是 M9 的产品回归**，也**不是 bench 环境损坏**。→ 原"需专门查"的遗留项**销账**。
+> 口径已按 captain 要求写死：**"不算 M9 产品回归，但也不能笼统记成'一致'"—— 要写"且逐场景构成也一致"。**
+
+> 📌 **方法论留档（这条比结论更值钱）**：`bench` 的场景如果**不在每轮之间重建场地**，
+> 5 轮就不是 5 个独立样本 —— 上一轮的破坏（挖洞、清脚、垫方块）会变成下一轮的"环境"。
+> 于是"通过率"里混进了"场地被改好了"的分数。**看到 `r1` 挂而 `r2..r5` 全过，就该怀疑这个。**
+
+**④ D23 残余检查（措辞必须准确）**
+
+- `grep -rn companion_mode src/` → **只剩注释**（`actions.js:214/242/456/465/560`、`index.js:16`）✅
+- **"唯一路径"的准确说法是「命令层唯一路径」，不是「全仓唯一」** —— 旧 `skills.*` 仍有别的调用方：
+
+| 函数 | 还有谁在用 | 性质 |
+|---|---|---|
+| `skills.collectBlock` | `src/agent/npc/item_goal.js:156` | 上游 NPC 评测路径 |
+| `skills.placeBlock` | `src/agent/modes.js:117/125/374`（自保放水桶、插火把）、`src/agent/npc/build_goal.js:64` | 运行路径 + 上游评测 |
+| `skills.followPlayer` | **无调用方** | **真死代码，可以删** |
+
+> **说"全仓唯一"就是新的谎。** D23 删掉的是**命令层的开关**；`skills.*` 的收敛是 **Phase R** 的对象，本轮不动。
+
+**⑤ 两处"没做到"的判定（我的结论）**
+
+| 项 | 我的判断 |
+|---|---|
+| **`protect_owner`** | **"判定链 + 11 条计数断言"不够** —— 我用真机跑就抓到：僵尸 `distToOwner=5.80` 但 `dyToOwner=3.60 > VERTICAL_SLACK(3)` → 按设计 `no-threat`。**判定链本身没错，但用例的几何是假的**，等于在测一个不可能触发的分支。→ 已按 captain 要求补**真实几何用例**（见⑥）。**不需要真打一场**（那要第二个真人客户端），但**几何必须真实**。 |
+| **`idle_planner`** | **可以在无真人情况下验**：`THINK_EVERY_MS` 可注入、`idle_planner` 是纯策略函数（输入 bot 状态 → 输出想做的事），所以**"真空闲 30 秒"可以用假时钟 + 连续调用模拟**，不需要真等 30 秒、也不需要真人。→ 本轮**未做**（没在 t29 范围内落地用例），记为**可补项而不是阻塞项** |
+
+**⑥ t29 修的一处测试口径错误（captain 授权）**
+
+`tools/m9_smoke_live.mjs` 的 ⑤ 原来把僵尸 `summon` 在 `by`（主人脚位）但**没等重力落定**，
+实测 `dyToOwner=3.60` → 被设计正确拒绝，脚本却断言"该打" → **假红**。
+修法（三处）：
+1. summon 后**先等落定、再两次 `tp` 到主人同一层**（否则它会落到下方方块上，dy 超标）；
+2. **新增前置断言**：`dist ≤ 6 且 dy ≤ 3`，几何不达标就明确判"验收无效"，**不许当通过**；
+3. 几何达标后断言 **`act===true && reason==='threat-near-owner'`**，并保留"不跟随时 `not-following`"。
+**修后真机 8/8 全过**：`现场候选 dist=1.96 dy=0.00` → `act=true reason=threat-near-owner`。
+
+**⑦ 回归（t29 实测）**
+
+| 项 | 结果 |
+|---|---|
+| `unit_all` | **41/41 + 1 跳过**，exit 0（任务书写 39；atoms 又加了 `protect_owner`/`idle_planner` 等用例） |
+| `preflight` | 默认 **exit 0**、**前缀违规 4 处**（`actions.js→act_place` 已销，与 captain 说的一致）/ `--strict-api` **exit 1**（Phase 5.4/Phase R 旧债，**未修绿**）/ `--report-api` exit 0；**121/121** 模块导入 |
+| `atom_all` | **18/18**，真实 **244 条**用例 0 FAIL；`vine_physics_test` 7/7 |
+| `bench 5` | **45/55（81.8%）**，与 M9 期基线一致**且逐场景构成也一致**（`dig-through` 两边都是 0/5）；`dig-through` 4/5→0/5 的口径更正见③ —— **是"从假分数回到真分数"，非回归** |
+
+**⑧ M9 剩余遗留**
+
+1. ~~`dig-through` 4/5 → 0/5 需专门查~~ → **✅ 已澄清并销账**（2026-11-03）：
+   真因是 `59b22b0`「每轮重建场地」；旧的 4/5 测的是**走上一轮挖的洞**
+   （`pre-t6.jsonl`：r1 `remain=7.5` 挖不穿 → r2..r10 `remain=0.6` 全过），
+   而 `bench_move_actions.mjs` 文档自己写着「挖不穿」。
+   → **`0/5` 是真实能力，属"假分数回到真分数"，不是回归。**
+   我最初误归因为 `2ebea3a`（在 `G-6` 铺 bedrock）—— **更正：与 dig-through 无关**（墙在 `G+1..G+2`）。
+2. **`idle_planner` 的"真空闲"验证**可用假时钟 + 纯策略函数离线做，本轮未落地。
+3. **`skills.followPlayer` 是真死代码**，可以删；`skills.collectBlock`/`placeBlock` 属 Phase R 收敛对象。
+4. `protect_owner` 只验到"判定链 + 真实几何"，**未真打一场**（需第二个真人客户端）。
+
+---
+
 ## 6. 文件组织结构（目标）
 
 > ⚠️ 2026-11-01：本节的子目录方案被 [`02_actions.md §5`](02_actions.md) 的**前缀方案**取代：`library/` 保持平铺，靠文件名前缀区分层级
