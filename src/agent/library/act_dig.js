@@ -164,14 +164,49 @@ export async function digBlock(bot, pos, opts = {}) {
  *   dig edge, so "no pickaxe" becomes "go around" instead of "fail four times".
  */
 export function canDigWithInventory(bot, block) {
-    if (!block) return false;
-    if (!isDiggable(block)) return false;
+    return canDigReason(bot, block).can;
+}
+
+/**
+ * 同 `canDigWithInventory`，但**把"为什么"也说出来**（三态）。
+ *
+ * ★ 2026-11-02（t21）真机查到的真实缺陷：
+ *   原来只有 true/false 两态，于是**"背包读不到"和"真的没工具"长得一模一样**。
+ *   实测链路：造场地时把她自己 entomb 在方块里 → 窒息死亡 → 服务端清空背包 →
+ *   `bot.inventory.items()` 返回 `[]` → `canDigWithInventory` 返回 false →
+ *   `flow_mine` 报 `NO_TOOL` → 任务板按规则②把单判成 **blocked（终态，要人介入）**。
+ *   但真相是"她刚死、背包正在重建"，**下一秒重试就好了**。
+ *
+ *   把"读不到"当成"没有工具"是这套系统里反复出现的一类错（M6 立了验收项）。
+ *   所以判据改成三态：
+ *     · `{can:true,  why:'ok'}`          —— 有能用的工具（或徒手可挖）
+ *     · `{can:false, why:'no-tool'}`     —— 背包**读得到**、但确实没有合适工具（真该 NO_TOOL）
+ *     · `{can:false, why:'unreadable'}`  —— 背包**读不到**（inventory 不存在 / 刚死亡重建中）
+ *                                          → 调用方应报 NOT_READY（可重试）而**不是** NO_TOOL
+ *
+ * @returns {{can:boolean, why:'ok'|'no-tool'|'unreadable'|'not-diggable'|'no-target'}}
+ */
+export function canDigReason(bot, block) {
+    if (!block) return { can: false, why: 'no-target' };
+    if (!isDiggable(block)) return { can: false, why: 'not-diggable' };
 
     // Blocks she can dig bare-handed (no tool required in vanilla).
     const name = String(block.name || '');
-    if (/dirt|sand|gravel|grass|clay|leaves|wool|snow|soul_/.test(name)) return true;
+    if (/dirt|sand|gravel|grass|clay|leaves|wool|snow|soul_/.test(name)) return { can: true, why: 'ok' };
 
-    const items = bot.inventory?.items?.() ?? [];
+    // ★ 先判"背包读得到吗" —— 这是三态的关键分界。
+    //   死亡瞬间 / 刚 respawn / 服务端同步中，`bot.inventory` 可能是 null，
+    //   或者 `items()` 不是数组。那时**不许**下"没工具"的结论。
+    const inv = bot?.inventory;
+    if (!inv || typeof inv.items !== 'function') return { can: false, why: 'unreadable' };
+    let raw;
+    try { raw = inv.items(); } catch { return { can: false, why: 'unreadable' }; }
+    if (!Array.isArray(raw)) return { can: false, why: 'unreadable' };
+
+    // 她死了 / 还没活过来：背包被清空是**暂时**的，不是"没有工具"
+    if (Number(bot?.health ?? 20) <= 0) return { can: false, why: 'unreadable' };
+
+    const items = raw;
     // Pickaxe covers stone-family blocks (the common case when digging down).
     //
     // ★ 2026-11-02 真机验收抓到的 bug：原来只取**第一把**镐 `.find()`，
@@ -186,13 +221,14 @@ export function canDigWithInventory(bot, block) {
         // A pickaxe with almost no durability left is as good as none.
         const max = pick.maxDurability ?? 0;
         const used = pick.durabilityUsed ?? 0;
-        if (!max || max - used > 2) return true;
+        if (!max || max - used > 2) return { can: true, why: 'ok' };
     }
     // Shovel covers dirt/sand; axe covers wood. Accept either as a fallback so we
     // do not refuse a route the bot could actually dig.
     const shovel = items.find(i => /_shovel$/.test(i.name));
     const axe = items.find(i => /_axe$/.test(i.name));
-    if (shovel || axe) return true;
+    if (shovel || axe) return { can: true, why: 'ok' };
 
-    return false;
+    // 背包读得到、但确实（含磨损到不能用）没有合适工具 → 这才是真的 no-tool
+    return { can: false, why: 'no-tool' };
 }

@@ -21,7 +21,7 @@
  * `checkStep` 安全检查（液体/无地板红线），流程不该自己再实现一遍挖穿逻辑。
  */
 import { ok, fail } from './contract.js';
-import { digBlock, isDiggable, canDigWithInventory } from './act_dig.js';
+import { digBlock, isDiggable, canDigWithInventory, canDigReason } from './act_dig.js';
 import { findBlocks } from './query_perceive.js';
 import { countItem } from './query_perceive.js';
 import { mapDirOf } from './bot_paths.js';
@@ -40,7 +40,7 @@ export const manifest = {
     },
     needs: { items: ['镐'], near: [] },
     claims: [],
-    codes: ['NO_TARGET', 'NO_TOOL', 'OUT_OF_REACH', 'NO_PATH', 'NO_FLOOR', 'LIQUID_RISK', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
+    codes: ['NO_TARGET', 'NO_TOOL', 'NOT_READY', 'OUT_OF_REACH', 'NO_PATH', 'NO_FLOOR', 'LIQUID_RISK', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
     resumable: false,
     timeoutMs: 8 * 60 * 1000,
 };
@@ -185,7 +185,20 @@ export async function mine(bot, ore, count = 1, opts = {}) {
 
             // 挖不动就别试了（换方向/换工具是上层的事）
             if (!isDiggable(block)) continue;
-            if (!canDigWithInventory(bot, block)) {
+            // ★ 三态判据（t21）：**"背包读不到"不等于"没有工具"**。
+            //   真机踩过：造场地把她 entomb 了 → 窒息死亡 → 服务端清空背包 →
+            //   items=[] → 旧代码直接报 NO_TOOL → 任务板按规则②判 blocked（终态）。
+            //   但真相是"刚死、背包正在重建"，下一秒重试就好了。
+            //   所以：unreadable → NOT_READY（可重试），只有真·没工具才报 NO_TOOL。
+            const why = canDigReason(bot, block);
+            if (why.why === 'unreadable') {
+                return fail('NOT_READY', `背包暂时读不到（可能在死亡/重生重建中），过一会再试`, {
+                    ore, block: block.name, count: mined, want,
+                    // 不谎报：明确标记"这次的工具状态没能确认"
+                    verified: false, reason: 'inventory-unreadable',
+                });
+            }
+            if (!why.can) {
                 return fail('NO_TOOL', `挖不动 ${block.name}（没有合适的镐）`, { ore, block: block.name, count: mined, want });
             }
 

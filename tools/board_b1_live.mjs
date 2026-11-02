@@ -89,7 +89,11 @@ if (process.argv[2] === '--agent') {
         await RC(`fill ${bx - 10} ${by - 2} ${bz - 10} ${bx + 10} ${by + 6} ${bz + 10} air`);
         await RC(`fill ${bx - 10} ${by - 1} ${bz - 10} ${bx + 10} ${by - 1} ${bz + 10} stone`);
         // mine 的目标：铁矿。铺一层在她脚边（含 deepslate 变体位置也放普通的）
+        // ★ 关键：矿层要**避开她站的那一格**，否则 /fill 会把她 entomb 在里面 →
+        //   窒息死亡 → 服务端清空背包 → mine 读到 items=[] → 假 NO_TOOL。
         await RC(`fill ${bx - 4} ${by} ${bz - 4} ${bx + 4} ${by + 1} ${bz + 4} iron_ore`);
+        await RC(`fill ${bx} ${by} ${bz} ${bx} ${by + 1} ${bz} air`);
+        await RC(`fill ${bx} ${by - 1} ${bz} ${bx} ${by - 1} ${bz} stone`);
         await sleep(1200);
         console.log(`AGENT_ARENA at ${bx},${by},${bz}`);
     } catch (e) { console.log('AGENT_ARENA_ERR', String(e?.message ?? e).slice(0, 80)); }
@@ -320,19 +324,24 @@ const cAfter = after.count ?? 0;
 push('② progress.count 不倒退', cAfter >= cMid && cMid >= cBefore,
     `前=${cBefore} 杀后=${cMid} 后=${cAfter}`);
 
-// 3) 不重复计数：最终 count 不能等于"两轮各自 count 之和"这种重复累加
-//    正确语义：progress.count 是"这张单当前做到多少"（不累加两次运行）
+// 3) 不重复计数：**重启不该改变计数**。
+//    正确语义：progress.count 是"这张单当前做到多少"（不累加两次运行）。
 // ③ 不重复计数
 //
-// 注意口径（第一次写错过）：`mine` 是**成批挖**的（一次 digBlock 批里挖几块），
-// 所以 count 比 want 多一点（18 vs 16）是**正常超挖**，不是重复计数。
-// 真正要防的"重复计数"长这样：两轮各 16、加起来 32（= 2×want）。
-// 判据：不允许到"两轮相加"的量级（> want*1.6 且 ≈ cBefore+cAfter 那种）。
+// ★ 2026-11-02（t20 验收时改，captain 授权）：
+//   原来这里判 `cAfter <= ceil(want*1.6)`（want=8 → 上限 13）。**那个阈值本身定错了**：
+//   `mine` 是**成批挖**的（一批里挖几块），单次运行就能到 3×want（实测 want=8 时挖到 24）。
+//   于是这条断言在"机制完全正确"的情况下也会红，只能靠运气过 —— 这不是验收，是掷骰子。
+//
+//   真正该断言的是：**重启前后计数不变**（`cAfter === cMid`）。
+//   判据含义：B 重启后要么没领到单（已被收敛成 done），要么接着做但不把 A 的量重算一遍；
+//   两种情况都不该让 count 增长。增长 = 重复计数。
+//   （单次运行内的超挖是**合法事实**，不归这条管；`!jobs` 会标"超额 N"给人看。）
 const wantN = after.want ?? cBefore ?? 1;
-const overshootOk = cAfter <= Math.ceil(wantN * 1.6);      // 允许成批挖的合理超挖
+const noGrowthAfterRestart = cAfter === cMid;              // ★ 重启不改变计数
 const notSummed = !(cMid > 0 && cBefore > 0 && Math.abs(cAfter - (cBefore + cMid)) <= 1 && cAfter > wantN * 1.5);
-push('③ 不重复计数（没把两轮相加；允许成批挖的合理超挖）', overshootOk && notSummed,
-    `后=${cAfter} want=${wantN}（上限 ${Math.ceil(wantN * 1.6)}）前=${cBefore} 杀后=${cMid}`);
+push('③ 不重复计数（重启后计数不增长）', noGrowthAfterRestart && notSummed,
+    `后=${cAfter} 杀后=${cMid} want=${wantN} 前=${cBefore}（判据：后必须 === 杀后）`);
 
 // ③b **防空跑**：如果 count 一直是 0，上面几条"不倒退/不重复"就是废话。
 //     必须证明"确实采到了东西"，这次重启验收才有意义。

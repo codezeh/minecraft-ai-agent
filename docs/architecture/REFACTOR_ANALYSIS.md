@@ -1614,7 +1614,7 @@ B 重新领到**同一张单**又挖 9 → 最终 **24/8**；`!jobs` 显示 `min
 |---|---|
 | ① 同 id 存活 | ✅ |
 | ② count 不倒退 | ✅ 0 → 24 → 24 |
-| ③ **不重复计数** | ✅ **机制已成立**（重启不再派单、`cAfter===cMid`）。⚠️ 但 `board_b1_live.mjs` 的**阈值**仍是 `cAfter <= ceil(want×1.6)=13`，而 `mine` 单次就能挖到 24（3×want）→ 该条**仍报 FAIL**。**是阈值口径问题，不是机制问题**（见⑧-1） |
+| ③ **不重复计数** | ✅ **机制已成立 + 阈值已改**（见⑧-1）：`board_b1_live.mjs` 的判据已从 `cAfter <= ceil(want×1.6)=13` 改成 **`cAfter === cMid`**（重启前后计数不变）。修复后实测 24 → 24 零增长。 |
 | ③b 确实采到了（防空跑） | ✅ 24 > 0 |
 | ①b 回报后到 done | ✅ state=done |
 | ④ attempts 未因 kill +1 | ✅ 0 → 0 |
@@ -1622,19 +1622,38 @@ B 重新领到**同一张单**又挖 9 → 最终 **24/8**；`!jobs` 显示 `min
 
 **⑧ B1 范围内的待办（归属已写清）**
 
-1. **`board_b1_live.mjs` 断言③阈值要改**（归属：**atoms**，是它的测试文件，t20 未获授权改）——
-   `cAfter <= ceil(want×1.6)` 对 `mine` 不成立（单次成批挖就到 3×want）。真正该断言的是
-   **重启前后 count 不变**（`cAfter === cMid`），而不是"总量不超过 1.6 倍 want"。改完后该条不再靠侥幸。
+1. ✅ **已完成（t20 收尾，captain 授权改）**：`board_b1_live.mjs` 断言③的判据从
+   `cAfter <= ceil(want×1.6)`（want=8 → 上限 13）改成 **`cAfter === cMid`**（重启前后计数不变）。
+   为什么原判据是错的：`mine` 是**成批挖**的（一批里挖几块），单次运行就能到 **3×want**（实测 want=8 挖到 24），
+   于是"机制完全正确"时这条也会红 —— 那不是验收，是掷骰子。真正该断言的是**重启不改变计数**，
+   不是"总量不超过某个魔数"。（单次运行内的超挖是合法事实，不归这条管；`!jobs` 标"超额 N"给人看。）
 2. **`!do` 仍走 `runAction`、没改走任务板**（按用户决策，B3 再说）。
 3. `claims` 表填充（预约）属 B3。
 
-**⑨ 两项「待 M8」遗留的销账核查（captain 要求）**
+**⑨ 两项「待 M8」遗留的销账核查（captain 要求：写清"为什么是部分/为什么不能销"）**
 
-| 项目 | 结论 |
+| 项目 | 结论 | **为什么**（别只看状态） |
+|---|---|---|
+| `applyStop()` 在 `board=null` 时空操作 | **部分销账** | **销账的部分**：B1 让生产路径上 `agent.board` 是真的 `BoardClient`（`agent.js:86` 接线），实测 `applyStop(player)` → `plan={to:'paused',patch:{state:'paused',lease:null,result:{code:'INTERRUPTED'}},pauseAutoClaim:true}` 且**真的发出了 `board:update`**（写板了，不是空转）。<br>**不能全销的部分**：`board=null` 仍然是**断线降级路径**（`agent.js:94`：client 连接失败就保持 null）。🔴 **那段空操作必须保留，不许当死代码删掉** —— 删了的话，一旦 mindserver 连不上，`applyStop` 就会去调 `null.update()` 直接抛异常，把"板子没连上"变成"动作停不下来"。它的正确身份是**降级护栏**，不是遗留物。 |
+| `requeueStaleBrief()` 无调用方 | **不能销账** | 它扫的是**"60 秒内没被认领的 brief 单"**——这需要有人**定期扫**（定时器/调度循环）。B1 只做了存储 + 事件 + 命令，**没有调度器**（`board_scheduler` 本期不做，属 B2）。现在全仓只有 `control_reasons_unit` 在调它（测的是纯函数语义），**生产上零调用**。所以它不是"忘了接线"，而是**缺了会调它的那个组件**；接到 B2 的调度循环里才有意义。 |
+| 死亡捡单 / 任务单 deadline 真机覆盖 | **部分推进** | B1 让 `board.add()` 可用（捡单在存储层已经能落）；但"谁去捡、多久过期、几级调度"这些属于 **B2 调度器**，真机尚未验证。 |
+
+**⑩ 功能未回归（t20 实测）**
+
+| 项 | 结果 |
 |---|---|
-| `applyStop()` 在 `board=null` 时空操作 | **部分销账**：B1 让生产路径上 `agent.board` 是真 `BoardClient`（`agent.js:86`）；实测 `applyStop(player)` → `plan={to:paused,pauseAutoClaim:true}` 且**真的发出 `board:update`**（写板了）。但 `board=null` 仍是**断线降级路径**（`agent.js:94`），那段空操作**必须保留**，只是不再是常态。 |
-| `requeueStaleBrief()` 无调用方 | **不能销账**：全仓仍只有 `control_reasons_unit` 调用，**零生产调用方**；它扫的是"60 秒没被认领的 brief 单"，需要调度器定期跑 → 属 **B2**。 |
-| 死亡捡单 / 任务单 deadline 真机覆盖 | **部分推进**：B1 让 `board.add()` 可用；但"谁去捡、多久过期"仍要 B2/8 级调度，真机未验。 |
+| `unit_all` | **31/31 + 1 跳过**，exit 0（任务书写的是 29；实际多 2 —— atoms 新增 `act_p1_unit`/`flow_p1_unit`，我按第 4 条加了 `board_payload_unit`，都是**新增用例**不是失败） |
+| `preflight` | 默认 **exit 0**（违规 5 处、**0 新增**）/ `--strict-api` **exit 1**（Phase 5.4 旧债，**未修绿**）/ `--report-api` exit 0；**114/114** 模块导入 |
+| `atom_all` | **18/18**，真实 **244 条**用例 0 FAIL |
+| `bench_move_actions 5` | **49/55（89.1%）**，与基线一致；失败全 `NO_PATH ×6`（down5×5 已知边界 + dig-through r1）；`climb-ladder` 中位 **1950ms**；`digdown` **5/5** `digdownSeen=true`、`execActions={"digdown":1}`、`y −57→−60` |
+
+> 🔴 **`water-cross` 本轮数据作废（并发踩场地）**：本轮跑到 `water-cross` 时，25566 上有**另一个 bot**
+> （`skc79700`，不是我的；atoms 当时在跑 t21 的真机），bench 的固定 arena（`10000,6000`）
+> 被两个 bot 同时 `fillSafe` 互相清填 —— 该场景中位 31416ms 正常、但单轮出现 **85144ms** 离群。
+> **处置**：`water-cross` 这一轮**不计入"与基线一致"的结论**；其余 **10 个场景**都在基线带内，
+> 总通过率 49/55 也与基线一致。**之后需在无人占用的窗口重跑一次干净 bench 作为最终数。**
+> 纪律（captain 记）：**调度器/任务板这类"多进程"改动上线后，真机测试必须严格串行** ——
+> 现在真的可能有多个 bot 同时在跑，arena 只有一个。
 
 ---
 
