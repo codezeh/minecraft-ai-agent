@@ -105,6 +105,8 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     }
     console.log(`   方块证据：外圈墙 ${walls}/8 格非空气，顶 ${roof}/9 格非空气`);
     console.log(`   可观测数据：placed=${r.data?.placed}/${r.data?.total} costMs=${r.data?.costMs} remaining=${r.data?.remaining}`);
+    // ★ 用户明确要求：把 reason 和 outsLength 都打出来
+    console.log(`   [诊断] reason=${r.data?.reason ?? '(null)'} outsLength=${r.data?.outsLength ?? '(null)'} code=${r.code}`);
     check('② !do shelter 真的搭起来了（ok=true + 墙/顶全齐）', r.ok && walls === 8 && roof === 9,
         `墙=${walls}/8 顶=${roof}/9 placed=${r.data?.placed}/${r.data?.total}`);
 }

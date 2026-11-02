@@ -86,21 +86,31 @@ export function shelterBlueprint(feet, material, size = 3, opts = {}) {
         if (!solid) put(cx, cy - 1, cz);               // 只在需要时补 1 块
     }
 
-    // ── 墙：**1 层**（y）的外圈 ────────────────────────────────────
-    //   原来是 2 层（y、y+1）；缩到 1 层是为了进预算（第一夜挡一下，不盖房）。
-    //   1 层墙 + 顶仍然挡视线、挡怪进不来。
-    for (let dx = -half; dx <= half; dx++) {
-        for (let dz = -half; dz <= half; dz++) {
-            const edge = Math.abs(dx) === half || Math.abs(dz) === half;
-            if (!edge) continue;                       // 中间留空（她要站在里面）
-            put(cx + dx, cy, cz + dz);
+    // ── 墙：**2 层**（y、y+1）的外圈 ────────────────────────────────
+    //
+    // ★★ 2026-11-03 真机 + 几何复查抓到的严重错误：我一度把它缩成**1 层墙**，
+    //   于是内空只有 1 格高 —— 而她身高 1.8（脚在 cy、头在 cy+1）→
+    //   **顶圈正好落在她头顶那一格** → 她被困在盒子里，`forward+jump` 8 秒也出不来
+    //   （真机证据：`reason=still-inside outsLength=4 costMs=8978`）。
+    //   这和 B1 那次"活埋 → 窒息 → 背包清空 → 假 NO_TOOL"是**同一类事故**：
+    //   把人封在方块里。**任何时候都不能让墙+顶占掉她身体的两格。**
+    //
+    //   所以墙必须是 2 层（voxel 层的常识：站着的生物需要 2 格空间）。
+    //   省块数要从"不铺地板"和"3×3 而不是更大"来省，**不能从她的身高里省**。
+    for (const y of [cy, cy + 1]) {
+        for (let dx = -half; dx <= half; dx++) {
+            for (let dz = -half; dz <= half; dz++) {
+                const edge = Math.abs(dx) === half || Math.abs(dz) === half;
+                if (!edge) continue;                   // 中间留空（她站在里面，2 格高）
+                put(cx + dx, y, cz + dz);
+            }
         }
     }
 
-    // ── 顶（y+1）的四边 ──────────────────────────────────────────
+    // ── 顶（**cy+2**，墙 2 层之上）的四边 ─────────────────────────
     const roof = [];
     for (let dx = -half; dx <= half; dx++) {
-        for (let dz = -half; dz <= half; dz++) roof.push([cx + dx, cy + 1, cz + dz]);
+        for (let dz = -half; dz <= half; dz++) roof.push([cx + dx, cy + 2, cz + dz]);
     }
     const isCenter = ([x, , z]) => x === cx && z === cz;
     for (const [x, y, z] of roof.filter((c) => !isCenter(c))) put(x, y, z);
@@ -116,9 +126,28 @@ export function shelterBlueprint(feet, material, size = 3, opts = {}) {
  *   而 3×3 带 1×1 内空时，屋顶正中**必然**在她头顶列 → **站在屋里永远封不上**。
  *   所以流程必须：搭完墙+顶圈 → **走到屋外相邻一格** → 封正中 → 再回屋。
  */
+/**
+ * "她是否已经走到屋外"——**判定必须用 OR，不是 AND**。
+ *
+ * ★ 2026-11-03 真机抓到我自己的逻辑 bug：
+ *   原来写 `Math.abs(dx) > 1 && Math.abs(dz) > 1`（两个轴都要出格）。
+ *   但她是从屋里**朝一个方向**跳出去的（比如纯 +x），`dz` 恒为 0 →
+ *   谓词**永远不可能为真** → `holdKey` 一直等到超时 → 报 `still-inside`。
+ *   真机证据：`reason=still-inside outsLength=4`（四个方向都有空气格，场地没问题）。
+ *
+ *   墙在 ±1，所以"出格"的正确条件是**任一轴超过 1** 即可。
+ *
+ * @returns {boolean}
+ */
+export function isOutsideShelter(px, pz, cx, cz) {
+    const dx = Math.abs(Math.floor(px) - cx);
+    const dz = Math.abs(Math.floor(pz) - cz);
+    return dx > 1 || dz > 1;
+}
+
 export function capCell(feet, size = 3) {
     const cy = Math.floor(feet.y), cx = Math.floor(feet.x), cz = Math.floor(feet.z);
-    return { x: cx, y: cy + 1, z: cz };
+    return { x: cx, y: cy + 2, z: cz };      // 墙 2 层之上才是顶（原来写 cy+1 是漏算了身高）
 }
 
 /**
@@ -204,7 +233,11 @@ export async function shelter(bot, opts = {}) {
                 material, want: need, total: need,
                 placed: placedCount0(r) + (seals.placed ?? 0),
                 remaining: seals.ok ? 0 : 1,
+                // ★ 这两个字段回答"到底是哪种失败"（用户明确要求打出来）：
+                //   reason='no-outside-spot' → 屋外没空气格（**造场地的问题**）
+                //   reason='still-inside'    → 有地方站但没跳出去（**移动的问题**）
                 reason: seals.reason ?? null,
+                outsLength: seals.outsLength ?? null,
                 costMs: Date.now() - t0,
             });
         }
@@ -267,23 +300,58 @@ async function sealRoofCenter(bot, cap, material, ctx) {
         const b = blockAt(bot, p);
         return b && ['air', 'cave_air', 'void_air'].includes(b.name);   // 站得下
     });
-    if (!outs.length) return { ok: false, code: 'OUT_OF_REACH', reason: 'no-outside-spot', message: '找不到能站的屋外格子' };
+    if (!outs.length) return { ok: false, code: 'OUT_OF_REACH', reason: 'no-outside-spot', message: '找不到能站的屋外格子（屋外那片没有空气格）', outsLength: 0 };
 
     const spot = outs[0];
-    const { goTo } = await import('./nav_core.js');
-    const { mapDirOf } = await import('./bot_paths.js');
-    const mv = await goTo(bot, { kind: 'point', pos: spot }, {
-        mapDir: mapDirOf(bot),
-        deadlineMs: Math.max(3000, Math.min((ctx?.deadline ?? Date.now() + 15000) - Date.now(), 15000)),
-        arriveTol: 0.8,
+
+    // ★★ 第②步：**直接跳出去，不调 goTo**（2026-11-03 用户定的修法）
+    //
+    // 为什么不能用 goTo：墙在 ±1、1 格高，屋外格在 ±2 —— 她出去**必须跳过那 1 格墙**。
+    // 而 `goTo` 走 `walkTo`（3D 规划 + pathfinder，`arriveTol` 要精确、还依赖 terrain3d 数据），
+    // 对"跨 1 格矮墙、只 2 格距离"这种移动是**误用**：pathfinder 算不出路 / 直接判"已经很近"就返回，
+    // 真机就是这样卡在 `still-inside` 的。
+    //
+    // 这本来就是"一次玩家输入"级别的事（走一步 + 跳一下），属原子层：
+    //   lookAtPoint(朝屋外方向) → holdKey(['forward','jump'], until 真的出格)
+    // 而且**不需要地形数据**。
+    //
+    // 注意：**不改 `nav_core.goTo`** —— 它"长距离走 3D、短距离走 pathfinder"是对的，
+    // 不该为这个特例加隐藏路径（那会变成 stepInto 那种"多一条路径就多一个不一致"）。
+    const { lookAtPoint } = await import('./atom_input_mouse.js');
+    const { holdKey } = await import('./atom_input_move.js');
+
+    // 朝屋外那个方向看（水平方向足够，1 格墙跳一下就过）
+    const dir = { x: spot.x - cx, z: spot.z - cz };
+    try {
+        await lookAtPoint(bot, {
+            x: bot.entity.position.x + dir.x,
+            y: bot.entity.position.y + 1.2,          // 平视稍上，便于迈上 1 格
+            z: bot.entity.position.z + dir.z,
+        }, { force: true });
+    } catch { /* 看不过去也照跳 */ }
+
+    const feetNow = () => bot.entity.position;
+    const outside = () => {
+        const f = feetNow();
+        return isOutsideShelter(f.x, f.z, cx, cz);        // ★ OR，不是 AND
+    };
+
+    // 按住前进 + 跳，直到**真的出格**（不是"按了就算"）
+    const hop = await holdKey(bot, ['forward', 'jump'], {
+        until: () => outside(),
+        timeout: Math.max(2000, Math.min((ctx?.deadline ?? Date.now() + 8000) - Date.now(), 8000)),
     });
 
-    // ② **确认真的出格了**（不能只看 goTo 说 ok）
-    const nowFeet = bot.entity.position;
-    const outX = Math.floor(nowFeet.x), outZ = Math.floor(nowFeet.z);
-    const stillInside = (Math.abs(outX - cx) <= 1) && (Math.abs(outZ - cz) <= 1);
-    if (!mv.ok || stillInside) {
-        return { ok: false, code: 'OUT_OF_REACH', reason: 'still-inside', message: '没能走到屋外（还在屋里）' };
+    // **确认真的出格了**（不能只看 holdKey 说 ok）
+    const outsideNow = outside();
+    const outFeet = feetNow();
+    if (!outsideNow) {
+        return {
+            ok: false, code: 'OUT_OF_REACH', reason: 'still-inside',
+            message: `跳出去没成功（holdKey=${hop.ok ? 'ok' : hop.code}，脚位仍在 `
+                + `${Math.floor(outFeet.x)},${Math.floor(outFeet.z)}；门槛是 |dx|>1 或 |dz|>1）`,
+            outsLength: outs.length,
+        };
     }
 
     // ③ 封正中
@@ -294,12 +362,17 @@ async function sealRoofCenter(bot, cap, material, ctx) {
     const cur = blockAt(bot, cap);
     const sealed = !!cur && cur.name !== 'air' && !['cave_air', 'void_air'].includes(cur.name);
 
-    // ⑤ 走回屋里（普通移动，不必再校验）
+    // ⑤ 跳回屋里（同样用原子输入，不调 goTo；1 格墙一跳就回）
     try {
-        await goTo(bot, { kind: 'point', pos: { x: cx + 0.5, y: cy, z: cz + 0.5 } }, {
-            mapDir: mapDirOf(bot),
-            deadlineMs: Math.max(2000, Math.min((ctx?.deadline ?? Date.now() + 10000) - Date.now(), 10000)),
-            arriveTol: 0.8,
+        await lookAtPoint(bot, {
+            x: cx + 0.5, y: bot.entity.position.y + 1.2, z: cz + 0.5,
+        }, { force: true });
+        await holdKey(bot, ['forward', 'jump'], {
+            until: () => {
+                const f = bot.entity.position;
+                return !isOutsideShelter(f.x, f.z, cx, cz);   // 回到屋里
+            },
+            timeout: Math.max(1500, Math.min((ctx?.deadline ?? Date.now() + 6000) - Date.now(), 6000)),
         });
     } catch { /* 回不去也不影响"封上了"这个事实 */ }
 
