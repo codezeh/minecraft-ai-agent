@@ -27,6 +27,7 @@ const UNITS = [
     'composite_registry_unit',   // M5：注册表启动校验 / params 解析 / ctx 工厂 / listSkills（D24 正解）
     'act_p0_unit',               // M6 P0：11 个动作的 ActionResult 契约与错误码归类
     'act_p1_unit',               // M6 P1：8 个动作（睡/醒/开关/骨粉/喂/交易/钓鱼/游泳）契约与错误码
+    'flow_p0_unit',              // M7 P0：craft/smelt/store/fetch 流程 + 注册表负向用例
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
     'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）
     'control_reasons_unit',      // M2：停的原因 → 任务单去哪 + D17/D18/D19/D10（控制层）

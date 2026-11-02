@@ -29,11 +29,14 @@ const base = () => ({
 // ── 1. 注册表本身：注册了哪些技能、是不是唯一的 ──────────────────────────
 {
     const names = SKILL_NAMES;
-    const expect = ['collect', 'follow', 'pickup', 'platform', 'escape'];
-    const same = expect.length === names.length && expect.every((n) => names.includes(n));
+    // M7 P0（2026-11-02）加了 craft / smelt / store / fetch → 注册表从 5 个变 9 个。
+    // 这里断言"**必须包含**这些"，而不是"只有这些"：以后加新技能不该让这条测试红，
+    // 但"某个技能被误删"必须红。
+    const expect = ['collect', 'follow', 'pickup', 'platform', 'escape', 'craft', 'smelt', 'store', 'fetch'];
+    const hasAll = expect.every((n) => names.includes(n));
     const noDup = new Set(names).size === names.length;
-    if (same && noDup) okCase('注册技能集合正确且不重复', names.join(','));
-    else badCase('注册技能集合正确且不重复', JSON.stringify(names));
+    if (hasAll && noDup) okCase('注册技能集合包含全部预期且不重复', `${names.length} 个：${names.join(',')}`);
+    else badCase('注册技能集合包含全部预期且不重复', JSON.stringify({ names, missing: expect.filter((n) => !names.includes(n)) }));
 }
 
 // ── 2. plan-only 的帮手不该出现在注册表里 ──────────────────────────────
