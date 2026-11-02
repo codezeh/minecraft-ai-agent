@@ -61,7 +61,16 @@ const check = (n, cond, e = '') => (cond ? ok(n, e) : bad(n, e));
 // ⑦ 子单带 parentId + why
 {
     const added = [];
-    const fakeBoard = { async add(job) { added.push(job); return { ok: true, data: { id: 'j_' + added.length } }; } };
+    // ★ 假板必须**像真板一样校验 skill**（2026-11-03 真机抓到的 bug 就是这个漏洞导致的：
+    //   我把父单写成 skill:null，真板 `board:add` 要求 skill 非空且在注册表里 → 一律被拒 →
+    //   obtain 恒 INTERNAL。而假板不校验，所以离线 9 条全绿却上线就废。）
+    const fakeBoard = {
+        async add(job) {
+            if (!job?.skill) return { ok: false, message: '缺少 skill' };   // 与真板同规则
+            added.push(job);
+            return { ok: true, data: { id: 'j_' + added.length } };
+        },
+    };
     const r = await obtain({ name: 'tester' }, 'iron_pickaxe', 1, { board: fakeBoard, inventory: {}, chests: {} });
     const children = added.slice(1);
     check('⑦ 子单都带 parentId + why（06 §4）',

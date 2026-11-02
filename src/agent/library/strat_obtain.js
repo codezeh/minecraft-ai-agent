@@ -340,12 +340,21 @@ export async function obtain(agent, item, count = 1, deps = {}) {
     }
 
     // 父单：一个不干活的壳（06 §9.1 的拆单形态）；子单带 parentId + why
+    //
+    // ★ 2026-11-03 真机抓到的 bug：原来这里写 `skill: null`，而 `board:add` 的校验
+    //   要求 **skill 必须非空且在注册表里** → 父单一律被拒 → `obtain` 恒 INTERNAL、
+    //   一张子单都下不出去（真机实测：ok=false code=INTERNAL 子单数=0）。
+    //   离线用例没抓到，是因为我用的是**假板**（假板的 add 不校验 skill）。
+    //   修法：父单的 skill 写 `obtain`（它本身就是一张 obtain 单，写它是诚实的，
+    //   不是凑数）；`kind` 仍是 personal，真正的活都在子单上。
     const parent = await board.add({
-        kind: 'personal', title: `弄到 ${count} 个 ${item}`, skill: null,
+        kind: 'personal', title: `弄到 ${count} 个 ${item}`, skill: 'obtain',
         args: { item, count }, priority: 5, source: 'self',
         assignee: agent?.name ?? null, state: 'running',
     });
-    if (!parent?.ok) return fail('INTERNAL', '父单没下进去', { item });
+    if (!parent?.ok) {
+        return fail('INTERNAL', `父单没下进去：${parent?.message ?? ''}`, { item });
+    }
 
     const parentId = parent.data?.id ?? parent.data?.job?.id ?? null;
     const created = [];
