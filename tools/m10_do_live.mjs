@@ -84,22 +84,45 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     const shelterMod = await import('../src/agent/library/flow_shelter.js');
     const { shelter } = shelterMod;
 
-    // ★ 用户要求的三个数（封 cap 前先打）：
-    //   ① cap 的绝对坐标 vs 她当时的脚位取整（查 cy 有没有算错）
-    //   ② bot.blockAt(v,false) vs (v,true)（force 能否加载）
-    //   ③ bot.world.getColumnAt(v)（chunk 到底加载没）
+    // ★★ 证据探针：**按蓝图坐标数，不用"她当前位置"当圆心**
+    //   （2026-11-03 自我纠正：之前的探针以她的当前位置为圆心，
+    //    而每轮结束时她位置不同 → 数出来的 4/16、8/9 毫无意义。
+    //    **判据：证据的坐标系必须是固定的、与被测对象的当前状态无关。**）
     const V3 = (await import('vec3')).default;
+    const ANCHOR = { x: Math.floor(bot.entity.position.x), y: Math.floor(bot.entity.position.y), z: Math.floor(bot.entity.position.z) };
+    /** 按固定蓝图基准数：返回 {wallOk, roofOk, missing[]} */
+    const auditByBlueprint = () => {
+        const plan = shelterMod.shelterBuildOrder(ANCHOR, 'cobblestone', 3, { floor: 'never', doorSide: '+x' });
+        const airish = new Set(['air', 'cave_air', 'void_air']);
+        const missing = plan.filter((b) => {
+            const cur = bot.blockAt(new V3(b.x, b.y, b.z), false);
+            return !cur || airish.has(cur.name);
+        });
+        const wallTotal = plan.filter((b) => ['wall1', 'wall2'].includes(b.phase)).length;
+        const roofTotal = plan.filter((b) => ['roofRing', 'cap'].includes(b.phase)).length;
+        const wallMissing = missing.filter((b) => ['wall1', 'wall2', 'sealDoor'].includes(b.phase)).length;
+        const roofMissing = missing.filter((b) => ['roofRing', 'cap'].includes(b.phase)).length;
+        return {
+            wallOk: wallTotal - wallMissing, wallTotal,
+            roofOk: roofTotal - roofMissing, roofTotal,
+            missing: missing.map((b) => ({ x: b.x, y: b.y, z: b.z, phase: b.phase })),
+            anchor: ANCHOR,
+        };
+    };
+
+    // 封 cap 前的三个数（用户要求）
     {
         const f = bot.entity.position;
         const capProbe = shelterMod.capCell({ x: f.x, y: f.y, z: f.z });
         const vv = new V3(capProbe.x, capProbe.y, capProbe.z);
-        const noForce = (() => { try { return bot.blockAt(vv, false); } catch (e) { return 'THREW:' + e.message; } })();
-        const withForce = (() => { try { return bot.blockAt(vv, true); } catch (e) { return 'THREW:' + e.message; } })();
-        const col = (() => { try { return bot.world?.getColumnAt?.(vv) ?? null; } catch (e) { return 'THREW:' + e.message; } })();
-        console.log(`  [诊断①] 她脚位=(${Math.floor(f.x)},${Math.floor(f.y)},${Math.floor(f.z)}) cap=(${capProbe.x},${capProbe.y},${capProbe.z})`);
-        console.log(`  [诊断②] blockAt(false)=${noForce ? (noForce.name ?? 'obj') : 'null'}  blockAt(true)=${withForce ? (withForce.name ?? 'obj') : 'null'}`);
+        const noForce = (() => { try { return bot.blockAt(vv, false); } catch (e) { return 'THREW'; } })();
+        const withForce = (() => { try { return bot.blockAt(vv, true); } catch (e) { return 'THREW'; } })();
+        const col = (() => { try { return bot.world?.getColumnAt?.(vv) ?? null; } catch (e) { return 'THREW'; } })();
+        console.log(`  [诊断①] 脚位=(${Math.floor(f.x)},${Math.floor(f.y)},${Math.floor(f.z)}) cap=(${capProbe.x},${capProbe.y},${capProbe.z})`);
+        console.log(`  [诊断②] blockAt(false)=${noForce?.name ?? 'null'}  blockAt(true)=${withForce?.name ?? 'null'}`);
         console.log(`  [诊断③] getColumnAt=${col ? '有' : 'null'}`);
     }
+
     const r = await shelter(bot, { block: 'cobblestone', radius: 1, ctx: { deadline: Date.now() + 180000 } });
     console.log(`\n=== ② !do shelter ===`);
     console.log(`返回: ok=${r.ok} code=${r.code} material=${r.data?.material} placed=${r.data?.placed}/${r.data?.want}`);
@@ -107,29 +130,14 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     // ★ 方块证据：数周围是不是真的多了一圈墙 + 顶
     const p2 = bot.entity.position;
     const cx = Math.floor(p2.x), cy = Math.floor(p2.y), cz = Math.floor(p2.z);
-    // ★ 按**当前**蓝图形状数（2026-11-03 缩小后：墙在 cy、顶在 cy+1）。
-    //   第一版还按旧的"墙两层(cy,cy+1)+顶cy+2"数，所以显示"顶0/9"——那是探针过时，不是没搭。
-    let walls = 0, roof = 0;
-    for (let dx = -1; dx <= 1; dx++) {
-        for (let dz = -1; dz <= 1; dz++) {
-            const edge = Math.abs(dx) === 1 || Math.abs(dz) === 1;
-            if (edge) {
-                // 墙 2 层：两层都算（除门洞那列）
-                for (const wy of [cy, cy + 1]) {
-                    const wb = bot.blockAt(new (await import('vec3')).default(cx + dx, wy, cz + dz));
-                    if (wb && wb.name !== 'air') walls++;
-                }
-            }
-            // ★ 顶在 cy+2（墙 2 层之上）—— 第一版数 cy+1，所以永远显示"顶 0/9 / 8/9"
-            const rb = bot.blockAt(new (await import('vec3')).default(cx + dx, cy + 2, cz + dz));
-            if (rb && rb.name !== 'air') roof++;
-        }
-    }
-    console.log(`   方块证据：外圈墙(2层) ${walls}/16 格非空气，顶 ${roof}/9 格非空气`);
-    console.log(`   可观测数据：placed=${r.data?.placed}/${r.data?.total} costMs=${r.data?.costMs} remaining=${r.data?.remaining}`);
-    // ★ 用户明确要求：把 reason 和 outsLength 都打出来
-    console.log(`   [诊断] reason=${r.data?.reason ?? '(null)'} outsLength=${r.data?.outsLength ?? '(null)'} code=${r.code}`);
-    // 门洞已从里面封上 → 墙应是 2 层共 16 格全部非空气；顶 9 格全部非空气
+    // ★ 按**固定蓝图基准**数（ANCHOR 是 shelter 开始前的脚位，与被测对象当前状态无关）
+    const audit = auditByBlueprint();
+    console.log(`   方块证据（按固定蓝图基准 anchor=${JSON.stringify(audit.anchor)}）: `
+        + `墙(含门) ${audit.wallOk}/${audit.wallTotal}，顶(含cap) ${audit.roofOk}/${audit.roofTotal}`);
+    if (audit.missing.length) console.log(`   缺的块: ${JSON.stringify(audit.missing)}`);
+    console.log(`   可观测数据：placed=${r.data?.placed}/${r.data?.total} costMs=${r.data?.costMs} sealed=${r.data?.sealed} inside=${r.data?.insideAfter}`);
+    console.log(`   [诊断] reason=${r.data?.reason ?? '(null)'} code=${r.code}`);
+
     check('② !do shelter 真的搭起来了（ok=true + 墙16/16 + 顶9/9 + 门已封）',
         r.ok && walls === 16 && roof === 9 && r.data?.sealed === true && r.data?.insideAfter === true,
         `墙=${walls}/16 顶=${roof}/9 placed=${r.data?.placed}/${r.data?.total} 门已封=${r.data?.sealed} 人在屋里=${r.data?.insideAfter}`);

@@ -217,6 +217,15 @@ export async function shelter(bot, opts = {}) {
         doorSide: opts.doorSide ?? '+x',
     });
     const need = order.length;
+    // ★ 每步计时（2026-11-03 用户要求）：不稳定时能一眼看出卡在哪一步。
+    const stepLog = (name, t0s, extra = '') => {
+        console.log(`[step] ${name}  costMs=${Date.now() - t0s}  ${extra}`);
+    };
+    // ★ 缺块的 pos（不要只报总数：缺 wall2 两块 = 她还没走出去就被墙挡了）
+    const missingPos = (blueprint) => blueprint.filter((b) => {
+        const cur = blockAt(bot, { x: b.x, y: b.y, z: b.z });
+        return !cur || ['air', 'cave_air', 'void_air'].includes(cur.name);
+    }).map((b) => ({ x: b.x, y: b.y, z: b.z, phase: b.phase }));
 
     // 按 phase 分组，**严格按 1–7 的顺序执行**
     const byPhase = (ph) => order.filter((b) => b.phase === ph);
@@ -228,8 +237,12 @@ export async function shelter(bot, opts = {}) {
     const indoor = [...byPhase('wall1'), ...byPhase('wall2'), ...byPhase('roofRing'),
         ...byPhase('floor')];
     if (indoor.length) {
+        const t1 = Date.now();
         const r1 = await build(bot, indoor.map((b) => ({ x: b.x, y: b.y, z: b.z, name: b.name })), { ctx });
         const done1 = Number(r1?.data?.placed ?? 0);
+        stepLog('1-3 wall1+wall2+roof', t1,
+            `placed=${done1}/${indoor.length} ok=${r1.ok} code=${r1.code ?? 'OK'}`
+            + (r1.ok ? '' : ` 缺=${JSON.stringify(missingPos(indoor))}`));
         if (!r1.ok) {
             return fail2(r1.code ?? 'BLOCKED', `墙/顶圈没搭完：${r1.message ?? ''}`, {
                 placed: done1, remaining: Math.max(0, need - done1),
@@ -243,7 +256,10 @@ export async function shelter(bot, opts = {}) {
     const door = byPhase('sealDoor');
 
     // 4) 从门洞走出去（门洞是 1×2 空，直接走/跳；不调 goTo）
+    const t4 = Date.now();
     const walkOut = await leaveThroughDoor(bot, feet, size, opts.doorSide ?? '+x', ctx, cap);
+    stepLog('4-exit', t4, `out=${walkOut.ok} tries=${walkOut.tries ?? 1}`
+        + (walkOut.ok ? '' : ` reason=${walkOut.reason}`));
     if (!walkOut.ok) {
         return fail2(walkOut.code, `没能从门洞走出去：${walkOut.message ?? ''}`, {
             placed: need - 3, remaining: 3, reason: walkOut.reason ?? null,
@@ -260,9 +276,12 @@ export async function shelter(bot, opts = {}) {
         //   所谓"那格读不到"从头到尾是我传参形状错了，**不是加载问题**
         //   （诊断实测：blockAt(false)=air、blockAt(true)=air、getColumnAt=有 → 全都在）。
         //   全仓库的调用约定是 `{ kind:'block', pos:{x,y,z} }`，这里补齐。
+        const t5 = Date.now();
         const put = await placeBlockAt(bot, { kind: 'block', pos: { x: cap.x, y: cap.y, z: cap.z } }, material, {});
         const cur = blockAt(bot, { x: cap.x, y: cap.y, z: cap.z });
         const sealed = !!cur && !['air', 'cave_air', 'void_air'].includes(cur.name);
+        stepLog('5-cap', t5, `ok=${put.ok && sealed} code=${put.code ?? 'OK'}`
+            + (put.ok ? '' : ` reason=${put.data?.reason ?? ''}`));
         if (!put.ok || !sealed) {
             return fail2(put.code ?? 'BLOCKED', `屋顶正中封不上：${put.message ?? '读回不是目标方块'}`, {
                 placed: need - 3, remaining: 3 + (sealed ? 0 : 0),
@@ -272,7 +291,10 @@ export async function shelter(bot, opts = {}) {
     }
 
     // 6) 走回屋里 → 从里面封门洞（门洞在 ±1 横向，不在她身体列 → 合法）
+    const t6 = Date.now();
     const back = await reenterThroughDoor(bot, feet, size, opts.doorSide ?? '+x', ctx);
+    stepLog('6-reenter', t6, `inside=${back.ok} tries=${back.tries ?? 1}`
+        + (back.ok ? '' : ` reason=${back.reason}`));
     if (!back.ok) {
         return fail2(back.code, `没能走回屋里：${back.message ?? ''}`, {
             placed: need - 2, remaining: 2, reason: back.reason ?? null,
@@ -282,10 +304,21 @@ export async function shelter(bot, opts = {}) {
         // ★ 2026-11-03 真机（reason=own-body-column）抓到：她刚穿过门洞进来，
         //   **人还站在门洞那一列**，直接封门就会被"不往自己身体列放"正确拒绝。
         //   所以先让她**走到屋里正中**，再封门（门洞在 ±1 横向，那时就不在她身体列了）。
+        const t7 = Date.now();
         await stepToCenter(bot, feet, ctx);
+        // ★ 打 own-body-column 的判定输入（用户要求：确认不是靠运气）
+        {
+            const f = bot.entity.position;
+            const fx = Math.floor(f.x), fy = Math.floor(f.y), fz = Math.floor(f.z);
+            for (const d of door) {
+                const inOwnCol = (d.x === fx && d.z === fz && (d.y === fy || d.y === fy + 1));
+                console.log(`[step] 7-seal-check feet=(${fx},${fy},${fz}) door=(${d.x},${d.y},${d.z}) own-body-column=${inOwnCol}`);
+            }
+        }
 
         const r2 = await build(bot, door.map((b) => ({ x: b.x, y: b.y, z: b.z, name: b.name })), { ctx });
         const done2 = Number(r2?.data?.placed ?? 0);
+        stepLog('7-seal', t7, `ok=${r2.ok} placed=${done2}/${door.length} code=${r2.code ?? 'OK'}`);
         if (!r2.ok || done2 < door.length) {
             return fail2(r2.code ?? 'BLOCKED', `门洞没封上：${r2.message ?? ''}`, {
                 placed: need - door.length + done2, remaining: door.length - done2,
@@ -331,15 +364,16 @@ async function leaveThroughDoor(bot, feet, size, doorSide, ctx, capCellRef) {
         timeout: Math.max(2000, Math.min((ctx?.deadline ?? Date.now() + 8000) - Date.now(), 8000)),
     });
     const outFeet = bot.entity.position;
+    const tries = Number(walk?.data?.tries ?? walk?.data?.polls ?? 1);
     if (!outside()) {
         return {
-            ok: false, code: 'OUT_OF_REACH', reason: 'still-inside',
+            ok: false, code: 'OUT_OF_REACH', reason: 'still-inside', tries,
             message: `从门洞没走出去（holdKey=${walk.ok ? 'ok' : walk.code}，脚位 `
                 + `${Math.floor(outFeet.x)},${Math.floor(outFeet.z)}；门槛 |dx|>1 或 |dz|>1）`,
             outsLength: null,
         };
     }
-    return { ok: true };
+    return { ok: true, tries };
 }
 
 /** 步骤 6：从门洞走回屋里（同样不调 goTo）。 */
@@ -363,9 +397,9 @@ async function reenterThroughDoor(bot, feet, size, doorSide, ctx) {
         timeout: Math.max(2000, Math.min((ctx?.deadline ?? Date.now() + 8000) - Date.now(), 8000)),
     });
     if (!inside()) {
-        return { ok: false, code: 'OUT_OF_REACH', reason: 'still-outside', message: `没能走回屋里（holdKey=${walk.ok ? 'ok' : walk.code}）` };
+        return { ok: false, code: 'OUT_OF_REACH', reason: 'still-outside', tries: Number(walk?.data?.tries ?? 1), message: `没能走回屋里（holdKey=${walk.ok ? 'ok' : walk.code}）` };
     }
-    return { ok: true };
+    return { ok: true, tries: Number(walk?.data?.tries ?? 1) };
 }
 
 
