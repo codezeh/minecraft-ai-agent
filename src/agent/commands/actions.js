@@ -70,7 +70,11 @@ function runAsAction (actionFn, resume = false, timeout = -1, stopReason = null)
         });
         // 被打断（新指令 / mode 抢占）时原来直接 return undefined，
         // 模型只看到空结果，就会说「好嘞」然后什么都没发生。至少给它一行事实。
-        if (code_return.interrupted && !code_return.timedout) {
+        // ★ M9 真机冒烟发现：这里没加可选链，而下面第 90 行用的是 `codeReturn?.timedout`。
+        //   两处写得不一致 → 一旦 runAction 返回 undefined（桩/异常路径），这里直接抛
+        //   "Cannot read properties of undefined (reading 'interrupted')"，
+        //   模型收到的是一个崩溃而不是一行结果。统一用可选链。
+        if (code_return?.interrupted && !code_return?.timedout) {
             const partial = formatActionResult(actionLabel, code_return, result);
             return partial || `${actionLabel}: INTERRUPTED — 被打断了，没做完`;
         }
