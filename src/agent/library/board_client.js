@@ -32,6 +32,27 @@ import { ok, fail } from './contract.js';
 export const ACK_TIMEOUT_MS = 5000;
 
 /**
+ * 把 id 归一成字符串；**不合法的返回 null**（绝不 `String(对象)`）。
+ *
+ * ★ 2026-11-02（t20）：`String({id:'x'})` → `"[object Object]"`，服务端拿它查库永远查不到，
+ *   而且**不报错**——与"任务板没连上"的症状完全一样。这类"静默两套行为"比业务 bug 难查得多。
+ *   规则：字符串直接用；数字/布尔/大整数转字符串；`{id: ...}` 取 `.id`；其余 → null。
+ */
+function normalizeId(id) {
+    if (typeof id === 'string') return id === '' ? null : id;
+    if (typeof id === 'number' && Number.isFinite(id)) return String(id);
+    if (id && typeof id === 'object' && typeof id.id === 'string' && id.id !== '') return id.id;
+    return null;
+}
+
+/** 给错误信息用的"你传了个啥"描述（不 toString 整个对象）。 */
+function describeId(id) {
+    if (id === null || id === undefined) return String(id);
+    if (typeof id === 'object') return Array.isArray(id) ? 'array' : `object(keys=${Object.keys(id).join(',') || '空'})`;
+    return typeof id;
+}
+
+/**
  * 造一个任务板客户端。
  *
  * @param {object} deps
@@ -151,9 +172,18 @@ export class BoardClient {
         return jobs;
     }
 
-    /** 【同步】取单（控制层直接 `?? null`）。 */
+    /**
+     * 【同步】取单（控制层直接 `?? null`）。
+     *
+     * ★ 2026-11-02（t20）：**不再 `String(id)` 静默转换**。
+     *   原写法对对象入参产出 `"[object Object]"` —— 正是 B1 那个"board:get 永远 null"事故的同一指纹。
+     *   现在：字符串/数字正常取；`{id:'x'}` 取 `.id`；其余返回 null（同步接口不能返回 fail）。
+     *   宁可返回 null（控制层本来就要处理"没这张单"），也不要拿一个 `"[object Object]"` 去查库。
+     */
     get(id) {
-        return this._byId.get(String(id ?? '')) ?? null;
+        const key = normalizeId(id);
+        if (key == null) return null;
+        return this._byId.get(key) ?? null;
     }
 
     /** 【不等】更新一张单（控制层只 try 不 await）。返回 Promise<ActionResult> 供需要的人用。 */
@@ -213,9 +243,19 @@ export class BoardClient {
         return r;
     }
 
-    /** 异步取单（要新鲜数据的调用方用）。 */
+    /**
+     * 异步取单（要新鲜数据的调用方用）。
+     *
+     * ★ 2026-11-02（t20）：**非字符串 id 直接 fail，不静默 `String()`**。
+     *   宁可当面报错，也不要发一个 `"[object Object]"` 上去让服务端恒返回 null
+     *   （那会伪装成"没有这张单"，与"任务板没连上"一模一样，最难查）。
+     */
     async getAsync(id) {
-        const r = await this._call('board:get', { id: String(id) });
+        const key = normalizeId(id);
+        if (key == null) {
+            return fail('NO_TARGET', `id 必须是字符串（收到 ${describeId(id)}）`, { idType: typeof id });
+        }
+        const r = await this._call('board:get', { id: key });
         if (r.ok && r.data?.job) this._byId.set(r.data.job.id, r.data.job);
         return r;
     }

@@ -355,12 +355,50 @@ export function listJobs(db, filter = {}) {
 }
 
 /**
+ * 「进度已达标」的单 → 直接收敛成 `done`，**不再派给人 / 继续跑**。
+ *
+ * ★ 2026-11-02（t20，captain 拍板）：这是 B1 真机"不重复计数"验收失败的根因。
+ *   实测：A 跑 collect（want=8）被 SIGKILL 时进度已到 15，但没来得及 finish；
+ *   租约过期后单回到 `ready`，B 重新领到同一张单又挖了 9 → 最终 24/8。
+ *   不是同一批重复计，是**已达标的单被重新派了一遍**。
+ *
+ * 判据：`want > 0 且 progress.count >= want`。
+ *
+ * ★ **绝不截断 count**（不做 `Math.min(count, want)`）：`24/8` 里的 24 是真实发生过的事实
+ *   （背包确实多了 24 个），截成 8 就是篡改记录；超额本身也是有用信息（want 定小了）。
+ *   展示层标「超额」即可（见 `!jobs`）。
+ *
+ * @returns {object|null} 收敛后的单；没达标返回 null
+ */
+function convergeIfSatisfied(db, id, now, reason = 'satisfied') {
+    const job = getJob(db, id);
+    if (!job) return null;
+    const want = Number(job.progress?.want ?? job.want ?? 0);
+    const count = Number(job.progress?.count ?? 0);
+    if (!(want > 0) || count < want) return null;            // 没达标 → 不收敛
+    if (isTerminal(job.state)) return job;                    // 已是终态
+    if (!canTransition(job.state, JOB_STATE.DONE)) return null;
+
+    db.prepare(`UPDATE jobs
+        SET state=?, lease_owner=NULL, lease_until=NULL, result=?, updatedAt=?
+        WHERE id=? AND state=?`).run(
+        JOB_STATE.DONE,
+        j({ ok: true, code: 'OK', message: `进度已达标（${count}/${want}），直接收敛为 done`, reason, at: now }),
+        now, id, job.state,
+    );
+    return getJob(db, id);
+}
+
+/**
  * 领单（**原子**）。
  *
  * ★ 规则①：只用一条 `UPDATE ... WHERE state='ready'`，靠 **`changes`** 判断成败。
  *   绝不"先 SELECT 再 UPDATE" —— 那中间有个窗口，两个 bot 会同时领到同一张单。
  *
  * 个人单优先（assignee 是自己），再多人单（assignee 为 null）；按 priority DESC、createdAt ASC。
+ *
+ * ★ 2026-11-02（t20）：派单前先收敛"进度已达标"的单（见 `convergeIfSatisfied`）——
+ *   否则被 kill 在"已跑够但没 finish"时刻的单会被重新派一遍，计数虚涨。
  *
  * @returns {object|null} 领到的单；没有可领的返回 null
  */
@@ -378,6 +416,9 @@ export function claimFor(db, bot, opts = {}) {
         LIMIT 8`).all(bot, now, bot);
 
     for (const c of cands) {
+        // ★ 先看"是不是已经跑够了"：跑够的直接收敛成 done，**不派发**（t20 修的就是这里）
+        const converged = convergeIfSatisfied(db, c.id, now, 'claim-sweep');
+        if (converged) continue;
         // 原子抢：**这一条**就是全部关键。changes===1 → 我抢到了；0 → 别人先抢走了，试下一个
         const r = db.prepare(`
             UPDATE jobs SET state='claimed', assignee=?, lease_owner=?, lease_until=?, updatedAt=?
@@ -412,6 +453,17 @@ export function heartbeat(db, id, bot, opts = {}) {
     const merged = mergeProgress(job.progress, progress);
     db.prepare(`UPDATE jobs SET lease_until=?, state=?, progress=?, updatedAt=? WHERE id=?`)
         .run(now + leaseMs, nextState, j(merged.progress), now, id);
+
+    // ★ 2026-11-02（t20，captain 要求）：心跳报到"已达标"就当场收敛成 done，**别等 finish**。
+    //   理由：B1 真机里 A 在"已跑够 15/8"时被 kill，如果只能靠 finish 收敛，
+    //   那张单会一直停在 running/ready，直到租约过期被人重领再跑一遍（计数虚涨）。
+    const converged = convergeIfSatisfied(db, id, now, 'heartbeat-satisfied');
+    if (converged) {
+        return {
+            ok: true, job: converged, progressClamped: merged.clamped, reported: merged.reported,
+            convergedToDone: true,
+        };
+    }
     return { ok: true, job: getJob(db, id), progressClamped: merged.clamped, reported: merged.reported };
 }
 

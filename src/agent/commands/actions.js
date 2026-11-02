@@ -865,8 +865,15 @@ export const actionsList = [
                 const prog = (p && Number.isFinite(p.count) && Number.isFinite(p.want) && p.want > 0)
                     ? ` ${p.count}/${p.want}`
                     : '';
+                // ★ 2026-11-02（t20）：超额要**标出来**，别让人以为 24/8 是 bug。
+                //   为什么要保留 24 而不是截成 8：24 是真实挖到的数量（背包确实多了 24 个），
+                //   截断等于篡改记录；超额本身还有信息量（want 定小了 / 这批比预期多）。
+                const over = (j.state === 'done' && p && Number.isFinite(p.count) && Number.isFinite(p.want)
+                    && p.want > 0 && p.count > p.want)
+                    ? `（超额 ${p.count - p.want}，实际做到 ${p.count}）`
+                    : '';
                 const why = j.state === 'blocked' && j.result?.message ? `（${j.result.message.slice(0, 40)}）` : '';
-                return `- ${j.id} [${STATE_ZH[j.state] ?? j.state}] ${j.skill}${prog} 优先级${j.priority}${why}`;
+                return `- ${j.id} [${STATE_ZH[j.state] ?? j.state}] ${j.skill}${prog}${over} 优先级${j.priority}${why}`;
             });
             const more = jobs.length > 24 ? ` …还有 ${jobs.length - 24} 张` : '';
             return `!jobs（${jobs.length} 张）：` + String.fromCharCode(10) + lines.join(String.fromCharCode(10)) + more;

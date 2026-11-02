@@ -1531,11 +1531,110 @@ preflight 前缀规矩仍是 **5 处**（4 处旧债 + `act_use→openContainer`
 ### Phase B: 任务板（2026-11-01 新增）
 **目标**: 个人单和多人单（[`06_task_board.md`](06_task_board.md)），验收用例见 06 §11
 
-- [ ] B0 修 D17、D18；流程注入 ctx（不依赖任务板，可与 Phase A 并行）
-- [ ] B1 个人单 + 持久化（socket 的 `allowRequest` 已于 2026-11-01 提前做完）
-- [ ] B2 调度：自动领单、优先级、抢占
-- [ ] B3 多人单、预约、角色
-- [ ] B4 共享地标、危险点、箱子内容
+- [x] B0 修 D17、D18；流程注入 ctx（不依赖任务板，可与 Phase A 并行）
+- [x] B1 个人单 + 持久化（socket 的 `allowRequest` 已于 2026-11-01 提前做完）—— **M8 B1 完成（`cfebbd4`），t20 验收见下**
+- [ ] B2 调度：自动领单、优先级、抢占 —— **未做**（`board_scheduler` 本期不做；`requeueStaleBrief()` 仍无生产调用方，属 B2）
+- [ ] B3 多人单、预约、角色 —— **未做**
+- [ ] B4 共享地标、危险点、箱子内容 —— **未做**
+
+#### M8 B1 验收记录（t20 / 2026-11-02，全部实测）
+
+**① 四模块与接线**
+
+| 模块 | 位置 | 结论 |
+|---|---|---|
+| `board_store.js` | `src/agent/library/` | ✅ node:sqlite 唯一写库；claimFor/heartbeat/finish/expireLeases |
+| `board_server.js` | `src/agent/library/` | ✅ 10 个 socket 事件 + `board:changed` 广播 |
+| `board_client.js` | `src/agent/library/` | ✅ 5 个控制层契约方法（**同步**）+ `*Async` |
+| `board_scheduler` | —— | 本期不做（B2） |
+
+**`board_server` 确实挂进了 mindserver**：`src/mindcraft/mindserver.js:12-13` import `openBoard` / `attachBoardServer`，
+`:83` `attachBoardServer({...})`；失败则 `board=null` 走降级。**不是"写了模块没接线"。**
+
+**② client 的 5 个控制层契约（独立断言 20/20）**
+
+- `list()`：**不是 Promise**、`Array.isArray` 为真、**空镜像返回 `[]` 而不是 `undefined`** ✅
+- `get()`：返回 `null`（非 Promise/undefined）✅；`list/get/update/add/setAutoClaim` 五方法齐 ✅
+- **用真实 `control.js` 跑**：有板时 `jobsBusy(agent)===true`、`resolveJob({board,jobId})` 拿得到真单（**不降级**）；
+  无板时才 `false`/`null` ✅
+- `makeNullBoard()` 行为一致（同步 `[]` / `null` / `isNullBoard`）✅
+
+**③ 三条最容易写错的规则（自造用例 20/20）**
+
+| 规则 | 实测 |
+|---|---|
+| **领单原子性** | 两 bot 抢同一张 → **只有一个领到**（另一个 `null`）；手动置 `claimed`+`lease_owner='other'` → `claimFor` 返回 `null` 且 **owner 保持 other 不动** ✅ |
+| **attempts 三分类** | `INTERRUPTED`/`PREEMPTED` → 不变、回 ready；`TIMEOUT`/`STUCK`/`NO_PATH` → **+1**；`NO_ITEM`/`NO_TOOL`/`NO_RECIPE` → **blocked 且不变** ✅ |
+| **完成判据** | `ok=true` 但 `count=3 < want=8` → **不算 done**（进度如实记 3）；`count=8=want` → done ✅ |
+
+**④ 真机额外 4 个 bug 的复验**
+
+| bug | 复验 |
+|---|---|
+| `board:get` payload 形状（`String({id})` → `"[object Object]"` → 恒 null） | ✅ 表驱动用例断言 `payload.keys=id` 且 `id` 是字符串；真机 `!jobs` 显示真实单 |
+| id 跨进程撞号 | ✅ 关库重开 → 再 add 成功、库里 id 无重复 |
+| 进度倒退 | ✅ 报 0 而库里 2 → 仍 2；`heartbeat` 返回 `progressClamped=true / reported=0` 留痕 |
+| `canDigWithInventory` 只看第一把镐 | ✅ 第一把 durability=1 + 第二把 1560 → **可挖**；无镐才 false |
+
+**⑤ payload 形状契约测试（t20 新增，落地 atoms 的建议）**
+
+- **评估**：`board_iface_unit` 里真正验 payload 形状的**只有 1 条**（case 6b，正是 `board:get` 那个回归），
+  其余多是"业务结果对不对"，不是"发出去的形状对不对"。
+- **已补**：新增 `tools/board_payload_unit.mjs`（**表驱动 14 用例**），对 **10 个 `board:*` 事件逐个断言 payload 形状**
+  （hello/add/list/get/claim/heartbeat/checkpoint/finish/set-state/update），含反例
+  "`board:add` 的 payload **就是 job 本身**、不许再包一层 `{job}`"，并对 `board:get` 做三入参断言。已进 `unit_all`（31/31）。
+- **它立刻抓到了残余**：`getAsync({id:'J-1'})` 仍被 `String()` 压成 `"[object Object]"` —— 与原 bug 同一指纹（已修，见⑥）。
+
+**⑥ t20 修复的 B1 真 bug：已达标的单被重复派发（「不重复计数」从没真正通过）**
+
+**现象（修复前真机）**：A 跑 `mine`（want=8）被 SIGKILL 时进度已到 **15**；租约过期后单回 `ready`，
+B 重新领到**同一张单**又挖 9 → 最终 **24/8**；`!jobs` 显示 `mine 24/8`。
+
+**根因（两条定向用例坐实）**：
+1. `claimFor` 只看 `state='ready' + assignee + notBefore`，**完全不看 progress 是否已达标** →
+   被 kill 在"已跑够但没 finish"时刻的单会被原样再派一遍（真 bug）；
+2. `!jobs` 直接显示 `24/8`，人看着像坏了（**不是 bug，是展示**）。
+
+**修法（按 captain 定稿口径）**
+
+| 改动 | 内容 |
+|---|---|
+| ✅ `claimFor` | 派发前 `convergeIfSatisfied()`：`want>0 && count>=want` 的 ready 单 **直接收敛成 done**（记 result），**不派发** |
+| ✅ `heartbeat` | 心跳报到已达标 → **当场收敛 done**（返回 `convergedToDone:true`），不等 finish |
+| ❌ **不截断 count** | captain 否决 `Math.min(count,want)`：24 是**真实事实**（背包确实多了 24 个），截断=篡改记录；超额有信息量（want 定小了） |
+| ✅ `!jobs` | `done && count>want` → 标 **`（超额 N，实际做到 count）`** |
+| ✅ `getAsync/get` | **不再静默 `String(id)`**：字符串/数字正常；`{id}` 取 `.id`；其余 `getAsync` 返回 `fail('NO_TARGET','id 必须是字符串')` 且**根本不发事件**；同步 `get()` 返回 `null` |
+
+**修复后真机复跑**：A 心跳报 24≥8 → 单**当场收敛 done**；B 重启 `AGENT_NO_JOB`（不再重跑）；
+**count 24→24 零增长**（修复前 15→24）；`!jobs` 显示 `mine 24/8（超额 16，实际做到 24）`。
+
+**⑦ 真机 B1 六条断言（修复后）**
+
+| 断言 | 结果 |
+|---|---|
+| ① 同 id 存活 | ✅ |
+| ② count 不倒退 | ✅ 0 → 24 → 24 |
+| ③ **不重复计数** | ✅ **机制已成立**（重启不再派单、`cAfter===cMid`）。⚠️ 但 `board_b1_live.mjs` 的**阈值**仍是 `cAfter <= ceil(want×1.6)=13`，而 `mine` 单次就能挖到 24（3×want）→ 该条**仍报 FAIL**。**是阈值口径问题，不是机制问题**（见⑧-1） |
+| ③b 确实采到了（防空跑） | ✅ 24 > 0 |
+| ①b 回报后到 done | ✅ state=done |
+| ④ attempts 未因 kill +1 | ✅ 0 → 0 |
+| ⑤ 无板时 `!jobs` 说人话 | ✅ 「任务板没连上（mindserver 未连通），现在没有单可看。!do 仍然可用。」 |
+
+**⑧ B1 范围内的待办（归属已写清）**
+
+1. **`board_b1_live.mjs` 断言③阈值要改**（归属：**atoms**，是它的测试文件，t20 未获授权改）——
+   `cAfter <= ceil(want×1.6)` 对 `mine` 不成立（单次成批挖就到 3×want）。真正该断言的是
+   **重启前后 count 不变**（`cAfter === cMid`），而不是"总量不超过 1.6 倍 want"。改完后该条不再靠侥幸。
+2. **`!do` 仍走 `runAction`、没改走任务板**（按用户决策，B3 再说）。
+3. `claims` 表填充（预约）属 B3。
+
+**⑨ 两项「待 M8」遗留的销账核查（captain 要求）**
+
+| 项目 | 结论 |
+|---|---|
+| `applyStop()` 在 `board=null` 时空操作 | **部分销账**：B1 让生产路径上 `agent.board` 是真 `BoardClient`（`agent.js:86`）；实测 `applyStop(player)` → `plan={to:paused,pauseAutoClaim:true}` 且**真的发出 `board:update`**（写板了）。但 `board=null` 仍是**断线降级路径**（`agent.js:94`），那段空操作**必须保留**，只是不再是常态。 |
+| `requeueStaleBrief()` 无调用方 | **不能销账**：全仓仍只有 `control_reasons_unit` 调用，**零生产调用方**；它扫的是"60 秒没被认领的 brief 单"，需要调度器定期跑 → 属 **B2**。 |
+| 死亡捡单 / 任务单 deadline 真机覆盖 | **部分推进**：B1 让 `board.add()` 可用；但"谁去捡、多久过期"仍要 B2/8 级调度，真机未验。 |
 
 ---
 
