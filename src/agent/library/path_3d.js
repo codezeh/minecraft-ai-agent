@@ -410,7 +410,20 @@ export function plan3D(baseDir, from, to, opts = {}) {
                     // 失败记忆：走过走不通的格子加价（不封死，留一次机会）
                     const fh = fails.get(k);
                     if (fh) c *= (1 + Math.min(fh, 5));
-                    cand.push({ x: cur.x + dx, y: ny, z: cur.z + dz, cost: c, action: dy > 1 ? 'jump' : dy < 0 ? 'down' : 'walk' });
+                    // ★★ 2026-11-03（05 §656-663，补 M6 漏项）：**落点是水面的一律产 `swim`**。
+                    //
+                    // 规格原文：「落点是 `T.WATER` 的边一律是 `swim`（水面上四邻移动、
+                    // 从岸上下水都算），**不再生成 `walk` 到水面**；上岸照旧是 `walk` / `jump`。」
+                    //
+                    // 为什么必须区分：`walk` 到水面上会走陆地那套（pillar 垫方块 / clear-feet
+                    // 挖脚下），在水里就是一脚沉到底、反复下坠卡死（10-28 事故）。
+                    // 实测基线：water-cross 5 轮里 `pillar-attempt` 27 次、`clear-feet` 11 次、
+                    // 单轮 49 秒 —— 全是拿陆地逻辑硬套水面造成的。
+                    //
+                    // 注意"上岸"不受影响：上岸时**落点不是水**，仍走 walk/jump，符合规格。
+                    const action = (t === T.WATER) ? 'swim'
+                        : dy > 1 ? 'jump' : dy < 0 ? 'down' : 'walk';
+                    cand.push({ x: cur.x + dx, y: ny, z: cur.z + dz, cost: c, action });
                 }
             }
         }

@@ -343,6 +343,23 @@ console.log('\n=== 13) 水下地面（SUBMERGED）===');
         const minY = Math.min(...ys);
         console.log(`  y 范围: ${minY} ~ ${Math.max(...ys)}`);
         check('不潜到水底（y 不低于 60）', minY >= 60, `最低 y=${minY}`);
+
+        // ★★ 2026-11-03（05 §656-663，补 M6 swim）：**落在水面的步必须都是 `swim`**。
+        //   规格原文：「落点是 `T.WATER` 的边一律是 `swim`…不再生成 `walk` 到水面」。
+        //   这里直接拿规划结果验：凡是 y 落在水面那一层（62）的步，action 必须是 swim；
+        //   而且整条路径里至少要有一步 swim（否则说明水面仍产 walk = 没接上）。
+        // ⚠️ 不能只看 y===62 —— 两岸陆地也在 y=62（x<10 / x>30 是 SOLID）。
+        //    必须按**真实水域的 x 范围**筛（这个用例里水在 x∈[10,30]）。
+        const inWaterX = (x) => x >= 10 && x <= 30;
+        const waterSteps = p.path.filter((st) => st.y === 62 && inWaterX(st.x));
+        const nonSwimOnWater = waterSteps.filter((st) => st.action !== 'swim');
+        const anySwim = p.path.some((st) => st.action === 'swim');
+        const hist = {};
+        for (const st of p.path) hist[st.action] = (hist[st.action] ?? 0) + 1;
+        console.log(`  动作直方图: ${JSON.stringify(hist)}`);
+        check('★ 落在水面的步都是 swim（含至少一步 swim）',
+            nonSwimOnWater.length === 0 && anySwim,
+            `水面步=${waterSteps.length} 非swim=${nonSwimOnWater.length} 有swim=${anySwim} 直方图=${JSON.stringify(hist)}`);
     }
 
     // 反向：如果**只有水下通路**，仍然要能走（不能因为贵就报 NO_PATH）

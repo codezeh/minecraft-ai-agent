@@ -265,7 +265,11 @@ bot.once('spawn', async () => {
         },
         // ── 水（游泳横渡）──────────────────────────────────────────────
         {
-            name: 'water-cross', want: ['walk'], deadlineMs: 120000,
+            // ★ 2026-11-03（补 M6 swim）：水面步现在是 `swim`，不再是 `walk`。
+            //   want 必须同步改，否则 actionHist 里是 {"swim":N} 而 want 找 walk
+            //   → wantHit=false → 假红"未命中目标动作"（验收口径没跟着改）。
+            //   保留 walk：上岸那几步仍是 walk。
+            name: 'water-cross', want: ['swim', 'walk'], deadlineMs: 120000,
             build: async () => {
                 await reset();
                 // 5 格宽、2 格深的水池

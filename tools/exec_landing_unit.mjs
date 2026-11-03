@@ -43,7 +43,7 @@ function makeBot() {
 }
 
 /** 按 cells 建一个临时 3D 库（cells 为 null 就不建），走一步 walk→(1,63,0)。 */
-async function walkOnto(cells, { mapDir } = {}) {
+async function walkOnto(cells, { mapDir, action = 'walk' } = {}) {
     let dir = mapDir;
     let tmp = null;
     if (cells) {
@@ -56,7 +56,7 @@ async function walkOnto(cells, { mapDir } = {}) {
     const opts = { onEvent: (e) => events.push(e) };
     if (dir !== undefined) opts.mapDir = dir;
     try {
-        const r = await execStep(bot, { action: 'walk', x: 1, y: 63, z: 0 }, opts);
+        const r = await execStep(bot, { action, x: 1, y: 63, z: 0 }, opts);
         return { r, events, moved: bot.__moved };
     } finally {
         if (tmp) {
@@ -81,10 +81,27 @@ const types = (ev) => ev.map((e) => e.type).join(',');
     check('落点是实地 → 照走', moved && r.code !== 'UNSAFE', `code=${r.code} moved=${moved}`);
 }
 
-// 3. 水面（底下 13 格才是水底）→ 照走：规划器有意走水面过河，这里不拦
+// 3. ★ 2026-11-03（05 §662）：**陆地步（walk）落水面 → UNSAFE**
+//    （恢复 10-28 的本意。之前不拦，是因为游泳能力是死的、拦了就彻底过不了河；
+//      现在 path_3d 会为水面产 swim 边，所以"walk 落水面"就是规划器信号错，必须拦。）
 {
     const { r, moved } = await walkOnto([{ x: 1, z: 0, y: 63, t: T.WATER }, { x: 1, z: 0, y: 50, t: T.SUBMERGED }]);
-    check('落点是水面 → 照走（不拦过河）', moved && r.code !== 'UNSAFE', `code=${r.code} moved=${moved}`);
+    check('★ walk 落点水面 → UNSAFE（陆地步不该落水面）', !moved && r.code === 'UNSAFE', `code=${r.code} moved=${moved}`);
+}
+
+// 3b. ★ `swim` 落水面 → 放行（千万别把 swim 自己拦掉，那等于把唯一过河的路堵死）
+{
+    const { r, moved } = await walkOnto(
+        [{ x: 1, z: 0, y: 63, t: T.WATER }, { x: 1, z: 0, y: 50, t: T.SUBMERGED }],
+        { action: 'swim' },
+    );
+    check('★ swim 落点水面 → 照走（放行，不做 UNSAFE）', r.code !== 'UNSAFE', `code=${r.code}`);
+}
+
+// 3c. ★ swim 落岩浆 → 仍然 UNSAFE（swim 也不能豁免岩浆）
+{
+    const { r } = await walkOnto([{ x: 1, z: 0, y: 63, t: T.LAVA }], { action: 'swim' });
+    check('★ swim 落点岩浆 → 一律 UNSAFE', r.code === 'UNSAFE', `code=${r.code}`);
 }
 
 // 4. 这一列库里没数据 → 不拦

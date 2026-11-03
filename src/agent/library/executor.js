@@ -317,16 +317,39 @@ export async function execStep(bot, step, opts = {}) {
     //
     // ★ D14（2026-11-01）：这段从加上起**一次都没跑过** —— execStep 里没有 mapDir，
     // 每次 ReferenceError 被空 catch 吞掉。现在由 walkTo 传进来；不传就跳过（单测、直接调用）。
-    // 启用时判据收窄为"落点那一格是危险面（T.LAVA：岩浆 / 岩浆块 / 火 / 篝火 / 仙人掌）"：
-    // 10-29 起规划器有意让她从水面过河（SUBMERGED 高代价，test_tunnel 用例 13），
-    // 照 10-28 的判据启用会把这些步全拦掉。水面要不要拦，等真机多场景基线再定。
+    // ★★★ 2026-11-03（05 §662，补 M6 漏项）：**落点判据按 action 区分**。
+    //
+    // 规格原文：
+    //   「`walk` / `jump` / `down` 落到 `T.WATER` → `UNSAFE`（恢复 10-28 的本意）；
+    //     `swim` 落到 `T.WATER` 放行；落到 `T.LAVA` 一律 `UNSAFE`」
+    //
+    // 为什么现在能定这条了：原来写"水面要不要拦等基线再定"，是因为**游泳能力是死的**
+    //   （`swimStep` 存在但没人调、`path_3d` 不产 swim 边）—— 拦了水面她就彻底过不了河。
+    //   现在 `path_3d` 会为水面落点产 `swim` 边、executor 有 `swim` 分支，
+    //   所以"陆地步落水面"就是**规划器出错**的信号（该产 swim 却产了 walk），必须拦；
+    //   而 `swim` 自己落水面是正常的，放行。
+    //
+    // ⚠️ 千万别把 `swim` 自己拦掉 —— 那等于把唯一能过河的路堵死。
     if (mapDir) {
         try {
             const col = columnSurfaces(mapDir, Math.floor(step.x), Math.floor(step.z));
             const landing = col.find(c => c.y === Math.floor(step.y));
+            const isSwim = step.action === 'swim';
             if (landing && landing.t === T.LAVA) {
-                onEvent({ type: 'unsafe-landing', x: step.x, y: step.y, z: step.z });
+                onEvent({ type: 'unsafe-landing', x: step.x, y: step.y, z: step.z, why: 'lava' });
                 return { ok: false, code: 'UNSAFE', message: `落点 (${step.x},${step.y},${step.z}) 是危险面` };
+            }
+            // 陆地步（walk/jump/down）落到水面 → 不安全（恢复 10-28 本意）
+            if (landing && landing.t === T.WATER && !isSwim) {
+                onEvent({
+                    type: 'unsafe-landing', x: step.x, y: step.y, z: step.z,
+                    why: 'land-step-onto-water', action: step.action ?? null,
+                });
+                return {
+                    ok: false, code: 'UNSAFE',
+                    message: `落点 (${step.x},${step.y},${step.z}) 是水面，`
+                        + `但这一步是 ${step.action ?? 'walk'}（水面步应该是 swim）`,
+                };
             }
 
             // ★★★ 2026-11-02（用户指出"悬崖等危险区域按理要有条件反射"）：**坠落/虚空反射**。
@@ -341,7 +364,13 @@ export async function execStep(bot, step, opts = {}) {
             // 判据用 `fallRisk`（query_safe）：从落点往下找最近的**能站**的面，
             // 落差 > maxDrop（默认 4，与 path_3d 的 maxDrop 对齐）或整列无面（虚空）就拒。
             // 注意 CLIMBABLE 不算落脚点（T 的注释里写明它"不是落脚点"）。
-            const risk = fallRisk(bot, mapDir, { x: step.x, y: targetFeetY, z: step.z });
+            // ★ 2026-11-03：`swim` 步**不做坠落判断**。
+            //   浮在水面上时脚下没有"能站的面"（下面全是水），`fallRisk` 会判成
+            //   坠落/虚空直接拦掉 —— 但游泳本来就是浮着的，不适用陆地那套判据
+            //   （05 §660 也写明"脚位 = 面位 + 1 只对实心面成立，浮在水里不适用"）。
+            const risk = isSwim
+                ? { ok: true, data: { safe: true, reason: 'swim-step' } }
+                : fallRisk(bot, mapDir, { x: step.x, y: targetFeetY, z: step.z });
             if (risk.ok && risk.data && risk.data.safe === false) {
                 onEvent({
                     type: 'unsafe-fall', x: step.x, y: step.y, z: step.z,
@@ -360,6 +389,25 @@ export async function execStep(bot, step, opts = {}) {
             // 查不到就不拦，但要留痕：原来这里是空 catch，D14 就是这么藏住的
             onEvent({ type: 'landing-check-error', x: step.x, y: step.y, z: step.z, error: String(e?.message ?? e).slice(0, 120) });
         }
+    }
+
+    // ---- ★ swim：单独处理，**不交给 pathfinder**（05 §660）----
+    //
+    // 规格原文：「`swim` 分支调动作 `swimStep`：朝目标格水平转头 → 同时按住前进和跳，
+    //   直到进到那一格 → 松开。**不交给 pathfinder**：它走的时候每 tick 自己设控制键，
+    //   会把按住的跳改掉（上游 `self_preservation` 的水下分支也是 `pathfinder.goal`
+    //   为空才按跳，`modes.js:38-42`）」
+    //
+    // 所以这一步必须在 pathfinder 那段**之前**返回，不能落进去。
+    if (step.action === 'swim') {
+        const { swimStep } = await import('./act_swim.js');
+        const r = await swimStep(bot, { x: step.x, y: step.y, z: step.z });
+        onEvent({
+            type: 'swim-step', x: step.x, y: step.y, z: step.z,
+            ok: r.ok, code: r.code ?? 'OK', costMs: r.data?.costMs ?? null,
+        });
+        if (!r.ok) return r;
+        return ok({ swum: true, ...(r.data ?? {}) });
     }
 
     // ---- 水平移动（walk / jump / down 都交给 pathfinder）----
