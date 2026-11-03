@@ -577,7 +577,24 @@ export function finish(db, id, result = {}, opts = {}) {
         next = (job.attempts + 1 >= job.maxAttempts) ? JOB_STATE.FAILED : JOB_STATE.READY;
     }
 
-    if (!canTransition(job.state, next)) {
+    // ★★ 2026-11-04（t69）：**"目标状态 == 当前状态" 是 no-op，不该走转移校验。**
+    //
+    //   真 bug（fixture 盘点时抓到，并被我 t60 的假绿用例掩盖了）：
+    //     `finish()` 对「父单 state='running' + 有活子单」算出的 `next` 也是 `running`，
+    //     而 `TRANSITIONS.running` **不含 'running'**（自转移没登记）
+    //     → `!canTransition` → `return { ok:false, code:'INTERNAL', message:'非法转移 running → running' }`
+    //     → **数据库那一行一字未动**。
+    //
+    //   后果最严重的是：**t60 的修复对它本来要修的场景根本走不到**。
+    //   `strat_first_night` / `strat_obtain` 建父单用的正是 `state:'running'`，
+    //   所以"父单挂着等子单"这条路一直是 bail-out，不是真的挂着等。
+    //
+    //   而且 t60 的用例是**假绿**：它断言 `state==='running' && attempts===0`，
+    //   而 bail-out 恰好也满足（行没被改）→ 分不清"决定挂着等"和"报错退出"。
+    //
+    //   修法：目标状态与当前相同时，**只更新 progress/checkpoint/result，不动 state**，
+    //   并如实返回 `next === job.state`（不是失败）。
+    if (next !== job.state && !canTransition(job.state, next)) {
         return { ok: false, code: 'INTERNAL', message: `非法转移 ${job.state} → ${next}` };
     }
 
