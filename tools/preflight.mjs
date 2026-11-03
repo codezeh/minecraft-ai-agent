@@ -793,6 +793,108 @@ function namedImportSymbols(line) {
     if (violations.length === 0) console.log('  ✓ 前缀 import 规矩没有命中');
 }
 
+// ---- [6/6] 代码规模（**统计信息，不参与失败判定**）----------------------
+//
+// 为什么放这里：§九「代码规模」原来写死在交接文档里（55 / 89），
+// 之后 M10 收尾 + A 系列 + 遗留清理又加了 33 个提交，一直没更新 → 数字变旧没人发现。
+// **让数字自己从代码里算出来，是唯一能根治的办法**（今晚 3 次"数字没标口径/没归档"）。
+//
+// 三条硬规矩（captain 定）：
+//   1. 统计**不参与** failed 判定 —— 退出码语义不变（默认 0 / --strict-api 0）
+//   2. **算不出来就显示 `—`，绝不给 0** —— 0 会被读成"真的没有"
+//   3. 每一项都要打印**来源命令**，别人能复核
+{
+    const { execFileSync } = await import('child_process');
+    const UNKNOWN = '—';
+
+    /** 递归数某目录下的 .js（等价 `find <dir> -name '*.js' | wc -l`）。 */
+    const countJs = (dir) => {
+        try {
+            let n = 0;
+            const rec = (d) => {
+                for (const f of readdirSync(d)) {
+                    const p = join(d, f);
+                    if (statSync(p).isDirectory()) rec(p);
+                    else if (f.endsWith('.js')) n++;
+                }
+            };
+            rec(dir);
+            return String(n);
+        } catch { return UNKNOWN; }
+    };
+
+    /** 跑一条 git 命令；不可用/失败一律 `—`（不许显示 0）。 */
+    const gitLines = (args) => {
+        try {
+            const out = execFileSync('git', args, { cwd: join(ROOT, '../..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+            return out.trim() ? out.trim().split('\n').length : UNKNOWN;
+        } catch { return UNKNOWN; }
+    };
+
+    /**
+     * 跑一条**输出本身就是那个数字**的 git 命令（如 `rev-list --count`）。
+     * ★ 不能复用 gitLines：`rev-list --count HEAD` 只输出一行 "123"，
+     *   数行数会得到 1 —— 我第一版就踩了这个，显示"重构提交数 1"。
+     */
+    const gitText = (args) => {
+        try {
+            const out = execFileSync('git', args, { cwd: join(ROOT, '../..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+            const t = out.trim();
+            return t === '' ? UNKNOWN : t;
+        } catch { return UNKNOWN; }
+    };
+
+    /** `composite_registry.SKILL_NAMES.length`（注册表技能数）。 */
+    const skillCount = async () => {
+        try {
+            const m = await import(pathToFileURL(join(ROOT, 'library/composite_registry.js')).href);
+            return Array.isArray(m.SKILL_NAMES) ? String(m.SKILL_NAMES.length) : UNKNOWN;
+        } catch { return UNKNOWN; }
+    };
+
+    /** `contract.CODES.length`（错误码数）。 */
+    const codeCount = async () => {
+        try {
+            const m = await import(pathToFileURL(join(ROOT, 'library/contract.js')).href);
+            return Array.isArray(m.CODES) ? String(m.CODES.length) : UNKNOWN;
+        } catch { return UNKNOWN; }
+    };
+
+    /**
+     * `unit_all` 的注册/执行/跳过数 —— **解析清单，不实跑**（实跑要几分钟，装不进门禁）。
+     * 只读 `UNITS` 与 `NEEDS_REAL_DATA` 两个字面量列表；解析不出来给 `—`。
+     */
+    const unitStats = () => {
+        try {
+            const src = readFileSync(join(ROOT, '../../tools/unit_all.mjs'), 'utf8');
+            const unitsBlock = src.match(/const UNITS = \[([\s\S]*?)\];/);
+            if (!unitsBlock) return null;
+            const registered = [...unitsBlock[1].matchAll(/^\s*'([^']+)'/gm)].map((m) => m[1]);
+            const nrBlock = src.match(/NEEDS_REAL_DATA = new Set\(\[([\s\S]*?)\]\)/);
+            const needsReal = nrBlock ? [...nrBlock[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
+            const skipped = registered.filter((n) => needsReal.includes(n));
+            return { registered: registered.length, executed: registered.length - skipped.length, skipped: skipped.length };
+        } catch { return null; }
+    };
+
+    const units = unitStats();
+    console.log('[6/6] 代码规模（统计信息，不参与失败判定；**算不出来显示 `—`**）');
+    console.log(`  源文件（src/**/*.js）     ${countJs(join(ROOT, '..'))}      ← find src -name '*.js' | wc -l`);
+    console.log(`  注册表技能                ${await skillCount()}      ← composite_registry.SKILL_NAMES.length`);
+    console.log(`  测试脚本                  ${units ? `${units.executed}（+${units.skipped} 跳过）` : UNKNOWN}`
+        + `      ← tools/unit_all.mjs 的 UNITS 清单`
+        + (units ? `（注册 ${units.registered} = 执行 ${units.executed} + 跳过 ${units.skipped}）` : '（清单解析失败）'));
+    console.log(`  错误码（CODES）           ${await codeCount()}      ← library/contract.js 的 CODES.length`);
+    const revCount = gitText(['rev-list', '--count', 'HEAD']);
+    const sinceCount = gitLines(['log', '--since=2026-10-31', '--oneline']);
+    console.log(`  重构提交数                ${revCount}      ← git rev-list --count HEAD`);
+    console.log(`  　（其中自 2026-10-31 起）  ${sinceCount}      ← git log --since=2026-10-31 --oneline | wc -l`);
+    if (revCount === UNKNOWN || sinceCount === UNKNOWN) {
+        console.log('  ⚠ git 不可用（或不在仓库内）→ 提交数显示 `—`，不是 0');
+    }
+    console.log('  说明：这些数字会随开发变化。**引用时以本段输出为准**，别抄文档里的快照。\n');
+}
+
 const { rmSync } = await import('fs');
 try { rmSync(join(ROOT, '../../bots/preflight_tmp'), { recursive: true, force: true }); } catch { }
 
