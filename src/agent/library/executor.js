@@ -437,7 +437,13 @@ export async function execStep(bot, step, opts = {}) {
     if (step.action === 'walk') {
         const { stepInto } = await import('./act_step.js');
         const cell = { x: Math.floor(step.x), y: targetFeetY, z: Math.floor(step.z) };
-        const si = await stepInto(bot, cell, { timeoutMs: 1600 });
+        // ★ timeoutMs：1600 → 500（2026-11-03 实测定的，不是猜的）
+        //   真机测：被墙挡住时 stepInto **撞满整个 timeout**（1610/1614/1614ms），
+        //   不是立刻返回 UNSAFE；而走得通时只要 114~219ms。
+        //   所以 1600 的余量全是白等 —— dig-through 那 6 次失败各白花 ~1.6s
+        //   （实测该场景 r2~r5 从 18.4s 涨到 21.0s）。
+        //   500ms 对"成功只要 ≤219ms"有 2.3 倍余量。
+        const si = await stepInto(bot, cell, { timeoutMs: 500 });
         onEvent({ type: 'step-into', x: cell.x, y: cell.y, z: cell.z, ok: si.ok, code: si.code ?? 'OK' });
         if (si.ok) return si;      // 真进格了（insideCell 保证不是假成功）→ 走这条
         // 失败 → 落下去走 pathfinder（行为与未接入时完全一致）
