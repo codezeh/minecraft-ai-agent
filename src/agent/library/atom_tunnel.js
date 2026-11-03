@@ -277,11 +277,25 @@ export async function tunnelStep(bot, dir, opts = {}) {
             if (!down.ok && down.code === 'INTERRUPTED') return down;
         }
     } else {
+        // ★ t41（2026-11-03）：NO_MOVE 从"永不到达的兜底"改成**真实产出点**。
+        //   三种情况三个码，别混：
+        //     !mv.ok + 有码  → 用它的码（真实原因，如 NO_PATH / INTERRUPTED）
+        //     !mv.ok + 没码  → INTERNAL（"别人没告诉我原因"是内部问题，不是 NO_MOVE）
+        //     mv.ok  但没动  → **NO_MOVE**（真·"挖通了但走不过去"= 假成功）
+        //   为什么要后者：`moveToXZ` 报 ok 只代表"goto 没抛错"，不代表她真的挪了窝；
+        //   洞挖好了、路通了却没过去，是独立于"挖失败"的一种失败，值得有自己的码。
+        const before = { x: bot.entity.position.x, z: bot.entity.position.z };
         const mv = await moveToXZ(bot, { kind: 'point', posXZ: { x: chk.to.x, z: chk.to.z } },
             { tol: 0.8, timeout: walkTimeout });
         if (!mv.ok) {
             onEvent({ type: 'tunnel-walk-fail', code: mv.code });
-            return fail(mv.code ?? 'NO_MOVE', '挖通了但走不过去', { from, dug });
+            return fail(mv.code ?? 'INTERNAL', '挖通了但走不过去', { from, dug });
+        }
+        // ok 但位移 < 0.5 格 = 假成功
+        const moved = Math.hypot(bot.entity.position.x - before.x, bot.entity.position.z - before.z);
+        if (moved < 0.5) {
+            onEvent({ type: 'tunnel-walk-stuck', moved });
+            return fail('NO_MOVE', `挖通了但没走过去（只动了 ${moved.toFixed(2)} 格）`, { from, dug, moved });
         }
     }
 

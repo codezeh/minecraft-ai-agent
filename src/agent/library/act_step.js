@@ -72,7 +72,12 @@ export async function stepInto(bot, cell, opts = {}) {
     }
     const target = { x: Math.floor(raw.x), y: Math.floor(raw.y), z: Math.floor(raw.z) };
     const p0 = bot.entity?.position;
-    if (!p0) return fail('NO_TARGET', '读不到自己的坐标');
+    // ★ t41（2026-11-03）码纠正：这里原来是 `NO_TARGET`，**语义不对**。
+    //   NO_TARGET = "**你给的**目标位置不对"（上层该改坐标）；而这里目标格没问题，
+    //   是**她自己**的坐标读不到（实体没就绪/断线瞬间）→ 内部状态异常 → `INTERNAL`
+    //   （上层既不该改坐标，也不该"走近再试"）。
+    //   也刻意不用 NO_DATA：那个码绑的是"目标格未加载"，用这儿会把人引去"走近点"。
+    if (!p0) return fail('INTERNAL', '读不到自己的坐标（实体还没就绪？）');
 
     const d0 = Math.hypot(target.x + 0.5 - p0.x, target.z + 0.5 - p0.z);
     if (d0 > maxReach) {

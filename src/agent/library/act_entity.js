@@ -102,7 +102,11 @@ export async function tradeOnce(bot, villager, index = 0, opts = {}) {
     const trades = win.trades ?? [];
     const tr = trades[index];
     if (!tr) {
-        return fail('NOT_READY', `没有第 ${index} 个交易（共 ${trades.length} 条）`, {
+        // ★ t41（2026-11-03）码纠正：这里原来是 `NOT_READY`，**语义不对**。
+        //   NOT_READY = "时间能解决，等一会再来"（作物没熟/熔炉没烧完/白天睡不了）；
+        //   而"这个村民只有 3 个交易、你要第 5 个"**等多久都不会出现** ——
+        //   得改请求（换交易/换村民）→ 那是 `NO_TARGET`（这个目标不存在）。
+        return fail('NO_TARGET', `没有第 ${index} 个交易（共 ${trades.length} 条）`, {
             index, available: trades.length,
         });
     }

@@ -5,8 +5,8 @@
 // 「要小心掉到危险的地方，得先规划好动作轨迹」
 //
 // 用假 bot（不带真实世界），因为这些都是**纯几何判断**，不需要连游戏。
-import { computeSafeZone, inSafeZone, checkStep } from '../src/agent/library/atom_tunnel.js';
-import { makeFakeBot } from './fixtures/fake_bot.mjs';
+import { computeSafeZone, inSafeZone, checkStep, tunnelStep } from '../src/agent/library/atom_tunnel.js';
+import { makeFakeBot, realRegistry } from './fixtures/fake_bot.mjs';
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {
@@ -25,6 +25,9 @@ function fakeBot(at, feet = { x: 0, y: 64, z: 0 }) {
         posOffset: 0,          // 原来这里就是整格坐标，不是格中心
         unloaded: 'null',      // 未加载必须是 null：判 NO_DATA 靠它
         diggable: (name) => !/^(bedrock|water|lava)$/.test(name),
+        // ★ t41：真要走到 nav_pathfinder.moveToXZ 的用例需要真注册表
+        //   （`new pf.Movements(bot)` 会读 blocksByName.chest 等一堆；手搓空表必崩）
+        registry: realRegistry(),
     });
 }
 
@@ -41,7 +44,40 @@ console.log('=== 1) 安全范围（箱子）===');
     check('出界被拒（y=61）', !inSafeZone(zone, { x: 0, y: 61, z: 0 }), '');
 }
 
-// ---------- 2) 正常掘进：前方是实心土 ----------
+// ---------- NO_MOVE：挖通了、moveToXZ 说 ok，但**实际没动** = 假成功 ----------
+//
+// ★ 为什么要有这条（t41，2026-11-03）：
+//   `NO_MOVE` 以前只在 `atom_tunnel` 里当**兜底**（`mv.code ?? 'NO_MOVE'`），
+//   而 `moveToXZ` 总会返回一个 code，所以那个兜底永远走不到 → 码"注册了却从不产出"。
+//   真正的 `NO_MOVE` 场景是：洞挖通了、`moveToXZ` 报 ok，**但她其实没挪窝** ——
+//   这正是反复打的那类"假成功"（ok 不等于做成了）。现在给它一个真实产出点。
+console.log('\n=== NO_MOVE：挖通了但没走过去 ===');
+{
+    const at = new Map();
+    at.set('0,63,0', 'stone');              // 她脚下
+    at.set('1,63,0', 'stone');              // 前方的地板
+    at.set('1,64,0', 'dirt');               // 脚位（要挖）
+    at.set('1,65,0', 'dirt');               // 头位（要挖）
+    const bot = fakeBot(at);
+    // 配把镐：act_dig 会检查"拿得动这块"，空手会 NO_TOOL
+    bot.inventory.slots.push({ name: 'diamond_pickaxe', type: 1, count: 1, slot: 0 });
+    bot.inventory.slots.push({ name: 'diamond_shovel', type: 1, count: 1, slot: 1 });
+    // ★ 关键桩：goto "成功返回"但**不移动位置**（模拟 pathfinder 假成功）
+    //   注意不要桩 bot.dig —— act_dig 靠读回方块判断成没成，桩了就会 TIMEOUT
+    bot.pathfinder.goto = async () => true;
+    const zone = computeSafeZone(bot, { radius: 4, up: 3, down: 3 });
+    const before = { x: bot.entity.position.x, z: bot.entity.position.z };
+    const r = await tunnelStep(bot, { dx: 1, dz: 0 }, { zone });
+    const moved = Math.hypot(bot.entity.position.x - before.x, bot.entity.position.z - before.z);
+    console.log(`  结果: ${r.ok ? 'ok' : r.code} / 位移=${moved.toFixed(2)}`);
+    check('挖通了但 moveToXZ 假成功（位移 0）→ NO_MOVE',
+        !r.ok && r.code === 'NO_MOVE',
+        `code=${r.code} moved=${moved.toFixed(2)}`);
+    check('NO_MOVE 带 data.moved（上层能看到"只动了多少"）',
+        typeof r.data?.moved === 'number' && r.data.moved < 0.5,
+        JSON.stringify(r.data ?? {}));
+}
+
 console.log('\n=== 2) 前方是实心土 → 允许 ===');
 {
     const at = new Map();

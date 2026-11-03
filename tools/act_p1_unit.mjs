@@ -240,15 +240,21 @@ function assertResult(name, r) {
     } else badCase('tradeOnce 无窗口 → WINDOW_CLOSED', { code: r.code });
 }
 
-// ── 18. tradeOnce：没有那个交易 → NOT_READY ───────────────────────
+// ── 18. tradeOnce：没有那个交易 → NO_TARGET ───────────────────────
+//
+// ★ 为什么这条断言从 NOT_READY 改成 NO_TARGET（t41，2026-11-03）：
+//   判据来自 `CODES`（contract.js）：NOT_READY = **时间能解决**的"等一会再来"
+//   （作物没熟、熔炉没烧完、白天睡不了）；而"这个村民只有 3 个交易、你要第 5 个"
+//   **等多久都不会出现** —— 得上层改请求（换交易/换村民）→ 那是 NO_TARGET。
+//   旧断言钉的是旧错码，不是行为：改后覆盖不变，只是码选对了。
 {
     const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 } });
     bot.currentWindow = { trades: [{ inputItem1: { name: 'wheat', count: 3 } }] };
     const v = { name: 'villager', isValid: true, position: new Vec3(0, 64, 1) };
     const r = await tradeOnce(bot, v, 5);            // 只有 1 条，要第 6 条
-    if (assertResult('tradeOnce 没这交易', r) && !r.ok && r.code === 'NOT_READY') {
-        okCase('tradeOnce 没有该条交易 → NOT_READY（不是 NO_ITEM）', r.code);
-    } else badCase('tradeOnce 没这交易 → NOT_READY', { code: r.code });
+    if (assertResult('tradeOnce 没这交易', r) && !r.ok && r.code === 'NO_TARGET') {
+        okCase('tradeOnce 没有该条交易 → NO_TARGET（终态，不是"等一会"；也不是 NO_ITEM）', r.code);
+    } else badCase('tradeOnce 没这交易 → NO_TARGET', { code: r.code });
 }
 
 // ── 19. tradeOnce：货不够 → NO_ITEM ──────────────────────────────
@@ -383,6 +389,22 @@ function assertResult(name, r) {
     if (assertResult('stepInto 悬空', r) && !r.ok && r.code === 'UNSAFE') {
         okCase('stepInto 落点脚下是空气 → UNSAFE（这格不该去，不是走不进去）', r.code);
     } else badCase('stepInto 悬空 → UNSAFE', { code: r.code });
+}
+
+// ── 29b. stepInto：读不到**自己**的坐标 → INTERNAL（不是 NO_TARGET）────────
+//
+// ★ 为什么是 INTERNAL（t41，2026-11-03）：
+//   `NO_TARGET` 的语义是"**你给的**目标位置不对" —— 目标没问题，是**她自己**的状态读不到
+//   （实体还没就绪/断线瞬间）。这是内部状态异常，上层既不该去改坐标，也不该"走近再试"，
+//   该重试整个动作或报内部错误 → INTERNAL。
+//   也刻意**不用 NO_DATA**：NO_DATA 绑的是"目标格未加载"，用在这儿会把上层引去"走近点"。
+{
+    const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 } });
+    bot.entity = undefined;                          // 读不到自己
+    const r = await stepInto(bot, { pos: { x: 0, y: 64, z: 1 } });
+    if (assertResult('stepInto 无自身坐标', r) && !r.ok && r.code === 'INTERNAL') {
+        okCase('stepInto 读不到自己的坐标 → INTERNAL（不是 NO_TARGET）', r.code);
+    } else badCase('stepInto 无自身坐标 → INTERNAL', { code: r.code });
 }
 
 // ── 30. stepInto：按前进并真的进格 ─────────────────────────────────

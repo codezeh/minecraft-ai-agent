@@ -27,11 +27,16 @@ export const CODES = [
     // 载具的错误码（08 / 02 §3 的 mount·dismount 动作契约）
     //   原实现 atom_boat.js 已于 2026-11-01 删除（零调用方）；输入侧现由
     //   atom_input_misc.mountEntity / dismount 承接，动作层补 mount/dismount 时仍用这套码。
-    'NO_VEHICLE',   // 附近没有可骑的船/矿车
-    'RIDE_FAILED',  // 发了 /ride 但服务器没让她上船
+    //
+    // ⚠️ 暂未产出（2026-11-03 t41 错误码使用审计）：下面 4 个载具码当前**全仓零产出** ——
+    //   boat 已删、动作层 mount/dismount 还没建。**保留不删**（将来一定会用到；
+    //   临时造码等于破坏契约），但审计时别再把这 4 个当"该用没用"的信号重复排查。
+    //   （同段的 NO_PERMISSION **有**真实产出（权限/斜杠命令路径），不在此列。）
+    'NO_VEHICLE',   // 附近没有可骑的船/矿车　（暂未产出）
+    'RIDE_FAILED',  // 发了 /ride 但服务器没让她上船　（暂未产出）
     'NO_PERMISSION',// /ride 被拒（需要 op）
-    'NOT_MOUNTED',  // 不在载具上
-    'DRIVE_FAILED', // 在载具上但动不了（搁浅/陆地）
+    'NOT_MOUNTED',  // 不在载具上　（暂未产出）
+    'DRIVE_FAILED', // 在载具上但动不了（搁浅/陆地）　（暂未产出）
     'WINDOW_CLOSED',// 容器/窗口已关闭
     'NO_ITEM',
     'OCCUPIED',

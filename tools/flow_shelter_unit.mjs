@@ -133,12 +133,38 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     check('④ 没有建筑材料 → NO_ITEM', !r.ok && r.code === 'NO_ITEM', r.code);
 }
 
-// ⑤ 读不到脚下 → NO_TARGET（不会在虚空里搭）
+// ⑤ 脚下这一格：**未加载 / 虚空 / 水** 是三件不同的事，必须报三个不同的码
+//
+// ★ 为什么这条测试被改过（t36，2026-11-03）：原来只有一条
+//     check('⑤ 脚下读不到 → NO_TARGET（不在虚空搭屋子）', ... blockAt:()=>null)
+//   它想验的是"不在虚空搭屋子"，但用 `blockAt` 返回 **null** 来模拟"虚空"——
+//   这两件事在 CODES 里是分开的：
+//     null  = 那格**还没加载** → `NO_DATA`（走近/等加载，可重试）
+//     air   = 读得到、但**站不住** → `NO_TARGET`（换地方搭）
+//   更严重的是：它掩盖了一个真 bug —— 生产代码当时只有 `if (!below)`，
+//   只挡 null；脚下真是 air 时会**一路往下走，在虚空里搭屋子**。
+//   改判据的权威依据是 `contract.js` 的 `CODES` 定义（NO_DATA = 目标格未加载，读不到方块），
+//   不是"为了让这条变绿而放宽断言" —— 反而把覆盖**变细**了（a/b/c 三种）。
 {
+    // ⑤a 区块未加载（blockAt 返回 null）→ NO_DATA
     const bot = makeFakeBot({ items: [{ name: 'cobblestone', type: 1, count: 64, slot: 0 }], stubs: { blockAt: () => null } });
     bot.entity = { position: { x: 0.5, y: 64, z: 0.5 } };
     const r = await shelter(bot, {});
-    check('⑤ 脚下读不到 → NO_TARGET（不在虚空搭屋子）', !r.ok && r.code === 'NO_TARGET', r.code);
+    check('⑤a 脚下那格读不到（未加载）→ NO_DATA', !r.ok && r.code === 'NO_DATA', r.code);
+}
+{
+    // ⑤b 脚下是真空气/虚空 → NO_TARGET（不在虚空搭屋子）
+    const bot = makeFakeBot({ items: [{ name: 'cobblestone', type: 1, count: 64, slot: 0 }], stubs: { blockAt: () => ({ name: 'air', position: { x: 0, y: 63, z: 0 } }) } });
+    bot.entity = { position: { x: 0.5, y: 64, z: 0.5 } };
+    const r = await shelter(bot, {});
+    check('⑤b 脚下是空气 → NO_TARGET（不在虚空搭屋子）', !r.ok && r.code === 'NO_TARGET', r.code);
+}
+{
+    // ⑤c 脚下是水 → NO_TARGET（水上不搭）
+    const bot = makeFakeBot({ items: [{ name: 'cobblestone', type: 1, count: 64, slot: 0 }], stubs: { blockAt: () => ({ name: 'water', position: { x: 0, y: 63, z: 0 } }) } });
+    bot.entity = { position: { x: 0.5, y: 64, z: 0.5 } };
+    const r = await shelter(bot, {});
+    check('⑤c 脚下是水 → NO_TARGET', !r.ok && r.code === 'NO_TARGET', r.code);
 }
 
 // ⑥ 中断优先
