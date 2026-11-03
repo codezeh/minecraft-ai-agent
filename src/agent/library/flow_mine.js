@@ -105,6 +105,35 @@ function feetY(bot) {
 }
 
 /**
+ * ★★ 2026-11-03（t67）：找一个**能站在方块旁边**的格子。
+ *
+ * 为什么需要：`goTo` 的目标如果传方块自身（`block.position`），那是**实心格的内部**，
+ * 寻路器不可能站进去 → `NO_REACH`。真机实测：`goTo false NO_REACH × 127`，
+ * 导致 d>4 的块全被跳过，只挖到 1/8。
+ *
+ * 判据（保守，找得到才走）：
+ *   同层四邻（±x / ±z），要求**那格是 air**（能站人）且**它脚下是实心**（站得住）。
+ *   找不到就返回 null（调用方退回"只给 x/z"的旧行为，不会更差）。
+ */
+function findStandNear(bot, pos) {
+    try {
+        const bx = Math.floor(pos.x), by = Math.floor(pos.y), bz = Math.floor(pos.z);
+        const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        for (const [dx, dz] of dirs) {
+            const feet = bot.blockAt?.({ x: bx + dx, y: by, z: bz + dz }, false);
+            const below = bot.blockAt?.({ x: bx + dx, y: by - 1, z: bz + dz }, false);
+            const feetAir = feet && /^(air|cave_air|void_air)$/.test(feet.name);
+            const belowSolid = below && !/^(air|cave_air|void_air)$/.test(below.name)
+                && !/^(water|lava)$/.test(below.name);
+            if (feetAir && belowSolid) {
+                return { x: bx + dx, y: by, z: bz + dz };
+            }
+        }
+        return null;
+    } catch { return null; }
+}
+
+/**
  * 挖 count 个 ore。
  *
  * @param {object} opts { maxDepth=64, ctx }
@@ -205,9 +234,20 @@ export async function mine(bot, ore, count = 1, opts = {}) {
             // 走近（够不着才走）
             const d = block.position.distanceTo(self);
             if (d > 4) {
-                const walked = await goTo(bot, {
-                    kind: 'point', pos: { x: block.position.x, y: block.position.y, z: block.position.z },
-                }, {
+                // ★★ 2026-11-03（t67）：**目标不能是方块自身** —— 那是实心格的内部，
+                //   寻路器不可能站进去 → `NO_REACH`。
+                //
+                //   真机证据（verify 第 14 跑）：
+                //     goTo false NO_REACH × 127
+                //     [MINE] try d= 4.6 / 4.9 / 5.1 …  ← d>4 的全被跳过
+                //     [MINE] try d= 1.2 / 2.5 / 3.5 …  ← d<=4 直接挖，成了 7 个
+                //   → 只挖到 1/8，绝大多数块"够不着又走不过去"被跳过。
+                //
+                //   改成走到**方块旁边能站的那一格**（四邻里 air 且脚下实心）。
+                const stand = findStandNear(bot, block.position);
+                const walked = await goTo(bot, stand
+                    ? { kind: 'point', pos: stand }
+                    : { x: block.position.x, z: block.position.z }, {
                     mapDir: mapDirOf(bot),
                     deadlineMs: Math.max(MIN_WAIT_BUDGET_MS, Math.min((ctx.deadline ?? Date.now() + APPROACH_WINDOW_MS) - Date.now(), APPROACH_BUDGET_MS)),
                     arriveTol: 2,
