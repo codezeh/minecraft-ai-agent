@@ -115,21 +115,32 @@ function feetY(bot) {
  *   同层四邻（±x / ±z），要求**那格是 air**（能站人）且**它脚下是实心**（站得住）。
  *   找不到就返回 null（调用方退回"只给 x/z"的旧行为，不会更差）。
  */
-function findStandNear(bot, pos) {
+export function findStandNear(bot, pos) {
     try {
         const bx = Math.floor(pos.x), by = Math.floor(pos.y), bz = Math.floor(pos.z);
-        const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-        for (const [dx, dz] of dirs) {
-            const feet = bot.blockAt?.({ x: bx + dx, y: by, z: bz + dz }, false);
-            const below = bot.blockAt?.({ x: bx + dx, y: by - 1, z: bz + dz }, false);
-            const feetAir = feet && /^(air|cave_air|void_air)$/.test(feet.name);
-            const belowSolid = below && !/^(air|cave_air|void_air)$/.test(below.name)
-                && !/^(water|lava)$/.test(below.name);
-            if (feetAir && belowSolid) {
-                return { x: bx + dx, y: by, z: bz + dz };
+        const cands = [];
+        // ★ t68：dy 到 -6、dx/dz 到 ±3 —— 树干的 log 离地可能差 5 层
+        //   （log 在 y=-55、地面在 -60）。范围太小时会全 null → NO_REACH 降不下来。
+        for (let dy = 0; dy >= -6; dy -= 1) {
+            for (let dx = -3; dx <= 3; dx += 1) {
+                for (let dz = -3; dz <= 3; dz += 1) {
+                    if (dx === 0 && dz === 0 && dy === 0) continue;   // 方块自身不算落点
+                    const x = bx + dx, y = by + dy, z = bz + dz;
+                    const feet = bot.blockAt?.({ x, y, z }, false);
+                    if (!feet || !/^(air|cave_air|void_air)$/.test(feet.name)) continue;
+                    const below = bot.blockAt?.({ x, y: y - 1, z }, false);
+                    if (!below) continue;
+                    if (/^(air|cave_air|void_air)$/.test(below.name)) continue;
+                    if (/^(water|lava)$/.test(below.name)) continue;
+                    if (/_leaves$/.test(below.name)) continue;         // 树叶站不住
+                    cands.push({ x, y, z, score: Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 1.5 });
+                }
             }
         }
-        return null;
+        if (!cands.length) return null;
+        cands.sort((a, b) => a.score - b.score);
+        const best = cands[0];
+        return { x: best.x, y: best.y, z: best.z };
     } catch { return null; }
 }
 
