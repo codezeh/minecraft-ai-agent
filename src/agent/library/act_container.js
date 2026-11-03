@@ -15,6 +15,8 @@
 import Vec3 from 'vec3';
 import { ok, fail, normalizeTarget } from './contract.js';
 import { blockAt, reachDistanceTo } from './query_perceive.js';
+import { windowSlots } from './atom_read.js';
+import { closeWindow } from './atom_input_inventory.js';
 import { GOAL_LOOK_AT_DEFAULT_REACH } from '../rules/rules.runtime.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -173,22 +175,19 @@ export async function openContainer(bot, pos, opts = {}) {
 
 /** 关掉当前窗口（幂等：没开窗也返回 ok）。 */
 export function closeContainer(bot) {
-    if (!bot.currentWindow) return ok({ closed: false });
-    try {
-        bot.closeWindow(bot.currentWindow);
-        return ok({ closed: true });
-    } catch (e) {
-        return fail('INTERNAL', String(e?.message ?? e));
-    }
+    // ★ Phase R 收尾（2026-11-03）：实现已搬到 `atom_input_inventory.closeWindow`
+    //   （"界面输入只有一个出口"），这里反向复用 → **全仓只有一份实现**。
+    return closeWindow(bot);
 }
 
 /** 当前窗口里的物品快照（给上层判断"有没有我要的"）。 */
 export function windowItems(bot) {
-    const win = bot.currentWindow;
-    if (!win) return null;
-    return (win.slots || [])
-        .map((it, i) => (it && it.name ? { slot: i, name: it.name, count: it.count } : null))
-        .filter(Boolean);
+    // ★ Phase R 收尾（2026-11-03）：实现已搬到 `atom_read.windowSlots`（读取原子的真身），
+    //   这里反向复用，**全仓只有一份实现**。
+    //   语义差异保留：本函数"没有窗口"时返回 `null`（调用方靠它区分"没开窗"和"空箱子"），
+    //   而 `windowSlots` 按原子的"读不到就空"规矩统一返回 `[]` —— 所以这里先判 currentWindow。
+    if (!bot?.currentWindow) return null;
+    return windowSlots(bot);
 }
 
 // ───────────────────────────────────────────────────────────────────────────

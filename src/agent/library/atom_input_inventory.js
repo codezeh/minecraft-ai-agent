@@ -15,7 +15,7 @@
  * "切过去没有""格子少了没有"这类后置复核是动作层的事。
  */
 import { ok, fail } from './contract.js';
-import { closeContainer } from './act_container.js';
+// ★ Phase R 收尾：closeWindow 的真实实现已在本文件（不再反向依赖 act_container）
 
 /** 快捷栏格数（原版 9）。 */
 export const HOTBAR_SLOTS = 9;
@@ -81,13 +81,20 @@ export async function clickSlot(bot, slot, opts = {}) {
 /**
  * 关掉当前窗口。
  *
- * 转出 `atom_container.closeContainer` —— 那条早就是原子（01 §3.3 标 ✅），
- * 这里再写一份就是"同一能力两套实现"。入口放在本文件只是为了"界面输入只有一个出口"。
+ * ★ Phase R 收尾（2026-11-03）：**实现搬到这里**（"界面输入只有一个出口"）。
+ *   原来只转发 `act_container.closeContainer` → 原子层反向依赖动作层（前缀违规）。
+ *   现在 `act_container.closeContainer` 反向复用本函数，**全仓仍只有一份实现**。
  *
  * @returns ActionResult ok(data:{closed}) / INTERNAL
  */
 export async function closeWindow(bot) {
-    return closeContainer(bot);
+    if (!bot?.currentWindow) return ok({ closed: false });
+    try {
+        bot.closeWindow(bot.currentWindow);
+        return ok({ closed: true });
+    } catch (e) {
+        return fail('INTERNAL', String(e?.message ?? e));
+    }
 }
 
 /**

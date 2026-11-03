@@ -36,42 +36,23 @@ export function isNightFalling(t) {
     return n >= NIGHT.START - NIGHT.DUSK_LEAD || n >= NIGHT.END;
 }
 
-/** 接受 Vec3 或 {x,y,z}，统一成 Vec3。 */
-export function vec(pos) {
-    if (pos instanceof Vec3) return pos;
-    return new Vec3(pos.x, pos.y, pos.z);
-}
-
-/** 方块坐标（整数）→ 方块中心（含 .5）。 */
-export function center(pos) {
-    const v = vec(pos);
-    return new Vec3(v.x + 0.5, v.y + 0.5, v.z + 0.5);
-}
-
 /** 眼睛位置。 */
-export function eyePosition(bot) {
-    return bot.entity.position.offset(0, bot.entity.eyeHeight ?? 1.62, 0);
-}
+// ★ Phase R 收尾（2026-11-03）：`vec` / `center` / `eyePosition` / `blockAt` / `findBlocks`
+//   的**实现搬到了 `atom_read.js`**（读取原子的真身）。
+//   原因：原子层要读方块就得从查询层借 = "下层依赖上层"（前缀违规）。
+//   现在反过来 —— 查询层从原子层引入并**原样再导出**，全仓仍只有一份实现，
+//   36 个 `from './query_perceive.js'` 的调用方一行都不用改。
+//
+// ★ 必须是 `import` + `export` 两行的写法，**不能用 `export {...} from`**：
+//   后者**不创建本地绑定**，而下面的 `reachDistanceTo` 还要用 `eyePosition`/`center`
+//   → 会 ReferenceError（本项目踩过一次：composite_registry 的 mapDirOf）。
+import {
+    vec, center, eyePosition, blockAt, findBlocks,
+} from './atom_read.js';
 
-export function blockAt(bot, pos) {
-    return bot.blockAt(vec(pos), false) ?? null;
-}
-
-/**
- * 按名字找最近的方块。
- * 用方块 id 匹配，不用回调——回调会对每个候选方块执行一次，不能有副作用。
- */
-export function findBlocks(bot, name, radius = 32, limit = 64) {
-    const def = bot.registry.blocksByName[name];
-    if (!def) return [];
-    const positions = bot.findBlocks({ matching: def.id, maxDistance: radius, count: limit });
-    const eye = eyePosition(bot);
-    return positions
-        .map(p => bot.blockAt(p, false))
-        .filter(Boolean)
-        .sort((a, b) => a.position.distanceTo(eye) - b.position.distanceTo(eye))
-        .slice(0, limit);
-}
+export {
+    vec, center, eyePosition, blockAt, findBlocks,
+};
 
 /** 眼睛到方块中心的距离（格）。 */
 export function reachDistanceTo(bot, pos) {
