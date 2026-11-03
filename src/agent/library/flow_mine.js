@@ -322,6 +322,18 @@ export async function mine(bot, ore, count = 1, opts = {}) {
                     'bpos=', block.position.x, block.position.y, block.position.z,
                     '| dNow=', block.position.distanceTo(bot.entity.position).toFixed(1));
                 if (walked.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
+                // ★★ t84：**goTo 之后单独静默一次，再挖第二刀。**
+                //
+                //   这是 t81 真正需要的唯一一处清理 —— 而 t82 把它放进了 `holdDig`
+                //   （每次挖都跑），导致 `stop()` 触发中断事件、abort 放大到 2867 次。
+                //   放在这里：**只有"刚走完路要接着挖"这一个场景**才清，
+                //   不影响"一步没走、直接挖"的主路径（那条路 abort 本来是 0）。
+                try {
+                    bot.pathfinder?.setGoal?.(null);
+                    bot.pathfinder?.stop?.();
+                    bot.clearControlStates?.();
+                    await new Promise((r) => setImmediate(r));   // 让 stop() 真正落地
+                } catch { /* 假 bot / 没 pathfinder 就算了 */ }
                 // ★ 不管走没走到，**再试一次 dig** —— 走不动也可能已经进了 reach
                 //   （第 24/27 跑：`STUCK` 卡在 3-6 格，但 4.1 格就能挖）
                 dug = await digBlock(bot, { kind: 'block', pos: { x: block.position.x, y: block.position.y, z: block.position.z } });

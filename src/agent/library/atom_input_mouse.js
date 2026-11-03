@@ -125,27 +125,28 @@ export async function holdDig(bot, block, opts = {}) {
     //   而是放在这里：**任何 dig 之前都强制静默**。这是挖矿的固有前提，
     //   不是某个 flow 的责任。
     //
-    //   ★★ t82 修正：**只要 bot 有 `pathfinder` 就一定静默**（不再看 `goal` 是否非空）。
+    //   ★★★ t84：**回退 t82 的"无条件静默" —— 它是回归，不是修复。**
     //
-    //     第 28 跑回归：`Digging aborted` 从 0 回到 **1277**。
-    //     t81 改成"先 dig → `OUT_OF_REACH` 才 goTo → 再 dig"，
-    //     第二次 dig 前 `goTo` 刚跑完，而**残留状态比 `hasGoal` 判据复杂得多**：
-    //     `walkTo` 是逐步行进的，最后一步的 goal 可能已清但控制键还按着，反之亦然。
-    //     与其猜"有没有残留"，不如**无条件清干净** —— 代价是一次内存写。
+    //     三跑实测（唯一可信的判据）：
+    //       t80 条件静默          → `Digging aborted` **1622 → 0**，dig OK 5
+    //       t80 + t81（先 dig）   → aborted **1277**，dig OK **29**   ← t81 用 1277 换 24 块
+    //       t80+t81+t82（无条件） → aborted **2867**，dig OK **5**    ← 净亏
     //
-    //     用 `bot.pathfinder` 存在与否区分真假 bot：真 bot 一定有；
-    //     假 bot（单测）通常没有 → 不会调 `clearControlStates`，
-    //     于是"数 clearControlStates 次数"这类观测点仍然准确。
+    //     t82 的 `setGoal(null) + stop() + setImmediate` **每次挖之前都跑**
+    //     （t81 之后每块都先 dig），而 `stop()` 会触发 pathfinder 自己的中断事件
+    //     → abort 正在进行的 dig。执行次数被放大数倍 → abort 反而更多。
+    //
+    //   → 回到 t80 的**条件版**：只在"确实有 goal / 有键按着"时才清。
     if (bot.pathfinder) {
-        try { bot.pathfinder.setGoal?.(null); } catch { /* ignore */ }
-        try { bot.pathfinder.stop?.(); } catch { /* ignore */ }
-        // ★ t82：给这次清理打个意图标记 —— "为挖矿而静默" 与 "别的流程自己清理"
-        //   在观测上要能分开，否则"数 clearControlStates 次数"这类外部计数器会失真
-        //   （第 28 跑 `flow_mine_pickup_unit` 就因此从 3 变 6）。
-        bot.__silencingForDig = true;
-        try { bot.clearControlStates?.(); } catch { /* ignore */ } finally { bot.__silencingForDig = false; }
-        // stop() 是异步的：让出一拍，确保它真的落地再开始挖
-        await new Promise((r) => setImmediate(r));
+        try {
+            const hasGoal = !!bot.pathfinder.goal;
+            const keysDown = Object.keys(bot.controlState ?? {}).some((k) => bot.controlState[k]);
+            if (hasGoal) { bot.pathfinder.setGoal(null); bot.pathfinder.stop?.(); }
+            if (keysDown) {
+                bot.__silencingForDig = true;
+                try { bot.clearControlStates?.(); } catch { /* ignore */ } finally { bot.__silencingForDig = false; }
+            }
+        } catch { /* ignore */ }
     }
 
     const heldId = bot?.heldItem ? bot.heldItem.type : null;
