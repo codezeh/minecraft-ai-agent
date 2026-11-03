@@ -157,6 +157,13 @@ export function planObtain(args = {}) {
     let hitDepth = false;
     let hitJobs = false;
 
+    // ★★ 2026-11-03（t65）：**"成品 ← 材料"的边**，用来给子单补 `dependsOn`。
+    //
+    //   为什么不改 `expand` 的返回值：它内部有十几处裸 `return`，逐个改成返回 key 列表
+    //   改动面太大、容易漏。改成**旁路记录**，最后统一后处理，风险小得多。
+    //   `needsOf[成品] = [材料, ...]`
+    const needsOf = new Map();
+
     /**
      * 递归展开（**有界**）。
      * @param {string} name 要弄的物品
@@ -164,9 +171,21 @@ export function planObtain(args = {}) {
      * @param {number} depth 当前层数（根 = 1）
      * @param {string} parentKey 父单的 key（用于 why / parentId 关联）
      * @param {string} why 为什么需要它
+     * @returns {string[]} 这次展开**产出的 plan key 列表**（供上层做 dependsOn）
+     *
+     * ★★ 2026-11-03（t65）：**返回 key 列表是为了让"材料 → 成品"能表达先后顺序**。
+     *
+     *   真机第 11 跑的止损点（verify 定位）：
+     *     obtain crafting_table 的子单是**并排派出去的**：
+     *       craft crafting_table → 先跑 → 那时还没木板 → NO_ITEM → blocked
+     *       craft oak_planks     → 后跑 → 成功做出 8 块
+     *     结果工作台 blocked、父单跟着 blocked，**而木板其实已经做出来了**。
+     *   根因：`strat_obtain` 只写了 `parentKey`（给 why 用），**从来没写 `dependsOn`**，
+     *   所以调度器看到它们全是 ready，谁先谁后看运气。
      */
     const expand = (name, need, depth, parentKey, why) => {
-        if (hitJobs || hitDepth) return;
+        if (hitJobs || hitDepth) return [];
+
 
         // ── 上限 0：子单预算（**push 之前**就要查，否则每次都会多推 1 张）──
         //
@@ -232,6 +251,8 @@ export function planObtain(args = {}) {
             if (hitJobs) return;
 
             if (src.type === 'craft') {
+                // ★ t65：记录"这个成品需要哪些材料"（后处理时用来补 dependsOn）
+                needsOf.set(name, Object.keys(src.recipe ?? {}));
                 plan.push({
                     skill: SOURCE_TO_SKILL.craft,
                     args: { item: name, count: stillNeed },
@@ -293,6 +314,33 @@ export function planObtain(args = {}) {
     };
 
     expand(item, want, 1, null, `需要 ${want} 个 ${item}`);
+
+    // ★★ 2026-11-03（t65）：**给每个 crafts 步骤补 `dependsOnKeys`** ——
+    //   材料必须先做出来，成品才能合（真机第 11 跑：crafting_table 抢在 oak_planks 前面跑 → NO_ITEM）。
+    //
+    //   做法（旁路后处理，不动 `expand` 的十几处 return）：
+    //     key = `<item>#<depth>`（同一物品同层只会出现一次）
+    //     对每个 craft 步骤 X： dépend 于"产出 X 的材料"的那些 plan 步骤
+    {
+        const keyOf = (s) => `${s.args?.item ?? s.args?.ore ?? '?'}#${s.depth ?? 0}`;
+        const byKey = new Map();
+        for (const s of plan) byKey.set(keyOf(s), s);
+
+        for (const s of plan) {
+            if (s.skill !== SOURCE_TO_SKILL.craft) continue;
+            const item = s.args?.item;
+            const mats = needsOf.get(item) ?? [];
+            const deps = [];
+            for (const m of mats) {
+                // 材料可能被展开在同一层或更深一层；两种都找
+                for (let d = (s.depth ?? 1) + 1; d <= (s.depth ?? 1) + 3; d += 1) {
+                    const k = `${m}#${d}`;
+                    if (byKey.has(k)) { deps.push(k); break; }
+                }
+            }
+            if (deps.length) s.dependsOnKeys = [...new Set(deps)];
+        }
+    }
 
     // ★ 不要"下了单就从缺口里扣掉"（2026-11-03 单测抓到的错）：
     //   第一版有这么一段，结果**环形依赖**（A→B→A）的缺口被自己清空了 ——
@@ -428,8 +476,16 @@ export async function obtain(agent, item, count = 1, deps = {}) {
         parentId = parent.data?.id ?? parent.data?.job?.id ?? null;
     }
 
+    // ★ t65：先把 key → jobId 建起来，才能把 `dependsOnKeys` 换成**真实 job id**
+    //   （任务板的 `dependsOn` 门控认的是 id，不是名字）。
+    //   分两遍：第一遍只加不依赖别人的（通常是材料），第二遍加有依赖的 ——
+    //   否则可能引用到还没建的 id。
+    const keyToId = {};
+    const keyOf = (s) => `${s.args?.item ?? s.args?.ore ?? '?'}#${s.depth ?? 0}`;
     const created = [];
+    const pending = [];
     for (const step of planned.plan) {
+        if (step.dependsOnKeys?.length) { pending.push(step); continue; }
         const r = await board.add({
             kind: 'personal',
             parentId,
@@ -442,7 +498,32 @@ export async function obtain(agent, item, count = 1, deps = {}) {
             assignee: agent?.name ?? null,
             state: 'ready',
         });
-        if (r?.ok) created.push(r.data?.id ?? r.data?.job?.id ?? null);
+        if (r?.ok) {
+            const id = r.data?.id ?? r.data?.job?.id ?? null;
+            created.push(id);
+            keyToId[keyOf(step)] = id;
+        }
+    }
+    for (const step of pending) {
+        const dependsOn = (step.dependsOnKeys ?? []).map((k) => keyToId[k]).filter(Boolean);
+        const r = await board.add({
+            kind: 'personal',
+            parentId,
+            title: `${step.skill} ${JSON.stringify(step.args)}`,
+            skill: step.skill,
+            args: step.args,
+            why: step.why,
+            dependsOn: dependsOn.length ? dependsOn : undefined,   // ★ 06 §9.1 工序门控
+            priority: 5,
+            source: 'self',
+            assignee: agent?.name ?? null,
+            state: 'ready',
+        });
+        if (r?.ok) {
+            const id = r.data?.id ?? r.data?.job?.id ?? null;
+            created.push(id);
+            keyToId[keyOf(step)] = id;
+        }
     }
 
     // ★★ 2026-11-03（t51）：**`count` 必须是"实际到手数"，不是"请求数"**。
