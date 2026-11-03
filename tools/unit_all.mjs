@@ -34,6 +34,7 @@ const UNITS = [
     'board_nofallback_unit',     // M8 B1：无板降级回归（board=null 行为与加板前一致）
     'board_cmd_unit',            // M8 B1：!addJob/!jobs/!cancelJob 三条命令 + 权限 + 参数校验
     'flow_mine_notool_unit',     // t21：mine 的 NO_TOOL 假失败 + 三态判据（读不到≠没工具）
+    'flow_mine_pickup_unit',     // t72：挖一块捡一块（每块后 collectDrops，不是攒到最后）+ 源码级守卫 + 行为差分
     'find_stand_unit',           // t65：findStandNear 四邻站位判据（脚下悬空/水/岩浆不算 + 读炸不崩，含反向验证）
     'board_scheduler_unit',      // M8 B2：调度主循环 / 抢占规则 / autoClaim / requeueStaleBrief
     'board_b3_unit',             // M8 B3：多人单拆单 / 6 种预约 key + TTL / 角色过滤 / dependsOn

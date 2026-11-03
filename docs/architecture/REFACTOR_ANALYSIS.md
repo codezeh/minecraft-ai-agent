@@ -2659,6 +2659,40 @@ jobs=6  maxDepth=6  hitDepth=true  hitJobs=false  gaps={"mat_6":1}
 
 ---
 
+#### 「参数形状错」族：4 例同一病理（2026-11-04，t68 复盘）
+
+同一晚发现 4 处，**症状各异、根因同一条**：
+
+| # | 位置 | 症状 | 抓法 |
+|---|---|---|---|
+| 1 | `normalizeTarget({x,y,z})` | 返回 null | 真机 |
+| 2 | `act_place` 的 cap 裸对象 | `NO_TARGET` | 真机 |
+| 3 | `flow_mine.findStandNear` → `bot.blockAt(裸对象)` | `stand=null ×130`、`goTo NO_REACH` | 真机（第 16 跑）|
+| 4 | `board_scheduler.readOverheadShelter` → `bot.blockAt(裸对象)` | `nearShelter` **恒 null** → shelter 分支永不触发 | **单测（t68 的严格假件），未上真机** |
+
+**共同病理**：
+> **参数形状错了 → API 抛错 → `catch` 吞掉 → 返回一个"看起来正常"的空值。**
+
+第 3、4 例都是 `bot.blockAt(p)` 传裸 `{x,y,z}`：真链路是
+`blockAt(p)` → `world.getBlock(p)` → **`p.floored()`**（`prismarine-world/src/world.js:229`），
+裸对象没有 `.floored()` → `TypeError` → 被上层的 `try/catch` 吞成 `null`
+→ 调用方看到的是"没有数据"，而不是"我传错了"。
+
+**★ #3 和 #4 是同一晚、被同一种方法抓出来的：让假件比真件更挑剔。**
+`tools/fixtures/fake_bot.mjs` 加了 `strictPoints`（默认 true，`blockAt` 拒裸坐标），
+于是 #4 在**写代码的当天、离线、未上真机**就暴露了；
+而 #3 当时假件收裸对象 → 单测全绿 → 只能等第 16 跑真机报 `stand=null ×130`。
+
+> **结论（纪律）：假件宽容度决定了单测的盲区大小。**
+> 假件应当**比真件更挑剔，不能更宽松** —— 它宽容一分，单测的盲区就大一分。
+> 这条已经落成可执行断言：`tools/find_stand_unit.mjs` 的 ⓪（假件忠实度前置守卫）
+> —— 谁把 `strictPoints` 关掉，那条立刻红。
+
+**遗留**：盘点显示 `tools/` 下仍有若干测试自建**本地宽松桩**（`blockAt: () => ({name})` 之类），
+它们不经过共享夹具，因此对"裸坐标"这类形状错误仍无感。逐个替换成共享夹具是后续清理项。
+
+---
+
 **文档版本**: 1.0  
 **生成时间**: 2026-10-31  
 **基于报告**: 4个子agent只读调研（token总计~2.1M）

@@ -2,6 +2,10 @@
 // 关键问题：用户假设「扫区块更快」。这里拿真实数字。
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
+// ★ 2026-11-04（t74）：`bot.blockAt` 需要 **Vec3**（内部调 `pos.floored()`）；
+//   原来这里传裸 `{x,y,z}` → 第一次迭代就 `TypeError` →
+//   **"对照（逐格 blockAt）耗时"这个基准数字从来没产出过**（fixture 用严格假件盘出来的）。
+import { Vec3 } from 'vec3';
 import { rcon } from './rcon.mjs';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -76,7 +80,8 @@ bot.once('spawn', async () => {
     for (let x = -18; x <= 18; x += 4) {
         for (let z = -18; z <= 18; z += 4) {
             for (let y = 120; y >= -60; y--) {
-                const b = bot.blockAt({ x, y, z }, false);
+                // ★ t74：必须传 Vec3，不能传裸对象（真 mineflayer 内部调 pos.floored()）
+                const b = bot.blockAt(new Vec3(x, y, z), false);
                 if (b && b.name !== 'air') { n++; break; }
             }
         }
