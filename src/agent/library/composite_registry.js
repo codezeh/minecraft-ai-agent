@@ -402,6 +402,32 @@ export function makeCtx(agent, job = null, manifest = null) {
         deadline,
 
         /**
+         * ★★ 2026-11-03（A2）：**子单预算，跨调用共享**。
+         *
+         * 解决什么问题：`strat_obtain` 的防展开闸（MAX_DEPTH=6 / MAX_JOBS=30）是
+         * **per-call**（`plan`/`hitDepth`/`hitJobs` 都是 `planObtain` 的局部变量）。
+         * 于是 `strat_first_night` 调 4 次 obtain → **理论可到 120 张子单**。
+         * 以前靠 `strat_first_night` 自己数 12 兜住 —— 但那是**每个调用方的责任**，
+         * 以后新策略忘了加就炸。
+         *
+         * 做法（借 GMP 的"全局兜底"思想）：预算对象挂在 ctx 上，`strat_*` 拆单时从这里扣。
+         *   `limit` 由 `manifest.jobBudget` 声明（没声明就用默认 40）
+         *   `used`  已用掉多少张
+         *   `hitCap` 是否撞过上限（**要如实上报，不许静默截断**）
+         *
+         * ★ 只**新增**一个字段，不动任何已有字段的语义（ctx 是 M5 核心，所有流程都用它）。
+         * ★ 没有 ctx 的旧路径（直接调 `planObtain(...)`）**行为完全不变** ——
+         *   那种情况 strat_obtain 退回它自己的 MAX_JOBS=30，有用例守着。
+         */
+        jobBudget: {
+            limit: Number.isFinite(Number(manifest?.jobBudget))
+                ? Math.max(1, Math.floor(Number(manifest.jobBudget)))
+                : 40,
+            used: 0,
+            hitCap: false,
+        },
+
+        /**
          * **唯一**写 trace_bus 的地方（09 §2）。
          * 自动带 jobId / skill，并且只放标量（09 §2：其余字段平铺、不超过 10 个）。
          */

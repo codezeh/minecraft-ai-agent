@@ -38,6 +38,10 @@ export const FIRST_NIGHT = Object.freeze({
     //   所以本策略里 4 个 `obtain` 步骤理论上可各展开 30 张 = **120 张子单**。
     //   台账已记：**任何"调多次 obtain"的策略都必须自己加全局总闸**，
     //   `strat_obtain` 不提供（也不该它提供 —— 那需要跨调用共享状态，是设计变更）。
+    // ★ 2026-11-03（A2）：这个数现在是**没有 ctx 时的兜底默认**。
+    //   走正常路径时，上限来自 `manifest.jobBudget: 12` → `ctx.jobBudget.limit`，
+    //   和 `strat_obtain` **共享同一份预算**（跨调用真的共享）。
+    //   两个数是同一个值（12），这是刻意的——改机制不该改行为。
     MAX_TOTAL_JOBS: 12,
 });
 
@@ -91,7 +95,12 @@ function bestToolRank(inv, kind) {
 export function planFirstNight(s = {}) {
     const inv = s.inventory ?? {};
     const t = Number(s.timeOfDay ?? 0);
-    const maxJobs = Math.max(1, Math.floor(Number(s.maxJobs ?? FIRST_NIGHT.MAX_TOTAL_JOBS)));
+    // ★ 优先用共享预算的**余额**（有 ctx 时）；否则用自己的兜底默认（旧路径，行为不变）
+    const budget = s.jobBudget ?? null;
+    const maxJobs = Math.max(1, Math.floor(Number(
+        s.maxJobs
+        ?? (budget ? Math.max(0, Number(budget.limit ?? 0) - Number(budget.used ?? 0)) : FIRST_NIGHT.MAX_TOTAL_JOBS),
+    )));
 
     const steps = [];
     const skipped = [];
@@ -197,6 +206,10 @@ export const manifest = {
     codes: ['OK', 'NO_ITEM', 'NO_TARGET', 'NO_RECIPE', 'NO_WORKSTATION', 'INTERRUPTED', 'INTERNAL', 'TIMEOUT'],
     resumable: false,
     timeoutMs: 20 * 60 * 1000,
+    // ★ 2026-11-03（A2）：声明本策略要多少子单预算。
+    //   由 `makeCtx` 变成 `ctx.jobBudget.limit`，`strat_obtain` 拆单时从共享预算里扣。
+    //   值仍是 12（与改造前 `MAX_TOTAL_JOBS` 一致 —— 不能因为改了机制就变数）。
+    jobBudget: 12,
 };
 
 /**
@@ -215,6 +228,9 @@ export async function firstNight(agent, deps = {}) {
     const inv = deps.inventory ?? countInventory(agent);
     const timeOfDay = deps.timeOfDay ?? agent?.bot?.time?.timeOfDay ?? 0;
 
+    // ★ 2026-11-03（A2）：从 ctx 取共享预算（不再自己数）
+    const budget = deps.ctx?.jobBudget ?? deps.jobBudget ?? null;
+
     const planned = planFirstNight({
         inventory: inv,
         timeOfDay,
@@ -223,6 +239,7 @@ export async function firstNight(agent, deps = {}) {
         foodCount: deps.foodCount,
         placedTable: deps.placedTable,
         maxJobs: deps.maxJobs,
+        jobBudget: budget,
     });
 
     // 全都被跳过了 → 直接 ok（这就是"策略"该有的样子：什么都不用做）
@@ -282,10 +299,19 @@ export async function firstNight(agent, deps = {}) {
         }
     }
 
+    // ★ 扣共享预算 + 如实上报（不许静默截断）
+    let hitBudget = false;
+    if (budget) {
+        budget.used = Number(budget.used ?? 0) + created.length;
+        if (planned.hitJobCap) { hitBudget = true; budget.hitCap = true; }
+    }
+
     return ok({
         parentId, jobs: created.map((c) => c.id),
         steps: created, skipped: planned.skipped,
         timeOfDay, hitJobCap: planned.hitJobCap,
+        hitBudget,
+        budget: budget ? { limit: budget.limit, used: budget.used, hitCap: budget.hitCap } : null,
     });
 }
 

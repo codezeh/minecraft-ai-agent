@@ -44,6 +44,7 @@ const UNITS = [
     'strat_obtain_unit',         // M10：strat_obtain 来源顺序 + ★防无限展开 + 不碰身体
     'strat_tool_tier_unit',      // M10：strat_tool_tier 不跳档 / 已够直接 ok / 三件工具
     'strat_first_night_unit',    // M10：first_night 跳过已满足 / dependsOn / 嵌套闸 / 不碰身体
+    'job_budget_unit',           // A2：ctx.jobBudget 跨调用共享（无 ctx 行为不变 / 余量生效 / hitCap 上报）
     'flow_shelter_unit',         // t31：flow_shelter 蓝图形状 + 材料判断 + idle_planner 死分支接线
     'flow_build_support_unit',   // t31：flow_build 支撑判据（A/B/C，含防循环论证反例）
     'idle_fakeclock_unit',       // t31：idle_planner 假时钟（30s 阈值 / 有单不规划 / 5min 节流）

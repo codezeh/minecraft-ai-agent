@@ -136,6 +136,15 @@ export function planObtain(args = {}) {
     const inventory = args.inventory ?? {};
     const chests = args.chests ?? {};
 
+    // ★★ 2026-11-03（A2）：**子单预算**。
+    //   有 `ctx.jobBudget` → 用**共享余额**（limit - used），跨调用真的共享；
+    //   没有（直接调 `planObtain()` 的旧路径）→ 退回 per-call `MAX_JOBS=30`，**行为完全不变**。
+    //   `MAX_DEPTH` 仍是 per-call 的深度闸（深度是"这次递归多深"，不是全局资源）。
+    const budget = args.ctx?.jobBudget ?? null;
+    const effCap = budget
+        ? Math.max(0, Number(budget.limit ?? 0) - Number(budget.used ?? 0))
+        : MAX_JOBS;
+
     const have = haveCount(item, inventory, chests);
     if (have.total >= want) {
         // 已经够了 → 一张单都不用下（04 §6.3："背包里有 count 个"就算完成）
@@ -158,6 +167,18 @@ export function planObtain(args = {}) {
      */
     const expand = (name, need, depth, parentKey, why) => {
         if (hitJobs || hitDepth) return;
+
+        // ── 上限 0：子单预算（**push 之前**就要查，否则每次都会多推 1 张）──
+        //
+        // ★ 2026-11-03（A2 用例抓到的 off-by-one）：
+        //   原来只有"push 之后判断 `plan.length >= effCap`"，而 `expand()` 一进来就先 push，
+        //   于是**永远会超推 1 张**：limit=12 实测用了 13；预算已耗尽（effCap=0）时还会产出 1 张。
+        //   push-then-check 只能"事后止损"，做不到"事前拦住"。
+        //   这里在入口处先查一次，配合后面的 post-check 形成双保险。
+        if (plan.length >= effCap) {
+            hitJobs = true;
+            return;
+        }
 
         // ── 上限 1：层数 ──────────────────────────────────────────
         if (depth > MAX_DEPTH) {
@@ -183,7 +204,7 @@ export function planObtain(args = {}) {
                 why: `${why}（箱子里有）`,
                 depth, parentKey, source: 'container',
             });
-            if (plan.length >= MAX_JOBS) { hitJobs = true; }
+            if (plan.length >= effCap) { hitJobs = true; }
             return;
         }
         // 箱子只有一部分 → 缺的那部分继续找别的来源
@@ -195,7 +216,7 @@ export function planObtain(args = {}) {
                 why: `${why}（箱子里有一部分）`,
                 depth, parentKey, source: 'container',
             });
-            if (plan.length >= MAX_JOBS) { hitJobs = true; return; }
+            if (plan.length >= effCap) { hitJobs = true; return; }
         }
         const stillNeed = deficit - Math.max(0, fromChest);
         if (stillNeed <= 0) return;
@@ -217,7 +238,7 @@ export function planObtain(args = {}) {
                     why,
                     depth, parentKey, source: 'craft',
                 });
-                if (plan.length >= MAX_JOBS) { hitJobs = true; return; }
+                if (plan.length >= effCap) { hitJobs = true; return; }
                 // 合成要材料 → 把材料也展开（这才是"需求图"）
                 seen.add(name);
                 for (const [mat, per] of Object.entries(src.recipe ?? {})) {
@@ -235,7 +256,7 @@ export function planObtain(args = {}) {
                     why,
                     depth, parentKey, source: 'smelt',
                 });
-                if (plan.length >= MAX_JOBS) { hitJobs = true; return; }
+                if (plan.length >= effCap) { hitJobs = true; return; }
                 seen.add(name);
                 expand(src.ingredient, stillNeed, depth + 1, name, `为了熔炼 ${name}`);
                 seen.delete(name);
@@ -249,7 +270,7 @@ export function planObtain(args = {}) {
                     why: `${why}（挖 ${src.source}）`,
                     depth, parentKey, source: 'collect', block: src.source,
                 });
-                if (plan.length >= MAX_JOBS) { hitJobs = true; }
+                if (plan.length >= effCap) { hitJobs = true; }
                 return;                     // 采集是终端来源，不再展开
             }
 
@@ -260,7 +281,7 @@ export function planObtain(args = {}) {
                     why: `${why}（打 ${src.animal}）`,
                     depth, parentKey, source: 'hunt',
                 });
-                if (plan.length >= MAX_JOBS) { hitJobs = true; }
+                if (plan.length >= effCap) { hitJobs = true; }
                 return;
             }
         }
@@ -278,11 +299,24 @@ export function planObtain(args = {}) {
     //   明明 A 还是弄不到，却报"没缺口"。缺口清单只该装**真的没有可行来源**的东西，
     //   已经交给子单去做的不用出现在缺口里（它们不是缺口，是在办）。
 
+    // ★ 扣共享预算 + 如实上报 hitCap（不许静默截断）
+    let hitBudget = false;
+    if (budget) {
+        budget.used = Number(budget.used ?? 0) + plan.length;
+        if (hitJobs) {                       // 本次是被 effCap 截断的
+            hitBudget = true;
+            budget.hitCap = true;
+        }
+    }
+
     return {
         ok: Object.keys(gaps).length === 0 && !hitDepth && !hitJobs,
         plan, gaps,
         expanded: plan.length,
         hitDepth, hitJobs,
+        // ★ 预算相关信息（旧路径下恒为 false/null，行为不变）
+        hitBudget,
+        budget: budget ? { limit: budget.limit, used: budget.used, hitCap: budget.hitCap } : null,
     };
 }
 
