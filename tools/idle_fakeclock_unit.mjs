@@ -70,6 +70,46 @@ const skills = SKILL_NAMES;
     check('⑦ 第 1 层"需要"优先于第 2 层"想做"', v.action === 'job', `action=${v.action} skill=${v.job?.skill}`);
 }
 
+// ⑧ ★ t57：同一个"需要"下过单之后要冷却 —— 否则 10 分钟堆 138 张重复单（真机实测）
+//
+// 场景：缺石镐（hasBasicTool=false）→ 第 1 层会一直想下 obtain。
+// 之前没有冷却：那张单 blocked 之后 jobBusy 变 false，下一拍又下同一张。
+{
+    const now1 = T0 + 10 * IDLE.THINK_EVERY_MS;
+    const fresh = decideIdle({ now: now1, hasBasicTool: false, availableSkills: skills });
+    // 刚下过（recentNeeds 里记了同一 why）→ 冷却期内不许再下
+    const cooling = decideIdle({
+        now: now1 + 3000,                       // 下一拍（3 秒后）
+        hasBasicTool: false,
+        availableSkills: skills,
+        recentNeeds: { 'no-basic-tool': now1 },
+    });
+    // 冷却期满 → 可以再下
+    const afterCooldown = decideIdle({
+        now: now1 + IDLE.NEED_RETRY_MS + 1,
+        hasBasicTool: false,
+        availableSkills: skills,
+        recentNeeds: { 'no-basic-tool': now1 },
+    });
+    check('⑧ ★ 同一需要下过单后冷却：3 秒后不再下，满 NEED_RETRY_MS 后才再下',
+        fresh.action === 'job' && cooling.action !== 'job' && afterCooldown.action === 'job',
+        `首次=${fresh.action} 3s后=${cooling.action} 满冷却=${afterCooldown.action}`);
+}
+
+// ⑨ ★ t57 反向验证：**不同的 need 不受彼此的冷却影响**（否则"缺木头"会把"缺吃的"也挡住）
+{
+    const now1 = T0 + 10 * IDLE.THINK_EVERY_MS;
+    const v = decideIdle({
+        now: now1 + 3000,
+        foodCount: 1,                            // 缺吃的
+        availableSkills: skills,
+        recentNeeds: { 'no-basic-tool': now1 },  // 只有"缺工具"在冷却
+    });
+    check('⑨ ★ 冷却按 need 分开：缺工具在冷却，但缺吃的仍能下单',
+        v.action === 'job' && String(v.reason).includes('food'),
+        `action=${v.action} reason=${v.reason}`);
+}
+
 console.log('============================================');
 console.log(`${pass}/${pass + fails} 个用例通过`);
 console.log('============================================');

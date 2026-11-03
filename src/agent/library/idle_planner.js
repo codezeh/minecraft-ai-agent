@@ -28,6 +28,24 @@ export const IDLE = Object.freeze({
     RADIUS: 100,              // 活动半径
     FOOD_MIN: 5,              // 食物少于这个数就补
     SELF_PRIORITY_MAX: 2,     // 自己找的单最高 2 级
+
+    /**
+     * ★★ 2026-11-03（t57）：**同一个"需要"下过单之后，多久之内不许再下**。
+     *
+     * 为什么必须有（真机 138 张单的风暴，verify 实测）：
+     *   第 1 层的判据是"缺石镐 → 下一张 `obtain:stone_pickaxe`"。
+     *   而那张单会 `blocked`（要石镐→需木镐→需木头→弄不到）。
+     *   `blocked` 之后 `jobBusy` 立刻变 false → **下一拍（3 秒后）又下同一张**。
+     *   实测：约 45 秒一张，10 分钟堆 **138 张一模一样的单**，
+     *   把任务板压垮（连 `board:add` 都开始 ack 超时 → 又引出孤儿父单）。
+     *
+     * 判据：**"缺什么"是一个持续状态，不是一个可以反复触发的事件。**
+     *   同一个 `why` 下过单之后要冷却；冷却期内照常判第 2/3 层，只是不重复下同一张。
+     *
+     * 取 5 分钟：与 `THINK_EVERY_MS` 同量级 —— 足够让她真去弄一次，
+     *   又不至于让"补短板"停摆太久。
+     */
+    NEED_RETRY_MS: 300000,
 });
 
 /**
@@ -69,7 +87,11 @@ export function planNeeds(s = {}) {
     if (s.inventoryFull) return { skill: 'store', args: {}, why: 'inventory-full' };
     if (s.hasBasicTool === false) return { skill: 'obtain', args: { item: 'stone_pickaxe' }, why: 'no-basic-tool' };
     if (s.nightFalling && s.nearShelter === false) return { skill: 'shelter', args: {}, why: 'night-no-shelter' };
-    if (Number(s.foodCount ?? 99) < IDLE.FOOD_MIN) return { skill: 'food', args: {}, why: 'food-low' };
+    // ★★ 2026-11-03（t59）：**注册名是 `eat`，不是 `food`** —— 原来这里写 'food'，
+    //   而 `SKILL_NAMES` 里根本没有 `food` → `decideIdle` 的 `have.has(need.skill)` 恒 false
+    //   → **"缺吃的"这条分支从上线起就是死的**（永远落不到第 1 层）。
+    //   是 t57 写冷却用例时用 `foodCount: 1` 才被发现的（用例⑨ 变红）。
+    if (Number(s.foodCount ?? 99) < IDLE.FOOD_MIN) return { skill: 'eat', args: {}, why: 'food-low' };
     return null;
 }
 
@@ -89,7 +111,11 @@ export function decideIdle(s = {}) {
     if (need) {
         // 08 §6.1："哪个写好了用哪个，没写好的先跳过"
         const have = new Set(s.availableSkills ?? []);
-        if (have.has(need.skill)) {
+        // ★★ t57：**同一个"需要"下过单之后要冷却** —— 见 IDLE.NEED_RETRY_MS 的注释。
+        //   不加这条会 10 分钟堆 138 张一模一样的单（真机实测）。
+        const lastAt = Number(s.recentNeeds?.[need.why] ?? 0);
+        const coolingDown = now - lastAt < IDLE.NEED_RETRY_MS;
+        if (have.has(need.skill) && !coolingDown) {
             return {
                 action: 'job',
                 reason: `need:${need.why}`,
@@ -102,7 +128,7 @@ export function decideIdle(s = {}) {
                 },
             };
         }
-        // 没写好就落到第 3 层（跳过，不硬塞）
+        // 没写好、或还在冷却 → 落到第 2/3 层（跳过，不硬塞）
     }
 
     // ── 第 2 层：想做（问模型，按 thinkEveryMs 节流）────────────────
@@ -132,11 +158,23 @@ export async function idleTick(agent, deps = {}) {
         lastTalkAt: agent?._lastTalkAt ?? 0,
         lastThinkAt: agent?._lastIdleThinkAt ?? 0,
         hasGoal: !!agent?.goal,
+        // ★ t57：把"各类需要上次下单的时间"喂给纯函数（记忆本身挂在 agent 上，
+        //   因为 decideIdle 是纯函数，不许自己存状态）。
+        recentNeeds: agent?._idleNeedAt ?? {},
         ...(deps.state ?? {}),
     });
 
     if (verdict.action === 'job' && deps.enqueue) {
-        try { await deps.enqueue(verdict.job); } catch { /* 下不进去就下一轮再说 */ }
+        try {
+            await deps.enqueue(verdict.job);
+            // ★ t57：**下单成功才记时间**（失败不记，否则"下不进去"会变成永久冷却）。
+            //   key 用 `need:<why>` 的 why 部分，与 decideIdle 里查的同一口径。
+            const why = String(verdict.reason ?? '').replace(/^need:/, '');
+            if (why) {
+                if (!agent._idleNeedAt) agent._idleNeedAt = {};
+                agent._idleNeedAt[why] = now;
+            }
+        } catch { /* 下不进去就下一轮再说（不记冷却，允许重试） */ }
     } else if (verdict.action === 'think' && deps.askModel) {
         agent._lastIdleThinkAt = now;
         try { await deps.askModel(); } catch { /* ignore */ }

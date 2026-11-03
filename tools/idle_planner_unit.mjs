@@ -31,7 +31,7 @@ const bad = (n, a) => { fails++; console.log(`FAIL ${n} ${JSON.stringify(a)}`); 
         [{ inventoryFull: true, hasBasicTool: false, foodCount: 0 }, 'store'],
         [{ hasBasicTool: false, foodCount: 0 }, 'obtain'],
         [{ nightFalling: true, nearShelter: false, foodCount: 0 }, 'shelter'],
-        [{ foodCount: 2 }, 'food'],
+        [{ foodCount: 2 }, 'eat'],   // ★ t59：注册名是 eat，不是 food
     ];
     const wrong = order.filter(([s, skill]) => planNeeds(s)?.skill !== skill);
     if (wrong.length === 0) ok('② 第 1 层按 08 §6.1 的顺序补短板', `${order.length} 步`);

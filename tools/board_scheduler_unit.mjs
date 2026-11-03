@@ -970,10 +970,10 @@ async function tickIdle({ bot, availableSkills = null, reader = null } = {}) {
 {
     const r = await tickIdle({
         bot: makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'bread', count: 3 }] }),
-        availableSkills: ['store', 'obtain', 'shelter', 'food'],
+        availableSkills: ['store', 'obtain', 'shelter', 'eat'],   // ★ t59：注册名是 eat
     });
     const job = r.jobs[0] ?? null;
-    if (r.plan?.action === 'job' && r.plan?.reason === 'need:food-low' && job?.skill === 'food') {
+    if (r.plan?.action === 'job' && r.plan?.reason === 'need:food-low' && job?.skill === 'eat') {
         okCase('t39④ 食物 3（< 5）→ job/food', `reason=${r.plan.reason} skill=${job.skill}`);
     } else {
         badCase('t39④ 食物少没触发 food', { plan: r.plan, job });
@@ -989,8 +989,12 @@ async function tickIdle({ bot, availableSkills = null, reader = null } = {}) {
         && noItems.plan?.action !== 'job' && !/no-basic-tool/.test(String(noItems.plan?.reason ?? ''));
 
     // (b) nearShelter 读不到（头顶未加载）→ 天黑也不触发 shelter
+    // ★ t59：这个 bot 原来**没有食物** → foodCount=0 → 现在 `eat` 注册了，
+    //   "缺吃的"会正确触发 need:food-low，于是 `action !== 'job'` 这条断言失败。
+    //   但本用例要验的是"nearShelter 读不到不触发 **shelter**"，不是"任何单都不下"。
+    //   所以给足食物，让 food 分支不干扰 —— 否则这条断言分不清"没触发 shelter"和"没触发任何单"。
     const noSky = await tickIdle({
-        bot: makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }], timeOfDay: 14000, overhead: [undefined, undefined, undefined, undefined] }),
+        bot: makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'bread', count: 8 }], timeOfDay: 14000, overhead: [undefined, undefined, undefined, undefined] }),
     });
     const stB = stateOf(makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }], timeOfDay: 14000, overhead: [undefined] }));
     const bOk = stB.nearShelter === null && stB.nightFalling === true
@@ -999,7 +1003,7 @@ async function tickIdle({ bot, availableSkills = null, reader = null } = {}) {
     // (c) foodCount 读不到（没有 registry.foodsByName）→ 不触发 food
     const noFoods = await tickIdle({
         bot: makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'bread', count: 1 }], foods: null }),
-        availableSkills: ['food'],
+        availableSkills: ['eat'],   // ★ t59：注册名是 eat
     });
     const stC = stateOf(makeIdleBot({ items: [{ name: 'bread', count: 1 }], foods: null }));
     const cOk = stC.foodCount === null && noFoods.plan?.action !== 'job' && !/food-low/.test(String(noFoods.plan?.reason ?? ''));

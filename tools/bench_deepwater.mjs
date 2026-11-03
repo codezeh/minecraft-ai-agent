@@ -72,6 +72,33 @@ async function waitLoaded(x, y, z, timeoutMs = 8000) {
     return false;
 }
 
+/**
+ * ★ 2026-11-03（captain 今天的真机坑）：`waitLoaded` 只等**脚下那一格**，
+ *   而 `scanSphere(半径24)` 跨好几个区块 —— **对岸/墙另一侧可能还没加载**，
+ *   于是 `blockAt` 返回 null → 扫描扫不到 → 规划以为那儿是空的 → 白跑一轮。
+ *
+ *   实测（captain）：起点 x=9992（区块 9984–9999），目标 x=10000（**下一个区块**）→ null。
+ *
+ *   所以扫之前必须确认**整个扫描区**都加载了：起点、终点、河心、以及扫描半径的四个角。
+ *   任一点读不到方块就等；超时则整轮作废（不计入分母，如实标）。
+ */
+async function waitAreaLoaded(pts, timeoutMs = 15000) {
+    const t0 = Date.now();
+    const missing = [];
+    while (Date.now() - t0 < timeoutMs) {
+        missing.length = 0;
+        for (const p of pts) {
+            try {
+                const b = bot.blockAt(new Vec3(p.x, p.y, p.z));
+                if (!b || !b.name) missing.push(p);
+            } catch { missing.push(p); }
+        }
+        if (missing.length === 0) return { ok: true, waitedMs: Date.now() - t0 };
+        await sleep(250);
+    }
+    return { ok: false, waitedMs: Date.now() - t0, missing };
+}
+
 await new Promise((res, rej) => {
     const t = setTimeout(() => rej(new Error('bot 登录超时')), 40000);
     bot.once('spawn', () => { clearTimeout(t); res(); });
@@ -182,7 +209,25 @@ for (let round = 1; round <= ROUNDS; round++) {
     let planHist = {};
     try {
         const startY = Math.floor(bot.entity.position.y);
-        scanSphere(bot, mapDir, { x: sx, y: startY, z: sz }, 24);
+
+        // ★ 扫之前先确认**扫描区含对岸**都加载了（见 waitAreaLoaded 注释）
+        const R = 24;
+        const areaPts = [
+            { x: sx, y: startY, z: sz },                       // 起点
+            { x: dx, y: S, z: dz },                            // 终点（对岸）
+            { x: AX, y: S, z: sz },                            // 河心
+            { x: sx - R + 2, y: startY, z: sz },               // 西侧边界
+            { x: dx + R - 2, y: S, z: dz },                    // 东侧边界（对岸外沿）
+            { x: sx, y: startY, z: sz - R + 2 },               // 南沿
+            { x: sx, y: startY, z: sz + R - 2 },               // 北沿
+        ];
+        const area = await waitAreaLoaded(areaPts, 15000);
+        if (!area.ok) {
+            flakes.push({ round, why: '扫描区未加载', missing: area.missing });
+            console.log(`  ⊘ #${round} 扫描区未加载（缺 ${area.missing.length} 点，等 ${area.waitedMs}ms）→ 本轮作废`);
+            continue;
+        }
+        scanSphere(bot, mapDir, { x: sx, y: startY, z: sz }, R);
         const plan = plan3D(mapDir, { x: sx, y: startY, z: sz }, { x: dx, y: S, z: dz }, { maxNodes: 60000, margin: 20 });
         if (plan.ok) {
             for (const step of plan.path) {

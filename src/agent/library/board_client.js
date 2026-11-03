@@ -202,10 +202,62 @@ export class BoardClient {
 
     /** 【不等】加一张单。 */
     add(job) {
-        return this._call('board:add', job).then((r) => {
-            if (r.ok && r.data?.job) this._byId.set(r.data.job.id, r.data.job);
+        return this._call('board:add', job).then(async (r) => {
+            if (r.ok && r.data?.job) { this._byId.set(r.data.job.id, r.data.job); return r; }
+            // ★★ 2026-11-03（t58）：**ack 超时 ≠ 没建成** —— 超时后必须回查一次。
+            //
+            //   真机证据（verify 实测）：`[!do first_night] 失败 INTERNAL：父单没下进去：
+            //   board:add 5000ms 没有 ack` —— **但服务端其实已经把父单建出来了**
+            //   （库里 3 张 `running`，各自子单 0/0/1）。
+            //
+            //   客户端判失败 → `firstNight` 直接 `return fail(...)` → **子单一张都不建**
+            //   → 父单永久变"孤儿 running"（没人跑它，也没人收它）。
+            //
+            //   根子是"超时"和"没成功"被混为一谈。回查一次很便宜：
+            //   按 `skill + why + source + assignee` 找同形状的 `ready/running` 单，
+            //   找到就说明**它其实建成了**，按成功返回（并标明 `recoveredFromTimeout`）。
+            if (r?.code === 'TIMEOUT') {
+                const found = await this._findJustAdded(job);
+                if (found) {
+                    this._byId.set(found.id, found);
+                    return ok({ id: found.id, job: found, recoveredFromTimeout: true });
+                }
+            }
             return r;
         });
+    }
+
+    /**
+     * ack 超时后回查："这张单其实建成了吗？"
+     *
+     * 判据（保守 —— 宁可漏认，不可错认）：
+     *   同一 `skill` + `why` + `source` + `assignee`，状态 `ready`/`running`。
+     *   有 `at` 时优先取最近 60 秒内的；找不到就返回 `null`（**不假装成功**）。
+     */
+    async _findJustAdded(job) {
+        try {
+            if (!job?.skill) return null;
+            if (typeof this.refreshAsync === 'function') {
+                try { await this.refreshAsync({ scope: 'mine' }); } catch { /* refresh 失败也继续用现有镜像 */ }
+            }
+            const list = this.list?.({ scope: 'mine' }) ?? [];
+            const cand = (list ?? []).filter((j) => (
+                j
+                && j.skill === job.skill
+                && (j.why ?? null) === (job.why ?? null)
+                && (j.source ?? null) === (job.source ?? null)
+                && (j.assignee ?? null) === (job.assignee ?? null)
+                && ['ready', 'running'].includes(String(j.state))
+            ));
+            if (!cand.length) return null;
+            const withAt = cand.filter((j) => Number.isFinite(Number(j.at)));
+            if (withAt.length) {
+                const nowSec = Date.now() / 1000;
+                const recent = withAt.filter((j) => nowSec - Number(j.at) <= 60);
+                return (recent.length ? recent : withAt)[0] ?? cand[0] ?? null;
+            }
+            return cand[0] ?? null;
+        } catch { return null; }
     }
 
     /** 【不等】开关自动领单（玩家喊停时暂停）。 */

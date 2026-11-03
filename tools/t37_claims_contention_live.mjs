@@ -15,7 +15,7 @@
  */
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { rcon } from './tools/rcon.mjs';
+import { rcon } from './rcon.mjs';
 import { openBoard, listClaims, reserve, release, CLAIM_TTL_MS } from '../src/agent/library/board_store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

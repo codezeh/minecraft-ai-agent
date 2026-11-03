@@ -19,7 +19,7 @@
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { io as ioClient } from 'socket.io-client';
-import { rcon } from './tools/rcon.mjs';
+import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { BoardClient } from '../src/agent/library/board_client.js';
 import { BoardScheduler } from '../src/agent/library/board_scheduler.js';
@@ -75,9 +75,24 @@ installPositionGuard(bot);
 bot.on('error', () => { });
 await new Promise((res) => { const t = setTimeout(res, 30000); bot.once('spawn', () => { clearTimeout(t); res(); }); });
 
-// tp 到森林地面
+// ★ 2026-11-03 修（我自己的 bug）：原来直接 `tp ... 100 ...` 让她**从 y=100 自由落体**，
+//   实测落到 y=18.48（地下/洞里）→ 摔死或掉进洞穴 → **obtain 采到的 8 个木头随死亡掉落**，
+//   于是下一张 craft 立刻报 `NO_ITEM 料不够`，链路断在这里。
+//   修法：tp 前先给抗性+缓降（不依赖地形高度），落地后再核一次高度。
+await RC(`effect give ${NAME} minecraft:resistance 60 5 true`).catch(() => { });
+await RC(`effect give ${NAME} minecraft:slow_falling 120 1 true`).catch(() => { });
 await RC(`tp ${NAME} ${FOREST.x} 100 ${FOREST.z}`).catch(() => { });
-await sleep(2500);
+await sleep(3000);
+// 落地后如果还在很低的高度（掉进洞/峡谷），用 RCON 把她拉到地表附近再落一次
+{
+    const y0 = Math.floor(bot.entity.position.y);
+    if (y0 < 60) {
+        console.log(`  ⚠ 落点过低 y=${y0}（疑似掉进洞穴）→ 抬到 y=90 重新落地`);
+        await RC(`tp ${NAME} ${Math.floor(bot.entity.position.x)} 90 ${Math.floor(bot.entity.position.z)}`).catch(() => { });
+        await sleep(3000);
+    }
+    console.log(`  落地 y=${Math.floor(bot.entity.position.y)} | 血量=${bot.health}`);
+}
 await RC(`clear ${NAME}`).catch(() => { });
 await sleep(400);
 
@@ -86,7 +101,12 @@ console.log(`  落地位置: ${JSON.stringify(bot.entity.position)}`);
 console.log(`  周围树: ${JSON.stringify(Object.values(bot.registry?.blocksByName ?? {}).filter((b) => /_log$/.test(b.name)).slice(0, 3).map((b) => b.name))}`);
 
 const sock = ioClient(`http://localhost:${MS_PORT}`, { transports: ['websocket'] });
-const board = new BoardClient({ name: NAME, skills: ['obtain', 'craft', 'shelter', 'sleep', 'eat', 'store'], socket: sock });
+// ★ 2026-11-03 修：必须把**注册表里的全部技能**都上报给 board:hello ——
+//   板子会校验"这个 bot 有没有上报过该技能"，漏一个就 `父单没下进去：没上报过技能 X`。
+//   第一版我只写了 obtain/craft/shelter/sleep/eat/store，**漏了 first_night** → 父单压根下不进去。
+//   直接从注册表现取，避免以后再漏（也不写死）。
+const SKILLS = (await import('../src/agent/library/composite_registry.js')).SKILL_NAMES ?? [];
+const board = new BoardClient({ name: NAME, skills: SKILLS, socket: sock });
 try { await board.hello(); } catch { }
 await sleep(800);
 
@@ -99,7 +119,11 @@ const sched = new BoardScheduler({
     board,
     agent: agentShell,
     actions: agentShell.actions,
-    runSkill: async (skill, args, job) => runSkill(agentShell, skill, args, job),
+    // ★ 2026-11-03 修（我自己的接线 bug）：调度器调的是
+    //   `runner(this.agent, job.skill, argsToString(job.args))` —— **第一个参数是 agent**。
+    //   我原来写成 (skill, args, job) => runSkill(agentShell, skill, ...) →
+    //   `skill` 实际收到的是 agent 对象 → 报「没有叫 [object Object] 的复合技能」。
+    runSkill: async (agent2, skill, argString) => runSkill(agent2 ?? agentShell, skill, argString),
     onEvent: (e) => { events.push(e); if (/job-(claimed|finished|failed)|preempt|skip/i.test(e?.type ?? '')) console.log('    [ev]', e.type, e.id ?? ''); },
 });
 
@@ -108,6 +132,7 @@ const { firstNight } = await import('../src/agent/library/strat_first_night.js')
 // ══ 第 1 层 a）编排：应拆出 5 张子单 ═══════════════════════════
 console.log('\n=== 第 1 层 a) 编排：调 firstNight（白天，无石镐）===');
 const r = await firstNight(agentShell, { board, timeOfDay: 1000 });
+console.log('  firstNight 完整返回: ' + JSON.stringify(r).slice(0, 400));
 const parentId = r.data?.parentId;
 const kids0 = listJobs(openBoard().db, {}).filter((j) => j.parentId === parentId);
 console.log(`  parent=${parentId} 子单=${kids0.length}：${kids0.map((k) => k.skill + ':' + (k.args?.item ?? '')).join(' | ')}`);
@@ -129,7 +154,8 @@ while (Date.now() - t0 < WAIT_MS) {
     try { await sched.tick(); } catch (e) { /* 单次 tick 失败不致命 */ }
     const db = openBoard().db;
     const kids = listJobs(db, {}).filter((j) => j.parentId === parentId);
-    const p = getJob(db, parentId);
+    const p = parentId ? getJob(db, parentId) : null;
+    if (!parentId) { console.log('  ⚠ parentId 为空 —— firstNight 没拆出任何子单，调度器无需跑'); break; }
     const snapshot = kids.map((k) => `${k.skill}:${k.state}:${k.progress?.count ?? 0}/${k.progress?.want ?? 0}`).join(' ');
     if (snapshot !== last) { console.log(`  [${Math.round((Date.now() - t0) / 1000)}s] ${snapshot} | parent=${p?.state}`); last = snapshot; }
     if (p?.state === JOB_STATE.DONE) break;

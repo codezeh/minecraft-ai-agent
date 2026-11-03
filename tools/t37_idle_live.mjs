@@ -13,7 +13,7 @@
  */
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
-import { rcon } from './tools/rcon.mjs';
+import { rcon } from './rcon.mjs';
 import { io as ioClient } from 'socket.io-client';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { BoardClient } from '../src/agent/library/board_client.js';
