@@ -114,6 +114,38 @@ export function pickBest(jobList, pos = null) {
 //   给一个 re-export 而不是再写一份实现 —— 这样"只有一份实现"和"向后兼容"同时成立。
 export { meetsRequires };
 
+/**
+ * 这一拍的 `idle-plan` 事件该不该发（t38：清遗留④，纯函数，好离线测）。
+ *
+ * ★ 为什么需要：`idle_planner.decideIdle()` 末尾是无条件兜底
+ *   `return { action: 'idle-mode', reason: 'idle-mode' }`，而调度器拍子是 3 秒
+ *   （`agent.js` 的 `EVERY = 3000`）—— 原来的判断只有 `action !== 'nothing'`，
+ *   于是**完全空闲的 2 分钟会发 40 条 `idle-plan`，全是"我闲着"的心跳**
+ *   （离线模拟：`{"think": 1, "idle-mode": 40}`）。
+ *   噪声会刷满面板/trace，也会把真正的 `need:*` 埋掉。
+ *
+ * 规则（只在"信息变了"时播报）：
+ *   · `nothing`（包括不给结论）→ **不发**，并**清掉记忆**；
+ *     不清的话"空闲 → 干活 → 再空闲"时第二次空闲会被当成"和上次一样"而漏播。
+ *   · 与上次播报的 `action` **和** `reason` 都相同 → 不发（重复的心跳）。
+ *   · 其它 → 发。
+ *
+ * 为什么记忆用 `action:reason` 而不是只有 `action`：事件 payload 两者都有，
+ * 只比 action 会把"两张不同的自己找的单"（`job` + 不同 `need:*`）当成重复吞掉 ——
+ * 那是丢信息，不是去噪。`idle-mode` 的 reason 恒为 `'idle-mode'`，照样只播一次。
+ *
+ * @param {{action?:string, reason?:string}|null} verdict  decideIdle 的结论
+ * @param {string|null} lastKey  上一拍播报过的 `action:reason`（没有就 null）
+ * @returns {{emit:boolean, next:string|null}}  next = 下一拍该记住的值
+ */
+export function idlePlanEmission(verdict, lastKey = null) {
+    const action = verdict?.action ?? null;
+    // 不再空闲：不发，且把记忆清掉（否则下次空闲时会被误判成"重复"）
+    if (!action || action === 'nothing') return { emit: false, next: null };
+    const key = `${action}:${verdict?.reason ?? ''}`;
+    return { emit: key !== lastKey, next: key };
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // 调度器
 // ───────────────────────────────────────────────────────────────────────────
@@ -166,6 +198,23 @@ export class BoardScheduler {
          *   所以：被抢占的单**只走 setState(paused)**，绝不再走 finish。
          */
         this._preemptedJobId = null;
+        /**
+         * 上一拍**播报过**的 `idle-plan`（`action:reason`），t38。
+         *
+         * ★ 为什么需要：`decideIdle()` 每拍都会返回一个结论（空闲时恒为 `idle-mode`），
+         *   原来每拍都发一条 `idle-plan` → 3 秒一条"我很闲"，2 分钟 40 条。
+         *   记住上一次，重复的不再发；判据见纯函数 `idlePlanEmission()`。
+         *   `nothing` 时会清成 null（"不再空闲"要忘掉记忆，否则下次空闲漏播）。
+         */
+        this._lastIdlePlan = null;
+        /**
+         * `_lastIdlePlan` 是哪一拍记下的（t38）。
+         *
+         * ★ 只用来判"连续"：中间去领单/干活时那段代码根本没跑，
+         *   记忆会**过期**（`_tickCount` 对不上），这次按"没有记忆"处理 ——
+         *   否则"发呆 → 干活 → 再发呆"时第二次发呆会被当成重复而不播报。
+         */
+        this._lastIdleTick = null;
     }
 
     /** 自动领单开关（③）。关掉≠停止：正在跑的单接着跑。 */
@@ -282,7 +331,19 @@ export class BoardScheduler {
                         await this.boardClient?.add?.({ ...job, kind: 'personal', assignee: this.agent?.name ?? null });
                     },
                 });
-                if (verdict?.action !== 'nothing') this.onEvent({ type: 'idle-plan', action: verdict.action, reason: verdict.reason });
+                // ★ t38：只在"结论变了"时播报。idle_planner 每拍都会返回一个结论
+                //   （空闲时恒为 idle-mode），无条件发就是 3 秒一条"我很闲"的心跳。
+                //   判据是纯函数 idlePlanEmission()，用例锁在 board_scheduler_unit。
+                //
+                // ★ 记忆只在**连续两拍都在判空闲**时才算数：中间去领单/干活（根本没走到
+                //   这段）时，`this._lastIdleTick` 就停在老值 → 这次拿 null 当记忆 →
+                //   "干活回来第一次空闲"照样播报。不这么判的话，干完活回来那条会被
+                //   上一次发呆的记忆吞掉（那是丢信息，不是去噪）。
+                const lastKey = this._lastIdleTick === this._tickCount - 1 ? this._lastIdlePlan : null;
+                const emission = idlePlanEmission(verdict, lastKey);
+                this._lastIdlePlan = emission.next;
+                this._lastIdleTick = this._tickCount;
+                if (emission.emit) this.onEvent({ type: 'idle-plan', action: verdict.action, reason: verdict.reason });
             } catch { /* 空闲规划失败不影响调度 */ }
             return { acted: false, reason: 'idle', requeued };
         }

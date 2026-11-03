@@ -242,7 +242,9 @@ function queryBlock(bot, t, me) {
     if (t.pos) {
         const v = { x: Math.floor(t.pos.x), y: Math.floor(t.pos.y), z: Math.floor(t.pos.z) };
         const b = blockAt(bot, v);
-        if (!b) return fail('NO_TARGET', '那个位置读不到方块', { kind: 'block', pos: v });
+        // ★ t36（2026-11-03）码纠正：blockAt 读不到 = 那格没加载 → NO_DATA；
+        //   报 NO_TARGET 会让上层去改坐标，而真相是"走近一点就有了"。
+        if (!b) return fail('NO_DATA', '那个位置读不到方块', { kind: 'block', pos: v });
         if (b.name === 'air' || b.name === 'cave_air') {
             return fail('NO_TARGET', '那里是空气', { kind: 'block', name: b.name, pos: v, visibility: 'lost' });
         }

@@ -10,11 +10,13 @@
  *   ③ **setAutoClaim(false) 后真的不领新单**，true 后恢复 —— 显式开关，不靠"没单"推断。
  *
  * 另加：空闲时不空转（一遍 tick 只 claim 一次）、领取冲突退避、requeueStaleBrief 接上。
+ * 另加（t38）：空闲 `idle-plan` 事件只在"结论变了"时播报 —— 2 分钟空闲 40 条 → 1 条。
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
 import {
     BoardScheduler, preempts, pickBest, meetsRequires, argsToString,
+    idlePlanEmission,
     CLAIM_BACKOFF_MS, HEARTBEAT_MS,
 } from '../src/agent/library/board_scheduler.js';
 import { JOB_STATE, STOP_REASONS, BRIEF_REQUEUE_MS } from '../src/agent/library/control.js';
@@ -647,9 +649,200 @@ function makeRunner({ clock, actions, durations = {}, onBody = null }) {
     else badCase('无板空转', r);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// t38（清遗留④）：`idle-plan` 事件噪声 —— 只在"结论变了"时播报
+//
+// 缺陷原貌：`decideIdle()` 末尾是无条件兜底 `{ action: 'idle-mode' }`，
+// 调度器拍子是 3 秒，而原来只判 `action !== 'nothing'` 就发 onEvent
+// → **完全空闲 2 分钟会发 40 条 idle-plan，全是"我闲着"的心跳**（离线模拟：
+// `{"think": 1, "idle-mode": 40}`）。噪声刷满面板/trace，还会把真正的 `need:*` 埋掉。
+//
+// 修法：调度器记住上一次播报过的 `action:reason`，重复的不再发（纯函数
+// `idlePlanEmission()`）；`nothing` 时清记忆，否则"空闲 → 干活 → 再空闲"会漏播。
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * 跑 N 拍空闲 tick（假时钟，每拍推进 3 秒 = 调度器真实拍子），收集 idle-plan 事件。
+ *
+ * @param {object} p
+ *   ticks        跑几拍
+ *   planAt       (i, clock, agent, sched) 每拍**之前**摆状态，决定这一拍 decideIdle 返回什么
+ *   forgetMemory true = 每拍把记忆清掉（模拟"改之前没有记忆"的样子，反向验证用）
+ */
+async function runIdleTicks({ ticks, planAt = null, forgetMemory = false } = {}) {
+    const clock = makeClock();
+    const board = makeFakeBoard([]);
+    const actions = makeFakeActions();
+    const agent = { name: 'tester', _lastTalkAt: 0, _lastIdleThinkAt: clock.now(), _idlePaused: false };
+    const events = [];
+    const { runSkill } = makeRunner({ clock, actions });
+    const sched = new BoardScheduler({
+        agent, board, actions, runSkill,
+        now: clock.now, sleep: clock.sleep,
+        onEvent: (e) => events.push(e),
+    });
+    for (let i = 0; i < ticks; i++) {
+        clock.advance(3000);                       // 调度器拍子：agent.js EVERY = 3000
+        planAt?.(i, clock, agent, sched);
+        await sched.tick();
+        if (forgetMemory) sched._lastIdlePlan = null;   // 反向验证：每拍忘掉上一次
+    }
+    return {
+        plans: events.filter((e) => e.type === 'idle-plan'),
+        events, clock, agent, sched, board,
+        claims: board.calls.filter((c) => c.op === 'claim').length,
+    };
+}
+
+/** 摆"这一拍 decideIdle 该返回什么"的状态（不改 idle_planner，只喂它的输入）。 */
+const idlePreset = {
+    // 空闲 + think 刚问过 → 第 3 层发呆
+    idleMode: (_i, clock, agent) => { agent._lastIdleThinkAt = clock.now(); agent._lastTalkAt = 0; },
+    // 空闲 + think 到点（5 分钟没问过）→ 第 2 层
+    think: (_i, clock, agent) => { agent._lastIdleThinkAt = clock.now() - 300_001; agent._lastTalkAt = 0; },
+    // 30 秒内说过话 → 不算空闲 → nothing
+    nothing: (_i, clock, agent) => { agent._lastTalkAt = clock.now(); },
+};
+
+// 16. 重复不再发：连续 3 拍 idle-mode → 只发 1 条
+{
+    const r = await runIdleTicks({ ticks: 3, planAt: idlePreset.idleMode });
+    if (r.plans.length === 1 && r.plans[0].action === 'idle-mode') {
+        okCase('t38① 连续 3 拍 idle-mode → 只发 1 条', `plans=${r.plans.length} action=${r.plans[0].action}`);
+    } else {
+        badCase('t38① 重复的 idle-mode 不该重复播报', r.plans);
+    }
+}
+
+// 17. 变化要发：idle-mode → think → idle-mode → 3 条（每次变化都发）
+{
+    const seq = [idlePreset.idleMode, idlePreset.think, idlePreset.idleMode];
+    const r = await runIdleTicks({ ticks: 3, planAt: (i, c, a, s) => seq[i]?.(i, c, a, s) });
+    const actions = r.plans.map((e) => e.action).join(',');
+    if (r.plans.length === 3 && actions === 'idle-mode,think,idle-mode') {
+        okCase('t38② idle-mode→think→idle-mode → 发 3 条（变化必发）', `plans=${actions}`);
+    } else {
+        badCase('t38② 变化应该都发', { plans: actions, count: r.plans.length });
+    }
+}
+
+// 18. 中间有中断：idle-mode → nothing → idle-mode → 2 条（nothing 清掉了记忆）
+{
+    const seq = [idlePreset.idleMode, idlePreset.nothing, idlePreset.idleMode];
+    const r = await runIdleTicks({ ticks: 3, planAt: (i, c, a, s) => seq[i]?.(i, c, a, s) });
+    const actions = r.plans.map((e) => e.action).join(',');
+    if (r.plans.length === 2 && actions === 'idle-mode,idle-mode') {
+        okCase('t38③ idle-mode→nothing→idle-mode → 发 2 条（nothing 清记忆）', `plans=${actions}`);
+    } else {
+        badCase('t38③ nothing 必须清掉记忆，否则第二次空闲漏播', { plans: actions, count: r.plans.length });
+    }
+}
+
+// 19. job / think / nothing 语义不变：该发的照发 1 条，不该发的一条都没有
+{
+    const oneThink = await runIdleTicks({ ticks: 1, planAt: idlePreset.think });
+    const oneIdle = await runIdleTicks({ ticks: 1, planAt: idlePreset.idleMode });
+    const oneNothing = await runIdleTicks({ ticks: 1, planAt: idlePreset.nothing });
+
+    // job 走不了端到端（tick 只喂 availableSkills，不喂背包状态），直接测判据本身
+    const jobA = { action: 'job', reason: 'need:food-low' };
+    const jobB = { action: 'job', reason: 'need:inventory-full' };
+    const a1 = idlePlanEmission(jobA, null);
+    const a2 = idlePlanEmission(jobB, a1.next);        // 不同的单：不能被当成重复吞掉
+    const a3 = idlePlanEmission(jobA, a2.next);        // 回到 jobA：和上一拍不同 → 发
+
+    const good = oneThink.plans.length === 1 && oneThink.plans[0].action === 'think'
+        && oneIdle.plans.length === 1 && oneIdle.plans[0].action === 'idle-mode'
+        && oneNothing.plans.length === 0
+        && a1.emit === true && a2.emit === true && a3.emit === true;
+    if (good) {
+        okCase('t38④ job/think 语义不变（think 1 条、job 各 1 条、nothing 0 条）',
+            `think=${oneThink.plans.length} idle=${oneIdle.plans.length} nothing=${oneNothing.plans.length} job 连发=${a1.emit},${a2.emit},${a3.emit}`);
+    } else {
+        badCase('t38④ job/think 行为被改动', {
+            think: oneThink.plans, idle: oneIdle.plans, nothing: oneNothing.plans,
+            job: [a1.emit, a2.emit, a3.emit],
+        });
+    }
+}
+
+// 20. ★ 反向验证：把"记忆"去掉（每拍清空）→ 用例①的断言必须变红
+{
+    const r = await runIdleTicks({ ticks: 3, planAt: idlePreset.idleMode, forgetMemory: true });
+    const case1WouldFail = r.plans.length !== 1;       // 用例①要求 ==1，这里是 3 → 变红
+    if (r.plans.length === 3 && case1WouldFail) {
+        okCase('t38⑤ 反向验证：去掉记忆后 3 拍发 3 条（用例①会变红）', `plans=${r.plans.length}`);
+    } else {
+        badCase('t38⑤ 反向验证失败：去掉记忆也没多播 → 用例①形同虚设', { plans: r.plans.length });
+    }
+}
+
+// 21. 2 分钟完全空闲：改前 40 条 idle-plan（3 秒一拍），改后 1 条
+{
+    const before = await runIdleTicks({ ticks: 40, planAt: idlePreset.idleMode, forgetMemory: true });
+    const after = await runIdleTicks({ ticks: 40, planAt: idlePreset.idleMode });
+    const good = before.plans.length === 40 && after.plans.length === 1
+        && before.claims === 40 && after.claims === 40;   // 拍子照跑，只是不再刷事件
+    if (good) {
+        okCase('t38⑥ 120 秒空闲：idle-plan 40 条 → 1 条（claim 拍数不变）',
+            `改前=${before.plans.length} 改后=${after.plans.length} claims=${after.claims}`);
+    } else {
+        badCase('t38⑥ 120 秒空闲噪声未收敛', { before: before.plans.length, after: after.plans.length, claims: after.claims });
+    }
+}
+
+// 22. 同一窗口把 think 那一拍也算进去（真 decideIdle 的 41 拍：think 1 + idle-mode 40）
+//     → 改前 41 条，改后 2 条（think 那条照发，语义不变）
+{
+    const warm = (i, c, a) => (i === 0 ? idlePreset.think : idlePreset.idleMode)(i, c, a);
+    const before = await runIdleTicks({ ticks: 41, planAt: warm, forgetMemory: true });
+    const after = await runIdleTicks({ ticks: 41, planAt: warm });
+    const beforeMix = before.plans.map((e) => e.action).join(',');
+    const afterMix = after.plans.map((e) => e.action).join(',');
+    const good = before.plans.length === 41 && after.plans.length === 2
+        && afterMix === 'think,idle-mode' && beforeMix.startsWith('think,idle-mode');
+    if (good) {
+        okCase('t38⑥b 41 拍（think 1 + idle-mode 40）：41 条 → 2 条（think 照发）',
+            `改前=${before.plans.length} 改后=${afterMix}`);
+    } else {
+        badCase('t38⑥b think 那一拍的语义', { before: beforeMix, after: afterMix });
+    }
+}
+
+// 23. 干活回来第一次空闲仍要播报（记忆不能跨过"根本没判空闲"的那几拍）
+{
+    const clock = makeClock();
+    const board = makeFakeBoard([]);
+    const actions = makeFakeActions();
+    const agent = { name: 'tester', _lastTalkAt: 0, _lastIdleThinkAt: clock.now(), _idlePaused: false };
+    const plans = [];
+    const { runSkill } = makeRunner({ clock, actions });
+    const sched = new BoardScheduler({
+        agent, board, actions, runSkill,
+        now: clock.now, sleep: clock.sleep,
+        onEvent: (e) => { if (e.type === 'idle-plan') plans.push(e); },
+    });
+
+    clock.advance(3000);
+    await sched.tick();                                   // 第 1 拍：空闲 → 播 1 条
+    // 第 2 拍：来了一张单 → 领单/跑单，**这一拍根本没走到空闲判定**
+    board.jobs.set('j1', { id: 'j1', state: JOB_STATE.READY, skill: 'mine', args: {}, priority: 5 });
+    clock.advance(3000);
+    await sched.tick();
+    const ranJob = board.jobs.get('j1')?.state === JOB_STATE.DONE;
+    // 第 3 拍：又空闲了 → 必须再播 1 条（拿上次的记忆吞掉它 = 丢信息）
+    clock.advance(3000);
+    await sched.tick();
+
+    if (ranJob && plans.length === 2 && plans.every((e) => e.action === 'idle-mode')) {
+        okCase('t38⑦ 干完活回来第一次空闲仍播报（记忆不跨过"没判空闲"的拍）', `plans=${plans.length}`);
+    } else {
+        badCase('t38⑦ 记忆跨过了干活那一拍 → 回来那条被吞', { ranJob, plans: plans.map((e) => e.action) });
+    }
+}
+
 /** 小工具：给失败信息一点可读性 */
 function busyReason(r) { return r?.reason ?? '?'; }
-
 console.log('============================================');
 console.log(`${pass}/${pass + fails} 个用例通过`);
 console.log('============================================');

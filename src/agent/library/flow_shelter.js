@@ -33,7 +33,8 @@ export const manifest = {
     },
     needs: { items: ['建筑材料 ≥20'], near: [] },
     claims: ['area:<自己周围>'],
-    codes: ['NO_ITEM', 'NO_TARGET', 'NO_SUPPORT', 'UNSAFE', 'OUT_OF_REACH', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
+    // t36：加 NO_DATA —— 脚下没加载时如实报 NO_DATA（原来错报 NO_TARGET）
+    codes: ['NO_ITEM', 'NO_TARGET', 'NO_DATA', 'NO_SUPPORT', 'UNSAFE', 'OUT_OF_REACH', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
     resumable: true,
     timeoutMs: 5 * 60 * 1000,
 };
@@ -200,7 +201,17 @@ export async function shelter(bot, opts = {}) {
     const feet = bot?.entity?.position;
     if (!feet || !Number.isFinite(feet.x)) return fail('NO_TARGET', '读不到自己的位置');
     const below = blockAt(bot, { x: Math.floor(feet.x), y: Math.floor(feet.y) - 1, z: Math.floor(feet.z) });
-    if (!below) return fail('NO_TARGET', '脚下那格读不到（区块没加载？）');
+    // ★ t36（2026-11-03）这里原来是**两条不同的事被一个码盖住**，现在分开报：
+    //   ① `blockAt` 返回 null = 那格**还没加载** → NO_DATA（走近/等加载再试，可重试）
+    //   ② 那格读得到、但站不住（空气/虚空/液体）= **不该在这儿搭** → NO_TARGET（换地方）
+    // 原来只有 `if (!below)`，只挡 ①。②的真相是"脚下是 air 对象、不是 null"，
+    // 于是会**一路往下走，在虚空/水面上搭屋子**（悬崖边、水边就是真实触发场景）。
+    if (!below) return fail('NO_DATA', '脚下那格读不到（区块没加载？）');
+    if (/^(air|cave_air|void_air)$/.test(below.name)
+        || /^(water|lava)$/.test(below.name)
+        || /_water$|_lava$/.test(below.name)) {
+        return fail('NO_TARGET', `脚下是 ${below.name}，不能在这儿搭屋子（换个实地再搭）`, { below: below.name });
+    }
 
     const material = pickMaterial(bot, opts.block ?? null);
     if (!material) {

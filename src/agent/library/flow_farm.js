@@ -30,7 +30,8 @@ export const manifest = {
     },
     needs: { items: ['种子', '锄?'], near: [] },
     claims: [],
-    codes: ['NO_TARGET', 'NO_ITEM', 'NO_TOOL', 'NOT_READY', 'OUT_OF_REACH', 'OCCUPIED', 'BLOCKED', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
+    // t36：加 NO_DATA —— 区域没加载时这里如实报 NO_DATA（原来错报 NO_TARGET）
+    codes: ['NO_TARGET', 'NO_DATA', 'NO_ITEM', 'NO_TOOL', 'NOT_READY', 'OUT_OF_REACH', 'OCCUPIED', 'BLOCKED', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
     resumable: false,
     timeoutMs: 4 * 60 * 1000,
 };
@@ -101,7 +102,8 @@ export async function farm(bot, area, opts = {}) {
     const crops = (opts.crop ? [String(opts.crop)] : CROPS);
 
     const blocks = scanArea(bot, area, radius);
-    if (!blocks.length) return fail('NO_TARGET', '区域里读不到方块（未加载？）', { area: { ...area, radius } });
+    // ★ t36（2026-11-03）码纠正：区域里一块都读不到 = 没加载 → NO_DATA（不是"附近没目标"）
+    if (!blocks.length) return fail('NO_DATA', '区域里读不到方块（未加载？）', { area: { ...area, radius } });
 
     let harvested = 0, planted = 0, tilled = 0, skipped = 0;
     let seedsLeft = true;

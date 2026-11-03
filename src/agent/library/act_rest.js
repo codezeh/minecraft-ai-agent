@@ -51,7 +51,8 @@ export async function sleepInBed(bot, target, opts = {}) {
     }
     const v = new Vec3(Math.floor(raw.x), Math.floor(raw.y), Math.floor(raw.z));
     const block = bot.blockAt?.(v, false);
-    if (!block) return fail('NO_TARGET', '那格读不到方块（未加载？）');
+    // ★ t36（2026-11-03）码纠正：读不到 = 未加载 → NO_DATA（不是"位置不对"）
+    if (!block) return fail('NO_DATA', '那格读不到方块（未加载？）');
     if (!/_bed$/.test(block.name)) return fail('NO_TARGET', `那不是床（${block.name}）`, { block: block.name });
 
     if (inReach(bot, { x: v.x + 0.5, y: v.y + 0.5, z: v.z + 0.5 }, maxReach) === false) {

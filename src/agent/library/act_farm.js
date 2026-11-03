@@ -43,7 +43,8 @@ export async function harvestCrop(bot, target) {
     const v = vec(target?.pos ?? target);
     if (!v) return fail('NO_TARGET', '目标位置无效');
     const block = bot.blockAt?.(v, false);
-    if (!block) return fail('NO_TARGET', '那格读不到方块（未加载？）');
+    // ★ t36（2026-11-03）码纠正：读不到 = 未加载 → NO_DATA（不是"位置不对"）
+    if (!block) return fail('NO_DATA', '那格读不到方块（未加载？）');
 
     const max = MAX_AGE[block.name];
     if (max == null) return fail('NO_TARGET', `那不是能收的作物（${block.name}）`, { block: block.name });
@@ -89,7 +90,8 @@ export async function plantSeed(bot, target, seed) {
     if (!soil) return fail('NO_TARGET', '目标位置无效');
 
     const below = bot.blockAt?.(soil, false);
-    if (!below) return fail('NO_TARGET', '那格读不到方块（未加载？）');
+    // ★ t36（2026-11-03）码纠正：读不到 = 未加载 → NO_DATA
+    if (!below) return fail('NO_DATA', '那格读不到方块（未加载？）');
     if (below.name !== 'farmland') {
         return fail('NO_TARGET', `那不是耕地（${below.name}），先 tillSoil`, { block: below.name });
     }
@@ -152,7 +154,8 @@ export async function tillSoil(bot, target, opts = {}) {
     const v = vec(target?.pos ?? target);
     if (!v) return fail('NO_TARGET', '目标位置无效');
     const block = bot.blockAt?.(v, false);
-    if (!block) return fail('NO_TARGET', '那格读不到方块（未加载？）');
+    // ★ t36（2026-11-03）码纠正：读不到 = 未加载 → NO_DATA（不是"位置不对"）
+    if (!block) return fail('NO_DATA', '那格读不到方块（未加载？）');
 
     const TILLABLE = new Set(['dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'dirt_path']);
     if (!TILLABLE.has(block.name)) {

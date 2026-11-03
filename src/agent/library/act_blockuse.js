@@ -52,7 +52,9 @@ export async function toggleBlock(bot, target, opts = {}) {
     }
     const v = new Vec3(Math.floor(raw.x), Math.floor(raw.y), Math.floor(raw.z));
     const block = bot.blockAt?.(v, false);
-    if (!block) return fail('NO_TARGET', '那格读不到方块（未加载？）');
+    // ★ t36（2026-11-03）码纠正：`blockAt` 返回 null = **那格没加载**，不是"位置不对"。
+    //   NO_TARGET 会让上层去改坐标（越改越远）；NO_DATA 才会让它走近/等加载。
+    if (!block) return fail('NO_DATA', '那格读不到方块（未加载？）');
     if (!TOGGLEABLE.test(block.name)) {
         return fail('NO_TARGET', `${block.name} 不是能开关的方块`, { block: block.name });
     }
@@ -116,7 +118,9 @@ export async function boneMeal(bot, target, opts = {}) {
     }
     const v = new Vec3(Math.floor(raw.x), Math.floor(raw.y), Math.floor(raw.z));
     const block = bot.blockAt?.(v, false);
-    if (!block) return fail('NO_TARGET', '那格读不到方块（未加载？）');
+    // ★ t36（2026-11-03）码纠正：`blockAt` 返回 null = **那格没加载**，不是"位置不对"。
+    //   NO_TARGET 会让上层去改坐标（越改越远）；NO_DATA 才会让它走近/等加载。
+    if (!block) return fail('NO_DATA', '那格读不到方块（未加载？）');
     if (!BONE_MEALABLE.test(block.name)) {
         return fail('NO_TARGET', `${block.name} 不能撒骨粉`, { block: block.name });
     }
