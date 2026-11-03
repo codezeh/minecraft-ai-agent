@@ -78,6 +78,16 @@ export async function stepInto(bot, cell, opts = {}) {
     //   （上层既不该改坐标，也不该"走近再试"）。
     //   也刻意不用 NO_DATA：那个码绑的是"目标格未加载"，用这儿会把人引去"走近点"。
     if (!p0) return fail('INTERNAL', '读不到自己的坐标（实体还没就绪？）');
+    // ★ t41b（2026-11-03）：`!p0` 只挡「entity/position 缺失」，**挡不住 NaN**。
+    //   `position` 存在但 `x`/`z` 是 NaN 时会一路算下去：
+    //     d0 = Math.hypot(NaN, ...) = NaN
+    //     NaN > maxReach  →  **false**   ← 于是"不是相邻一格"的检查被绕过
+    //   → 继续往下走做无意义的移动（pressKey + 轮询到超时），最后报一个不相干的码。
+    //   这和「读不到」是同一件事（自身状态异常，不是目标有问题）→ 同一个码 `INTERNAL`。
+    //   三个轴都判：y 虽不进 d0 的计算，但后面 Math.floor(raw.y) 用它算目标格。
+    if (!Number.isFinite(p0.x) || !Number.isFinite(p0.y) || !Number.isFinite(p0.z)) {
+        return fail('INTERNAL', '自己的坐标无效（NaN）', { pos: { x: p0.x, y: p0.y, z: p0.z } });
+    }
 
     const d0 = Math.hypot(target.x + 0.5 - p0.x, target.z + 0.5 - p0.z);
     if (d0 > maxReach) {

@@ -407,6 +407,25 @@ function assertResult(name, r) {
     } else badCase('stepInto 无自身坐标 → INTERNAL', { code: r.code });
 }
 
+// ── 29c. stepInto：自己的坐标是 **NaN** → INTERNAL（不是"继续算下去"）──────
+//
+// ★ 为什么需要单独一条（t41b，2026-11-03）：
+//   29b 只覆盖「`bot.entity` 缺失」。但 `position` **存在**、`x`/`z` 是 `NaN` 时会绕过它：
+//     d0 = Math.hypot(NaN, ...) = NaN
+//     NaN > maxReach  →  **false**   ← "不是相邻一格"的检查被绕过
+//   → 继续往下做无意义的移动（pressKey + 轮询到超时），最后报一个不相干的码。
+//   这与「读不到」是同一件事 → 同一个码 `INTERNAL`。
+//
+// 反向验证：把 act_step 里那段 NaN 守卫删掉 → 本例应变成别的码/或走到移动逻辑 → 变红。
+{
+    const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 } });
+    bot.entity = { position: { x: NaN, y: 64, z: 0 } };   // 存在，但坐标是 NaN
+    const r = await stepInto(bot, { pos: { x: 0, y: 64, z: 1 } });
+    if (assertResult('stepInto 自身坐标 NaN', r) && !r.ok && r.code === 'INTERNAL') {
+        okCase('stepInto 自身坐标 NaN → INTERNAL（NaN 会绕过 maxReach 检查）', r.code);
+    } else badCase('stepInto 自身坐标 NaN → INTERNAL', { code: r.code });
+}
+
 // ── 30. stepInto：按前进并真的进格 ─────────────────────────────────
 {
     const seen = new Set();
