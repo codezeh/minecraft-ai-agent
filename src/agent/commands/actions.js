@@ -788,7 +788,16 @@ export const actionsList = [
         description: 'Run a composite skill (multi-step ability) by name. Get names/params from !listSkills. Args are a key=value string, e.g. "block=oak_log count=16".',
         params: {
             'name': { type: 'string', description: 'Composite skill name, e.g. collect / follow / pickup / platform / escape. See !listSkills.' },
-            'args': { type: 'string', description: 'Parameters as a key=value string, space separated, e.g. "block=oak_log count=16".' },
+            // ★ 2026-11-03（t53）：`args` **必须有默认值 `''`**。
+            //   原来没有 default → 框架把它当**必填参数** → 用户说 `!do first_night`（无参数技能）
+            //   会得到 `ERR Command !do is missing param 'args'.`，而真实原因根本不是"缺参数"。
+            //   实测（verify 离线复现，不需要服务器）：
+            //     !do first_night            → ERR missing param 'name'（裸词不被 argRegex 认）
+            //     !do("first_night")         → ERR missing param 'args'（本行的问题）
+            //     !do("first_night", "")     → ✅ 唯一可用写法
+            //   绝大多数复合技能（first_night / tool_tier / shelter …）本来就不带参数，
+            //   让它们必须写一对空引号是**没道理的可用性缺陷**。
+            'args': { type: 'string', default: '', description: 'Parameters as a key=value string, space separated, e.g. "block=oak_log count=16". Omit it for skills that take no params (first_night / tool_tier / shelter …).' },
         },
         perform: async function (agent, name, args) {
             const entry = getSkill(name);
