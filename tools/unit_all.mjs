@@ -34,6 +34,7 @@ const UNITS = [
     'board_nofallback_unit',     // M8 B1：无板降级回归（board=null 行为与加板前一致）
     'board_cmd_unit',            // M8 B1：!addJob/!jobs/!cancelJob 三条命令 + 权限 + 参数校验
     'flow_mine_notool_unit',     // t21：mine 的 NO_TOOL 假失败 + 三态判据（读不到≠没工具）
+    'find_stand_unit',           // t65：findStandNear 四邻站位判据（脚下悬空/水/岩浆不算 + 读炸不崩，含反向验证）
     'board_scheduler_unit',      // M8 B2：调度主循环 / 抢占规则 / autoClaim / requeueStaleBrief
     'board_b3_unit',             // M8 B3：多人单拆单 / 6 种预约 key + TTL / 角色过滤 / dependsOn
     'board_b4_unit',             // M8 B4：共享地标/危险点/箱子内容 + 迁移幂等 + 单一真相
@@ -46,13 +47,14 @@ const UNITS = [
     'strat_first_night_unit',    // M10：first_night 跳过已满足 / dependsOn / 嵌套闸 / 不碰身体
     'job_budget_unit',           // A2：ctx.jobBudget 跨调用共享（无 ctx 行为不变 / 余量生效 / hitCap 上报）
     'exec_dig_horizontal_unit',
-    'nav_lock_unit',   // t66：导航「单一驱动者」闸（含反向验证）  // t40：邻列 dig 从脚位挖（人形通道）+ 同列不变 + 假成功守卫
+    'nav_lock_unit',   // t66：导航「单一驱动者」闸（含反向验证）
     'path3d_tunnel_unit',        // t45：横向隧道 dig 边（目标 y=当前层 / 后继不变 / 垂直 dig 不变）
     'flow_shelter_unit',         // t31：flow_shelter 蓝图形状 + 材料判断 + idle_planner 死分支接线
     'flow_build_support_unit',   // t31：flow_build 支撑判据（A/B/C，含防循环论证反例）
     'idle_fakeclock_unit',       // t31：idle_planner 假时钟（30s 阈值 / 有单不规划 / 5min 节流）
     'board_payload_unit',        // M8 B1（t20 补）：10 个 board:* 事件的 payload 形状（表驱动，防"[object Object]"式恒 null）
     'board_scope_unit',          // M8 B2（t23 补）：refresh({scope}) 语义边界 —— mine/claimable/all + 未知报错 + 共享单抢占端到端
+    'board_add_recall_unit',     // t65：board_client.add 超时回查（认得到当成功 / 认不到仍失败 / 非 TIMEOUT 不回查，含反向验证）
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
     'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）
     'control_reasons_unit',      // M2：停的原因 → 任务单去哪 + D17/D18/D19/D10（控制层）
