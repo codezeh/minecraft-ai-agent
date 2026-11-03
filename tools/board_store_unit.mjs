@@ -479,6 +479,47 @@ const freshDb = () => {
     else badCase('rowToJob 字段映射', j);
 }
 
+// ── 30. ★ t60：派了子单的策略单，不能按自己的 count 重试/blocked ──────
+//
+// 真机：obtain:oak_log attempts=3 耗尽 → blocked，progress {count:2,want:8}，
+//   而它的子单 mine 已 done 并真挖到 6 个 → 父子账对不上。
+// 根因：`okFlag && want>0 && count<want` 那一支对叶子单是对的，对策略单是错的
+//   （活是子单干的；而且每次重试会**重复派子单**）。
+{
+    const { db } = freshDb();
+    addJob(db, { kind: 'personal', title: 'parent', skill: 'obtain',
+        args: { item: 'oak_log', count: 8 }, priority: 1, source: 'self',
+        assignee: null, requires: [], claims: [], state: 'running', attempts: 0, maxAttempts: 3 });
+    const parent = listJobs(db, {})[0];
+    // 一个还活着的子单（ready）
+    addJob(db, { kind: 'personal', parentId: parent.id, title: 'mine', skill: 'mine',
+        args: { ore: 'oak_log', count: 4 }, priority: 1, source: 'self',
+        assignee: null, requires: [], claims: [], state: 'ready', attempts: 0, maxAttempts: 3 });
+
+    // 父单报 ok 但只有 2/8
+    const r = finish(db, parent.id, {
+        ok: true, code: 'OK', message: '', progress: { count: 2, want: 8 },
+    });
+    const after = getJob(db, parent.id);
+    const good = after.state === 'running' && after.attempts === 0;
+    if (good) okCase('★ t60 有活子单时策略单保持 running、不消耗 attempts', `state=${after.state} attempts=${after.attempts}`);
+    else badCase('t60 策略单不该被重试', { state: after.state, attempts: after.attempts, r });
+}
+
+// ── 31. 反向对照：**没有**子单时，ok 但不够 → 照旧重试（叶子单语义不变）──
+{
+    const { db } = freshDb();
+    addJob(db, { kind: 'personal', title: 'leaf', skill: 'collect',
+        args: {}, priority: 1, source: 'self',
+        assignee: null, requires: [], claims: [], state: 'running', attempts: 0, maxAttempts: 3 });
+    const leaf = listJobs(db, {})[0];
+    finish(db, leaf.id, { ok: true, code: 'OK', message: '', progress: { count: 2, want: 8 } });
+    const after = getJob(db, leaf.id);
+    const good = after.state === 'ready' && after.attempts === 1;
+    if (good) okCase('★ t60 反证：无子单的叶子单 ok 但不够 → 仍 READY + attempts+1', `state=${after.state} attempts=${after.attempts}`);
+    else badCase('t60 叶子单语义不该变', { state: after.state, attempts: after.attempts });
+}
+
 console.log('============================================');
 console.log(`${pass}/${pass + fail} 个用例通过`);
 console.log('============================================');

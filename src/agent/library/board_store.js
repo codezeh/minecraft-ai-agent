@@ -534,8 +534,32 @@ export function finish(db, id, result = {}, opts = {}) {
     let next;
     let counted = false;
 
+    // ★★ 2026-11-03（t60）：**派了子单的策略单，不能按"自己的进度"判完成或重试**。
+    //
+    //   真机证据（verify 第 4 跑，第一夜最后一个卡点）：
+    //     obtain:oak_log  → attempts=3 耗尽 → blocked，progress {"count":2,"want":8}
+    //     但它的子单 mine{count:4} **已经 done 并真的挖到 6 个**
+    //   父子账对不上的原因是这一支：
+    //     `okFlag && want > 0 && count < want` → 不够就 READY 重试
+    //   对**叶子单**（flow 自己干活）这条是对的；对**策略单**是错的——
+    //     策略层的活是**子单干的**，它自己的 `count` 只是"某一瞬间背包里有多少"，
+    //     而下游 craft 还会消耗它 → `count` 永远追不上 `want` → 无限重试
+    //     → 每次重试还**重复派一遍子单**（第 4 跑里 craft 单被派了 3 次）。
+    //
+    //   正确语义（04 §6.3「策略不自己做动作，只拆子单、等子单结果」）：
+    //     父单有**活着的子单** → 它就该保持 `running`，**不消耗 attempts**，
+    //     等 `rollupParent` 在子单全部结束后决定 done/blocked。
+    const kids = db.prepare('SELECT state FROM jobs WHERE parentId = ?').all(id);
+    const kidsAlive = kids.some((c) => [
+        JOB_STATE.READY, JOB_STATE.CLAIMED, JOB_STATE.RUNNING, JOB_STATE.PAUSED,
+    ].includes(c.state));
+
     if (completed) {
         next = JOB_STATE.DONE;
+    } else if (kids.length && kidsAlive) {
+        // 子单还在跑：父单挂着等，既不算完成也不算失败
+        next = JOB_STATE.RUNNING;
+        counted = false;
     } else if (DIRECT_BLOCK_CODES.has(code)) {
         next = JOB_STATE.BLOCKED;                       // 重试没用，直接 blocked
     } else if (NO_COUNT_CODES.has(code)) {
