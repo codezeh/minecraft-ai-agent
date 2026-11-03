@@ -538,7 +538,23 @@ export function listSkills() {
  *
  * @returns ActionResult（流程自己的返回值，或参数错时的 fail）
  */
-export async function runSkill(agent, name, argString) {
+/**
+ * 跑一个复合技能。
+ *
+ * ★★ 2026-11-03（t63）：**第 4 个参数 `job` 必须真的传进来** ——
+ *   否则 `makeCtx(agent, null, ...)` → `ctx.jobId` 恒 null →
+ *   `strat_obtain` 里"我正被哪张单执行"的判断永远失效 → 每次都多建一张壳。
+ *
+ *   真机链条（verify 逐行钉死）：
+ *     board_scheduler:636  runner(this.agent, job.skill, argsToString(job.args))   ← job 没传
+ *     composite_registry:557  makeCtx(agent, null, entry.manifest)                ← 硬编码 null
+ *     composite_registry:413  jobId = job?.id ?? null                             → 恒 null
+ *     strat_obtain:417  const myJobId = deps.ctx?.jobId ?? null                   → 恒 null
+ *
+ *   这条属「传参漏了 → 分支永不走」家族（今晚第 4 例：`availableSkills`、
+ *   `planNeeds` 5 字段、`ctx.board`、现在 `ctx.jobId`）。
+ */
+export async function runSkill(agent, name, argString, job = null) {
     const entry = getSkill(name);
     if (!entry) {
         // 同理：技能名写错 ≠ 目标找不到，不产生错误码
@@ -554,6 +570,7 @@ export async function runSkill(agent, name, argString) {
         // 上层（!do）据 data.paramError 直接回人话，不经过 code 的语义。
         return { ok: false, code: null, message: `参数错：${parsed.error}`, data: { paramError: true } };
     }
-    const ctx = makeCtx(agent, null, entry.manifest);
+    // ★ t63：`job` 要真的透传（原来硬编码 null → ctx.jobId 恒 null）
+    const ctx = makeCtx(agent, job, entry.manifest);
     return entry.run(agent?.bot ?? agent, parsed.args, ctx);
 }

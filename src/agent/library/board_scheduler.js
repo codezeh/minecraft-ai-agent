@@ -633,7 +633,11 @@ export class BoardScheduler {
 
         try {
             const runner = this.runSkillFn ?? defaultRunSkill;
-            result = await runner(this.agent, job.skill, argsToString(job.args));
+            // ★★ 2026-11-03（t63）：**必须把 `job` 传下去** ——
+            //   否则 `runSkill` 里 `makeCtx(agent, null, ...)` → `ctx.jobId` 恒 null，
+            //   `strat_obtain` 判不出"我正被哪张单执行" → 每次都多建一张壳 →
+            //   外层那张永远 0 子单 → 被当叶子单重试到 blocked（真机第 8 跑的止损点）。
+            result = await runner(this.agent, job.skill, argsToString(job.args), job);
             return true;
         } catch (e) {
             result = { ok: false, code: 'INTERNAL', message: String(e?.message ?? e) };
@@ -754,9 +758,10 @@ export class BoardScheduler {
 // ───────────────────────────────────────────────────────────────────────────
 
 /** 默认用注册表的 runSkill（测试会注入假的）。 */
-async function defaultRunSkill(agent, skill, argString) {
+async function defaultRunSkill(agent, skill, argString, job = null) {
     const reg = await import('./composite_registry.js');
-    return reg.runSkill(agent, skill, argString);
+    // ★ t63：`job` 透传给 runSkill（→ makeCtx → ctx.jobId）
+    return reg.runSkill(agent, skill, argString, job);
 }
 
 /** `{count:4}` → `'count=4'`（注册表 runSkill 收 key=value 串）。 */
