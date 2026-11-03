@@ -22,7 +22,8 @@
  * 输出：PASS <用例> / FAIL <用例> <实际>，全过退出码 0。
  */
 import { readFileSync } from 'node:fs';
-import { makeFakeBot } from './fixtures/fake_bot.mjs';
+import Vec3 from 'vec3';
+import { makeFakeBot, assertPointLike } from './fixtures/fake_bot.mjs';
 import { mine } from '../src/agent/library/flow_mine.js';
 
 let pass = 0, fail = 0;
@@ -59,9 +60,17 @@ function mineBot({ ores = 3, dropsLand = false, onCollect = null } = {}) {
             itemsByName: { iron_pickaxe: { id: 892 }, raw_iron: { id: 867 } },
         },
         stubs: {
+            // ★ t68：findBlocks 返回 **Vec3**（真 mineflayer 如此；query_perceive 会直接喂给 blockAt）
             findBlocks: () => [...world.keys()].map((k) => k.split(',').map(Number))
-                .map(([x, y, z]) => ({ x, y, z })),
+                .map(([x, y, z]) => new Vec3(x, y, z)),
             blockAt: (v) => {
+                // ★ t68：**严格守卫**（与夹具/真 mineflayer 同一条判据）。
+                //   为什么保留自己的方块形状而不整换夹具：这里的方块带着
+                //   `digTime()/harvestTools`（`mine()` 判断"挖得动/挖多久"要用），
+                //   夹具的方块没有这两样 —— 整换会让 dig 走另一条路（实测 TIMEOUT）。
+                //   但**坐标形状必须一样挑剔**：否则 `mine()` 内部传裸对象（t70 家族）
+                //   在本文件里永远看不见。
+                assertPointLike(v);
                 const k = `${Math.floor(v?.x ?? 0)},${Math.floor(v?.y ?? 0)},${Math.floor(v?.z ?? 0)}`;
                 return world.get(k) ?? { name: 'air', position: v };
             },
@@ -75,7 +84,13 @@ function mineBot({ ores = 3, dropsLand = false, onCollect = null } = {}) {
                 else bot.inventory.slots.push({ name: 'raw_iron', type: 867, count: 1, slot: 37 });
             },
             // ★ 计数器：只有 flow_pickup.collectDrops 会调 clearControlStates
-            clearControlStates: () => { bot.__collectCalls++; onCollect?.(bot.__collectCalls); },
+            // ★ 计数口径修正：`holdDig` 也会调 clearControlStates（挖前静默），
+            //   它带 `__silencingForDig` 标记 → 排除掉，只数 collectDrops 自己的调用。
+            //   （原口径"只有 collectDrops 会调它"已被 t80/t82 打破 —— 借副作用当计数器是脆的）
+            clearControlStates: () => {
+                if (bot.__silencingForDig) return;
+                bot.__collectCalls++; onCollect?.(bot.__collectCalls);
+            },
         },
     });
     bot.__collectCalls = 0;

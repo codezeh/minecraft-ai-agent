@@ -125,15 +125,28 @@ export async function holdDig(bot, block, opts = {}) {
     //   而是放在这里：**任何 dig 之前都强制静默**。这是挖矿的固有前提，
     //   不是某个 flow 的责任。
     //
-    //   ★ 只在"确实有东西要清"时才动手（有 pathfinder goal / controlState 非空），
-    //     不无条件调 —— 一是没必要，二是**假 bot 上没有这些东西**，
-    //     无条件调会让"数 clearControlStates 次数"这种观测点失真。
-    try {
-        const hasGoal = !!bot.pathfinder?.goal;
-        const keysDown = Object.keys(bot.controlState ?? {}).some((k) => bot.controlState[k]);
-        if (hasGoal) { bot.pathfinder.setGoal(null); bot.pathfinder.stop?.(); }
-        if (keysDown) bot.clearControlStates?.();
-    } catch { /* 假 bot / 没装 pathfinder 就算了 */ }
+    //   ★★ t82 修正：**只要 bot 有 `pathfinder` 就一定静默**（不再看 `goal` 是否非空）。
+    //
+    //     第 28 跑回归：`Digging aborted` 从 0 回到 **1277**。
+    //     t81 改成"先 dig → `OUT_OF_REACH` 才 goTo → 再 dig"，
+    //     第二次 dig 前 `goTo` 刚跑完，而**残留状态比 `hasGoal` 判据复杂得多**：
+    //     `walkTo` 是逐步行进的，最后一步的 goal 可能已清但控制键还按着，反之亦然。
+    //     与其猜"有没有残留"，不如**无条件清干净** —— 代价是一次内存写。
+    //
+    //     用 `bot.pathfinder` 存在与否区分真假 bot：真 bot 一定有；
+    //     假 bot（单测）通常没有 → 不会调 `clearControlStates`，
+    //     于是"数 clearControlStates 次数"这类观测点仍然准确。
+    if (bot.pathfinder) {
+        try { bot.pathfinder.setGoal?.(null); } catch { /* ignore */ }
+        try { bot.pathfinder.stop?.(); } catch { /* ignore */ }
+        // ★ t82：给这次清理打个意图标记 —— "为挖矿而静默" 与 "别的流程自己清理"
+        //   在观测上要能分开，否则"数 clearControlStates 次数"这类外部计数器会失真
+        //   （第 28 跑 `flow_mine_pickup_unit` 就因此从 3 变 6）。
+        bot.__silencingForDig = true;
+        try { bot.clearControlStates?.(); } catch { /* ignore */ } finally { bot.__silencingForDig = false; }
+        // stop() 是异步的：让出一拍，确保它真的落地再开始挖
+        await new Promise((r) => setImmediate(r));
+    }
 
     const heldId = bot?.heldItem ? bot.heldItem.type : null;
     const budget = Number.isFinite(digTimeMs)

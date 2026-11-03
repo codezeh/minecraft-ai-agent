@@ -910,6 +910,48 @@ export function dependsSatisfied(db, job) {
  *
  * @returns {{changed:boolean, parent?:object, reason?:string}}
  */
+/**
+ * ★★ 2026-11-04（t83）：**"卡住"的单，材料后来到了，要给它一次重试机会。**
+ *
+ *   真机证据（第 28 跑）：
+ *     obtain crafting_table  blocked
+ *       ├ craft oak_planks     done   prog={"count":4,"want":4}   dep=null
+ *       └ craft crafting_table blocked «料不够合 crafting_table»  dep=["14_jb2"]  ← 依赖已满足！
+ *
+ *   `NO_ITEM` 在 `DIRECT_BLOCK_CODES` 里 → 直接进 `blocked`（**终态，永不重试**）。
+ *   但在**依赖图**里，`NO_ITEM` 常常意味着"**材料还没做出来**" —— 那只是**暂时**的：
+ *   它的兄弟单（`craft oak_planks`）正在做。等材料到了，它本该能跑，却因为早就是终态而永远不跑。
+ *
+ *   **这是"终态吃掉了后续机会"** —— 和 t60（bail-out 吃掉"挂着等"）同族：
+ *   **把"暂时不能"判成了"永远不能"。**
+ *
+ *   修法：扫同一个父单下所有 `blocked` 的子单，若它的 `dependsOn` **现在全部 done**，
+ *   就放回 `ready` 重试一次。用 `checkpoint.reopenedOnce` 记账，**只给一次机会**
+ *   ——避免"真缺料又永远满足不了"时反复重开造成死循环。
+ *
+ * @returns {Array} 被重开的单（供调用方广播）
+ */
+export function reopenBlockedWithSatisfiedDeps(db, parentId = null, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const rows = parentId == null
+        ? db.prepare("SELECT id FROM jobs WHERE state = 'blocked'").all()
+        : db.prepare("SELECT id FROM jobs WHERE state = 'blocked' AND parentId = ?").all(parentId);
+    const out = [];
+    for (const { id } of rows) {
+        const job = getJob(db, id);
+        if (!job) continue;
+        const deps = Array.isArray(job.dependsOn) ? job.dependsOn : [];
+        if (!deps.length) continue;                       // 没依赖 → NO_ITEM 是真缺料，不重开
+        if (job.checkpoint?.reopenedOnce) continue;       // 只给一次机会
+        if (!dependsSatisfied(db, job)) continue;         // 依赖还没满足 → 继续等
+        const r = setState(db, id, JOB_STATE.READY, { now });
+        if (!r.ok) continue;
+        updateJob(db, id, { checkpoint: { ...(job.checkpoint ?? {}), reopenedOnce: true } });
+        out.push(getJob(db, id));
+    }
+    return out;
+}
+
 export function rollupParent(db, parentId, opts = {}) {
     const now = opts.now ?? Date.now();
     const parent = getJob(db, parentId);

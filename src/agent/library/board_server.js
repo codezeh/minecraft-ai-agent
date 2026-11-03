@@ -23,6 +23,7 @@ import {
     expireLeases, JOB_STATE,
     // B3：预约（06 §9.2）+ 父子收敛（06 §9.1）
     reserve, release, renewClaims, expireClaims, listClaims, rollupParent,
+    reopenBlockedWithSatisfiedDeps,
     // B4：共享数据（06 §9.3）
     putShared, getShared, listShared, delShared, findItemInSharedChests,
 } from './board_store.js';
@@ -252,6 +253,13 @@ export function attachBoardServer(deps = {}) {
                 try { release(db, r.job.id, r.job.lease?.owner ?? String(payload?.bot ?? ''), null); } catch { /* ignore */ }
                 // ★ B3：父子收敛（06 §9.1）—— 有 parentId 就顺手推进父单
                 if (r.job.parentId) {
+                    // ★ t83：**先**把"材料已到、之前被 NO_ITEM 卡住的兄弟"放回 ready，
+                    //   再 rollup —— 否则它们永远是终态 blocked，父单跟着 blocked
+                    //   （第 28 跑：crafting_table 的依赖已 done 却仍 blocked）
+                    try {
+                        const reopened = reopenBlockedWithSatisfiedDeps(db, r.job.parentId, { now: now() });
+                        for (const j of reopened) changed(j, 'reopened:deps-satisfied');
+                    } catch { /* ignore */ }
                     try {
                         const up = rollupParent(db, r.job.parentId, { now: now() });
                         if (up.changed) changed(up.parent, `rollup:${up.reason}`);

@@ -35,6 +35,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
     openBoard, addJob, getJob, finish, JOB_STATE,
+    listJobs, setState, reopenBlockedWithSatisfiedDeps,
 } from '../src/agent/library/board_store.js';
 
 let pass = 0, fail = 0;
@@ -184,6 +185,64 @@ function runFinish({ state = JOB_STATE.RUNNING, maxAttempts = 3, attempts = 0, r
     const good = r?.ok === true && r.counted === true && r.next === JOB_STATE.READY && after.attempts === 1;
     if (good) okCase('④-5 未知 code → 计 attempts、回 READY（不吞、不 blocked）', `next=${r.next} attempts=${after.attempts}`);
     else badCase('④-5 未知 code 处理不符', { r, state: after.state, attempts: after.attempts });
+}
+
+// ── ⑤ t83：blocked 单的依赖后来满足了 → 必须能重开一次 ────────────────
+//
+// 真机（第 28 跑）：craft crafting_table 依赖的 craft oak_planks 已 done 4/4，
+//   但它自己在材料到之前跑过一次 → NO_ITEM → blocked（终态）→ 永不重跑。
+{
+    const { db } = freshDb();
+    addJob(db, { kind: 'personal', title: 'parent', skill: 'obtain',
+        args: { item: 'crafting_table', count: 1 }, priority: 5, source: 'self',
+        assignee: null, requires: [], claims: [], state: 'running', attempts: 0, maxAttempts: 3 });
+    const parent = listJobs(db, {})[0];
+    // 材料单：done
+    addJob(db, { kind: 'personal', parentId: parent.id, title: 'planks', skill: 'craft',
+        args: { item: 'oak_planks', count: 4 }, priority: 5, source: 'self',
+        assignee: null, requires: [], claims: [], state: 'ready', attempts: 0, maxAttempts: 3 });
+    const mat = listJobs(db, {}).find((j) => j.id !== parent.id);
+    setState(db, mat.id, 'claimed'); setState(db, mat.id, 'running'); setState(db, mat.id, 'done');
+    // 成品单：blocked，依赖已 done
+    addJob(db, { kind: 'personal', parentId: parent.id, title: 'table', skill: 'craft',
+        args: { item: 'crafting_table', count: 1 }, priority: 5, source: 'self',
+        assignee: null, requires: [], claims: [], state: 'ready', attempts: 0, maxAttempts: 3,
+        dependsOn: [mat.id] });
+    const prod = listJobs(db, {}).find((j) => j.args?.item === 'crafting_table' && j.parentId === parent.id);
+    setState(db, prod.id, 'claimed'); setState(db, prod.id, 'blocked');
+
+    const reopened = reopenBlockedWithSatisfiedDeps(db, parent.id);
+    const after = getJob(db, prod.id);
+    const again = reopenBlockedWithSatisfiedDeps(db, parent.id);   // 第二次不许再开（只给一次）
+    const after2 = getJob(db, prod.id);
+    const good = reopened.length === 1 && after.state === 'ready'
+        && after.checkpoint?.reopenedOnce === true
+        && again.length === 0 && after2.state === 'ready';
+    if (good) okCase('★ t83 依赖满足后 blocked 单重开一次（且只重开一次）',
+        `reopened=${reopened.length} state=${after.state} 二次=${again.length}`);
+    else badCase('t83 重开', { n: reopened.length, state: after.state, again: again.length });
+}
+
+// ⑤-b 反向验证：依赖**没**满足 → 不许重开
+{
+    const { db } = freshDb();
+    addJob(db, { kind: 'personal', title: 'p2', skill: 'obtain', args: {}, priority: 5,
+        source: 'self', assignee: null, requires: [], claims: [], state: 'running', attempts: 0 });
+    const parent = listJobs(db, {})[0];
+    addJob(db, { kind: 'personal', parentId: parent.id, title: 'm', skill: 'craft',
+        args: { item: 'oak_planks', count: 4 }, priority: 5, source: 'self',
+        assignee: null, requires: [], claims: [], state: 'ready', attempts: 0 });
+    const mat = listJobs(db, {}).find((j) => j.id !== parent.id);
+    addJob(db, { kind: 'personal', parentId: parent.id, title: 't', skill: 'craft',
+        args: { item: 'crafting_table', count: 1 }, priority: 5, source: 'self',
+        assignee: null, requires: [], claims: [], state: 'ready', attempts: 0, dependsOn: [mat.id] });
+    const prod = listJobs(db, {}).find((j) => j.args?.item === 'crafting_table');
+    setState(db, prod.id, 'claimed'); setState(db, prod.id, 'blocked');
+    const reopened = reopenBlockedWithSatisfiedDeps(db, parent.id);
+    const after = getJob(db, prod.id);
+    if (reopened.length === 0 && after.state === 'blocked') {
+        okCase('★ t83 反证：依赖未满足 → 不重开（仍是 blocked）', `n=${reopened.length}`);
+    } else badCase('t83 依赖未满足却重开了', { n: reopened.length, state: after.state });
 }
 
 console.log('============================================');
