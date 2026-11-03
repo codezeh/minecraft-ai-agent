@@ -30,6 +30,29 @@ import { walkTo } from './executor.js';
 import { moveTo, moveToXZ } from './nav_pathfinder.js';
 import { ensureTraced } from './trace_bus.js';
 
+/**
+ * ★★ 2026-11-04（t76）：**在"导航驱动权"内跑一段自己的移动代码。**
+ *
+ * 为什么需要：`flow_pickup.collectDrops` 直接用 `moveTo`（原生 pathfinder），
+ * **绕过了 `goTo` 的单一驱动者闸**。t72 之后它变成"每挖一块就调一次"，
+ * 频率从"末尾 1 次"变成"每块 1 次" → 第 23 跑立刻和挖矿抢 pathfinder：
+ *   `goTo false NO_REACH ×579`（上轮 0）、`dig = 0`、最后原因 `INTERNAL`（goal 被换）/ `NO_MOVE`
+ *
+ * 语义与 `goTo` 一致：**同 owner 可重入**（挖矿流程内部本来就在持锁），
+ * 所以拿不到锁只可能是"**别的任务**正在用导航" → 这时返回 null 交给调用方决定
+ * —— **绝不硬抢**。
+ *
+ * @param {object} bot
+ * @param {Function} fn 在这段时间里可以自由用 pathfinder
+ * @returns {Promise<any|null>} fn 的返回值；拿不到锁返回 null
+ */
+export async function withNav(bot, fn, waitMs = 3000) {
+    const owner = String(bot?.__navJobId ?? 'adhoc');
+    const lock = await acquireNav(owner, waitMs);
+    if (!lock) return null;
+    try { return await fn(); } finally { lock.release(); }
+}
+
 /** 目标坐标是否可用。 */
 function finiteXZ(t) {
     return !!t && Number.isFinite(t.x) && Number.isFinite(t.z);

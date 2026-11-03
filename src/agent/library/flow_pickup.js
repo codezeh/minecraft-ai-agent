@@ -23,6 +23,8 @@
 import { ok, fail } from './contract.js';
 import { findStandSpot } from './query_stand.js';
 import { moveTo } from './nav_pathfinder.js';
+// ★ t76：`collectDrops` 自己会 moveTo —— 必须走导航闸，否则和 `goTo` 抢 pathfinder
+import { withNav } from './nav_core.js';
 import { waitUntil } from './atom_wait.js';
 import { findDrops } from './query_drops.js';
 import { EYE_HEIGHT } from '../rules/rules.runtime.js';
@@ -139,8 +141,9 @@ export async function collectDrops(bot, origin, opts = {}) {
         step('walk-to-drop', { dist: target.dist, count: found.data.count });
         // 用实体的精确坐标——地板化会把落点挪到方块中心，常差半格导致吸不到
         const dest = target.exactPos ?? target.pos;
-        await moveTo(bot, { kind: 'point', pos: { x: Math.floor(dest.x), y: Math.floor(dest.y), z: Math.floor(dest.z) } },
-            { tol: 0, timeout: 6000 });
+        // ★ t76：**走导航闸**（原来直接 moveTo 绕过闸 → 每挖一块捡一次时与 goTo 抢 pathfinder）
+        await withNav(bot, () => moveTo(bot, { kind: 'point', pos: { x: Math.floor(dest.x), y: Math.floor(dest.y), z: Math.floor(dest.z) } },
+            { tol: 0, timeout: 6000 }));
         if (await waitGain(1200)) return okResult();
     }
 
@@ -167,7 +170,8 @@ export async function collectDrops(bot, origin, opts = {}) {
             dy,
             ephemeral: spot.data.supportEphemeral,
         });
-        const mv = await moveTo(bot, { kind: 'point', pos: spot.data.pos }, { tol: 0, timeout: 5000 });
+        // ★ t76：同上，走导航闸
+        const mv = await withNav(bot, () => moveTo(bot, { kind: 'point', pos: spot.data.pos }, { tol: 0, timeout: 5000 }));
         if (await waitGain(1200)) { picked = true; break; }
 
         // 用 moveTo 现在会报告的落脚状态判断（2026-10-25 契约补强）：

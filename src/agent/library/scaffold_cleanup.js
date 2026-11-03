@@ -20,6 +20,13 @@
  * `blockUpdate` 不再作为记录来源，只在放置后用来复核那格真的变成了方块。
  */
 
+// ★★ 2026-11-04（t77）：`bot.blockAt` 需要 **Vec3**（内部调 `pos.floored()`）；
+//   传裸 `{x,y,z}` 会抛 `TypeError`，而这里两处都用 `catch { return/skipped++ }` 吞掉
+//   → **完全静默**：`_record` 一条都记不下（`placed` 恒空）→ cleanup 自然一条都不挖
+//   → **ScaffoldTracker 在生产里等于没工作**，而它"看起来"只是"没有需要清理的方块"。
+//   （fixture 用严格假件盘出来的，"参数形状错"族第 5 例）
+import { Vec3 } from 'vec3';
+
 const MAX_TRACK = 64;
 
 export class ScaffoldTracker {
@@ -66,7 +73,7 @@ export class ScaffoldTracker {
         // 复核：那格现在必须是非空气实体（否则就是没放成/被立刻打掉）
         let name = null;
         try {
-            const b = this.bot.blockAt?.({ x, y, z }, false);
+            const b = this.bot.blockAt?.(new Vec3(x, y, z), false);
             name = b?.name ?? null;
         } catch { return; }
         if (!name || name === 'air' || name === 'cave_air' || name === 'void_air') return;
@@ -111,7 +118,7 @@ export class ScaffoldTracker {
             if (Date.now() - t0 > maxMs) { skipped++; continue; }
             if (this.bot.interrupt_code) { skipped++; continue; }
             try {
-                const b = this.bot.blockAt?.({ x: it.x, y: it.y, z: it.z }, false);
+                const b = this.bot.blockAt?.(new Vec3(it.x, it.y, it.z), false);
                 if (!b || b.name !== it.block) { skipped++; continue; }   // 已经变了
                 const r = await digFn(this.bot, { kind: 'block', pos: { x: it.x, y: it.y, z: it.z } });
                 if (r?.ok) removed++;
