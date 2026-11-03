@@ -107,26 +107,45 @@ export const blockKey = (x, y, z) => `${Math.floor(x)},${Math.floor(y)},${Math.f
 /**
  * 造 world：Map<"x,y,z", 方块名>。
  *
- * 接受三种写法，省得每个测试自己拼字符串：
+ * 接受这些写法，省得每个测试自己拼字符串：
  *   - Map（复制一份，不改调用方的）
  *   - `[[x, y, z, name], ...]`
+ *   - **`[[x, y, z, name, props], ...]`** ← t68 新增：方块**属性**（门开合 / 作物 age …）
  *   - `[{ x, y, z, name }, ...]`（atom_* 里那种位置对象）
  *   - `{ '0,63,0': 'stone' }`
+ *
+ * ★ 为什么属性挂在**这个函数的第 5 个元素**上，而不是再加一个 `blockProps` 选项：
+ *   `worldOf` 已经是"描述世界"的**唯一入口**，而"这格是什么方块、它的状态是什么"
+ *   本来就属于同一件事。**不新增第二个描述世界的入口**（今晚已经因为"两个名字指同一件事"
+ *   栽过好几次）。现有所有 `worldOf([[x,y,z,name]])` 调用**一字不用改**（props 缺省空）。
+ *
+ * ★ 用法（属性只影响**假件造出来的方块对象**，不动 `blockAt` 的严格性）：
+ *     worldOf([[0, 64, 0, 'oak_door', { open: true, facing: 'north' }]])
+ *     worldOf([[0, 64, 0, 'wheat', { age: 7 }]])
+ *   方块对象会带上 `properties` 与 `getProperties()`（真 mineflayer 也有这个方法）。
+ *   **不要**为了属性回去写 `stubs.blockAt` —— 那就又绕过了 strictPoints。
  */
 export function worldOf(entries = []) {
     const w = new Map();
+    /** 键 → 属性对象（不塞进 Map 的 value，保持 `world.get(k)` 仍是方块名字符串）。 */
+    const props = new Map();
+    const put = (key, name, pr) => { w.set(key, name); if (pr && typeof pr === 'object') props.set(key, pr); };
+
     if (entries instanceof Map) {
         for (const [k, v] of entries) w.set(k, v);
-        return w;
-    }
-    if (Array.isArray(entries)) {
+        const p = entries.__props;                       // 让"复制一份"也带上属性
+        if (p instanceof Map) for (const [k, v] of p) props.set(k, v);
+    } else if (Array.isArray(entries)) {
         for (const e of entries) {
-            if (Array.isArray(e)) w.set(blockKey(e[0], e[1], e[2]), e[3]);
-            else if (e && typeof e === 'object') w.set(blockKey(e.x, e.y, e.z), e.name);
+            if (Array.isArray(e)) put(blockKey(e[0], e[1], e[2]), e[3], e[4]);
+            else if (e && typeof e === 'object') put(blockKey(e.x, e.y, e.z), e.name, e.props);
         }
-        return w;
+    } else {
+        for (const [k, v] of Object.entries(entries ?? {})) w.set(k, v);
     }
-    for (const [k, v] of Object.entries(entries ?? {})) w.set(k, v);
+
+    // 非枚举属性：不干扰 Map 的遍历/序列化，只有本夹具（和想读它的测试）看得见。
+    Object.defineProperty(w, '__props', { value: props, enumerable: false, configurable: true });
     return w;
 }
 
@@ -208,6 +227,8 @@ export function makeFakeBot(opts = {}) {
     }
 
     const world = worldOf(rawWorld);
+    /** 键 → 方块属性（`worldOf` 第 5 个元素带进来的；没有就是空）。 */
+    const worldProps = rawWorld?.__props instanceof Map ? rawWorld.__props : new Map();
 
     /** world 里的名字 → null（未加载）；`unloaded: 'air'` 时当空气。 */
     function readName(x, y, z) {
@@ -241,6 +262,14 @@ export function makeFakeBot(opts = {}) {
             canHarvest: () => true,
             type: 0,
         };
+        // ★ t68：方块属性（门 open / 作物 age …）。真 mineflayer 的 block 也有 `getProperties()`。
+        //   属性通过 `worldOf([[x,y,z,name,props]])` 带进来 —— **不需要也不允许**
+        //   为此回去写 `stubs.blockAt`（那会绕过 strictPoints，把刚装的门又绕开）。
+        const props = worldProps.get(blockKey(fx, fy, fz));
+        if (props && typeof props === 'object') {
+            block.properties = props;
+            block.getProperties = () => props;
+        }
         return typeof dflt === 'function' ? dflt(block) : block;
     }
 

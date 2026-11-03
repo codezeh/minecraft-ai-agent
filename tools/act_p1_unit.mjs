@@ -33,8 +33,12 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
+        // t68：`red_bed 遍地` → **只有目标那格是床**。
+        //   以前任何坐标都返回床 → 读错格子/读错 y 也照样通过；
+        //   现在读错位置会拿到 air → 该红就红。
+        world: worldOf([[0, 64, 1, 'red_bed']]),
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => ({ name: 'red_bed', position: v }),
             time: { isDay: true, timeOfDay: 6000 },
             isRaining: false, thunderState: 0,
         },
@@ -49,7 +53,10 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
-        stubs: { blockAt: (v) => ({ name: 'stone', position: v }), time: { isDay: false } },
+        // t68：`stone 遍地` → **只有目标那格是石头**（读错格子会拿到 air → 可能误走别的分支）
+        world: worldOf([[0, 64, 1, 'stone']]),
+        unloaded: 'air',
+        stubs: { time: { isDay: false } },
     });
     const r = await sleepInBed(bot, { pos: { x: 0, y: 64, z: 1 } });
     if (assertResult('sleepInBed 非床', r) && !r.ok && r.code === 'NO_TARGET') okCase('sleepInBed 不是床 → NO_TARGET', r.code);
@@ -60,7 +67,10 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
-        stubs: { blockAt: (v) => ({ name: 'red_bed', position: v }), time: { isDay: false }, isRaining: false, thunderState: 0 },
+        // t68：床只在**目标那一格**（20,64,0）→ 读错位置会拿到 air
+        world: worldOf([[20, 64, 0, 'red_bed']]),
+        unloaded: 'air',
+        stubs: { time: { isDay: false }, isRaining: false, thunderState: 0 },
     });
     const r = await sleepInBed(bot, { pos: { x: 20, y: 64, z: 0 } });
     if (assertResult('sleepInBed 太远', r) && !r.ok && r.code === 'OUT_OF_REACH') okCase('sleepInBed 太远 → OUT_OF_REACH（走近即可）', r.code);
@@ -71,8 +81,10 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
+        // t68：床只在目标那格
+        world: worldOf([[0, 64, 1, 'red_bed']]),
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => ({ name: 'red_bed', position: v }),
             time: { isDay: false, timeOfDay: 14000 },
             isRaining: false, thunderState: 0,
             sleep: async () => { bot.isSleeping = true; },
@@ -107,7 +119,8 @@ function assertResult(name, r) {
 
 // ── 7. toggleBlock：不是可翻方块 → NO_TARGET ────────────────────────
 {
-    const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 }, stubs: { blockAt: (v) => ({ name: 'stone', position: v }) } });
+    // t68：`stone 遍地` → 只有目标那格是石头
+    const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 }, world: worldOf([[0, 64, 1, 'stone']]), unloaded: 'air' });
     const r = await toggleBlock(bot, { pos: { x: 0, y: 64, z: 1 } });
     if (assertResult('toggleBlock 非可翻', r) && !r.ok && r.code === 'NO_TARGET') okCase('toggleBlock 石头 → NO_TARGET', r.code);
     else badCase('toggleBlock 石头 → NO_TARGET', { code: r.code });
@@ -115,7 +128,8 @@ function assertResult(name, r) {
 
 // ── 8. toggleBlock：太远 → OUT_OF_REACH ────────────────────────────
 {
-    const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 }, stubs: { blockAt: (v) => ({ name: 'oak_door', position: v, getProperties: () => ({ open: false }) }) } });
+    // t68：属性走 `worldOf` 第 5 个元素（不再覆盖 blockAt）
+    const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 }, world: worldOf([[20, 64, 0, 'oak_door', { open: false }]]), unloaded: 'air' });
     const r = await toggleBlock(bot, { pos: { x: 20, y: 64, z: 0 } });
     if (assertResult('toggleBlock 太远', r) && !r.ok && r.code === 'OUT_OF_REACH') okCase('toggleBlock 太远 → OUT_OF_REACH', r.code);
     else badCase('toggleBlock 太远 → OUT_OF_REACH', { code: r.code });
@@ -123,12 +137,14 @@ function assertResult(name, r) {
 
 // ── 9. toggleBlock：状态真的翻转 ────────────────────────────────────
 {
-    let open = false;
+    // t68：属性用**可变对象**（getProperties() 返回同一引用 → 改它就是"门开了"）
+    const doorProps = { open: false };
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
+        world: worldOf([[0, 64, 1, 'oak_door', doorProps]]),
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => ({ name: 'oak_door', position: v, getProperties: () => ({ open }) }),
-            activateBlock: async () => { open = true; },
+            activateBlock: async () => { doorProps.open = true; },
         },
     });
     const r = await toggleBlock(bot, { pos: { x: 0, y: 64, z: 1 } });
@@ -141,8 +157,10 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
+        // t68：属性走 worldOf（`open:false` + activateBlock 不动作 = 永远打不开）
+        world: worldOf([[0, 64, 1, 'oak_door', { open: false }]]),
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => ({ name: 'oak_door', position: v, getProperties: () => ({ open: false }) }),  // 永远 false
             activateBlock: async () => { /* 被红石锁住，没反应 */ },
         },
     });
@@ -168,8 +186,10 @@ function assertResult(name, r) {
     // 这样"认不认得"就有可判据：认得=BLOCKED，不认得=NO_TARGET。
     const lockedWith = (name) => makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
+        // t68：属性走 worldOf；`open:false` = 右键了也没开（activateBlock 不动作）
+        world: worldOf([[0, 64, 1, name, { open: false }]]),
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => ({ name, position: v, getProperties: () => ({ open: false }) }),
             activateBlock: async () => { /* 没反应 */ },
         },
     });
@@ -192,7 +212,8 @@ function assertResult(name, r) {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
         items: [{ name: 'bone_meal', type: 1, count: 3, slot: 0 }],
-        stubs: { blockAt: (v) => ({ name: 'stone', position: v, getProperties: () => ({}) }) },
+        world: worldOf([[0, 64, 1, 'stone', {}]]),
+        unloaded: 'air',
     });
     const r = await boneMeal(bot, { pos: { x: 0, y: 64, z: 1 } });
     if (assertResult('boneMeal 石头', r) && !r.ok && r.code === 'NO_TARGET') {
@@ -205,7 +226,8 @@ function assertResult(name, r) {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
         items: [],
-        stubs: { blockAt: (v) => ({ name: 'wheat', position: v, getProperties: () => ({ age: 3 }) }) },
+        world: worldOf([[0, 64, 1, 'wheat', { age: 3 }]]),
+        unloaded: 'air',
     });
     const r = await boneMeal(bot, { pos: { x: 0, y: 64, z: 1 } });
     if (assertResult('boneMeal 无骨粉', r) && !r.ok && r.code === 'NO_TOOL') {
@@ -218,7 +240,8 @@ function assertResult(name, r) {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
         items: [{ name: 'bone_meal', type: 1, count: 3, slot: 0 }],
-        stubs: { blockAt: (v) => ({ name: 'wheat', position: v, getProperties: () => ({ age: 7 }) }) },
+        world: worldOf([[0, 64, 1, 'wheat', { age: 7 }]]),
+        unloaded: 'air',
     });
     const r = await boneMeal(bot, { pos: { x: 0, y: 64, z: 1 } });
     if (assertResult('boneMeal 已熟', r) && !r.ok && r.code === 'NOT_READY') {
@@ -228,13 +251,15 @@ function assertResult(name, r) {
 
 // ── 13. boneMeal：撒了 age 推进 ────────────────────────────────────
 {
-    let age = 3;
+    // t68：属性用**可变对象**（撒骨粉后 age 3 → 5，同一引用可见）
+    const cropProps = { age: 3 };
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
+        world: worldOf([[0, 64, 1, 'wheat', cropProps]]),
+        unloaded: 'air',
         items: [{ name: 'bone_meal', type: 1, count: 3, slot: 0 }],
         stubs: {
-            blockAt: (v) => ({ name: 'wheat', position: v, getProperties: () => ({ age }) }),
-            activateBlock: async () => { age = 5; },
+            activateBlock: async () => { cropProps.age = 5; },
         },
     });
     const r = await boneMeal(bot, { pos: { x: 0, y: 64, z: 1 } });
@@ -377,8 +402,11 @@ function assertResult(name, r) {
     const seen = new Set();
     const bot = makeFakeBot({
         feet: { x: 0, y: 63, z: 0 },
+        // t68：`永远是 water`（两个分支都返回 water，其实等于常量）→ 只让**目标那格**是水。
+        //   以前读错格子也会拿到 water；现在读错位置拿到 air → 会被"目标不是水"挡下。
+        world: worldOf([[1, 62, 0, 'water']]),
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => ({ name: (/water/.test(String(v?.y)) ? 'water' : 'water'), position: v }),
             setControlState: (k, v) => { if (v) seen.add(k); if (bot.__controls) { if (v) bot.__controls.set(k, true); else bot.__controls.delete(k); } },
             lookAt: async () => {},
         },
@@ -479,8 +507,11 @@ function assertResult(name, r) {
     const seen = new Set();
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
+        // t68：`y===63 就 stone`（不分 x/z）→ **只有目标那一列**的脚下是地板。
+        //   以前读错列（x/z 错）也会拿到 stone；现在会拿到 air → UNSAFE 分支会露出来。
+        world: worldOf([[0, 63, 0, 'stone']]),
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => ({ name: v.y === 63 ? 'stone' : 'air', position: v }),
             lookAt: async () => {},
             setControlState: (k, v) => { if (v) seen.add(k); if (bot.__controls) { if (v) bot.__controls.set(k, true); else bot.__controls.delete(k); } },
         },
@@ -497,8 +528,10 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
+        // t68：同上 —— 地板只在目标那一列 (0,63,1)
+        world: worldOf([[0, 63, 1, 'stone']]),
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => ({ name: v.y === 63 ? 'stone' : 'air', position: v }),
             lookAt: async () => {},
             setControlState: () => {},
         },

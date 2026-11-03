@@ -30,7 +30,7 @@ const MC_PORT = 25566;
 const MS_PORT = 18090;
 const OWNER = 'HEAVENZEH';        // profile 里的 owner（能下命令）
 const AGENT_NAME = 'deepseek';    // profile 里的 bot 名
-const WAIT_MS = 10 * 60 * 1000;
+const WAIT_MS = 12 * 60 * 1000;
 
 let pass = 0, fail = 0;
 const chk = (n, c, i) => { if (c) { pass++; console.log('  PASS  ' + n + (i ? '   ' + i : '')); } else { fail++; console.log('  FAIL  ' + n + '   ' + JSON.stringify(i)); } };
