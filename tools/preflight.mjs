@@ -747,13 +747,13 @@ function namedImportSymbols(line) {
      *   修完就删这条，届时 strict 也应恢复 exit 0。
      */
     const TIGHTENED_NEW_VIOLATIONS = [
-        {
-            file: 'src/agent/library/act_use.js', target: 'src/agent/library/act_container.js',
-            symbols: ['openContainer'],
-            why: '动作调动作的副作用入口：act_use 为"门/箱子"直接 import act_container.openContainer（真开窗，改世界状态）',
-            todo: 'Phase 5.4 / 补动作时（归属 atoms）：容器交互走 flow_store / flow_fetch，act_use 只负责"右键这一下"；'
-                + '或把"打开容器窗口"下沉成输入原子（atom_input_inventory.openWindow）。修完删本条，strict 必须恢复 exit 0',
-        },
+        // ★ 2026-11-03（t44，已销账，列表恢复为空）：
+        //   `act_use.js:15 → act_container.openContainer` 那条已消除 —— 不是加白名单，
+        //   而是**删掉了违规本身**：`act_use.useBlock` 这段"按方块类型分派到门/床/工作站/作物"
+        //   的分派壳，其四类交互早已按 02 §3 拆成独立动作（act_blockuse / act_rest / act_farm /
+        //   act_container），生产代码零调用方，02 §3 也**没有** `use`/`useBlock` 这个动作行
+        //   （line 73 明写 toggleBlock 是「🔀 从 atom_use 拆」）→ 这个壳就是"拆完没清理"的残留。
+        //   删完 strict 恢复 exit 0。以后再出现同层次的真问题，照旧往这里加。
     ];
 
     const knownKey = (v) => `${v.file}|${v.target}`;
