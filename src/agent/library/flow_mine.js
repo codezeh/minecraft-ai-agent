@@ -58,6 +58,24 @@ export const manifest = {
 };
 
 /**
+ * ★★ 2026-11-04（t72）：**常驻诊断，`TRACE=1` 才输出，默认零开销。**
+ *
+ * 为什么改成常驻（原来是"跑前加、跑完删"）：
+ *   "跑完立刻还原打点"和"下一跑还要用打点"是**矛盾**的 —— 第 20 跑就因此拿不到
+ *   `[MINE]` 数据（verify 按硬约束还原了，于是那一跑没有可用诊断）。
+ *   改成手动开关：想有数据就 `TRACE=1` 启动，不用改代码、不会忘、不留残留风险。
+ *
+ * 这四类行是踩过坑才加的，别删：
+ *   `round` 每轮候选数 / feetY  → 暴露过"根本没扫到矿"和"人在错误的高度"
+ *   `goTo`  落点 stand + 结果码 → 暴露过 `stand=null ×130`（裸对象）和"选到树干内部"
+ *   `dig`   结果码              → 暴露过 `INTERNAL 1590`（两条流抢 pathfinder）
+ *   `pickup` mined vs gained    → 暴露过"挖 7 个只捡到 2 个"（掉落物过期）
+ */
+function trace(...args) {
+    if (process.env.TRACE) console.log('[MINE]', ...args);
+}
+
+/**
  * 各矿的理想挖掘高度（Y）。卡片举例：铁 16、钻石 -58。
  * 这张表是"去哪找"的常识，不是魔法数：原版矿脉按 Y 分布，找不到就换高度。
  */
@@ -290,10 +308,14 @@ export async function mine(bot, ore, count = 1, opts = {}) {
                     arriveTol: 2,
                 });
                 if (!walked.ok) {
+                    // ★ t72：常驻诊断（TRACE 守卫，默认零输出零开销）—— 见文件顶部的说明
+                    trace('goTo', 'false', walked.code ?? '', '|', String(walked.message ?? '').slice(0, 100),
+                        '| stand=', JSON.stringify(stand), 'bpos=', block.position.x, block.position.y, block.position.z);
                     if (walked.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
                     lastCode = 'OUT_OF_REACH';            // 走不过去：换下一块
                     continue;
                 }
+                trace('goTo', 'true', 'OK', '| stand=', JSON.stringify(stand));
             }
 
             const dug = await digBlock(bot, { kind: 'block', pos: { x: block.position.x, y: block.position.y, z: block.position.z } });
@@ -316,11 +338,13 @@ export async function mine(bot, ore, count = 1, opts = {}) {
                 //   末尾那次仍然保留（兜底捡漏）。
                 try {
                     if (countAll() - before < want) {
+                        const g0 = countAll() - before;
                         await collectDrops(bot, { x: block.position.x, y: block.position.y, z: block.position.z }, {
                             countFn: () => countAll(),
                             radius: 4,
                             deadlineMs: Math.max(1500, Math.min((ctx.deadline ?? Date.now() + 2500) - Date.now(), 2500)),
                         });
+                        trace('pickup', 'block=', block.name, 'gained', g0, '→', countAll() - before, '/', want);
                     }
                 } catch { /* 捡不到就继续挖（末尾还有一次兜底） */ }
                 continue;
