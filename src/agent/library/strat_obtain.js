@@ -504,7 +504,27 @@ export async function obtain(agent, item, count = 1, deps = {}) {
             keyToId[keyOf(step)] = id;
         }
     }
-    for (const step of pending) {
+    // ★★ 2026-11-04（t75）：**有依赖的子单必须按"深度从深到浅"建**，
+    //   否则成品建的时候它的材料还没建出来 → `keyToId[k]` 取不到 → `.filter(Boolean)`
+    //   把它悄悄丢掉 → `dependsOn` 变空 → 成品立刻可领 → 缺料 → `NO_ITEM` → **BLOCKED（终态）**。
+    //
+    //   真机证据（第 22 跑）：
+    //     obtain wooden_pickaxe  blocked
+    //       └ craft stick c=2        done 4/2
+    //       └ craft wooden_pickaxe   blocked «料不够合 wooden_pickaxe»
+    //     **它名下只有 craft stick，没有 craft oak_planks** ——
+    //     而 `planObtain('wooden_pickaxe')` 实际产出 6 步：
+    //       craft wooden_pickaxe d=1  deps=[oak_planks#2, stick#2]
+    //       craft oak_planks     d=2  deps=[oak_log#3]
+    //       craft stick          d=2  deps=[oak_planks#3]
+    //       craft oak_planks     d=3  deps=[oak_log#4]
+    //       mine oak_log         d=3 / d=4   （无 deps → 第一遍就建好）
+    //     `plan` 的顺序是**成品在前、材料在后**，直接按 plan 顺序建 → 成品的依赖全是 undefined。
+    //
+    //   修法：按 `depth` **降序**建（材料先、成品后；同深度保持原顺序）。
+    //   依赖边永远指向更深的层（deps 的 depth ≥ 自己的 depth+1），所以降序一定够。
+    const pendingOrdered = [...pending].sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0));
+    for (const step of pendingOrdered) {
         const dependsOn = (step.dependsOnKeys ?? []).map((k) => keyToId[k]).filter(Boolean);
         const r = await board.add({
             kind: 'personal',
