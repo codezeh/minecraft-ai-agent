@@ -140,7 +140,9 @@ const keys = (r) => r.steps.map((s) => s.key);
     const children = added.slice(1);
     const hasParent = children.length > 0 && children.every((c) => c.parentId === 'j_1');
     const hasWhy = children.every((c) => typeof c.why === 'string' && c.why.length > 0);
-    const stoneDep = children.find((c) => c.skill === 'craft' && c.args?.item === 'stone_pickaxe');
+    // ★ t64：石镐那步从 `craft` 改成 `obtain`（让 strat_obtain 递归拆出木板/木棍/石头），
+    //   所以这里按 **item** 找，不再按 skill 找 —— 断言的是"石镐那张单带 dependsOn"，与 skill 名无关。
+    const stoneDep = children.find((c) => c.args?.item === 'stone_pickaxe');
     check('⑧ ★ 子单都带 parentId + why；石镐子单带 dependsOn（指向木镐的真实 job id）',
         r.ok && hasParent && hasWhy && Array.isArray(stoneDep?.dependsOn) && stoneDep.dependsOn.length === 1,
         `子单 ${children.length} 张，石镐 dependsOn=${JSON.stringify(stoneDep?.dependsOn)}`);

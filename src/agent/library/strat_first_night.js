@@ -131,6 +131,25 @@ export function planFirstNight(s = {}) {
     }
 
     // ── 2) 工作台 ────────────────────────────────────────────────────
+    //
+    // ★★ 2026-11-03（t64）：**这一步要用 `obtain`，不能用 `craft`。**
+    //
+    //   真机第 9 跑的止损点：
+    //     mine ore=oak_log count=8 → done {"count":8,"want":8}     ← 真挖到 8 个木头
+    //     craft crafting_table     → blocked «NO_ITEM 料不够»       ← 却说没料
+    //   原因：`crafting_table` 的配方要 **4 个 oak_planks**，不是原木
+    //   （minecraft-data 实测：inShape=[[41,41],[41,41]]，41 = oak_planks）。
+    //   而 `flow_craft` 的设计是"缺料返回 NO_ITEM + data.missing，**交给 strat_obtain**"
+    //   —— 但 `first_night` 直接派 `craft`，**没人去把那层中间物备齐**。
+    //
+    //   `strat_obtain` 的递归拆单是好的（实测）：
+    //     crafting_table → craft:crafting_table → craft:oak_planks → mine:oak_log
+    //     wooden_pickaxe → craft:wooden_pickaxe → craft:oak_planks → mine:oak_log
+    //                      → craft:stick → craft:oak_planks → mine:oak_log
+    //
+    //   所以把这几步从 `craft` 改成 `obtain`：交给策略层递归，它自己会拆出
+    //   "先合木板、再合工作台"这层依赖。
+    //   （这也符合 04 §6.3：策略只编排，具体怎么弄到由 `strat_obtain` 决定。）
     if (stoneDone) {
         skipped.push({ key: 'table', why: '已有石镐或更好' });
     } else if (s.placedTable) {
@@ -138,8 +157,8 @@ export function planFirstNight(s = {}) {
     } else if (count('crafting_table') > 0) {
         skipped.push({ key: 'table', why: '背包里已有工作台（不需要合成）' });
     } else {
-        add('table', 'craft', { item: 'crafting_table', count: 1 },
-            '木镐要在工作台上做', ['wood']);
+        add('table', 'obtain', { item: 'crafting_table', count: 1 },
+            '木镐要在工作台上做（obtain 会递归拆出"先合木板"）', ['wood']);
     }
 
     // ── 3) 木镐 ──────────────────────────────────────────────────────
@@ -148,15 +167,17 @@ export function planFirstNight(s = {}) {
     } else if (woodenDone) {
         skipped.push({ key: 'wooden_pickaxe', why: '已经有木镐' });
     } else {
-        add('wooden_pickaxe', 'craft', { item: 'wooden_pickaxe', count: 1 },
-            '要先有木镐才能挖石头', ['table']);
+        add('wooden_pickaxe', 'obtain', { item: 'wooden_pickaxe', count: 1 },
+            '要先有木镐才能挖石头（obtain 会递归拆出木板和木棍）', ['table']);
     }
 
     // ── 4) 石镐 ──────────────────────────────────────────────────────
     if (stoneDone) {
         skipped.push({ key: 'stone_pickaxe', why: '已经有石镐或更好' });
     } else {
-        add('stone_pickaxe', 'craft', { item: 'stone_pickaxe', count: 1 },
+        // ★ t64：同样改 obtain —— 石镐要 3 个 cobblestone + 2 个 stick，
+        //   stick 又来自 planks，planks 又来自 log。交给 strat_obtain 递归拆。
+        add('stone_pickaxe', 'obtain', { item: 'stone_pickaxe', count: 1 },
             '石镐是第一夜的核心工具（挖石头/挡怪）', ['wooden_pickaxe']);
     }
 
