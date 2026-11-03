@@ -24,6 +24,18 @@ import { ok, fail } from './contract.js';
 import { digBlock, isDiggable, canDigWithInventory, canDigReason } from './act_dig.js';
 import { findBlocks } from './query_perceive.js';
 import { countItem } from './query_perceive.js';
+// ★★ 2026-11-04（t70）：**必须用 `query_perceive.blockAt`，不能用 `bot.blockAt(裸对象)`。**
+//
+//   mineflayer 的 `bot.blockAt(point)` 内部会调 `point.floored()` —— 那是 **Vec3 的方法**，
+//   传裸 `{x,y,z}` 会**抛错**（或被 catch 吞成 null）。
+//
+//   真机证据（第 17 跑）：`[MINE] goTo ... stand= null` **×130**，`stand={...}` **×0** ——
+//   而我用 verify 实测的同一份四邻数据在离线跑 `findStandNear`，**能正确返回 {y:-59}**。
+//   也就是说：**逻辑对，读方块的方式错。**
+//
+//   `query_perceive.blockAt(bot, pos)` 里面已经 `vec(pos)` 包好了 Vec3 —— 复用它，
+//   也顺便只有"一处知道怎么读方块"（今晚"同一件事只许一个名字"）。
+import { blockAt as readBlock } from './query_perceive.js';
 import { mapDirOf } from './bot_paths.js';
 import { goTo } from './nav_core.js';
 import { collectDrops } from './flow_pickup.js';
@@ -126,9 +138,11 @@ export function findStandNear(bot, pos) {
                 for (let dz = -3; dz <= 3; dz += 1) {
                     if (dx === 0 && dz === 0 && dy === 0) continue;   // 方块自身不算落点
                     const x = bx + dx, y = by + dy, z = bz + dz;
-                    const feet = bot.blockAt?.({ x, y, z }, false);
+                    // ★ t70：用 `readBlock`（query_perceive，内部包 Vec3）
+                    //   而不是 `bot.blockAt(裸对象)` —— 后者对裸对象会抛错/返回 null。
+                    const feet = readBlock(bot, { x, y, z });
                     if (!feet || !/^(air|cave_air|void_air)$/.test(feet.name)) continue;
-                    const below = bot.blockAt?.({ x, y: y - 1, z }, false);
+                    const below = readBlock(bot, { x, y: y - 1, z });
                     if (!below) continue;
                     if (/^(air|cave_air|void_air)$/.test(below.name)) continue;
                     if (/^(water|lava)$/.test(below.name)) continue;
