@@ -371,8 +371,23 @@ export async function obtain(agent, item, count = 1, deps = {}) {
 
     // 没有板 → 只能把计划交回去（不执行，也不假装下了单）
     if (!board?.add) {
+        // ★★ 2026-11-03（t52）：**这条也缺 `want`，而且 `count` 用了请求数** ——
+        //   我上一轮（d09bfee）只修了「已经够了」和「真的下了单」两条 return，
+        //   **漏了这条 noBoard 分支** → `want` 仍是 null → `finish()` 规则③
+        //   `want <= 0` 成立 → `completed = true` → **仍然假完成**。
+        //
+        //   实测后果（verify 真 agent 跑出来的，不是我推的）：
+        //     10 分钟内堆了 **105 张一模一样的 `obtain:stone_pickaxe`**，
+        //     每张 `progress={"count":1,"want":null}` 立刻 done → `jobBusy` 立刻变 false
+        //     → 下一拍 idle_planner 再下一张 → **无限循环**。
+        //
+        //   而 idle_planner 恰恰最常走这条（它下单时 ctx 里的 board.add 不保证可用），
+        //   所以**漏这条比漏别的更危险**。
+        //
+        //   口径与另两条 return 统一：`count` = 背包真值，`want` = 请求数。
+        const gotNow = countInventory(agent)[item] ?? 0;
         return ok({
-            item, count: Number(count), jobs: [], plan: planned.plan,
+            item, count: gotNow, want: Number(count), jobs: [], plan: planned.plan,
             gaps: planned.gaps, noBoard: true,
             note: '没有任务板：只返回拆单计划，没有真的下单',
         });
