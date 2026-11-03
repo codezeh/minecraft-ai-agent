@@ -158,6 +158,24 @@ export async function holdDig(bot, block, opts = {}) {
 
     const t0 = Date.now();
     let digErr = null;
+    // ★★ t87：**并发 dig 探测器。**
+    //
+    //   隔离实验（verify 第 32 跑）证明：**裸调 `bot.dig` 40 次，abort 率 0%**；
+    //   而真实跑 `Digging aborted` ~2554-3354、`dig OK` 只有 3-25。
+    //   → `bot.dig` 本身无罪，**责任在调用方**。
+    //
+    //   mineflayer 的 `dig()` 开头有 `if (bot.targetDigBlock) bot.stopDigging()`
+    //   —— **并发 dig 会互相 cancel**，报的就是 `Digging aborted`。
+    //
+    //   这行打点就是判据：**如果进入时 `targetDigBlock` 已经非 null，
+    //   说明有另一个 dig 在跑，我们正要把它 cancel 掉。**
+    if (process.env.TRACE) {
+        const busy = bot.targetDigBlock?.name ?? null;
+        const keys = Object.keys(bot.controlState ?? {}).filter((k) => bot.controlState[k]);
+        const goal = bot.pathfinder?.goal ? 'yes' : 'no';
+        console.log('[DIG] enter block=', block.name, 'targetDigBlock=', busy,
+            'keys=', JSON.stringify(keys), 'goal=', goal, 'caller=', bot.__digCaller ?? '?');
+    }
     const digging = bot.dig(block, true).catch((e) => { digErr = e; });
 
     // 中断 / 超时二选一先到者：都要 stopDigging，否则客户端会一直举着手
