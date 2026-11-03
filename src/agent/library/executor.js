@@ -27,7 +27,7 @@ import { digBlock, isDiggable, canDigWithInventory } from './act_dig.js';
 import { climbUp, climbDown, isClimbable } from './act_climb.js';
 // 坠落/虚空反射（2026-11-02）：落点下方没支撑就拒绝走过去
 import { fallRisk } from './query_safe.js';
-import { scanSphere, stats3d, columnSurfaces, T } from './terrain3d.js';
+import { scanSphere, stats3d, columnSurfaces, T, forgetSurface, noteDugSurface, classifyBlock } from './terrain3d.js';
 import { plan3D } from './path_3d.js';
 import { ensureTraced } from './trace_bus.js';
 import { findScaffoldItem } from './scaffold_blocks.js';
@@ -226,6 +226,11 @@ export async function execStep(bot, step, opts = {}) {
                     return { ok: false, code: r.code ?? 'DIG_FAIL', message: `挖 ${above.name} 失败` };
                 }
                 dug++;
+                // ★★ 2026-11-03（t35）：**挖成功后立刻更新 terrain3d（局部，不整片重扫）**。
+                //   真机证据：dig 报 OK、真实世界已变 air，但 `columnSurfaces` 仍说 SOLID
+                //   → 下一轮规划看到的还是"墙没动" → 反复挖同一处 → 4 格后库和现实对不上
+                //   → plan-fail → NO_PATH。
+                updateSurfAfterDig(mapDir, bx, y + 1, bz, bot);
                 onEvent({ type: 'dig', x: bx, z: bz, y: y + 1, name: above.name });
             }
             if (!sameColumn) {
@@ -286,6 +291,7 @@ export async function execStep(bot, step, opts = {}) {
                     return { ok: false, code: r.code ?? 'DIG_FAIL', message: `向下挖 ${below.name} 失败` };
                 }
                 dug++;
+                if (r.ok) updateSurfAfterDig(mapDir, bx, y - 1, bz, bot);
                 onEvent({ type: 'digdown', y: y - 1, name: below.name });
             }
             await sleep(250);
@@ -994,4 +1000,36 @@ export function describeStore(mapDir) {
     } catch (e) {
         return `3D 库读不到：${e.message}`;
     }
+}
+
+/**
+ * ★★ 2026-11-03（t35）：挖掉一格后**局部更新 terrain3d**。
+ *
+ * 真机证据（这是本函数存在的全部理由）：
+ *   `dig-through` 场景里 `dig` 报 **OK**、真实世界那格已经 air，
+ *   但 `columnSurfaces` 读出来**仍然说 SOLID** → 下一轮规划看到的还是"墙没动"
+ *   → 反复挖同一处 → 挖 4 格后库与现实彻底对不上 → `plan-fail` → **NO_PATH**。
+ *
+ * 为什么是"局部更新"而不是"整片重扫"：
+ *   重扫是 O(半径³) 的块操作，每挖一格都重扫太贵；
+ *   而且实测**连重扫都救不了**（t35 报告：rescan 后仍 NO_PATH）——
+ *   因为重扫写回的是"顶面"，而她要的是"墙身被挖穿"这件事。
+ *
+ * 失败不影响挖矿本身（更新库是附属动作，不许把它带崩）。
+ */
+function updateSurfAfterDig(mapDir, x, y, z, bot) {
+    if (!mapDir) return;
+    try {
+        const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
+        forgetSurface(mapDir, fx, fy, fz);
+        // 挖掉后**下面那格**成为新的落脚面（用真实世界的方块重新分类）
+        const below = bot?.blockAt?.(new Vec3(fx, fy - 1, fz), false);
+        if (below) {
+            const t = classifyBlock(below.name);
+            // 空气不算面；其余照实登记
+            if (t !== undefined && t !== null && !/^(air|cave_air|void_air)$/.test(below.name)) {
+                noteDugSurface(mapDir, fx, fy, fz, t);
+            }
+        }
+    } catch { /* 更新失败不许影响挖矿结果 */ }
 }

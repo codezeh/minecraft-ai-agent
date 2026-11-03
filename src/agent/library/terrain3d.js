@@ -544,6 +544,52 @@ export function readFails(baseDir, opts = {}) {
 }
 
 /**
+ * ★★ 2026-11-03（t35 打点定位）：**挖掉一格后局部更新 surf 表**。
+ *
+ * 为什么必须做（真机证据）：
+ *   `dig-through` 场景里她 `dig` **成功**了（`code=OK`），真实世界那格已经变成 air，
+ *   但 `columnSurfaces` 读出来**仍然说那里是 SOLID** —— 库里没跟着变。
+ *   于是下一轮规划看到的还是"墙没动"，反复挖同一个位置，
+ *   挖完 4 格后库和现实彻底对不上 → `plan-fail` → **NO_PATH**。
+ *
+ * 为什么不能靠"整片重扫"：重扫是 O(半径³) 的块操作，每次挖都重扫太贵；
+ * 而且实测**连重扫都救不了**（见 t35 报告：rescan 后仍 NO_PATH，因为重扫写回的是"顶面"，
+ * 而她要的是"墙身被挖穿"这件事）。局部更新才是对的粒度。
+ *
+ * 语义：删掉 (x,y,z) 这一格的 surf 记录（它现在是空气，不再是"面"）。
+ *
+ * @param {string} baseDir
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @returns {number} 删掉的行数
+ */
+export function forgetSurface(baseDir, x, y, z) {
+    try {
+        const db = dbFor(baseDir);
+        const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
+        const r = db.prepare('DELETE FROM surf WHERE x = ? AND z = ? AND y = ?').run(fx, fz, fy);
+        return Number(r?.changes ?? 0);
+    } catch {
+        return 0;      // 更新失败不许把挖矿本身带崩
+    }
+}
+
+/** 挖掉 (x,y,z) 后，把**下面那格**登记成新的面（挖掉一层后新的落脚面）。 */
+export function noteDugSurface(baseDir, x, y, z, t) {
+    try {
+        const db = dbFor(baseDir);
+        const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
+        db.prepare('DELETE FROM surf WHERE x = ? AND z = ? AND y >= ?').run(fx, fz, fy);
+        if (Number.isFinite(t)) {
+            db.prepare('INSERT OR REPLACE INTO surf (x, z, y, t) VALUES (?, ?, ?, ?)')
+                .run(fx, fz, fy - 1, t);
+        }
+        return true;
+    } catch { return false; }
+}
+
+/**
  * 清掉过期的失败记忆（防止 fail 表无限增长）。
  *
  * 为什么需要显式清理：TTL 只在**读**的时候过滤，行本身一直在表里，
