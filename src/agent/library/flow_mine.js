@@ -258,6 +258,10 @@ export async function mine(bot, ore, count = 1, opts = {}) {
             break;
         }
         sawAnyOre = true;
+        // ★ t78：`round` 打点补回来（第 24 跑 verify 报它丢了）——
+        //   它是判断"有没有扫到树 / 人在不在正确高度"的关键
+        trace('round', 'n=', round, 'ore=', ore, 'candidates=', candidates.length,
+            'feetY=', Math.round(bot.entity.position.y), 'count=', countAll() - before, '/', want);
 
         // 按距离排序，逐个试
         const self = bot.entity.position;
@@ -312,13 +316,38 @@ export async function mine(bot, ore, count = 1, opts = {}) {
                     trace('goTo', 'false', walked.code ?? '', '|', String(walked.message ?? '').slice(0, 100),
                         '| stand=', JSON.stringify(stand), 'bpos=', block.position.x, block.position.y, block.position.z);
                     if (walked.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
-                    lastCode = 'OUT_OF_REACH';            // 走不过去：换下一块
-                    continue;
+                    // ★★ 2026-11-04（t78）：**走不动 ≠ 够不着 —— 先重新量一次距离。**
+                    //
+                    //   真机证据（第 24 跑）：`NO_REACH ×139`，其中
+                    //     「还差 5 格，最后原因 STUCK」×67
+                    //     「还差 4 格，最后原因 STUCK」×36
+                    //     「还差 6 格，最后原因 STUCK」×17
+                    //   `stand` 全对（0 个 null）→ 落点没问题，是**走过去时被树叶/树干物理卡住**。
+                    //
+                    //   而循环的判据是 `if (d > 4) { goTo }` ——
+                    //   **她本来离 8 格，`goTo` 已经把她带到 3-6 格了**，
+                    //   这时 d 已经 ≤4（够得着！），可代码却直接 `continue` 跳过这一块，
+                    //   于是"白走一趟 + 白丢一块"。
+                    //
+                    //   正确做法：**走不动就重新量距离，够得着就直接挖**。
+                    //   够不着才真的换下一块（保持原来的 OUT_OF_REACH 语义）。
+                    const dNow = block.position.distanceTo(bot.entity.position);
+                    if (dNow <= 4) {
+                        trace('goTo', 'stuck-but-in-reach', 'dNow=', dNow.toFixed(1), '→ 直接挖');
+                        // 落到下面的 digBlock（不 continue）
+                    } else {
+                        lastCode = 'OUT_OF_REACH';            // 真够不着：换下一块
+                        continue;
+                    }
+                } else {
+                    trace('goTo', 'true', 'OK', '| stand=', JSON.stringify(stand));
                 }
-                trace('goTo', 'true', 'OK', '| stand=', JSON.stringify(stand));
             }
 
             const dug = await digBlock(bot, { kind: 'block', pos: { x: block.position.x, y: block.position.y, z: block.position.z } });
+            // ★ t78：`dig` 打点补回来（第 24 跑 verify 报它丢了）
+            trace('dig', dug.ok ? 'true' : 'false', dug.code ?? 'OK', block.name,
+                'd=', block.position.distanceTo(bot.entity.position).toFixed(1), 'mined=', mined, '/', want);
             if (dug.ok) {
                 mined++;
                 // ★★ 2026-11-04（t72）：**每挖一块就顺手捡，别攒到最后一次性捡。**
