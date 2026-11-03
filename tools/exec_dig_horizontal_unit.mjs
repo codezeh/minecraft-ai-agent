@@ -26,9 +26,17 @@ function botAt(x, y, z, extra = {}) {
     const bot = makeFakeBot({
         items: [PICK],
         world: worldOf(extra.world ?? []),
+        // ★ 2026-11-03（t46）：邻列 dig 挖通后 executor 会调 `stepInto` 真的走进隧道。
+        //   假件默认"只记录不移动" → stepInto 必然超时 → 这些用例会假红。
+        //   打开可选的"走一格"模拟（只模拟水平相邻一格，不做物理/跳跃）。
+        walkOnForward: true,
         ...(extra.opts ?? {}),
     });
-    bot.entity.position = new Vec3(x, y, z);
+    // ★ 2026-11-03（t46）：原来这里是 `new Vec3(x, y, z)` —— **整数坐标不是她真实的位置**。
+    //   真机 bot 永远站在**格心**（x/z 带 .5）。放整数会让"到隔壁一格"的距离算成
+    //   hypot(1.5, 0.5)=1.58 > STEP_ADJACENT_MAX(1.5) → stepInto 报"不是相邻一格"，
+    //   于是"挖开通道后走进去"在假件里必然失败（假红）。
+    bot.entity.position = new Vec3(x + 0.5, y, z + 0.5);
     return bot;
 }
 

@@ -130,6 +130,19 @@ export function makeFakeBot(opts = {}) {
         gotoError = null,
         placeAs = null,
         username = 'fixture',
+        // ★ 2026-11-03（t46）：**可选**的"走一格"模拟。
+        //
+        // 默认 `false` —— 保持本文件原有的"只记录不移动"语义，不影响任何既有用例。
+        // 打开后：`lookAt(point)` 记住目标格 → 随后 `setControlState('forward', true)`
+        // 就把 entity.position **挪进那一格**（并记 `bot.__walked`）。
+        //
+        // 为什么需要它：`act_step.stepInto` 的机制是 lookAt 格心 → holdKey('forward')
+        // 轮询 `insideCell(p, target)`。真实 bot 靠物理走过去；假件原来两处都是空桩，
+        // 于是 stepInto **必然 TIMEOUT**。凡是"挖开通道后要走进去"的用例（t46 隧道）
+        // 在假件里都只能得到假红 —— 那是"假件不真"，不是产品错。
+        //
+        // 只模拟**水平相邻一格**（stepInto 的全部需求），不做物理/重力/跳跃。
+        walkOnForward = false,
         stubs = {},
     } = opts;
 
@@ -218,13 +231,30 @@ export function makeFakeBot(opts = {}) {
         },
         equip: async (item, dest) => { bot.__equips.push({ item, dest }); bot.heldItem = item; return item; },
         unequip: async () => { bot.heldItem = null; },
-        lookAt: async () => { },
+        // ★ walkOnForward 打开时：记住"在看哪一格"，供 setControlState('forward') 走过去用。
+        lookAt: async (point) => { if (walkOnForward && point) bot.__lookTarget = { x: point.x, y: point.y, z: point.z }; },
         look: async () => { },
         chat: (msg) => { bot.__chats.push(String(msg)); },
         activateBlock: async () => { },
         toss: async () => { },
 
-        setControlState: (k, v) => { if (v) bot.__controls.set(k, true); else bot.__controls.delete(k); },
+        // ★ walkOnForward：按下 forward 就把她挪进"正在看的那一格"（模拟走一格）。
+        //   只处理**水平相邻一格**（stepInto 的全部需求），不做重力/跳跃/多格行走。
+        setControlState: (k, v) => {
+            if (v) bot.__controls.set(k, true); else bot.__controls.delete(k);
+            if (walkOnForward && v && k === 'forward') {
+                const t = bot.__lookTarget;
+                const cur = bot.entity.position;
+                if (t && cur) {
+                    const tx = Math.floor(t.x), ty = Math.floor(t.y) - 1, tz = Math.floor(t.z);
+                    const d = Math.hypot(tx + 0.5 - cur.x, tz + 0.5 - cur.z);
+                    if (d > 0 && d <= 1.6) {           // 只走一格，远了不动（不是无限瞬移）
+                        bot.entity.position = new Vec3(tx + 0.5, ty, tz + 0.5);
+                        bot.__walked.push({ x: tx, y: ty, z: tz });
+                    }
+                }
+            }
+        },
         getControlState: (k) => bot.__controls.get(k),
         clearControlStates: () => bot.__controls.clear(),
         waitForTicks: async () => { },
@@ -257,6 +287,9 @@ export function makeFakeBot(opts = {}) {
         __goals: [],
         __controls: new Map(),
         __moved: false,
+        // walkOnForward 的观测点：走过哪几格 / 当前在看哪一格
+        __walked: [],
+        __lookTarget: null,
     };
 
     // placeBlock 的别名：有的地方写 bot.place，有的写 bot.placeBlock

@@ -274,6 +274,23 @@ export async function execStep(bot, step, opts = {}) {
                     data: { dug, blockedAt: { x: bx, y: Math.floor(p.y), z: bz } },
                 };
             }
+            // ★★ 2026-11-03（t47）：**隧道挖通了，必须真的走进去**。
+            //
+            // 为什么（t46 真机数据）：本分支原来 `return ok({dug})` 就结束了，**没把她移进那格**。
+            // 而 walkTo 用 `moved = |Δpos|` 判断"有没有推进" → 隧道步 ok 但 moved≈0；
+            // 计划里下一条边是按"她已经在隧道格里"规划的 → 实际位置不符 →
+            // step-into 失败 → 重规划 → 真机表现 `oscillation:1` + `scan3d:5` + NO_REACH。
+            // 所以不是"够不到"，是"挖通了但没走进去"。
+            const { stepInto } = await import('./act_step.js');
+            const intoCell = { x: bx, y: Math.floor(p.y), z: bz };
+            const si = await stepInto(bot, intoCell, { timeoutMs: 1200 });
+            if (!si.ok) {
+                return {
+                    ok: false, code: si.code ?? 'NO_REACH',
+                    message: `隧道挖通了但走不进去：${si.message ?? ''}`,
+                    data: { dug, cell: intoCell },
+                };
+            }
         }
 
         if (sameColumn && y < targetY) {

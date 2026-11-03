@@ -35,8 +35,11 @@ const key = (x, y, z) => `${x},${y},${z}`;
 function makeBot({ world, pos = { x: 0, y: 64, z: 0 } } = {}) {
     const dugBlocks = [];        // 记录 bot.dig 实际挖的坐标
     const controlStates = [];
+    // ★ 2026-11-03（t46）：脚位要落在**格心**（x/z 带 .5）—— 真机 bot 永远在格心。
+    //   放整数会让"到隔壁一格"算成 hypot(1.5,0.5)=1.58 > STEP_ADJACENT_MAX(1.5)
+    //   → stepInto 在"不是相邻一格"就返回了，邻列走的用例会假红。
     const bot = {
-        entity: { position: new Vec3(pos.x, pos.y, pos.z), onGround: true, height: 1.8, eyeHeight: 1.62 },
+        entity: { position: new Vec3(pos.x + 0.5, pos.y, pos.z + 0.5), onGround: true, height: 1.8, eyeHeight: 1.62 },
         inventory: {
             items: () => [{ name: 'diamond_pickaxe', count: 1, type: 1, slot: 36 }],
         },
@@ -65,7 +68,22 @@ function makeBot({ world, pos = { x: 0, y: 64, z: 0 } } = {}) {
             if (typeof defaultVal === 'function') return defaultVal(block);
             return block;
         },
-        setControlState: (s, on) => { controlStates.push([s, on]); },
+        // ★ 2026-11-03（t46）：邻列 dig 挖通后 executor 会调 `stepInto` 真的走进隧道，
+        //   它靠 lookAt(格心) + setControlState('forward') + 轮询 `insideCell`。
+        //   这里补最小模拟（只走水平相邻一格）：记住 lookAt 目标，按下 forward 就挪进去。
+        //   不补的话这两条邻列用例会假红（挖本身是成功的）。
+        lookAt: async (point) => { if (point) bot.__lookTarget = { x: point.x, y: point.y, z: point.z }; },
+        setControlState: (s, on) => {
+            controlStates.push([s, on]);
+            if (on && s === 'forward' && bot.__lookTarget) {
+                const t = bot.__lookTarget;
+                const cur = bot.entity.position;
+                const tx = Math.floor(t.x), ty = Math.floor(t.y) - 1, tz = Math.floor(t.z);
+                if (Math.hypot(tx + 0.5 - cur.x, tz + 0.5 - cur.z) <= 1.6) {
+                    bot.entity.position = new Vec3(tx + 0.5, ty, tz + 0.5);
+                }
+            }
+        },
         equip: async () => { },
         pathfinder: { stop: () => { }, setMovements: () => { }, goals: {} },
         // 用来判断有没有被"垫高"
@@ -80,6 +98,13 @@ function makeBot({ world, pos = { x: 0, y: 64, z: 0 } } = {}) {
 function baseWorld(extra = []) {
     const w = new Map();
     w.set(key(0, 63, 0), 'stone');      // 她脚下
+    // ★ 2026-11-03（t46）：邻列 `(1,63,0)` 也要有地板。
+    //   邻列 dig 挖通后 executor 会 `stepInto` 走进去，而 stepInto 会检查
+    //   "落点脚下有没有东西"（防按前进走进空气掉下去）。
+    //   本文件的 `blockAt` 对未登记格返回 **'air'**，所以这里若不给地板，
+    //   stepInto 会正确地报 UNSAFE —— 那是**场地缺地板**，不是产品错。
+    //   （真机上她本来就是沿地面走到墙边，脚下方必然是实心。）
+    w.set(key(1, 63, 0), 'stone');
     for (const [x, y, z, name] of extra) w.set(key(x, y, z), name);
     return w;
 }
