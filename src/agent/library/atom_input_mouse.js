@@ -110,6 +110,31 @@ export async function holdDig(bot, block, opts = {}) {
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!block || !block.position) return fail('NO_TARGET', 'holdDig 需要一个方块对象');
 
+    // ★★ 2026-11-04（t80）：**挖之前必须让导航静默 —— 这是挖矿的前提，由这里保证。**
+    //
+    //   真机证据（第 26 跑，`[MINE] dig` 的 err= 分布）：
+    //     `Digging aborted` × **1622**（99.9%），成功仅 2 次
+    //     且 `d= 1.2`（她就在方块边上）也 abort → **只能是 dig 开始后被外部中止**
+    //   同一跑 `goTo` 的失败全是 `INTERNAL` —— **同一个底层原因：运动被并发打断**。
+    //
+    //   来源：t72 把 `collectDrops` 改成"每挖一块就跑一次"，而它用 `moveTo`（pathfinder）。
+    //   `withNav` 只保证了**不并发**，但 `collectDrops` 返回后 **pathfinder 的 goal 还挂着**，
+    //   于是下一块 `bot.dig` 一开始就被"还有移动目标"打断 → `Digging aborted`。
+    //
+    //   **修法不放在调用方**（那样每个流都要记得清，今晚这类"传参漏了"已 4 例），
+    //   而是放在这里：**任何 dig 之前都强制静默**。这是挖矿的固有前提，
+    //   不是某个 flow 的责任。
+    //
+    //   ★ 只在"确实有东西要清"时才动手（有 pathfinder goal / controlState 非空），
+    //     不无条件调 —— 一是没必要，二是**假 bot 上没有这些东西**，
+    //     无条件调会让"数 clearControlStates 次数"这种观测点失真。
+    try {
+        const hasGoal = !!bot.pathfinder?.goal;
+        const keysDown = Object.keys(bot.controlState ?? {}).some((k) => bot.controlState[k]);
+        if (hasGoal) { bot.pathfinder.setGoal(null); bot.pathfinder.stop?.(); }
+        if (keysDown) bot.clearControlStates?.();
+    } catch { /* 假 bot / 没装 pathfinder 就算了 */ }
+
     const heldId = bot?.heldItem ? bot.heldItem.type : null;
     const budget = Number.isFinite(digTimeMs)
         ? digTimeMs

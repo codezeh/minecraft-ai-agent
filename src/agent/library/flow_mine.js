@@ -346,8 +346,14 @@ export async function mine(bot, ore, count = 1, opts = {}) {
 
             const dug = await digBlock(bot, { kind: 'block', pos: { x: block.position.x, y: block.position.y, z: block.position.z } });
             // ★ t78：`dig` 打点补回来（第 24 跑 verify 报它丢了）
+            // ★ t79：把 `dug.message` 也打出来 —— 第 25 跑 `dig false INTERNAL ×5403`（d=1.2 够得着）
+            //   但没打 message，看不到底层原因。`act_dig` 把 `holdDig` 的 error.message 原样带出来，
+            //   那正是我们要的（例如 "goal was changed" / "block is not diggable" / 服务端取消）。
             trace('dig', dug.ok ? 'true' : 'false', dug.code ?? 'OK', block.name,
-                'd=', block.position.distanceTo(bot.entity.position).toFixed(1), 'mined=', mined, '/', want);
+                'd=', block.position.distanceTo(bot.entity.position).toFixed(1),
+                'mined=', mined, '/', want,
+                '| err=', String(dug.message ?? '').slice(0, 120),
+                '| dataErr=', String(dug.data?.error ?? '').slice(0, 120));
             if (dug.ok) {
                 mined++;
                 // ★★ 2026-11-04（t72）：**每挖一块就顺手捡，别攒到最后一次性捡。**
