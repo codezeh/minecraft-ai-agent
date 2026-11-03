@@ -207,7 +207,20 @@ export async function execStep(bot, step, opts = {}) {
         let dug = 0;
         let liquidBlocked = false;
         while (y < targetY && dug < 32) {
-            const above = blockAt(bot, bx, y + 1, bz);
+            // ★★ 2026-11-03（t40）：**邻列要从脚位开始挖**，同列保持 y+1 不变。
+            //
+            // 为什么（真机 + 离线推演双重证据）：
+            //   她身高 1.8，横向钻洞需要 2 格高（脚位格 + 头格）都被挖掉。
+            //   而原来的循环 `above = blockAt(bx, y + 1, bz)` **永远挖不到 y 本身**
+            //   （她自己脚所在的格）→ "邻列横向挖隧道"永远开不出人形通道
+            //   → dig-through 挖 4 格却 NO_PATH（t35 打点定位）。
+            //   离线推演四种 step.y：-61→[]、-60→[-59]、-59→[-59,-58]、-56→[-59..-55]，
+            //   **没有任何取值能挖掉脚位格** —— 所以在 executor 里改是唯一出路。
+            //
+            // 为什么不改同列：同列 dig 的语义是"往上挖穿天花板"（挖 y+1 才是对的），
+            //   `digdown` 5/5 就靠它。**同列分支一个字节都不许动**（用户明确要求）。
+            const cellY = sameColumn ? y + 1 : y;
+            const above = blockAt(bot, bx, cellY, bz);
             if (!above) break;
             if (IS_LIQUID.test(above.name)) {
                 // 头顶是液体：不该"挖"，该"穿过"。但**不能因此报成功**——
@@ -221,7 +234,7 @@ export async function execStep(bot, step, opts = {}) {
                 if (!isDiggable(above)) {
                     return { ok: false, code: 'NO_TOOL', message: `挖不动 ${above.name}（没有合适的工具）` };
                 }
-                const r = await digBlock(bot, { kind: 'block', pos: { x: bx, y: y + 1, z: bz } });
+                const r = await digBlock(bot, { kind: 'block', pos: { x: bx, y: cellY, z: bz } });
                 if (!r.ok && !/air/i.test(String(r.message ?? ''))) {
                     return { ok: false, code: r.code ?? 'DIG_FAIL', message: `挖 ${above.name} 失败` };
                 }
@@ -230,8 +243,8 @@ export async function execStep(bot, step, opts = {}) {
                 //   真机证据：dig 报 OK、真实世界已变 air，但 `columnSurfaces` 仍说 SOLID
                 //   → 下一轮规划看到的还是"墙没动" → 反复挖同一处 → 4 格后库和现实对不上
                 //   → plan-fail → NO_PATH。
-                updateSurfAfterDig(mapDir, bx, y + 1, bz, bot);
-                onEvent({ type: 'dig', x: bx, z: bz, y: y + 1, name: above.name });
+                updateSurfAfterDig(mapDir, bx, cellY, bz, bot);
+                onEvent({ type: 'dig', x: bx, z: bz, y: cellY, name: above.name });
             }
             if (!sameColumn) {
                 // 邻列：只负责把那一列挖通，站位交给后续的 walk 步骤。
@@ -243,6 +256,24 @@ export async function execStep(bot, step, opts = {}) {
             const moved = await stepUp(bot, { onEvent });
             if (!moved.ok) return moved;
             y = Math.floor(bot.entity.position.y);
+        }
+
+        // ★★ 2026-11-03（t40）：**邻列的假成功守卫**。
+        //
+        // 旧代码在"循环一次都没跑"时（step.y 使 targetY <= 脚位）直接 `return ok({dug:0})`
+        // —— 她脚位那格明明还是实心，却报成功 → 上层以为推进了 → 反复重规划 → **死循环**。
+        // 这正是 A5 里刚花力气清除的那一类"假成功"，不许再踩回去。
+        //
+        // 判据：邻列必须真的把**脚位格**挖成空气，否则如实报失败。
+        if (!sameColumn) {
+            const feetCell = blockAt(bot, bx, Math.floor(p.y), bz);
+            if (feetCell && !IS_AIR.has(feetCell.name)) {
+                return {
+                    ok: false, code: 'DIG_FAIL',
+                    message: `邻列 (${bx},${Math.floor(p.y)},${bz}) 的脚位格还是 ${feetCell.name}（通道没开出来）`,
+                    data: { dug, blockedAt: { x: bx, y: Math.floor(p.y), z: bz } },
+                };
+            }
         }
 
         if (sameColumn && y < targetY) {
