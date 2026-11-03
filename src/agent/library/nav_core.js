@@ -35,6 +35,61 @@ function finiteXZ(t) {
     return !!t && Number.isFinite(t.x) && Number.isFinite(t.z);
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// ★★ 2026-11-03（t66）：**同一时刻只允许一个"驱动者"用 pathfinder**。
+//
+//   真机证据（verify 第 13 跑，全量日志）：
+//     [MINE] dig false INTERNAL      × 1590     ← 底层是 "The goal was changed"
+//     [MINE] dig false OUT_OF_REACH  ×  320
+//     [MINE] dig true  OK            ×    1     ← 只成功 1 次
+//     [walkTo] 失败: INTERNAL The goal was changed before it could be completed!
+//
+//   `[MINE] round` 行揭示了并发源：**两条流在抢同一个 pathfinder**
+//     round 0  ore=cobblestone feetY=8 → -23 → -51   （idle 的 obtain stone_pickaxe 在下潜）
+//     round 38 ore=oak_log   feetY=-56 candidates=29 （first_night 的 obtain oak_log 到了树区）
+//   一个在 goTo 下潜点、另一个在 goTo 树下 → **每次都被对方改掉 goal** → dig 全部 INTERNAL。
+//
+//   为什么前几轮偶尔能成（8/8、34/8）：那时另一条流没恰好撞上。
+//
+//   这和 M2 的 D18「两个流程同时驱动身体」是**同一类问题，只是发生在导航层**。
+//   控制层当年靠"只有一个动作在跑"解决；导航层一直没这道闸。
+//
+// 语义：
+//   · `owner` 缺省用 `'adhoc'`（没有任务单的调用）。
+//   · **可重入**：同一个 owner 再次进来直接放行（流程内部可能连调 goTo）。
+//   · 不同 owner → **排队等**，等到 `NAV_LOCK_WAIT_MS`；等不到就 `BLOCKED`（明确码，不假装成功）。
+// ───────────────────────────────────────────────────────────────────────────
+const NAV_LOCK_WAIT_MS = 20000;
+/** 仅供单测：当前驱动者（正常代码不该读它）。 */
+export const navLockOwner = () => _navOwner;
+let _navOwner = null;
+let _navDepth = 0;
+
+/**
+ * 拿"导航驱动权"。
+ * @param {string|number} owner 驱动者标识（一般用 ctx.jobId；没有就用 'adhoc'）
+ * @returns {{release:Function}|null} null = 等超时
+ */
+// ★ t66：导出给单测用 —— "同一时刻只有一个驱动者"是承重行为，必须能直接验
+//   （通过 goTo 验要搭真 bot，太重；闸本身是纯逻辑，直接测最准）。
+export async function acquireNav(owner, waitMs = NAV_LOCK_WAIT_MS) {
+    const t0 = Date.now();
+    while (true) {
+        if (_navOwner === null || _navOwner === owner) {
+            _navOwner = owner;
+            _navDepth += 1;
+            return {
+                release() {
+                    _navDepth -= 1;
+                    if (_navDepth <= 0) { _navDepth = 0; _navOwner = null; }
+                },
+            };
+        }
+        if (Date.now() - t0 >= waitMs) return null;
+        await new Promise((r) => setTimeout(r, 100));
+    }
+}
+
 /**
  * 目标归一化：接受 {x,z} / {x,y,z} / {kind:'point', pos:{...}} 三种写法。
  *
@@ -78,9 +133,30 @@ export async function goTo(bot, target, opts = {}) {
         arriveTol = null,
         onEvent = () => { },
         rescan = true,
+        // ★ t66：驱动者标识。有任务单时 `makeCtx` 会把 jobId 写到 `bot.__navJobId`，
+        //   所以所有 flow 的 goTo 都自动带上 owner，不用逐个改调用点。
+        //   没有任务单（`!do` 直调 / 反射 / 离线）就 'adhoc'。
+        owner = bot?.__navJobId ?? 'adhoc',
     } = opts;
 
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
+
+    // ★★ t66：**同一时刻只允许一个驱动者用 pathfinder**（否则两条流互相改 goal
+    //   → `The goal was changed` → dig 全部 INTERNAL，真机实测 1590 次）。
+    const lock = await acquireNav(String(owner), Math.min(NAV_LOCK_WAIT_MS, Math.max(1000, deadlineMs)));
+    if (!lock) {
+        return fail('BLOCKED', '导航被别的任务占用（pathfinder 同一时刻只允许一个驱动者）', {
+            owner, retryable: true,
+        });
+    }
+    try {
+        return await _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent, rescan, owner });
+    } finally {
+        lock.release();
+    }
+}
+
+async function _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent, rescan }) {
 
     const dest = normalizeDest(target);
     if (!dest) return fail('NO_TARGET', '目标坐标无效（需要 {x,z} 或 {kind:"point",pos:{x,y,z}}）');

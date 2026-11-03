@@ -45,7 +45,8 @@ const UNITS = [
     'strat_tool_tier_unit',      // M10：strat_tool_tier 不跳档 / 已够直接 ok / 三件工具
     'strat_first_night_unit',    // M10：first_night 跳过已满足 / dependsOn / 嵌套闸 / 不碰身体
     'job_budget_unit',           // A2：ctx.jobBudget 跨调用共享（无 ctx 行为不变 / 余量生效 / hitCap 上报）
-    'exec_dig_horizontal_unit',  // t40：邻列 dig 从脚位挖（人形通道）+ 同列不变 + 假成功守卫
+    'exec_dig_horizontal_unit',
+    'nav_lock_unit',   // t66：导航「单一驱动者」闸（含反向验证）  // t40：邻列 dig 从脚位挖（人形通道）+ 同列不变 + 假成功守卫
     'path3d_tunnel_unit',        // t45：横向隧道 dig 边（目标 y=当前层 / 后继不变 / 垂直 dig 不变）
     'flow_shelter_unit',         // t31：flow_shelter 蓝图形状 + 材料判断 + idle_planner 死分支接线
     'flow_build_support_unit',   // t31：flow_build 支撑判据（A/B/C，含防循环论证反例）

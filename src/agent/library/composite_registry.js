@@ -395,6 +395,14 @@ export function makeCtx(agent, job = null, manifest = null) {
     const bot = agent?.bot ?? agent;
     const jobId = job?.id ?? null;
 
+    // ★★ 2026-11-03（t66）：把**当前任务单 id 写到 bot 上**，供导航层的
+    //   "单一驱动者"闸使用（`nav_core.goTo` 默认从 `bot.__navJobId` 取 owner）。
+    //
+    //   为什么这样做：`goTo` 的调用点遍布所有 flow（几十处），逐个传 owner 不现实、
+    //   也容易漏（今晚"传参漏了"已经 4 例）。写到 bot 上 = **所有 flow 自动生效**。
+    //   和既有约定一致：`bot.interrupt_code` 也是挂在 bot 上的跨层信令。
+    try { if (bot && jobId) bot.__navJobId = jobId; } catch { /* 假 bot 上写不进去就算了 */ }
+
     // deadline：单子给了就用单子的，否则 now + manifest.timeoutMs（07 §8）
     const jobDeadline = Number(job?.deadline);
     const deadline = Number.isFinite(jobDeadline) && jobDeadline > 0
