@@ -360,7 +360,12 @@ export async function obtain(agent, item, count = 1, deps = {}) {
     });
 
     if (planned.plan.length === 0) {
-        if (planned.ok) return ok({ item, count: Number(count), obtained: Number(count), jobs: [], alreadyHave: planned.alreadyHave ?? null });
+        // ★ t51：同上 —— `count` 用**背包真值**，`want` 才是请求数。
+        //   "已经够了"这条路上两者相等，但统一口径，别让上层要按路径猜字段含义。
+        if (planned.ok) {
+            const have = inv?.[item] ?? 0;
+            return ok({ item, count: have, want: Number(count), jobs: [], alreadyHave: planned.alreadyHave ?? null });
+        }
         return fail('NO_ITEM', `弄不到 ${item}：没有可行来源`, { item, gaps: planned.gaps, jobs: [] });
     }
 
@@ -408,8 +413,20 @@ export async function obtain(agent, item, count = 1, deps = {}) {
         if (r?.ok) created.push(r.data?.id ?? r.data?.job?.id ?? null);
     }
 
+    // ★★ 2026-11-03（t51）：**`count` 必须是"实际到手数"，不是"请求数"**。
+    //
+    //   原来这里写 `count: Number(count)`（= 请求的 8），而调度器 `_progressOf()` 直接读
+    //   `data.count` 当进度 → **背包里一个木头都没有，进度却记成 8/8** → 上层以为做完了
+    //   → 后续 craft 子单立刻 `NO_ITEM`（真机第一夜链路就是这么断的）。
+    //
+    //   正确语义（策略层只拆单、不干活）：
+    //     count = **当前背包里真的有多少**（真值，通常是 0）
+    //     want  = 请求多少
+    //     jobs  = 我拆出去的子单（真正的活在那里面）
+    //   于是进度显示 `0/8`，上层知道"还没到手"，不会误判完成。
+    const gotNow = countInventory(agent)[item] ?? 0;
     return ok({
-        item, count: Number(count), parentId, jobs: created,
+        item, count: gotNow, want: Number(count), parentId, jobs: created,
         gaps: planned.gaps, hitDepth: planned.hitDepth, hitJobs: planned.hitJobs,
         expanded: planned.expanded,
     });
