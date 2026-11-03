@@ -47,10 +47,12 @@ const reset = async () => {
 await reset();
 await fillSafe(AX - 8, G + 3, AZ - 26, AX + 8, G + 3, AZ + 26, 'stone');
 
-const sx = AX, sz = AZ;
-await RC(`tp ${NAME} ${sx + 0.5} ${S} ${sz + 0.5}`);
+// ★ 与 bench 的 digdown 一致：起点 dx=-4 / up=3（站在盖顶，脚位 G+4），目标 dx=16（地面）
+const sx = AX - 4, sz = AZ;
+const START_Y = S + 3;
+await RC(`tp ${NAME} ${sx + 0.5} ${START_Y} ${sz + 0.5}`);
 await sleep(1200);
-console.log(`场地 G=${G} 起点=(${sx},${S},${sz}) 目标=(${AX + 16},${S},${AZ})`);
+console.log(`场地 G=${G} 起点=(${sx},${START_Y},${sz}) 目标=(${AX + 16},${S},${AZ})`);
 
 // 手动跑两轮，模拟 bench 的 #1/#2（第一轮会把盖板挖开 → 第二轮面对的是什么，正是我们要看的）
 const mapDir = mapDirOf(bot);
@@ -59,7 +61,7 @@ const mapDir = mapDirOf(bot);
 for (let round = 1; round <= 2; round++) {
     await reset();
     await fillSafe(AX - 8, G + 3, AZ - 26, AX + 8, G + 3, AZ + 26, 'stone');
-    await RC(`tp ${NAME} ${sx + 0.5} ${S} ${sz + 0.5}`);
+    await RC(`tp ${NAME} ${sx + 0.5} ${START_Y} ${sz + 0.5}`);
     await sleep(1000);
     console.log(`\n════════ digdown #${round} ════════`);
 
@@ -74,29 +76,41 @@ for (let round = 1; round <= 2; round++) {
         for (const st of plan.path) hist[st.action] = (hist[st.action] ?? 0) + 1;
         console.log(`  [iter${iter}] 规划 ${plan.path.length}步 直方图=${JSON.stringify(hist)} 起点=(${F(pos0.x)},${F(pos0.y)},${F(pos0.z)})`);
 
-        // ★ 旁路诊断：对**第一步 action 是 walk/jump/down 且水平相邻**的 step，试一次 stepInto
-        const steps = plan.path.slice(0, 3);
+        // ★★ 旁路诊断（2026-11-03 按 captain 要求）：
+        //   ① 把 **y+1（脚位）** 传进去，看是否变成 ok=true / 进格=true
+        //   ② 同时确认 `down`/`jump` 步**不该**走 stepInto（它只会按前进，不会下降/上跳）
+        const ELIGIBLE = new Set(['walk']);        // 只有 walk（同层相邻）才准试 stepInto
+        // ★ 把**非 walk 的全部 step** 单独列出来，确认 down/jump/dig/climb 都被跳过
+        const nonWalk = plan.path.filter((st) => !ELIGIBLE.has(st.action));
+        if (nonWalk.length) {
+            console.log(`  非 walk 步（应全部跳过 stepInto）: `
+                + nonWalk.map((st) => `${st.action}(${st.x},${st.y},${st.z})`).join(' '));
+        }
+        const steps = plan.path.slice(0, 8);
         for (let i = 0; i < steps.length; i++) {
             const st = steps[i];
             const p0 = bot.entity.position.clone();
-            const inCellBefore = insideCell(p0, st);
-            // 只在不已经在格内时试（已在格内 stepInto 无意义）
-            let siResult = null;
-            if (!inCellBefore) {
-                const r = await stepInto(bot, { x: st.x, y: st.y, z: st.z }, { timeoutMs: 2500 });
-                const p1 = bot.entity.position.clone();
-                const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
-                siResult = {
-                    ok: r.ok, code: r.code ?? 'OK',
-                    inCellAfter: insideCell(p1, st),
-                    dist: +dist.toFixed(2),
-                };
-                console.log(`    [step${i}] action=${st.action} 目标=(${st.x},${st.y},${st.z})`
-                    + ` | stepInto: ok=${r.ok} code=${r.code ?? 'OK'} 进格=${siResult.inCellAfter} 位移=${F(dist)}`
-                    + ` ${(!r.ok || dist < 0.1) ? '★(失败或没动)' : ''}`);
-            } else {
-                console.log(`    [step${i}] action=${st.action} 目标=(${st.x},${st.y},${st.z}) | 已在格内，跳过 stepInto`);
+            const feetCell = { x: st.x, y: st.y + 1, z: st.z };   // ★ 面位 → 脚位（与 executor:115 同一换算）
+            const inCellBefore = insideCell(p0, feetCell);
+            const eligible = ELIGIBLE.has(st.action);
+
+            if (!eligible) {
+                console.log(`    [step${i}] action=${st.action} 目标(面位)=(${st.x},${st.y},${st.z})`
+                    + ` | ★ 非 walk，**不试 stepInto**（它只会按前进，不下降/不上跳）`);
+                continue;
             }
+            if (inCellBefore) {
+                console.log(`    [step${i}] action=${st.action} 脚位格=(${feetCell.x},${feetCell.y},${feetCell.z}) | 已在格内，跳过`);
+                continue;
+            }
+            const t0 = Date.now();
+            const r = await stepInto(bot, feetCell, { timeoutMs: 2500 });
+            const p1 = bot.entity.position.clone();
+            const dist = Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
+            const inAfter = insideCell(p1, feetCell);
+            console.log(`    [step${i}] action=${st.action} 脚位格=(${feetCell.x},${feetCell.y},${feetCell.z})`
+                + ` | stepInto(y+1): ok=${r.ok} code=${r.code ?? 'OK'} 进格=${inAfter} 位移=${F(dist)}`
+                + ` ${r.ok && inAfter ? '✅验通' : '❌仍失败'}  (${Date.now() - t0}ms)`);
         }
 
         // 照常执行整条路径的前几步（原逻辑，不变）
