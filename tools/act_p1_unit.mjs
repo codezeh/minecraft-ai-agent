@@ -152,6 +152,54 @@ function assertResult(name, r) {
     } else badCase('toggleBlock 锁住 → BLOCKED', { code: r.code });
 }
 
+// ── 10b. 「方块名 → 可交互类别」的匹配广度（承重正则的钉子）────────────
+//
+// ★ 为什么补这一节（t44 收尾，2026-11-03）：
+//   删掉 `act_use.js` 时，它导出的 `useKindOf`（名字→类别分类器）一起没了。
+//   captain 要求把那份"分类映射"的 6 条断言补回来 —— 但 `useKindOf` 已不存在，
+//   所以这里钉的是**现在真正承重的实现**：`act_blockuse` 的 `TOGGLEABLE` / `BONE_MEALABLE`
+//   两个正则（床/作物/耕地/容器各自已在别处有用例：sleepInBed 非床、harvestCrop 非作物、
+//   tillSoil 石头、atom_container 的 containerKindOf 4 条）。
+//
+//   **判据**：谁把 TOGGLEABLE 里的 `_trapdoor` / `_fence_gate` / `lever` 删掉，
+//             下面三条立刻变红（会从 BLOCKED 变成 NO_TARGET）。
+{
+    // 桩：方块认得（能进 TOGGLEABLE），但右键后状态不变 → BLOCKED 而不是 NO_TARGET。
+    // 这样"认不认得"就有可判据：认得=BLOCKED，不认得=NO_TARGET。
+    const lockedWith = (name) => makeFakeBot({
+        feet: { x: 0, y: 64, z: 0 },
+        stubs: {
+            blockAt: (v) => ({ name, position: v, getProperties: () => ({ open: false }) }),
+            activateBlock: async () => { /* 没反应 */ },
+        },
+    });
+    for (const [name, why] of [
+        ['oak_trapdoor', '_trapdoor'],
+        ['oak_fence_gate', '_fence_gate'],
+        ['lever', 'lever'],
+    ]) {
+        const bot = lockedWith(name);
+        const r = await toggleBlock(bot, { pos: { x: 0, y: 64, z: 1 } });
+        if (assertResult(`toggleBlock ${name}`, r) && !r.ok && r.code === 'BLOCKED') {
+            okCase(`toggleBlock 认得 ${name}（TOGGLEABLE 的 ${why} 支）→ BLOCKED 而非 NO_TARGET`, r.code);
+        } else badCase(`toggleBlock ${name} 应被认得 → BLOCKED`, { code: r.code });
+    }
+}
+
+// ── 10c. boneMeal：不可撒的方块 → NO_TARGET（钉住 BONE_MEALABLE 的拒绝侧）──
+//   可撒侧已由 12/13 两条（小麦）覆盖；这里补"石头不该被撒"。
+{
+    const bot = makeFakeBot({
+        feet: { x: 0, y: 64, z: 0 },
+        items: [{ name: 'bone_meal', type: 1, count: 3, slot: 0 }],
+        stubs: { blockAt: (v) => ({ name: 'stone', position: v, getProperties: () => ({}) }) },
+    });
+    const r = await boneMeal(bot, { pos: { x: 0, y: 64, z: 1 } });
+    if (assertResult('boneMeal 石头', r) && !r.ok && r.code === 'NO_TARGET') {
+        okCase('boneMeal 石头 → NO_TARGET（BONE_MEALABLE 拒绝侧）', r.code);
+    } else badCase('boneMeal 石头 → NO_TARGET', { code: r.code });
+}
+
 // ── 11. boneMeal：没有骨粉 → NO_TOOL（不是 NO_ITEM）─────────────────
 {
     const bot = makeFakeBot({
