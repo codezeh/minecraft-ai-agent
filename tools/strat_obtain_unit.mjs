@@ -58,6 +58,29 @@ const check = (n, cond, e = '') => (cond ? ok(n, e) : bad(n, e));
         `jobs=${r.plan.length} 源=${[...new Set(r.plan.map((p) => p.source))].join('/')}`);
 }
 
+// ⑥a ★ t85：**同层同物品的需求必须合并成一张单**（数量算准）
+//
+// 真机根因（第 30 跑）：plan 里出现 `craft oak_planks c=4` + `craft oak_planks c=3`
+// 两张单，而原木只有 `mine oak_log c=1` 一张 → 两张都 blocked «料不够»。
+// 真实需求：木镐 = 3 木板 + 2 木棍，木棍又要 2 木板 → 共 5 木板 = 2 原木；
+// 一层的"做木板"应该只有一张单，count = 该层所有需求之和。
+{
+    const r = await planObtain({ item: 'wooden_pickaxe', count: 1, inventory: {}, chests: {} });
+    const planksAt = (d) => r.plan.filter((p) => p.depth === d && p.skill === 'craft' && p.args?.item === 'oak_planks');
+    const logsAt = (d) => r.plan.filter((p) => p.depth === d && p.skill === 'mine' && p.args?.ore === 'oak_log');
+    // 同一层不许出现两张同物品的 craft 单
+    const dupPlanks = [1, 2, 3, 4].some((d) => planksAt(d).length > 1);
+    const dupLogs = [1, 2, 3, 4].some((d) => logsAt(d).length > 1);
+    // 数量必须 > 1（旧的 bug 是 c=1）
+    const allCounts = r.plan.filter((p) => p.skill === 'mine' && p.args?.ore === 'oak_log')
+        .map((p) => Number(p.args.count));
+    const countsOk = allCounts.length > 0 && allCounts.every((c) => c >= 1)
+        && allCounts.some((c) => c > 1);
+    check('⑥a ★ 同层同物品合并（无重复 craft/mine），且原木数量 > 1',
+        !dupPlanks && !dupLogs && countsOk,
+        `重复木板=${dupPlanks} 重复原木=${dupLogs} 原木数=${JSON.stringify(allCounts)}`);
+}
+
 // ⑥b ★ t62：**被调度器执行时（有 ctx.jobId）不许再建壳**，子单直接挂自己名下。
 //
 // 真机根因：strat_obtain 每次运行都多建一张 obtain 壳 → 外层那张永远 0 子单

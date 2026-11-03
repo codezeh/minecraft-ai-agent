@@ -165,6 +165,38 @@ export function planObtain(args = {}) {
     const needsOf = new Map();
 
     /**
+     * ★★ 2026-11-04（t85）：**同层同物品的需求必须合并成一张单。**
+     *
+     *   真机证据（第 30 跑）：`obtain wooden_pickaxe` 的 plan 里出现了
+     *     `craft oak_planks c=4` 和 `craft oak_planks c=3` **两张单**，
+     *     而原木只有 `mine oak_log c=1` 一张 → 两张都 `blocked «料不够合 oak_planks»`。
+     *
+     *   原因：`expand` 每遇到一次"需要木板"就 `plan.push` 一条，
+     *   而 `wooden_pickaxe` 的配方里木板需求来自**两处**（自身 3 块 + 木棍 2 块），
+     *   再叠上前面的 `crafting_table`（4 块）—— **同一层出现 2~3 张各需少量木板的单**。
+     *   每张单单独等料、单独算量，**总需求永远对不上**。
+     *
+     *   修法：**同 `skill` + 同 `args.item` + 同 `depth` 的步骤合并计数**（不新增一条）。
+     *   这样一层的"做木板"只有一张单：`craft oak_planks count=<所有需求之和>`。
+     *
+     *   `depth` 必须参与 key —— 不同深度的同名物品来自不同的父需求，不能合并
+     *   （合并会打乱 dependsOn 的层级结构）。
+     */
+    const pushStep = (step) => {
+        const same = plan.find((p) => p.depth === step.depth
+            && p.skill === step.skill
+            && (p.args?.item ?? p.args?.input ?? p.args?.ore) === (step.args?.item ?? step.args?.input ?? step.args?.ore));
+        if (same) {
+            same.args.count = Number(same.args.count ?? 0) + Number(step.args.count ?? 0);
+            // why 拼起来，保留来源可读性
+            if (step.why && !String(same.why ?? '').includes(step.why)) same.why = `${same.why}；${step.why}`;
+            return same;
+        }
+        plan.push(step);
+        return step;
+    };
+
+    /**
      * 递归展开（**有界**）。
      * @param {string} name 要弄的物品
      * @param {number} need 要几个
@@ -253,7 +285,7 @@ export function planObtain(args = {}) {
             if (src.type === 'craft') {
                 // ★ t65：记录"这个成品需要哪些材料"（后处理时用来补 dependsOn）
                 needsOf.set(name, Object.keys(src.recipe ?? {}));
-                plan.push({
+                pushStep({
                     skill: SOURCE_TO_SKILL.craft,
                     args: { item: name, count: stillNeed },
                     why,
