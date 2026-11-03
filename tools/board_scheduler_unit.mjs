@@ -20,6 +20,10 @@ import {
     CLAIM_BACKOFF_MS, HEARTBEAT_MS,
 } from '../src/agent/library/board_scheduler.js';
 import { JOB_STATE, STOP_REASONS, BRIEF_REQUEUE_MS } from '../src/agent/library/control.js';
+// t68：**共享假件**（默认 strictPoints:true —— 像真 mineflayer 一样拒裸坐标）。
+// 下面 t39 段用本文件的 makeIdleBot（宽松件，只测判据逻辑）；末尾 ⑧ 专门用这个严格件
+// 复现"生产真实形态"，因为两者的差别正是 t70/t39 那类 bug 的藏身处。
+import { makeFakeBot, worldOf } from './fixtures/fake_bot.mjs';
 
 let pass = 0;
 let fails = 0;
@@ -1032,6 +1036,57 @@ async function tickIdle({ bot, availableSkills = null, reader = null } = {}) {
             `action=${noState.plan?.action} reason=${noState.plan?.reason} jobs=${noState.jobs.length}`);
     } else {
         badCase('t39⑥ 反向验证失败：不传字段居然还能命中第 1 层 → 用例形同虚设', { plan: noState.plan, jobs: noState.jobs.length });
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⑧ ★★ t68：**假件忠实度**（t39 的 nearShelter 用**真 mineflayer 形态**复测）
+//
+//   上面 t39③ 用的是本文件的宽松假件 `makeIdleBot`（`blockAt` 收裸对象），
+//   于是 `readOverheadShelter` 里那句
+//       `bot.blockAt({ x: fx, y: fy + dy, z: fz })`
+//   看起来是好的。但**真 mineflayer 会 `pos.floored()`**（prismarine-world
+//   `world.js:229`）→ 裸对象 TypeError → 被 `safeField` 的 catch 吞成 null
+//   → **生产里 nearShelter 恒为 null → shelter 分支永远不触发**（和 t70 同一类）。
+//
+//   本用例换成共享严格件复现"生产真实形态"：头顶有石头盖时，nearShelter 必须是 true。
+//   当前实现会回 null → 记为 **XFAIL(已知bug)**（指纹 = nearShelter === null）。
+//   修法（等 captain 批，只改 src 那一行）：包成 Vec3 或用 `query_perceive.readBlock`。
+//     · 指纹在 → XFAIL（已知，不判红）
+//     · 开始返回 true/false → XPASS，提醒把本条改成硬断言
+//     · 返回别的怪值 → 真 FAIL（新问题不许吞）
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // 头顶 dy=2..5 全是石头 = 在洞里/屋里 → 语义上就是"有遮蔽"
+    const roofed = makeFakeBot({
+        world: worldOf([[0, 66, 0, 'stone'], [0, 67, 0, 'stone'], [0, 68, 0, 'stone'], [0, 69, 0, 'stone']]),
+        feet: { x: 0, y: 64, z: 0 },
+        registry: { foodsByName: {} },
+    });
+    const st = readIdleState({ bot: roofed });
+    // ★ 2026-11-04（captain）：**"露天"必须显式铺空气，不能用空世界。**
+    //   空世界 = 那些格"没加载" → `readOverheadShelter` 正确地返回 null（"没加载就不猜"）。
+    //   要测"露天"就得让探针那几个格真的是 air（`dy=2..5`，与 SHELTER_PROBE_DY 对齐）。
+    const OPEN = makeFakeBot({
+        world: worldOf([[0, 66, 0, 'air'], [0, 67, 0, 'air'], [0, 68, 0, 'air'], [0, 69, 0, 'air']]),
+        feet: { x: 0, y: 64, z: 0 },
+        registry: { foodsByName: {} },
+    });
+    const stOpen = readIdleState({ bot: OPEN });
+
+    const roofOk = st.nearShelter === true;
+    const openOk = stOpen.nearShelter === false;
+    if (roofOk && openOk) {
+        pass++;
+        // ★ 已由 t73 修好（`readOverheadShelter` 改传 Vec3），本条转**硬断言**：
+        //   以后谁再把它写回裸对象，`roofOk` 会变 false → 直接红（不再被 xfail 兜住）。
+        console.log(`PASS ⑧ ★ nearShelter 在真 mineflayer 形态下可用（屋顶=true 露天=false）`);
+    } else if (false && st.nearShelter === null && stOpen.nearShelter === null) {
+        console.log(`XFAIL(已知bug) ⑧ 假件忠实度：nearShelter 在真 mineflayer 形态下**恒为 null**`
+            + `（board_scheduler.js:206 传裸对象 → 真机 TypeError → 被吞成 null → shelter 分支永不触发）`);
+        console.log(`       —— 已报 captain（与 t70 同族）。修好后本条会打 XPASS`);
+    } else {
+        badCase('⑧ 假件忠实度：nearShelter 形态不符（须重判）', { roofed: st.nearShelter, open: stOpen.nearShelter });
     }
 }
 

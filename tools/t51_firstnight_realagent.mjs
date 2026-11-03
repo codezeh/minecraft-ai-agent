@@ -104,27 +104,54 @@ await RC(`effect give ${AGENT_NAME} minecraft:slow_falling 120 1 true`).catch(()
 //   （上一轮实测 feetY=85，树在 -59，垂直差 144 格 → findBlocks(32) 永远找不到树）。
 //   改成：tp 后**轮询到她真的落到地面**（|y+59| <= 3）才继续；超时就重 tp 一次。
 const TARGET_Y = -59;
-let landedY = null;
+const TX = FOREST.x, TZ = FOREST.z;
+
+// ★ 第 20 跑（captain 要求）：**先让 tp 说不出谎**
+//   ① 打**原始 Pos 串**（不解析），一打就能看出 RCON 回包格式
+//   ② 判据改成"和树林坐标比对"，且**不到位就抛错退出**（不再"告警后继续跑"跑出不可用数据）
+async function rawPos() {
+    const raw = String(await RC(`data get entity ${AGENT_NAME} Pos`).catch(() => ''));
+    return raw;
+}
+function parsePos(raw) {
+    // 兼容两种：`[1.0d, 2.0d, 3.0d]` 与 `[1.0, 2.0, 3.0]`
+    const m = String(raw).match(/\[\s*(-?[\d.]+)d?\s*,\s*(-?[\d.]+)d?\s*,\s*(-?[\d.]+)d?\s*\]/);
+    if (!m) return null;
+    return { x: Number(m[1]), y: Number(m[2]), z: Number(m[3]) };
+}
+
+const beforeRaw = await rawPos();
+console.log('  [TP] before(raw) = ' + JSON.stringify(beforeRaw).slice(0, 180));
+
+let landed = null;
 for (let attempt = 1; attempt <= 3; attempt++) {
-    await RC(`tp ${AGENT_NAME} ${FOREST.x} ${TARGET_Y + 3} ${FOREST.z}`).catch(() => { });
-    for (let i = 0; i < 20; i++) {
-        await sleep(500);
-        const raw = String(await RC(`data get entity ${AGENT_NAME} Pos`).catch(() => ''));
-        const m = raw.match(/\[(-?[\d.]+)d?,\s*(-?[\d.]+)d?,\s*(-?[\d.]+)d?\]/);
-        if (!m) continue;
-        const y = Number(m[2]);
-        if (Math.abs(y - TARGET_Y) <= 3) { landedY = { x: Math.round(Number(m[1])), y: Math.round(y), z: Math.round(Number(m[3])) }; break; }
+    await RC(`tp ${AGENT_NAME} ${TX} ${TARGET_Y + 3} ${TZ}`).catch(() => { });
+    await sleep(2200);
+    const afterRaw = await rawPos();
+    const p2 = parsePos(afterRaw);
+    console.log(`  [TP] attempt${attempt} after(raw) = ` + JSON.stringify(afterRaw).slice(0, 180));
+    console.log(`  [TP] attempt${attempt} parsed = ` + JSON.stringify(p2));
+    if (p2) {
+        const atTrees = Math.abs(p2.x - TX) <= 10 && Math.abs(p2.z - TZ) <= 10 && p2.y >= -62 && p2.y <= -56;
+        if (atTrees) { landed = p2; break; }
+        console.log(`  [TP] 不在树林（要求 ${TX},${TZ} ±10 且 y∈[-62,-56]）→ 重试`);
+    } else {
+        console.log('  [TP] Pos 串解析失败（上面的 raw 就是证据）→ 重试');
     }
-    if (landedY) break;
-    console.log(`  ⚠ 第 ${attempt} 次 tp 后没落到地面，重试…`);
+    // 备选：先用 spreadplayers 撒到该带，再补 tp
+    await RC(`forceload add ${TX - 10} ${TZ - 10} ${TX + 10} ${TZ + 10}`).catch(() => { });
+    await RC(`spreadplayers ${TX} ${TZ} 0 3 false ${AGENT_NAME}`).catch(() => { });
+    await sleep(2500);
 }
-console.log('  落地: ' + (landedY ? `(${landedY.x}, ${landedY.y}, ${landedY.z})` : '（未能落地，继续但可能找不到树）'));
-const pos1 = String(await RC(`data get entity ${AGENT_NAME} Pos`).catch(() => ''));
-// ★ 第 13 跑：记下起点 feetY 与坐标（判断"她是不是在树旁边"）
-{
-    const m1 = pos1.match(/\[(-?[\d.]+)d?,\s*(-?[\d.]+)d?,\s*(-?[\d.]+)d?\]/);
-    if (m1) console.log(`  ★ bot 起点坐标 = (${Math.round(Number(m1[1]))}, ${Math.round(Number(m1[2]))}, ${Math.round(Number(m1[3]))}) | feetY=${Math.round(Number(m1[2]))} | 树中心=(6203,-59,8803)`);
+
+if (!landed) {
+    const finalRaw = await rawPos();
+    console.error('  🔴 [TP] 三次都没把她送到树林 —— **抛错退出，不跑任务**（避免产出不可用数据）');
+    console.error('     final(raw) = ' + JSON.stringify(finalRaw).slice(0, 200));
+    try { agentProc.kill('SIGTERM'); } catch { }
+    process.exit(9);
 }
+console.log(`  ★ [TP] 判据通过：Pos=(${Math.round(landed.x)}, ${Math.round(landed.y)}, ${Math.round(landed.z)}) | 树林=(${TX},${TARGET_Y},${TZ}) ±10`);
 await RC(`clear ${AGENT_NAME}`).catch(() => { });
 await sleep(500);
 

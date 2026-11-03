@@ -115,6 +115,9 @@ export function worldOf(entries = []) {
  * @param {Error|null} [opts.gotoError] 传了就让 goto 失败（模拟 NO_PATH）
  * @param {string}  [opts.placeAs]     放下的方块名，默认取手持物品名，否则 stone
  * @param {object}  [opts.stubs]       覆盖任意字段
+ * @param {boolean} [opts.strictPoints] **默认 true**：`blockAt` 必须收到 Vec3 形状的点
+ *   （真 mineflayer 会 `pos.floored()`，裸对象直接 TypeError）。
+ *   只在**明确知道自己要测什么**时才传 false，并在用例里写清为什么。
  */
 export function makeFakeBot(opts = {}) {
     const {
@@ -127,6 +130,7 @@ export function makeFakeBot(opts = {}) {
         items = [],
         diggable = (name) => !/^(bedrock|water|lava)$/.test(name),
         gotoOffset = 0.5,
+        strictPoints = true,
         gotoError = null,
         placeAs = null,
         username = 'fixture',
@@ -156,6 +160,17 @@ export function makeFakeBot(opts = {}) {
     }
 
     function readBlock(v, dflt) {
+        // ★★ 2026-11-04（t68）：**像真 mineflayer 一样挑剔**。
+        //   真链路：`bot.blockAt(p)` → `world.getBlock(p)` → `p.floored()`
+        //   （prismarine-world `world.js:229` `block.position = pos.floored()`）。
+        //   裸对象没有 `.floored()` → 真机直接 TypeError。
+        //
+        //   为什么假件必须跟着挑剔：t70 那个真机 bug（`stand=null ×130`）就是
+        //   `findStandNear` 传裸对象、抛错被 `catch` 吞成 null —— 而假件**收裸对象**，
+        //   于是单测全绿、真机全 null。**假件太松 = 假绿**，这条现在是可执行断言。
+        if (strictPoints && typeof v?.floored !== 'function') {
+            throw new TypeError('point.floored is not a function（mineflayer 要 Vec3，裸对象会被拒）');
+        }
         if (!v || typeof v !== 'object') {
             return typeof dflt === 'function' ? dflt(null) : null;
         }
@@ -209,7 +224,8 @@ export function makeFakeBot(opts = {}) {
         blockAtCursor: () => null,
         findBlocks: () => [],
         nearestEntity: () => null,
-        getBlock: (x, y, z) => readBlock({ x, y, z }),
+        // 夹具自己的便捷读写：**包成 Vec3**，免得被自己的 strictPoints 拒掉
+        getBlock: (x, y, z) => readBlock(new Vec3(x, y, z)),
         setBlock: (x, y, z, name) => world.set(blockKey(x, y, z), name),
 
         dig: async (b) => {

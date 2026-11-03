@@ -11,6 +11,7 @@
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
+import Vec3 from 'vec3';
 import { makeFakeBot, worldOf } from './fixtures/fake_bot.mjs';
 import { holdKey, pressKey, releaseAll, setSneak } from '../src/agent/library/atom_input_move.js';
 import { holdDig, useOnBlock, placeAgainst, attackOnce } from '../src/agent/library/atom_input_mouse.js';
@@ -193,7 +194,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         world: worldOf([[1, 64, 0, 'stone']]),
         feet: { x: 0, y: 64, z: 0 },
     });
-    const block = bot.blockAt({ x: 1, y: 64, z: 0 });
+    // t68：假 bot 已按真 mineflayer 挑剔（要 Vec3），裸对象会被拒 —— 这里包成 Vec3
+    const block = bot.blockAt(new Vec3(1, 64, 0));
     const r = await holdDig(bot, block, { digTimeMs: 1000 });
     const dug = bot.__dug.length === 1;
     if (r.ok && r.data.dugBlock === 'stone' && dug) okCase('holdDig 挖完报 dugBlock', `costMs=${r.data.costMs}`);
@@ -211,7 +213,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
             stopDigging: () => { stopped++; },
         },
     });
-    const block = bot.blockAt({ x: 1, y: 64, z: 0 });
+    // t68：假 bot 已按真 mineflayer 挑剔（要 Vec3），裸对象会被拒 —— 这里包成 Vec3
+    const block = bot.blockAt(new Vec3(1, 64, 0));
     const t0 = Date.now();
     const r = await holdDig(bot, block, { digTimeMs: 150 });
     const ms = Date.now() - t0;
@@ -230,7 +233,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
         world: worldOf([[1, 64, 0, 'stone']]),
         stubs: { dig: () => new Promise(() => { }), stopDigging: () => { stopped++; } },
     });
-    const block = bot.blockAt({ x: 1, y: 64, z: 0 });
+    // t68：假 bot 已按真 mineflayer 挑剔（要 Vec3），裸对象会被拒 —— 这里包成 Vec3
+    const block = bot.blockAt(new Vec3(1, 64, 0));
     const p = holdDig(bot, block, { digTimeMs: 5000 });
     await sleep(60);
     bot.interrupt_code = true;

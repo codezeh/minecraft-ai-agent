@@ -54,6 +54,9 @@ import { meetsRequires } from './board_store.js';
 //   分层规矩里 `board` 只能 import `query`/`infra`（board → strat 是**新违规**，
 //   preflight 的 prefix 检查会红）。放 query 则"只有一份实现 + 两边都能用"同时成立。
 import { isNightFalling } from './query_perceive.js';
+// ★ t73：统一走 `query_perceive.blockAt`（内部包 Vec3）——
+//   直接 `bot.blockAt(裸对象)` 会抛 `point.floored is not a function`（今晚第 4 例）
+import { blockAt as readBlock } from './query_perceive.js';
 
 // ───────────────────────────────────────────────────────────────────────────
 // 纯函数（不碰 I/O，好离线测）
@@ -203,7 +206,19 @@ function readOverheadShelter(bot) {
     if (!p || typeof bot.blockAt !== 'function') return null;
     const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
     for (const dy of SHELTER_PROBE_DY) {
-        const b = bot.blockAt({ x: fx, y: fy + dy, z: fz });
+        // ★★ 2026-11-04（t73）：**必须传 Vec3，不能传裸对象。**
+        //
+        //   mineflayer `bot.blockAt(p)` → `world.getBlock(p)` → **`p.floored()`**
+        //   （`prismarine-world/src/world.js:229`）—— 裸 `{x,y,z}` 没这个方法 →
+        //   `TypeError` → 被外层 `safeField` 吞成 null →
+        //   **`nearShelter` 恒 null → idle_planner 的 shelter 分支永不触发**。
+        //
+        //   fixture 用"严格假件"（`strictPoints` 默认 true，裸坐标必抛）抓出来的：
+        //   **当年 t39③ 的绿是假绿** —— 假件比真件宽松，裸对象在假件上不报错。
+        //
+        //   全仓 `bot.blockAt(` 共 75 处，**只有这一处**传裸对象
+        //   （其余都走 `query_perceive.blockAt`，内部已包 Vec3）。
+        const b = readBlock(bot, { x: fx, y: fy + dy, z: fz });
         if (!b || !b.name) return null;                     // 没加载 → 不猜
         if (!OPEN_SKY_BLOCKS.has(b.name)) return true;      // 头上有盖
     }
