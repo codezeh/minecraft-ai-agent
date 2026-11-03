@@ -43,15 +43,40 @@ export const manifest = {
 };
 
 /** 放工作台要找的位置：脚下前方一格（不往自己身上放、也不放到头顶）。 */
-function tableSpotFor(bot) {
+/**
+ * ★★ 2026-11-04（t88）：**放工作台要试多个位置，不能只试一个。**
+ *
+ *   真机证据（第 33 跑）：
+ *     `craft wooden_pickaxe → failed «放不下工作台：INTERNAL
+ *      Server refused to place crafting table»`
+ *
+ *   `tableSpotFor` 只给"面前那一格"。而服务端会拒绝非法放置：
+ *     · 那格不是空气（脚下有方块/掉落物实体）
+ *     · 那格没有可依附的实心面
+ *     · 玩家正站在那格里
+ *   一旦第一个位置被拒，整条链路就 `NO_WORKSTATION` 失败 —— 而**旁边一格往往就能放**。
+ *
+ *   所以这里给出**按优先级排序的候选列表**：面前 → 四个侧邻 → 脚下的旁边，
+ *   逐个试，直到放上去一个。
+ */
+function tableSpotsFor(bot) {
     const p = bot.entity?.position;
-    if (!p) return null;
+    if (!p) return [];
     const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
-    // 朝面前那格放（yaw 方向）；读不到 yaw 就放脚边
     const yaw = Number(bot.entity?.yaw ?? 0);
     const dx = Math.round(-Math.sin(yaw));
     const dz = Math.round(-Math.cos(yaw));
-    return { x: fx + (dx || 1), y: fy, z: fz + dz };
+    const out = [];
+    const push = (x, y, z) => {
+        if (!out.some((c) => c.x === x && c.y === y && c.z === z)) out.push({ x, y, z });
+    };
+    // ① 面前那格（原行为，优先）
+    push(fx + (dx || 1), fy, fz + dz);
+    // ② 四个侧邻
+    for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) push(fx + ax, fy, fz + az);
+    // ③ 侧邻再往下一格（面前那格脚下是空的时候）
+    for (const [ax, az] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) push(fx + ax, fy - 1, fz + az);
+    return out;
 }
 
 /** 附近有没有现成的工作台（够得着的优先）。 */
@@ -145,20 +170,29 @@ export async function craft(bot, itemName, count = 1) {
                 }
             }
 
-            // 放到脚下前方一格
-            const spot = tableSpotFor(bot);
+            // 放到附近一格（**多候选重试**，见 tableSpotsFor 的注释）
+            const spots = tableSpotsFor(bot);
             const itemStack = findItem(bot, 'crafting_table');
-            if (!spot || !itemStack) {
+            if (!spots.length || !itemStack) {
                 return fail('NO_WORKSTATION', `需要工作台，但没有可放置的位置/物品`, { item: itemName });
             }
             try {
                 if (bot.heldItem?.name !== 'crafting_table') await bot.equip(itemStack, 'hand');
             } catch { /* 换手失败就让 placeBlockAt 自己报 */ }
 
-            const placed = await placeBlockAt(bot, { kind: 'block', pos: spot }, 'crafting_table', {});
-            if (!placed.ok) {
-                return fail(placed.code === 'OCCUPIED' ? 'OCCUPIED' : 'NO_WORKSTATION',
-                    `放不下工作台：${placed.code} ${placed.message ?? ''}`, { item: itemName, spot });
+            let spot = null;
+            let lastPlaced = null;
+            for (const cand of spots) {
+                const placed = await placeBlockAt(bot, { kind: 'block', pos: cand }, 'crafting_table', {});
+                if (placed.ok) { spot = cand; lastPlaced = placed; break; }
+                lastPlaced = placed;
+                if (placed.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
+                // 其它失败（服务端拒绝 / 被占 / 未加载）→ 换下一个候选继续试
+            }
+            if (!spot) {
+                return fail(lastPlaced?.code === 'OCCUPIED' ? 'OCCUPIED' : 'NO_WORKSTATION',
+                    `放不下工作台（试了 ${spots.length} 个位置）：${lastPlaced?.code} ${lastPlaced?.message ?? ''}`,
+                    { item: itemName, tried: spots });
             }
             placedTable = true;
             table = blockAt(bot, spot);
