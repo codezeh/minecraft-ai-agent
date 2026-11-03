@@ -54,9 +54,12 @@ const agentProc = spawn(process.execPath, ['main.js'], {
     stdio: ['ignore', 'pipe', 'pipe'],
 });
 let agentOut = '';
+import { appendFileSync, writeFileSync } from 'node:fs';
+writeFileSync('tmp-t59-agent.log', '');
 agentProc.stdout.on('data', (b) => {
     const s = String(b);
     agentOut += s;
+try { appendFileSync('tmp-t59-agent.log', s); } catch { }
     for (const line of s.split('\n')) {
         const t = line.trim();
         if (!t) continue;
@@ -88,17 +91,40 @@ for (const biome of ['minecraft:forest', 'minecraft:birch_forest', 'minecraft:ta
     const m = raw.match(/(-?\d+)[, ]+(-?\d+)/);
     if (m && !/Could not find/i.test(raw)) { FOREST = { x: Number(m[1]), z: Number(m[2]), biome }; break; }
 }
-if (!FOREST) { FOREST = { x: 3000, z: 3000, biome: '(fallback)' }; }
+// ★ t60：世界没有森林（locate biome 全部 Could not find），改用 RCON 造的橡树林
+//   场地已验证：bot.findBlocks('oak_log', 32格) = 31 个方块（≥20）
+if (!FOREST) { FOREST = { x: 6203, z: 8803, biome: '(RCON 手造橡树林 6 棵)' }; }
 console.log(`  森林: ${FOREST.x}, ${FOREST.z} [${FOREST.biome}]`);
 await RC(`forceload add ${FOREST.x - 48} ${FOREST.z - 48} ${FOREST.x + 48} ${FOREST.z + 48}`).catch(() => { });
 await sleep(800);
 // 先给抗性/缓降再 tp（避免 y=100 自由落体摔死）
 await RC(`effect give ${AGENT_NAME} minecraft:resistance 60 5 true`).catch(() => { });
 await RC(`effect give ${AGENT_NAME} minecraft:slow_falling 120 1 true`).catch(() => { });
-await RC(`tp ${AGENT_NAME} ${FOREST.x} 100 ${FOREST.z}`).catch(() => { });
-await sleep(3500);
+// ★ 第 14 跑修（captain 批准）：原来 `tp ... 100 ...` + 固定 sleep → 她卡在 y=85 半空
+//   （上一轮实测 feetY=85，树在 -59，垂直差 144 格 → findBlocks(32) 永远找不到树）。
+//   改成：tp 后**轮询到她真的落到地面**（|y+59| <= 3）才继续；超时就重 tp 一次。
+const TARGET_Y = -59;
+let landedY = null;
+for (let attempt = 1; attempt <= 3; attempt++) {
+    await RC(`tp ${AGENT_NAME} ${FOREST.x} ${TARGET_Y + 3} ${FOREST.z}`).catch(() => { });
+    for (let i = 0; i < 20; i++) {
+        await sleep(500);
+        const raw = String(await RC(`data get entity ${AGENT_NAME} Pos`).catch(() => ''));
+        const m = raw.match(/\[(-?[\d.]+)d?,\s*(-?[\d.]+)d?,\s*(-?[\d.]+)d?\]/);
+        if (!m) continue;
+        const y = Number(m[2]);
+        if (Math.abs(y - TARGET_Y) <= 3) { landedY = { x: Math.round(Number(m[1])), y: Math.round(y), z: Math.round(Number(m[3])) }; break; }
+    }
+    if (landedY) break;
+    console.log(`  ⚠ 第 ${attempt} 次 tp 后没落到地面，重试…`);
+}
+console.log('  落地: ' + (landedY ? `(${landedY.x}, ${landedY.y}, ${landedY.z})` : '（未能落地，继续但可能找不到树）'));
 const pos1 = String(await RC(`data get entity ${AGENT_NAME} Pos`).catch(() => ''));
-console.log('  落地: ' + pos1.slice(0, 140));
+// ★ 第 13 跑：记下起点 feetY 与坐标（判断"她是不是在树旁边"）
+{
+    const m1 = pos1.match(/\[(-?[\d.]+)d?,\s*(-?[\d.]+)d?,\s*(-?[\d.]+)d?\]/);
+    if (m1) console.log(`  ★ bot 起点坐标 = (${Math.round(Number(m1[1]))}, ${Math.round(Number(m1[2]))}, ${Math.round(Number(m1[3]))}) | feetY=${Math.round(Number(m1[2]))} | 树中心=(6203,-59,8803)`);
+}
 await RC(`clear ${AGENT_NAME}`).catch(() => { });
 await sleep(500);
 
@@ -145,7 +171,9 @@ const t0 = Date.now();
 let lastSnap = '';
 let obtainFirstSeen = null;   // ★ 记录 obtain 子单第一次出现的进度（关键判据）
 
+let loopErr = null;
 while (Date.now() - t0 < WAIT_MS) {
+  try {
     const jobs = db.prepare('SELECT * FROM jobs ORDER BY createdAt').all();
     const fresh = jobs.filter((j) => !beforeIds.has(j.id));
     if (!parentId) {
@@ -201,7 +229,22 @@ while (Date.now() - t0 < WAIT_MS) {
         console.log('  父单与子单都已终态，提前结束等待');
         break;
     }
-    await sleep(3000);
+  } catch (e) {
+    loopErr = String(e?.message ?? e);
+    console.log('  ⚠ 轮询异常（继续等）: ' + loopErr.slice(0, 120));
+  }
+  await sleep(3000);
+}
+// ★ 打印退出原因（captain 要求：不许静默提前退出）
+{
+    const waited = Math.round((Date.now() - t0) / 1000);
+    const jobs2 = db.prepare('SELECT * FROM jobs ORDER BY createdAt').all();
+    const fresh2 = jobs2.filter((j) => !beforeIds.has(j.id));
+    const kids2 = parentId ? fresh2.filter((j) => j.parentId === parentId) : [];
+    const par2 = parentId ? getJob(db, parentId) : null;
+    const st = {};
+    for (const k of kids2) st[k.state] = (st[k.state] ?? 0) + 1;
+    console.log(`  [退出原因] 等待 ${waited}s / 上限 ${Math.round(WAIT_MS / 1000)}s | parent=${par2?.state ?? '无'} | 子单状态分布=${JSON.stringify(st)} | 循环异常=${loopErr ?? '无'}`);
 }
 
 // ── 5) 断言 ─────────────────────────────────────────────────────────
@@ -233,6 +276,17 @@ if (obSeen) {
         pr?.want != null, { want: pr?.want });
 } else {
     chk('★ obtain 子单出现过（能看到它的首次进度）', false, '没捕获到 obtain 子单');
+}
+
+// ★★ t57 关键新判据（captain 指定，**查库不看背包**）：obtain:oak_log 的 progress.count > 0
+//   背包跨轮保留（bot 名固定 deepseek）→ 看背包永远说不清"这轮到底撸到没有"。
+{
+    const obOak = kids.find((k) => { try { return JSON.parse(k.args || '{}').item === 'oak_log'; } catch { return false; } });
+    const pr = obOak ? JSON.parse(obOak.progress || 'null') : null;
+    console.log('  ★ obtain:oak_log 查库：state=' + (obOak?.state ?? '不存在') + ' progress=' + JSON.stringify(pr));
+    chk('① obtain:oak_log 子单存在（查库）', !!obOak, { exists: !!obOak });
+    chk('★★ obtain:oak_log 的 progress.count > 0（真的撸到木头了 —— 验证 1855dbb）',
+        Number(pr?.count ?? 0) > 0, { progress: pr });
 }
 
 // 第 1 层

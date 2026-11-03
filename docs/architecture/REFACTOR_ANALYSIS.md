@@ -2552,6 +2552,39 @@ jobs=6  maxDepth=6  hitDepth=true  hitJobs=false  gaps={"mat_6":1}
 
 ---
 
+#### 第 15 层（2026-11-04，t65）：`finish` 的"保持原状"走了转移校验 → t60 的修复一直空转
+
+| 项 | 内容 |
+|---|---|
+| 症状 | 策略单（`strat_first_night` / `strat_obtain` 建的父单）有活子单时，本该"挂着等"（保持 `running`、不消耗 attempts） |
+| 根因 | `finish()` 算出的 `next` 与 `job.state` 相同（都是 `running`）时，仍去调 `canTransition('running','running')`；而 `TRANSITIONS.running` **不含 `'running'`** → `!canTransition` → 直接 `return {ok:false, code:'INTERNAL', message:'非法转移 running → running'}`，**数据库那行一字未动** |
+| 后果 | t60 加的"父单挂着等子单"分支，**对它本来要修的场景从来没真生效过**（父单 `claimed` 时才通；而策略层下父单用的正是 `running`） |
+| 修法 | `next !== job.state && !canTransition(...)` —— "保持原状"不该走转移校验。提交 `faed233` |
+| 怎么发现的 | **不是真机，是补测试时撞出来的**：给 `finish` 的活子单分支补用例时按"应有契约"断言 `ok:true / next:'running'`，实现直接红在 `INTERNAL 非法转移 running → running` |
+| 教训族 | **假绿**：原 t60 用例断言 `state==='running' && attempts===0`，而 bail-out 恰好也满足（行没被改）→ **分不清"决定挂着等"和"报错退出"**。断言要挑"两种实现会给出不同答案"的那个可观测量（这里是 `r.ok` / `r.next`，不是库里的终态） |
+
+**这条的方法论价值**：它证明"零覆盖分支盘点"能直接换来真 bug ——
+`finish` 的活子单分支当时只有 2 条用例（一条正例用 `ready` 子单、一条"没有子单"的反证），
+**三种活子单状态（claimed/running/paused）和"父单 running"这个生产真实形态都没测**，
+于是"报错退出"和"挂着等"在测试里长得一模一样。用例现在锁在 `tools/board_store_finish_unit.mjs` ③-2。
+
+#### 第 16 层（记账，**未修**，待定）：`dependsSatisfied` 静默阻塞 —— 后继永远领不到且**无任何留痕**
+
+| 项 | 内容 |
+|---|---|
+| 症状 | 子单 `ready` 一直不被 claim，父单看起来卡住；库里查不出原因 |
+| 机制 | `dependsSatisfied(db, job)` 只认 `dep.state === 'DONE'`；前置一旦 `blocked`/`failed`/**不存在**，后继**永久**不可领 |
+| 静默性（实测） | 前置 `blocked` 时：后继 `state=ready`（不是 blocked，`rollupParent` 也不会收它）、`dependsOn` 仍指向那张 blocked 单、`result`/`interrupted` **全空** → **事件流里什么都没有**，只能人肉 join `dependsOn` 才知道"它在等谁" |
+| 实测证据 | `tools/board_store_converge_unit.mjs` ②-5（形态钉死）+ ②-6（**XFAIL 已知缺口**：按"应留痕"断言，当前不留痕） |
+| 拟修方向（captain 定，未做） | `dependsSatisfied` 返回 false 时发一条 `job-waiting-on-dep` 事件（可观测性改动、低风险）。**先记账，别动** |
+| 教训族 | **容错必须留痕**：判据"拦住"了不是终点，还要能回答"拦住之后用户/排障者看得到吗"。与第 15 层同族：都是"状态没错、但看不出为什么" |
+
+**为什么单独记成一层**：第 14 跑 / 第 16 跑里 `craft crafting_table` 呈现为 `ready` + dep `done` —— 但那只是**某一时刻的快照**。
+若上游某张单曾 `blocked` 过、而后继的 `dependsOn` 指向它，后继就**永久静默阻塞**，且**库里完全看不出"我在等谁"**。
+这正是"卡点查不出来"的一类结构性原因，不是某个具体 bug。
+
+---
+
 **文档版本**: 1.0  
 **生成时间**: 2026-10-31  
 **基于报告**: 4个子agent只读调研（token总计~2.1M）

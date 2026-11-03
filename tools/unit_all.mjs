@@ -55,6 +55,8 @@ const UNITS = [
     'board_payload_unit',        // M8 B1（t20 补）：10 个 board:* 事件的 payload 形状（表驱动，防"[object Object]"式恒 null）
     'board_scope_unit',          // M8 B2（t23 补）：refresh({scope}) 语义边界 —— mine/claimable/all + 未知报错 + 共享单抢占端到端
     'board_add_recall_unit',     // t65：board_client.add 超时回查（认得到当成功 / 认不到仍失败 / 非 TIMEOUT 不回查，含反向验证）
+    'board_store_converge_unit', // t65：claimFor 的 convergeIfSatisfied 收敛（达标不派发）+ dependsSatisfied 前置不存在/blocked/failed + ★静默阻塞实测
+    'board_store_finish_unit',   // t65：finish 活子单/全终结/已达标三分支 + FAILED·BLOCKED 耗尽 + progress 单调（3 条已知 bug 走 XFAIL）
     'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
     'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）
     'control_reasons_unit',      // M2：停的原因 → 任务单去哪 + D17/D18/D19/D10（控制层）
