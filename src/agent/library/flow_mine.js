@@ -136,7 +136,19 @@ export function findStandNear(bot, pos) {
         for (let dy = 0; dy >= -6; dy -= 1) {
             for (let dx = -3; dx <= 3; dx += 1) {
                 for (let dz = -3; dz <= 3; dz += 1) {
-                    if (dx === 0 && dz === 0 && dy === 0) continue;   // 方块自身不算落点
+                    // ★★ 2026-11-04（t71）：**必须换列** —— 只跳过 `dy===0` 是不够的。
+                    //
+                    //   真机证据（第 18 跑）：`findStandNear` 已经 131 次都返回了落点
+                    //   （`stand=null` 从 130 降到 0），但 `goTo` 仍然 `NO_REACH ×128`。
+                    //   看它返回的样例：
+                    //     stand= {x:6206, y:-57, z:8806}  for bpos= 6206 -54 8806   ← dx=0,dz=0！
+                    //     stand= {x:6205, y:-59, z:8806}  for bpos= 6206 -58 8806   ← dx=-1 正常
+                    //   第一个例子选中的是**方块自己那一列、往下 3 格** ——
+                    //   对树来说那正是**树干内部**（树干占满那一列），寻路器当然走不进去 → `NO_REACH`。
+                    //
+                    //   "站在旁边"的语义就要求**水平方向换列**（dx 或 dz 非 0）。
+                    //   同列往下的候选看起来"脚下有实心"（踩在树干上），实际是树干内部。
+                    if (dx === 0 && dz === 0) continue;                // 必须换列（含原方块自身）
                     const x = bx + dx, y = by + dy, z = bz + dz;
                     // ★ t70：用 `readBlock`（query_perceive，内部包 Vec3）
                     //   而不是 `bot.blockAt(裸对象)` —— 后者对裸对象会抛错/返回 null。
