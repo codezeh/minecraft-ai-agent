@@ -290,19 +290,24 @@ export async function mine(bot, ore, count = 1, opts = {}) {
                 return fail('NO_TOOL', `挖不动 ${block.name}（没有合适的镐）`, { ore, block: block.name, count: mined, want });
             }
 
-            // 走近（够不着才走）
-            const d = block.position.distanceTo(self);
-            if (d > 4) {
-                // ★★ 2026-11-03（t67）：**目标不能是方块自身** —— 那是实心格的内部，
-                //   寻路器不可能站进去 → `NO_REACH`。
-                //
-                //   真机证据（verify 第 14 跑）：
-                //     goTo false NO_REACH × 127
-                //     [MINE] try d= 4.6 / 4.9 / 5.1 …  ← d>4 的全被跳过
-                //     [MINE] try d= 1.2 / 2.5 / 3.5 …  ← d<=4 直接挖，成了 7 个
-                //   → 只挖到 1/8，绝大多数块"够不着又走不过去"被跳过。
-                //
-                //   改成走到**方块旁边能站的那一格**（四邻里 air 且脚下实心）。
+            // ★★ 2026-11-04（t81）：**别用常量猜"够不够得着"，先让 dig 自己试。**
+            //
+            //   真机证据（第 27 跑，`dig true OK` 的 `d=`）：
+            //     d= 1.2 / 1.2 / 3.7 / **4.1** / 3.5   ← **4.1 也能挖**
+            //   而原来的判据是 `if (d > 4) { goTo }` —— **4.0~4.5 这段本来就能挖，却先去走路**。
+            //   走路的代价极高（第 27 跑 `goTo` 失败 132 次，全是 STUCK/NO_MOVE，
+            //   把 12 分钟窗口耗掉大半，只挖了 5 块）。
+            //
+            //   所以改成：**先 dig（一次调用，便宜）；只有 dig 明确说 `OUT_OF_REACH` 才走过去，走过去后再试一次。**
+            //   好处有三：
+            //     ① 去掉魔法常量 4 与真实 reach（~4.5）之间的错配
+            //     ② 大部分"STUCK 卡在 3-4 格"的情况**根本不需要走**——直接挖掉
+            //     ③ "够得着"这个判据由 dig 自己给（权威），不是我们猜
+            let dug = await digBlock(bot, { kind: 'block', pos: { x: block.position.x, y: block.position.y, z: block.position.z } });
+
+            if (!dug.ok && dug.code === 'OUT_OF_REACH') {
+                // 够不着 → 走到方块旁边能站的那一格，再试一次
+                //   ★ 目标不能是方块自身（实心格内部，寻路器站不进去 → NO_REACH，t67）
                 const stand = findStandNear(bot, block.position);
                 const walked = await goTo(bot, stand
                     ? { kind: 'point', pos: stand }
@@ -311,40 +316,24 @@ export async function mine(bot, ore, count = 1, opts = {}) {
                     deadlineMs: Math.max(MIN_WAIT_BUDGET_MS, Math.min((ctx.deadline ?? Date.now() + APPROACH_WINDOW_MS) - Date.now(), APPROACH_BUDGET_MS)),
                     arriveTol: 2,
                 });
-                if (!walked.ok) {
-                    // ★ t72：常驻诊断（TRACE 守卫，默认零输出零开销）—— 见文件顶部的说明
-                    trace('goTo', 'false', walked.code ?? '', '|', String(walked.message ?? '').slice(0, 100),
-                        '| stand=', JSON.stringify(stand), 'bpos=', block.position.x, block.position.y, block.position.z);
-                    if (walked.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
-                    // ★★ 2026-11-04（t78）：**走不动 ≠ 够不着 —— 先重新量一次距离。**
-                    //
-                    //   真机证据（第 24 跑）：`NO_REACH ×139`，其中
-                    //     「还差 5 格，最后原因 STUCK」×67
-                    //     「还差 4 格，最后原因 STUCK」×36
-                    //     「还差 6 格，最后原因 STUCK」×17
-                    //   `stand` 全对（0 个 null）→ 落点没问题，是**走过去时被树叶/树干物理卡住**。
-                    //
-                    //   而循环的判据是 `if (d > 4) { goTo }` ——
-                    //   **她本来离 8 格，`goTo` 已经把她带到 3-6 格了**，
-                    //   这时 d 已经 ≤4（够得着！），可代码却直接 `continue` 跳过这一块，
-                    //   于是"白走一趟 + 白丢一块"。
-                    //
-                    //   正确做法：**走不动就重新量距离，够得着就直接挖**。
-                    //   够不着才真的换下一块（保持原来的 OUT_OF_REACH 语义）。
-                    const dNow = block.position.distanceTo(bot.entity.position);
-                    if (dNow <= 4) {
-                        trace('goTo', 'stuck-but-in-reach', 'dNow=', dNow.toFixed(1), '→ 直接挖');
-                        // 落到下面的 digBlock（不 continue）
-                    } else {
-                        lastCode = 'OUT_OF_REACH';            // 真够不着：换下一块
-                        continue;
+                trace('goTo', walked.ok ? 'true' : 'false', walked.code ?? 'OK',
+                    '|', String(walked.message ?? '').slice(0, 100),
+                    '| stand=', JSON.stringify(stand),
+                    'bpos=', block.position.x, block.position.y, block.position.z,
+                    '| dNow=', block.position.distanceTo(bot.entity.position).toFixed(1));
+                if (walked.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
+                // ★ 不管走没走到，**再试一次 dig** —— 走不动也可能已经进了 reach
+                //   （第 24/27 跑：`STUCK` 卡在 3-6 格，但 4.1 格就能挖）
+                dug = await digBlock(bot, { kind: 'block', pos: { x: block.position.x, y: block.position.y, z: block.position.z } });
+                if (!dug.ok) {
+                    lastCode = dug.code ?? 'OUT_OF_REACH';
+                    if (dug.code === 'NO_TOOL') {
+                        return fail('NO_TOOL', dug.message ?? '挖不动', { ore, block: block.name, count: mined, want });
                     }
-                } else {
-                    trace('goTo', 'true', 'OK', '| stand=', JSON.stringify(stand));
+                    continue;                                  // 这一块真拿不到，换下一块
                 }
             }
 
-            const dug = await digBlock(bot, { kind: 'block', pos: { x: block.position.x, y: block.position.y, z: block.position.z } });
             // ★ t78：`dig` 打点补回来（第 24 跑 verify 报它丢了）
             // ★ t79：把 `dug.message` 也打出来 —— 第 25 跑 `dig false INTERNAL ×5403`（d=1.2 够得着）
             //   但没打 message，看不到底层原因。`act_dig` 把 `holdDig` 的 error.message 原样带出来，
