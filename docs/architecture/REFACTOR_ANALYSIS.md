@@ -2488,6 +2488,70 @@ jobs=6  maxDepth=6  hitDepth=true  hitJobs=false  gaps={"mat_6":1}
 
 ---
 
+### 第一夜端到端链路：13 层与教训（2026-11-04，t51–t67）
+
+`!do first_night` 是**唯一一条从策略层一路打到原子层的完整链路**：
+策略拆单 → 任务板 → 调度器 → 流程 → 动作 → 原子 → mineflayer。
+它连续断了 **13 次**，每次"修好了"都只是把 0/5 换成下一个 0/5。
+本节把 13 层逐条记账（每层都有 commit 号、"怎么发现的"、教训族），并归纳可复用的方法论。
+
+**当前状态（截至 `8446430`）**：13 层全部已修且有离线用例；**端到端绿跑尚未记录** ——
+第 14 跑（`8446430` 的证据来源）仍卡在 ⑬，第 15 跑由 verify 进行中。
+**别把"13 层都修了"读成"链路已通"**，那是两件事。
+
+#### 逐层台账
+
+| # | 症状 | 根因 | 修法 | 怎么发现的 | 教训族 |
+|---|---|---|---|---|---|
+| ① | `!do first_night` 印 **OK**，任务板 **0 张单** | 三个策略绑定**从未转发 ctx**：`run:(bot,args,ctx)=>runFirstNight(ctx?.agent ?? bot, {maxJobs:args.maxJobs})`；而 ctx 里**既没 agent 也没 board**（只有 jobId/mapDir/deadline/jobBudget/onEvent）→ `ctx?.agent ?? bot` 取到 **mineflayer bot**（无 `.board`）→ `strat_first_night:228` `deps.board ?? agent?.board` = **null** → noBoard 分支 `return ok({noBoard:true})`；那句 note 因 `ok===true` **永不显示**（`formatActionOutcome` 只在 ok===false 印 message）| ctx 新增 `agent`/`board`（只增不改）；三个绑定把 `ctx.agent`+`ctx.board` 传进 deps（`6b205a4`）| **verify 打点 + control 离线复核，两条独立路同一结论**；修复前后：first_night `add 0→6 次`、obtain `0→2` | 「传参漏了 → 分支永不走」**第 3 例**（前两例：`availableSkills` 取不到给 `[]`、`planNeeds` 5 字段只传 1）|
+| ② | 10 分钟 **105 张**同样的 `obtain:stone_pickaxe` | `strat_obtain` 有**三处** `return ok({...})`，上轮只修两处，**noBoard 分支漏了 `want`** → `finish()` 规则③ `want<=0` 成立 → `completed=true` | 第三处同样 `count: gotNow, want: Number(count)`（`dee4612`）| verify 真 agent 跑的分布：`总单数 105`、`{"obtain:stone_pickaxe":105}`、最近三张 `{count:1,want:null}`、`first_night` 单数 **0** | 「假成功/假完成」|
+| ③ | 背包**空着**也判 `obtain:oak_log` 完成（`{"count":8}`）| `count` 报的是**请求数**不是到手数，且没返 `want` → `_progressOf()` 当进度 → `finish()` 里 `want` 缺省 0 → `want<=0` → 立刻 done | `gitNow = countInventory(agent)[item] ?? 0` → `count: gotNow, want: Number(count)`（`d09bfee`）| verify 第一夜断链日志：`obtain:oak_log → done {"count":8}` 但 `craft:crafting_table → blocked NO_ITEM`，最终 `inventory.items()={}` | 「假成功/假完成」|
+| ④ | 新号**空背包连树都撸不了**：`mine oak_log → NO_TOOL` | `act_dig.js:195` 的**手写白名单** `/dirt\|sand\|gravel\|grass\|clay\|leaves\|wool\|snow\|soul_/` **漏了木头**（`_log`/`wood`/`planks`/`stem`/`hyphae`）—— 而 `oak_log` 根本不需要镐 | 改读权威字段 `block.harvestTools`：无 = 徒手可挖；`stone` 6 个 / `iron_ore` 4 个 = 需镐（`1855dbb`）| verify 第一夜第一块多米诺；顺带发现**假件也不真**：单测假矿块没写 `harvestTools`，把"需要镐"伪装成"徒手可挖" | 「名字/清单漂移于真相」|
+| ⑤ | 约 45 秒一张，10 分钟 **138 张**，把板压到 `board:add` ack 超时 | idle_planner **同类需求无冷却**：判"缺石镐"→ 下单 → 该单 `blocked` → `jobBusy` 立刻 false → **3 秒后又下同一张** | `IDLE.NEED_RETRY_MS=300000`；`decideIdle` 收 `recentNeeds[why]` 冷却期内不下；**下单成功才记时间**（失败不记，否则变永久冷却）；记忆挂 `agent._idleNeedAt`（`decideIdle` 是纯函数）（`9dd1337`）| verify 真机单量增长曲线 | 「并发抢资源」（自我竞争）|
+| ⑥ | "缺吃的"**永远落不到第 1 层**（死分支）| `idle_planner` 写 `{skill:'food'}`，而 `SKILL_NAMES` 里**没有 food**（注册名是 **`eat`**）→ `have.has(need.skill)` 恒 false | 改成 `eat`；并修两个**钉住旧错名**的测试（`idle_planner_unit` 期望 `'food'`、`board_scheduler_unit` 的 `availableSkills` 写 `'food'`）（`9dd1337`）| **t57 写冷却用例时用 `foodCount:1` 触发的** —— 用例⑨ 直接变红 | 「名字/清单漂移于真相」|
+| ⑦ | 整条链"编排通过"但没真跑通 | **测试场地没树**（世界只有 plains）。`craft` 回报 `NO_ITEM` 是**预期行为，不是编排错** | 非代码：换有树场地跑（`t37_firstnight_live.mjs` 已备，含真实森林 + 两层判据）| atoms 如实报"编排对、链路没走通，两件事"；同族证据：拿 `registry.blocksByName` 当"附近有树"、拿背包残留当"刚采到的" —— **测量工具在骗自己** | 「测量工具骗自己」|
+| ⑧ | 外层 `obtain` 单 `attempts` 烧到 3 → `blocked`，旁边明明有 5 个子单做成了 | `strat_obtain` **无论是否正在被调度器执行都再建一张 `obtain` 壳**：外层那张**永远 0 子单** → `finish` 按叶子单规则判"ok 但不够" → 重试到 blocked；真干活的壳与子单挂在旁边 | `const myJobId = deps.ctx?.jobId ?? null; let parentId = myJobId;` **只有没有 job 上下文时**才建壳（`eb3328f`）| verify **查库**（不是读代码猜）：`0002 blocked att=3 子单数=0` / `0003 blocked 子单数=5` / `0010 parent=0009 子单数=0` | 「假成功/假完成」+「两套东西各叫一个名字」|
+| ⑨ | ⑧ 的修复**不可能生效**：`ctx.jobId` 恒 `null` | `board_scheduler:636` `runner(agent, skill, argsToString(args))` **job 没传** → `composite_registry:557` `makeCtx(agent, null, manifest)` **硬编码 null** → `:413 jobId=job?.id ?? null` → `strat_obtain:417 myJobId` 恒 null → 每次都建壳 | 三处把 job 传下去：`runner(...,job)` / `defaultRunSkill(agent,skill,argString,job)` / `runSkill(agent,name,argString,job)` → `makeCtx(agent, job, manifest)`（`01c78a3`）| verify **逐行钉死**整条 5 行调用链 | 「传参漏了 → 分支永不走」**第 4 例**；"修了判断、但判断的输入是死的"|
+| ⑩ | 真挖到 8 个木头，`craft crafting_table` 却说 `NO_ITEM 料不够` | **配方要中间物不是原材料**：`crafting_table` 的 `inShape=[[41,41],[41,41]]`（41=`oak_planks`）→ 要 **4 个木板**，而 `first_night` 直接派 `craft`，没人把中间物备齐（`flow_craft` 契约就是"缺料返 NO_ITEM + data.missing，交给 strat_obtain"）| 三步从 `craft` 改成 **`obtain`**，交给策略层递归（`3eca173`）；实测递归链正确 `crafting_table → craft:crafting_table → craft:oak_planks → mine:oak_log` | 真机**第 9 跑**止损点（`mine 8/8 done` 紧接 `craft blocked NO_ITEM`）| 「能力有了但没表达顺序/约束」|
+| ⑪ | 工作台子单抢在木板子单**前面**跑 → `NO_ITEM` → 父单 blocked，而木板其实做出来了 | 递归子单**只写 `parentKey`（给 why 用），从没写 `dependsOn`** → 调度器看到全是 `ready`，没有先后约束 | 旁路后处理（不动 `expand` 十几处 return）：`needsOf.set(name, Object.keys(src.recipe))` 记"成品←材料"边 → 补 `dependsOnKeys`（`key=<item>#<depth>`）→ 子单**分两遍建**（先材料后成品）并用 `keyToId` 换真实 job id（`e8a57e5`）| 真机**第 11 跑**（verify 定位）：`craft crafting_table blocked` 先跑、`craft oak_planks done 8/4` 后跑 —— 谁先看运气 | 「能力有了但没表达顺序/约束」|
+| ⑫ | 底层 `dig` **1590 次 INTERNAL**（`The goal was changed before it could be completed`），成功 **1 次** | **两条流抢同一个 pathfinder**：idle 的 `obtain stone_pickaxe` 在 `feetY=8→-23→-51` 下潜，同时 `first_night` 的 `obtain oak_log` 到了树区 → 每次都被对方改掉 goal | `nav_core.goTo` 加"**单一驱动者**"闸：同 owner 可重入；不同 owner **排队等**，等不到就 `BLOCKED`（明确码，不假装成功）；owner 默认取 `bot.__navJobId`（`makeCtx` 写 bot，所有 flow 自动带上，不用改几十处）（`7f699c6`）| verify **第 13 跑**全量日志 5736 行打点；`[MINE] round` 行直接暴露两条流的坐标 | 「并发抢资源」——**D18 的导航版**（M2 修的是"两个流程同时驱动身体"，导航层一直没这道闸）|
+| ⑬ | `goTo` **NO_REACH × 127**；`d<=4` 的 7 块成功，`d>4` 的 120+ 块全跳过 | `flow_mine` 的 `if (d>4) goTo(...)` 把**方块自身位置**（实心格内部）当目标 —— 寻路器不可能站进实心格 | 新增 `findStandNear(bot,pos)`：同层四邻找「那格是 air 且脚下实心」的一格；**找不到就退回"只给 x/z"**（不比原来差）（`8446430`）| verify **第 14 跑**：`[MINE] try d=4.6/4.9/5.1…` 全跳过 vs `d=1.2/2.5/3.5…` 成了 7 个 | 「坐标/语义没分清」（同类：`act_step` 要**脚位**而 `path_3d` 给**面位**，差 1 格）|
+
+**另有一层同属这条链（t58）**：`board:add` **ack 超时 ≠ 没建成** —— 服务端其实已建出父单（库里 3 张 `running`），
+客户端判失败 → `firstNight` 直接 return → 子单一张不建 → **父单永久孤儿**。
+修法：`add()` 收到 `TIMEOUT` 后**回查一次** `_findJustAdded(job)`（按 `skill+why+source+assignee` 找同形状的 `ready/running`，
+有 `at` 时优先 60 秒内），找到即当成功并带 `recoveredFromTimeout:true`；**找不到仍返回原失败**（不假装成功）（`9dd1337`）。
+
+#### 为什么这条链特别难
+
+1. **它是唯一贯穿全部 7 层的链路**（策略拆单 → 任务板 → 调度器 → 流程 → 动作 → 原子 → mineflayer）。
+   而 `unit_all` 的 48 个脚本**只测单层**（每层都绿），**任何一层断了，端到端结果都一样是"0 张单 / 0 个方块"**
+   —— 症状完全相同，无法从结果反推是哪一层。
+2. **失败会在层间"变形"**：⑨ 让 ⑧ 的修复失效（`ctx.jobId` 恒 null）；① 让"0 张单"和 ②③ 的"105 张单"
+   看起来像两个不同问题；⑤ 的 138 张单是 ② 的假完成 + 调度器 3 秒一拍**共振**出来的。
+   **所以"修完一个还是 0/5"是常态，不是修错了。**
+3. **每层都能"单独自证正常"**：`strat_obtain` 单测传真 board 是好的（`add 0→6`），`flow_craft` 单测好的，
+   `act_dig` 单测好的 —— **单层绿灯 + 端到端红灯**。这是"分层验收全绿 ≠ 端到端可用"最干净的例证（与 dig-through 五轮攻坚同构）。
+4. **只能靠"打点 + 查库"定位，不能靠读代码**：⑧ 的父子账是 `SELECT ... WHERE parentId=?` 数出来的；
+   ⑫ 靠 5736 行日志里 `[MINE] round` 的坐标对比；⑬ 靠 `d=4.6/4.9/5.1` 与 `d=1.2/2.5/3.5` 的分布。
+   **每一层都是"先量化、再定位、最后才改代码"。**
+
+#### 排查纪律（这批比 bug 本身值钱）
+
+1. **先证伪自己，再下结论**。verify 今晚**撤回 4 次自己的错误归因**：双调度器 / `[MINE]` 没输出 /
+   策略单占 bot 死锁 / `risk` 假设。**每撤一次都比上一次更接近真相** —— 归因不是"猜对才算数"，是"能被证据推翻才算数"。
+2. **用统计对比证明修复生效，不看"看起来通了"**：`dig OK 1→7`、`dig INTERNAL 1590→0`、`add 0→6 次`、
+   进度 `{count:8}` → `{count:gotNow, want:8}`。**一次成功不算通，分布变了才算修好。**
+3. **判据来源必须与被测对象当前状态无关**：查库（`WHERE parentId=?`）> 看背包；RCON `data get block`（地面真相）> 信 mirror；
+   **比较基准要选"不会被这次改动影响的那一份"**。
+4. **反向验证**：闸要能证明"不这么做就挡住"，用例要能证明"改坏了会红"。
+   例：`nav_lock_unit` 4/4 含反向验证；`act_p1_unit` 的 `TOGGLEABLE` 变异测试（删掉一支 → 正好那两条红）。
+   **"我加了测试"≠"测试能抓"** —— 变异一次才作数。
+5. **同一件事只许有一个名字**：`boardClient`/`board`、`interrupted` 字段、`food`/`eat`、外层单/壳、
+   两个 `ctx`（一个带板一个不带）—— 今晚 **5 处**都是"两个名字指同一个东西"或"名字指向不存在的东西"。
+
+---
+
 **文档版本**: 1.0  
 **生成时间**: 2026-10-31  
 **基于报告**: 4个子agent只读调研（token总计~2.1M）
