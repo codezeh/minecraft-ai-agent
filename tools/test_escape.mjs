@@ -12,6 +12,7 @@
 //   - 步骤名 jumpPlace → pillar（现在这一步就是调 atom_pillar.pillarUpOnce）
 //   - 新增：头顶第二格挖不动只降空间、不致命；第一格挖不动才 BLOCKED
 import { planEscape } from '../src/agent/library/flow_escape.js';
+import { assertPointLike } from './fixtures/fake_bot.mjs';
 import { findScaffoldItem } from '../src/agent/library/scaffold_blocks.js';
 
 let passed = 0, failed = 0;
@@ -25,6 +26,8 @@ function fakeBot({ y = 42, solidAbove = 20, solidName = 'stone', items = [{ name
         entity: { position: { x: 10.5, y, z: 10.5 } },
         inventory: { items: () => items.map((it, i) => ({ ...it, type: i + 1 })) },
         blockAt: (pos) => {
+            // ★ t68：严格守卫（与共享夹具同一条判据）—— 裸坐标要像真 mineflayer 一样被拒
+            assertPointLike(pos);
             const by = Math.floor(pos.y);
             if (by <= y) return { name: 'stone', position: pos, diggable: true };
             if (by <= y + solidAbove) return { name: solidName, position: pos, diggable: solidName !== 'bedrock' };
@@ -131,6 +134,8 @@ console.log('\n=== 9) 第二格挖不动只降空间、不致命（第一格才�
         entity: { position: { x: 10.5, y: 42.5, z: 10.5 } },
         inventory: { items: () => [{ name: 'dirt', count: 64, type: 1 }] },
         blockAt: (pos) => {
+            // ★ t68：严格守卫（与共享夹具同一条判据）—— 裸坐标要像真 mineflayer 一样被拒
+            assertPointLike(pos);
             const by = Math.floor(pos.y);
             if (by <= 42) return { name: 'stone', position: pos, diggable: true };
             if (by === 43) return { name: 'stone', position: pos, diggable: true };

@@ -103,6 +103,9 @@ if (skipped.length) {
 
 let failed = 0;
 const results = [];
+/** t68：统计"绕过了严格假件（覆盖 stubs.blockAt）"的次数 = 单测盲区宽度的下限。 */
+let strictBypass = 0;
+let strictBypassFiles = [];
 
 for (const name of list) {
     const script = join(HERE, `${name}.mjs`);
@@ -110,9 +113,13 @@ for (const name of list) {
     try {
         const out = execFileSync(process.execPath, [script], {
             encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'],
+            // 把 fake_bot 的"覆盖严格 blockAt"告警改走 stdout，好在这里统计到
+            env: { ...process.env, FAKE_BOT_NOTICE_STDOUT: '1' },
         });
         const printed = String(out);
         process.stdout.write(printed);
+        const bypass = (printed.match(/\[fake_bot\]\[STRICT-BYPASS\]/g) || []).length;
+        if (bypass) { strictBypass += bypass; strictBypassFiles.push(`${name}(${bypass})`); }
         // ★ 2026-11-01 修：只数**行首**的 PASS（同 atom_all）。汇总行里也含 "PASS" 字样，
         // 用词边界匹配会把汇总行算成一条用例，显示数系统性虚高。
         const passCount = (printed.match(/^\s*PASS\s/mg) || []).length;
@@ -139,6 +146,15 @@ for (const name of skipped) {
     console.log(`  ⏭ ${name}  (需要真机数据，加 --real 跑)`);
 }
 console.log(`  ${results.length - failed}/${results.length} 个脚本通过${skipped.length ? `，${skipped.length} 个跳过` : ''}`);
+// ★ t68：绕过严格假件的次数 —— **单测盲区宽度的下限**。
+//   "门装了吗" 不等于 "有多少人走门"：`strictPoints` 只在**没被 stubs.blockAt 覆盖**时生效。
+//   这个数 = 当前有多少个用例走偏门、对"裸坐标"这类形状错误无感。
+if (strictBypass) {
+    console.log(`  ⚠ 绕过严格假件（stubs.blockAt 覆盖）：${strictBypass} 处 —— 这些用例里 strictPoints 不生效`);
+    console.log(`     来源：${strictBypassFiles.join(' ')}`);
+} else {
+    console.log('  ✓ 没有用例覆盖 stubs.blockAt（严格假件全量生效）');
+}
 console.log('  （这些都不需要服务器；需要真机的另有 tools/atom_all.mjs）');
 console.log('============================================');
 process.exit(failed === 0 ? 0 : 1);

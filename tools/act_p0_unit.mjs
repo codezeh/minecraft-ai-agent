@@ -475,7 +475,10 @@ function assertResult(name, r) {
 // ── 24. plantSeed：不是耕地 → NO_TARGET ─────────────────────────────
 {
     const bot = makeFakeBot({
-        stubs: { blockAt: (v) => ({ name: 'dirt', position: v }) },
+        // t68：原来是「dirt 遍地」的纯回声桩 → 改成**真 world**（只有这一格是 dirt）。
+        //   等价性：用例只读 (0,64,0)，其余格原为 dirt、现为 air，结论不变（NO_TARGET）。
+        world: worldOf([[0, 64, 0, 'dirt']]),
+        unloaded: 'air',
     });
     const r = await plantSeed(bot, { pos: { x: 0, y: 64, z: 0 } }, 'wheat_seeds');
     if (assertResult('plantSeed 非耕地', r) && !r.ok && r.code === 'NO_TARGET') {
@@ -489,11 +492,9 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         items: [{ name: 'wheat_seeds', type: 1, count: 4, slot: 0 }],
-        stubs: {
-            blockAt: (v) => (v.y === 64
-                ? { name: 'farmland', position: v }
-                : { name: 'oak_leaves', position: v }),      // 上方有东西
-        },
+        // t68：纯位置桩 → 真 world（64 层耕地、65 层叶子 = 上方被占）
+        world: worldOf([[0, 64, 0, 'farmland'], [0, 65, 0, 'oak_leaves']]),
+        unloaded: 'air',
     });
     const r = await plantSeed(bot, { pos: { x: 0, y: 64, z: 0 } }, 'wheat_seeds');
     if (assertResult('plantSeed 被占', r) && !r.ok && r.code === 'OCCUPIED') {
@@ -507,7 +508,9 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         items: [],
-        stubs: { blockAt: (v) => (v.y === 64 ? { name: 'farmland' } : { name: 'air' }) },
+        // t68：纯位置桩 → 真 world（等价：64 层耕地、其余空气）
+        world: worldOf([[0, 64, 0, 'farmland']]),
+        unloaded: 'air',
     });
     const r = await plantSeed(bot, { pos: { x: 0, y: 64, z: 0 } }, 'wheat_seeds');
     if (assertResult('plantSeed 无种子', r) && !r.ok && r.code === 'NO_ITEM') {
@@ -542,7 +545,9 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         items: [],
-        stubs: { blockAt: (v) => ({ name: 'grass_block', position: v }) },
+        // t68：纯回声桩（grass_block 遍地）→ 真 world，只铺这一格
+        world: worldOf([[0, 64, 0, 'grass_block']]),
+        unloaded: 'air',
     });
     const r = await tillSoil(bot, { pos: { x: 0, y: 64, z: 0 } });
     if (assertResult('tillSoil 没锄', r) && !r.ok && r.code === 'NO_TOOL') {
@@ -556,7 +561,9 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         items: [{ name: 'iron_hoe', type: 1, count: 1, slot: 0 }],
-        stubs: { blockAt: (v) => ({ name: 'stone', position: v }) },
+        // t68：纯回声桩（stone 遍地）→ 真 world，只铺这一格
+        world: worldOf([[0, 64, 0, 'stone']]),
+        unloaded: 'air',
     });
     const r = await tillSoil(bot, { pos: { x: 0, y: 64, z: 0 } });
     if (assertResult('tillSoil 非泥土', r) && !r.ok && r.code === 'NO_TARGET') {

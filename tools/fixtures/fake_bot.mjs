@@ -58,6 +58,37 @@ export const MC_VERSION = '1.21.8';
 let cachedRegistry = null;
 
 /**
+ * 本进程内"覆盖了 blockAt 严格默认实现"的次数（t68）。
+ *
+ * 为什么要有这个计数：`strictPoints` 只在**没被 stubs 覆盖**时生效。
+ * 计数就是"这个测试文件有多少个用例走偏门绕过了保护"。
+ * `tools/unit_all.mjs` 会把各子进程的数字汇总起来 —— **那就是单测盲区宽度的下限**。
+ */
+export let fakeBotStrictBypassCount = 0;
+
+/** 读当前计数（给 unit_all 汇总用；没 import 夹具的测试文件自然报 0）。 */
+export function getStrictBypassCount() {
+    return fakeBotStrictBypassCount;
+}
+
+/**
+ * 「坐标必须是 Vec3 形状」的唯一实现（t68）。
+ *
+ * 真链路：`bot.blockAt(p)` → `world.getBlock(p)` → `p.floored()`
+ * （`prismarine-world/src/world.js:229`）→ 裸 `{x,y,z}` 直接 TypeError。
+ *
+ * 共享夹具内部用它；**自己手写 bot 的测试也应当调用它**，而不是各自抄一遍
+ * —— 抄出来的每一份都可能慢慢长歪（本项目的老毛病：同一件事两个名字）。
+ *
+ * @throws {TypeError} 传入的不是 Vec3 形状
+ */
+export function assertPointLike(p) {
+    if (typeof p?.floored !== 'function') {
+        throw new TypeError('point.floored is not a function（mineflayer 要 Vec3，裸对象会被拒）');
+    }
+}
+
+/**
  * 真注册表（executor / pathfinder 需要 blocksByName 完整）。
  *
  * 什么时候要：走 `atom_move` → `new pf.Movements(bot)` 这类路径，
@@ -150,6 +181,32 @@ export function makeFakeBot(opts = {}) {
         stubs = {},
     } = opts;
 
+    // ══════════════════════════════════════════════════════════════════════
+    // ★★ 2026-11-04（t68）：**覆盖 `blockAt` = 放弃忠实度保护**，让它可见。
+    //
+    //   为什么需要这条警告：`strictPoints`（默认 true）只保护**默认**的 blockAt 实现；
+    //   测试只要传 `stubs: { blockAt }`，就把那份严格实现**整个换掉**了 ——
+    //   裸坐标检查随之失效。全仓盘点：60 处自定义 blockAt 桩里 **39 处**是这么覆盖进来的。
+    //   **门是装了，但所有人都能从旁边绕过去** —— 而绕过去这件事以前**完全不可见**。
+    //
+    //   为什么不直接禁止：有些桩是**故意的**（例如只测"脚下是水"这一条分支，
+    //   固定返回值反而更清晰）。所以这里不拦，只**报告**：一个用例跑起来就看见这行，
+    //   作者就知道自己放弃了保护。
+    //
+    //   输出通道：默认 `console.warn`（stderr）。当 `unit_all` 跑批量时它设
+    //   `FAKE_BOT_NOTICE_STDOUT=1`，本文件改走 stdout 并带机器可读标记，
+    //   好让 `unit_all` 统计"有多少用例绕过了严格假件"——**那就是单测盲区宽度的下限**。
+    // ══════════════════════════════════════════════════════════════════════
+    const BYPASS_MARKER = '[fake_bot][STRICT-BYPASS]';
+    if (stubs && Object.prototype.hasOwnProperty.call(stubs, 'blockAt')) {
+        fakeBotStrictBypassCount++;
+        if (process.env.FAKE_BOT_NOTICE !== '0') {
+            const msg = `${BYPASS_MARKER} 覆盖了 blockAt 的严格默认实现：裸坐标检查失效（strictPoints 不再保护本用例）`;
+            if (process.env.FAKE_BOT_NOTICE_STDOUT === '1') console.log(msg);
+            else console.warn(`[fake_bot] ⚠ 你覆盖了 blockAt 的严格默认实现：裸坐标检查失效（strictPoints 不再保护这个用例）`);
+        }
+    }
+
     const world = worldOf(rawWorld);
 
     /** world 里的名字 → null（未加载）；`unloaded: 'air'` 时当空气。 */
@@ -168,9 +225,7 @@ export function makeFakeBot(opts = {}) {
         //   为什么假件必须跟着挑剔：t70 那个真机 bug（`stand=null ×130`）就是
         //   `findStandNear` 传裸对象、抛错被 `catch` 吞成 null —— 而假件**收裸对象**，
         //   于是单测全绿、真机全 null。**假件太松 = 假绿**，这条现在是可执行断言。
-        if (strictPoints && typeof v?.floored !== 'function') {
-            throw new TypeError('point.floored is not a function（mineflayer 要 Vec3，裸对象会被拒）');
-        }
+        if (strictPoints) assertPointLike(v);
         if (!v || typeof v !== 'object') {
             return typeof dflt === 'function' ? dflt(null) : null;
         }

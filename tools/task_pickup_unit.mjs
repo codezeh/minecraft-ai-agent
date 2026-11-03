@@ -15,6 +15,7 @@
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
 import { collectDrops } from '../src/agent/library/flow_pickup.js';
+import { makeFakeBot } from './fixtures/fake_bot.mjs';
 
 let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };
@@ -22,6 +23,7 @@ const badCase = (name, actual) => { fail++; console.log(`FAIL ${name} ${actual}`
 
 /** 最小假 bot：够让 collectDrops 走完提前返回的分支。 */
 function makeBot({ interrupted = false } = {}) {
+    const strictPickup = makeFakeBot({ unloaded: 'null' });
     return {
         entity: {
             position: { x: 0, y: 64, z: 0 },
@@ -30,7 +32,9 @@ function makeBot({ interrupted = false } = {}) {
         interrupt_code: interrupted ? 'USER_STOP' : null,
         clearControlStates: () => { },
         // findStandSpot / canStand 会读方块；读不到(null) → 找不到站位 → 直接收尾
-        blockAt: () => null,
+        // ★ t68：委托共享夹具（`unloaded:'null'` 保持"读不到就是 null"的语义；
+        //   同时获得严格性：产品若传裸坐标会抛，而不是静默拿到 null）
+        blockAt: (p, dflt) => strictPickup.blockAt(p, dflt),
         // findDrops 会遍历实体；给空列表
         entities: {},
     };

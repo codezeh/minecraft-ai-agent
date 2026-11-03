@@ -14,26 +14,24 @@
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
 import { detectTrapped } from '../src/agent/library/query_stuck.js';
+import { makeFakeBot } from './fixtures/fake_bot.mjs';
 
 let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };
 const badCase = (name, actual) => { fail++; console.log(`FAIL ${name} ${actual}`); };
 
 /**
- * 假 bot：world 是 "x,y,z" -> 方块名 的 Map。缺省 air。
- * 提供了 canStand 需要的 blockAt（读不到返回 null）。
+ * 假 bot（**共享夹具**，t68 统一替换手写版）。
+ *
+ * 原来手写那份的两个语义必须保留：
+ *   · 缺省格子是 **air**（不是"未加载"）→ 显式传 `unloaded: 'air'`；
+ *   · 位置在格中心（`feet.x + 0.5`）= 夹具 `posOffset: 0.5` 的默认值。
+ *
+ * ★ 收益：`blockAt` 现在像真 mineflayer 一样**拒裸坐标**（`strictPoints` 默认 true）。
+ *   产品哪天传裸对象，这里会立刻红，而不是被宽松假件吞成"看起来正常的空值"。
  */
 function makeBot({ world, feet = { x: 0, y: 64, z: 0 } } = {}) {
-    const key = (x, y, z) => `${x},${y},${z}`;
-    return {
-        entity: { position: { x: feet.x + 0.5, y: feet.y, z: feet.z + 0.5 } },
-        blockAt: (v) => {
-            const p = v && typeof v === 'object' ? v : { x: 0, y: 0, z: 0 };
-            const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
-            const name = world.get(key(x, y, z)) ?? 'air';
-            return { name, position: { x, y, z }, boundingBox: name === 'air' ? null : 'block' };
-        },
-    };
+    return makeFakeBot({ world, feet, unloaded: 'air' });
 }
 
 /** 造一个封闭房间：内部 air，四周与上下 stone。 */

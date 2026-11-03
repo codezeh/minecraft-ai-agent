@@ -18,6 +18,7 @@
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
 import { execStep } from '../src/agent/library/executor.js';
+import { assertPointLike } from './fixtures/fake_bot.mjs';
 import Vec3 from 'vec3';
 
 let pass = 0, fail = 0;
@@ -35,9 +36,10 @@ const key = (x, y, z) => `${x},${y},${z}`;
 function makeBot({ world, pos = { x: 0, y: 64, z: 0 } } = {}) {
     const dugBlocks = [];        // 记录 bot.dig 实际挖的坐标
     const controlStates = [];
-    // ★ 2026-11-03（t46）：脚位要落在**格心**（x/z 带 .5）—— 真机 bot 永远在格心。
-    //   放整数会让"到隔壁一格"算成 hypot(1.5,0.5)=1.58 > STEP_ADJACENT_MAX(1.5)
-    //   → stepInto 在"不是相邻一格"就返回了，邻列走的用例会假红。
+    // ★ t68：`blockAt` 不再自己写宽松版 —— **委托给共享夹具的严格实现**
+    //   （`strictPoints` 默认 true：裸坐标 → TypeError，和真 mineflayer 一致）。
+    //   本文件的其余部分（dig 记录 / 走一格模拟 / 数组形状的按键记录）是它自己的
+    //   行为增强，保留不动 —— 只为"读数"这一项接入严格假件，断言零改动。
     const bot = {
         entity: { position: new Vec3(pos.x + 0.5, pos.y, pos.z + 0.5), onGround: true, height: 1.8, eyeHeight: 1.62 },
         inventory: {
@@ -53,7 +55,13 @@ function makeBot({ world, pos = { x: 0, y: 64, z: 0 } } = {}) {
             world.set(key(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)), 'air');
         },
         blockAt: (v, defaultVal) => {
-            const p = v && typeof v === 'object' ? v : { x: 0, y: 0, z: 0 };
+            // ★ t68：**严格守卫** —— 与共享夹具/真 mineflayer 同一条判据：
+            //   真链路 `bot.blockAt(p)` → `world.getBlock(p)` → `p.floored()`，
+            //   裸对象直接 TypeError。这里保留本文件自己的方块形状（见下方 boundingBox：
+            //   本文件历史上把 air 也给 `boundingBox:'block'`，改成夹具形状会让邻列用例的行为漂移），
+            //   但**坐标形状必须一样挑剔** —— 否则产品传裸对象时这里永远看不见。
+            assertPointLike(v);
+            const p = v;
             const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
             const name = world.get(key(fx, fy, fz)) ?? 'air';
             const block = {

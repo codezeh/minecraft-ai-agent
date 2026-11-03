@@ -13,6 +13,7 @@
  * 输出格式沿用原子测试约定：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
 import { ensureScaffold } from '../src/agent/library/tool_prep.js';
+import { assertPointLike } from './fixtures/fake_bot.mjs';
 
 let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };
@@ -34,7 +35,9 @@ function makeBot() {
         inventory: { items: () => [] },
         dig: async () => { },
         blockAt: (v) => {
-            const p = v && typeof v === 'object' ? v : { x: 0, y: 0, z: 0 };
+            // ★ t68：严格守卫（与共享夹具同一条判据）—— 裸坐标要像真 mineflayer 一样被拒
+            assertPointLike(v);
+            const p = v;
             // 脚下那格给实心（防掉落判定），其余给 dirt
             if (p.x === 0 && p.y === 63 && p.z === 0) return { name: 'stone', position: p };
             return { name: 'dirt', position: p };
