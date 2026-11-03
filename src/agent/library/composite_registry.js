@@ -153,17 +153,30 @@ const ENTRIES = [
         run: (bot, args, ctx) => runShelter(bot, { block: args.block, radius: args.radius, ctx }),
     },
     // ── M10 策略层：只拆子单、等结果，不自己做动作（04 §6.3）────────────
+    //
+    // ★★ 2026-11-03（t55）：三个策略的 `deps` **必须带 `board` 和 `ctx`**。
+    //
+    //   原来这里写的是 `{}` / `{ maxJobs: args.maxJobs }` —— **board 从未被传**。
+    //   而策略层靠 `deps.board ?? agent?.board` 取板，`ctx?.agent ?? bot` 又只是
+    //   mineflayer 的 bot（没有 `.board`）→ `board = null` → 走 noBoard 分支 →
+    //   **返回 ok 但一张单都不建**，`!do` 印 "OK"，板上 0 张。
+    //
+    //   `ctx` 也要传：`strat_first_night` 读 `deps.ctx?.jobBudget`（A2 的共享预算），
+    //   不传就等于 A2 经 runSkill 全线失效。
     {
         manifest: manifestObtain,
-        run: (bot, args, ctx) => runObtain(ctx?.agent ?? bot, args.item, args.count, {}),
+        run: (bot, args, ctx) => runObtain(ctx?.agent ?? bot, args.item, args.count, { board: ctx?.board ?? null, ctx }),
     },
     {
         manifest: manifestToolTier,
-        run: (bot, args, ctx) => runToolTier(ctx?.agent ?? bot, args.target, {}),
+        run: (bot, args, ctx) => runToolTier(ctx?.agent ?? bot, args.target, { board: ctx?.board ?? null, ctx }),
     },
     {
         manifest: manifestFirstNight,
-        run: (bot, args, ctx) => runFirstNight(ctx?.agent ?? bot, { maxJobs: args.maxJobs }),
+        // ★ t55：`board` + `ctx` 必须传进去（原来只有 maxJobs → deps.board 是 undefined
+        //   → firstNight 走 noBoard 分支 → 一张单不建却返回 ok）。
+        //   `ctx` 一并传：`deps.ctx?.jobBudget` 是 A2 的共享预算，不传就等于 A2 失效。
+        run: (bot, args, ctx) => runFirstNight(ctx?.agent ?? bot, { ...(ctx ?? {}), board: ctx?.board ?? null, maxJobs: args.maxJobs }),
     },
 ];
 
@@ -400,6 +413,27 @@ export function makeCtx(agent, job = null, manifest = null) {
         jobId,
         mapDir: mapDirOf(agent),
         deadline,
+
+        // ★★ 2026-11-03（t55）：**把 `agent` 和 `board` 暴露到 ctx 上**。
+        //
+        // 为什么必须加（真机 bug，不是洁癖）：
+        //   策略层 `strat_*` 的签名是 `(agent, ..., deps)`，从 `deps.board ?? agent?.board` 取任务板。
+        //   但注册表里三个策略的适配器是：
+        //     run: (bot, args, ctx) => runFirstNight(ctx?.agent ?? bot, { maxJobs: args.maxJobs })
+        //   —— `ctx` 里**既没有 agent 也没有 board**（本函数原来只放 jobId/mapDir/deadline/jobBudget/onEvent），
+        //   于是 `ctx?.agent ?? bot` 取到的是 **mineflayer 的 bot**（没有 `.board`），
+        //   `deps.board` 也没有 → `board = null` → 走 `noBoard` 分支
+        //   → **返回 `ok({noBoard:true})`、一张单都不建** → `!do first_night` 印 "OK" 但板上 0 张单。
+        //
+        //   离线实测（control 复核）：`runSkill` 路径 `add` 调用 **0 次**、`steps=5`；
+        //   直调 `firstNight(agent, {board})` 时 `add` 调用 **7 次**、`steps=6**。
+        //
+        // 影响面：`strat_obtain` / `strat_first_night` 经 `runSkill` 全都拿不到板；
+        //   `flow_*` 不受影响（它们的适配器本来就用 ctx 里已有的东西）。
+        //
+        // ★ 只**新增**两个字段，不动任何已有字段（ctx 是 M5 核心，所有流程都在用）。
+        agent,
+        board,
 
         /**
          * ★★ 2026-11-03（A2）：**子单预算，跨调用共享**。
