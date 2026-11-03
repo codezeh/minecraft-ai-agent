@@ -88,7 +88,7 @@ function mineBot({ withOre = 2, canDig = true } = {}) {
     for (let i = 0; i < withOre; i++) {
         oreBlocks.push({
             name: 'iron_ore', position: { x: i + 1, y: 16, z: 0, distanceTo: () => 1 },
-            diggable: true, canHarvest: () => true,
+            diggable: true, canHarvest: () => true, harvestTools: { 877: true },
         });
     }
     const dug = new Set();
@@ -126,7 +126,7 @@ function mineBot({ withOre = 2, canDig = true } = {}) {
 // ── 6. mine：没有镐 → NO_TOOL（abort 类）─────────────────────────
 {
     // 直接造一个空背包的 bot（不要"先给镐再清空 slots"：heldItem / count 闭包会留旧值）
-    const ore = { name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 }, diggable: true, canHarvest: () => true };
+    const ore = { name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 }, diggable: true, canHarvest: () => true, harvestTools: { 877: true } };
     const bot = makeFakeBot({
         feet: { x: 0, y: 16, z: 0 },
         items: [],
@@ -160,7 +160,7 @@ function mineBot({ withOre = 2, canDig = true } = {}) {
         registry: { blocksByName: { iron_ore: { id: 15 } }, itemsByName: { iron_pickaxe: { id: 257 } } },
         stubs: {
             findBlocks: () => [{ x: 1, y: 16, z: 0 }],
-            blockAt: (v) => ({ name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 }, diggable: true, canHarvest: () => true, digTime: () => 100 }),
+            blockAt: (v) => ({ name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 }, diggable: true, canHarvest: () => true, harvestTools: { 877: true }, digTime: () => 100 }),
             dig: async () => { /* 挖不动：方块一直在 */ },
         },
     });
@@ -192,7 +192,7 @@ function farmBot({ mature = 2, farmland = 2, seeds = 4 } = {}) {
                     return {
                         name: b.name, position: { x, y, z },
                         getProperties: () => ({ age: b.age }),
-                        diggable: true, canHarvest: () => true, digTime: () => 100,
+                        diggable: true, canHarvest: () => true, harvestTools: { 877: true }, digTime: () => 100,
                     };
                 }
                 return { name: 'air', position: { x, y, z } };

@@ -35,7 +35,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
     const world = new Map();          // "x,y,z" -> block
     const addOre = (x) => world.set(`${x},16,0`, {
         name: 'iron_ore', position: { x, y: 16, z: 0, distanceTo: () => 1 },
-        diggable: true, canHarvest: () => true, digTime: () => 50,
+        diggable: true, canHarvest: () => true, harvestTools: { 877: true }, digTime: () => 50,
     });
     for (let i = 0; i < oreCount; i++) addOre(i + 1);
 
@@ -78,7 +78,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
 // ── 1. ① 只有一把全新镐，挖掉 1 块后**仍然能继续挖** ─────────────────
 {
     const bot = mineBot({ oreCount: 4 });
-    const before = canDigWithInventory(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true });
+    const before = canDigWithInventory(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } });
     const r = await mine(bot, 'iron', 3, { ctx: { deadline: Date.now() + 20000 } });
     const afterPick = bot.inventory.slots.find((i) => i.name === 'iron_pickaxe');
     const good = before === true && r.ok && r.data.count >= 3 && afterPick.durabilityUsed >= 3;
@@ -93,7 +93,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
 // ── 2. 挖 1 块之后立刻再问判据 → 必须仍是 true（真机 bug 的核心断言）──
 {
     const bot = mineBot({ oreCount: 2 });
-    const oreBlock = () => ({ name: 'iron_ore', diggable: true, canHarvest: () => true });
+    const oreBlock = () => ({ name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } });
     // 手动挖掉 1 块（模拟"挖了 1 个之后"）
     const r1 = await mine(bot, 'iron', 1, { ctx: { deadline: Date.now() + 10000 } });
     const afterOne = canDigWithInventory(bot, oreBlock());
@@ -110,7 +110,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
     const bot = mineBot();
     // 模拟"刚死/重建中"：inventory 整个不见了
     Object.defineProperty(bot, 'inventory', { configurable: true, get: () => null });
-    const block = { name: 'iron_ore', diggable: true, canHarvest: () => true };
+    const block = { name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } };
     const why = canDigReason(bot, block);
     const r = await mine(bot, 'iron', 2, { ctx: { deadline: Date.now() + 8000 } });
 
@@ -130,7 +130,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
 {
     const bot = mineBot();
     bot.inventory = { items: () => { throw new Error('desync'); } };
-    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true });
+    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } });
     if (why.can === false && why.why === 'unreadable') okCase('inventory.items() 抛错 → unreadable', why.why);
     else badCase('items() 抛错', why);
 }
@@ -139,7 +139,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
 {
     const bot = mineBot();
     bot.health = 0;
-    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true });
+    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } });
     if (why.can === false && why.why === 'unreadable') {
         okCase('血量 0（刚死、背包被清）→ unreadable（不是 no-tool）', why.why);
     } else badCase('血量 0 的三态', why);
@@ -155,11 +155,11 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
             findBlocks: () => [{ x: 1, y: 16, z: 0 }],
             blockAt: () => ({
                 name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 },
-                diggable: true, canHarvest: () => true,
+                diggable: true, canHarvest: () => true, harvestTools: { 877: true },
             }),
         },
     });
-    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true });
+    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } });
     const r = await mine(bot, 'iron', 1, { ctx: { deadline: Date.now() + 5000 } });
     const good = why.can === false && why.why === 'no-tool'
         && !r.ok && r.code === 'NO_TOOL';
@@ -170,7 +170,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
 // ── 7. 磨损到不能用的镐 → no-tool（不是 unreadable）────────────────
 {
     const bot = mineBot({ picks: [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 36, maxDurability: 250, durabilityUsed: 249 }] });
-    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true });
+    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } });
     // max-used = 1 → 不能用 → no-tool（背包读得到，所以不是 unreadable）
     if (why.can === false && why.why === 'no-tool') okCase('磨损到剩 1 耐久的镐 → no-tool（不是 unreadable）', why.why);
     else badCase('磨损镐', why);
@@ -184,7 +184,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
             { name: 'iron_pickaxe', type: 892, count: 1, slot: 37, maxDurability: 250, durabilityUsed: 0 },   // 全新
         ],
     });
-    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true });
+    const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } });
     if (why.can === true) okCase('多把镐：任一把能用即可（第一把废了也不误判）', why.why);
     else badCase('多把镐', why);
 }
@@ -192,6 +192,7 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
 // ── 9. 徒手能挖的方块不受影响 ────────────────────────────────────
 {
     const bot = makeFakeBot({ items: [], registry: { blocksByName: {}, itemsByName: {} } });
+    // ★ dirt 真实没有 harvestTools（徒手可挖）—— 别给它加，否则这个用例就没意义了
     const why = canDigReason(bot, { name: 'dirt', diggable: true, canHarvest: () => true });
     if (why.can === true && why.why === 'ok') okCase('徒手可挖（dirt）→ ok，与工具无关', why.why);
     else badCase('徒手可挖', why);

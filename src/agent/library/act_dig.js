@@ -191,8 +191,30 @@ export function canDigReason(bot, block) {
     if (!isDiggable(block)) return { can: false, why: 'not-diggable' };
 
     // Blocks she can dig bare-handed (no tool required in vanilla).
+    //
+    // ★★ 2026-11-03（t56）：**别再手写清单，用 minecraft-data 的权威字段 `harvestTools`。**
+    //
+    //   原来的正则白名单是 `/dirt|sand|gravel|grass|clay|leaves|wool|snow|soul_/` ——
+    //   **漏了木头**（`_log` / `wood` / `planks` / `stem` / `hyphae`）。
+    //   后果（真机第一夜链路的第一块多米诺）：新号空背包时
+    //     `mine oak_log` → `NO_TOOL「挖不动 oak_log（没有合适的镐）」`
+    //   —— 而 `oak_log` **根本不需要镐**，她连树都撸不了，整条 first_night 卡在第一步。
+    //
+    //   权威数据（minecraft-data 1.21.8 实测）：
+    //     oak_log     harvestTools = 无     → 徒手可挖 ✅
+    //     oak_planks  harvestTools = 无     → 徒手可挖 ✅
+    //     dirt        harvestTools = 无     → 徒手可挖 ✅
+    //     stone       harvestTools = 6 个   → 需要镐（判据仍正确）
+    //   所以判据就是"这张表里有没有东西"。
+    //
+    //   **手写清单漂移于真相** —— 今晚这条主线又一例
+    //   （`CODES` 用错码、`ATOM_ORDER` 留已删项、`TOGGLEABLE` 漏 trapdoor/fence_gate/lever）。
+    //   能用权威字段就别维护清单。
+    const ht = block.harvestTools;
+    if (ht == null || (typeof ht === 'object' && Object.keys(ht).length === 0)) {
+        return { can: true, why: 'ok' };
+    }
     const name = String(block.name || '');
-    if (/dirt|sand|gravel|grass|clay|leaves|wool|snow|soul_/.test(name)) return { can: true, why: 'ok' };
 
     // ★ 先判"背包读得到吗" —— 这是三态的关键分界。
     //   死亡瞬间 / 刚 respawn / 服务端同步中，`bot.inventory` 可能是 null，
