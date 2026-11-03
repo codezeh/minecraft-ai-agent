@@ -50,7 +50,34 @@ export async function withNav(bot, fn, waitMs = 3000) {
     const owner = String(bot?.__navJobId ?? 'adhoc');
     const lock = await acquireNav(owner, waitMs);
     if (!lock) return null;
-    try { return await fn(); } finally { lock.release(); }
+    try {
+        return await fn();
+    } finally {
+        // ★★ 2026-11-04（t86）：**用完导航必须把目标清掉，别让它挂在那里。**
+        //
+        //   真机证据（第 30/31 跑，两跑都很稳定）：
+        //     `Digging aborted` **1916 / 1760** 次，而 `dig true OK` 只有 **11 / 3** 次
+        //     —— **绝大多数 dig 都在 abort**，这不是方差，是系统性原因。
+        //
+        //   机制：`collectDrops`（t72 每挖一块跑一次）走 `withNav` → `moveTo` 设了 pathfinder goal；
+        //   `withNav` 只负责**互斥**（t76），返回时**goal 还挂着** →
+        //   紧接着的 `bot.dig` 一开始就被"还有移动目标"打断 → `Digging aborted`。
+        //   而 t81 之后"每块都先 dig"，所以**每块都要撞一次**。
+        //
+        //   修法：`withNav` 收尾时清 goal + 松键 —— **"借了导航就还干净"**。
+        //   这和 t84 的回退不冲突：t84 是"别在**每次 dig 前**无条件清"（那会让 `stop()`
+        //   的中断事件自己制造 abort）；这里是"**在用过导航之后**清一次"，
+        //   精确对应"goal 是这次 moveTo 留下的"这个真实来源。
+        try {
+            bot.pathfinder?.setGoal?.(null);
+            bot.pathfinder?.stop?.();
+        } catch { /* 假 bot / 没 pathfinder */ }
+        try {
+            const keysDown = Object.keys(bot.controlState ?? {}).some((k) => bot.controlState[k]);
+            if (keysDown) bot.clearControlStates?.();
+        } catch { /* ignore */ }
+        lock.release();
+    }
 }
 
 /** 目标坐标是否可用。 */
