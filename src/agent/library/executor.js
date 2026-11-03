@@ -410,6 +410,39 @@ export async function execStep(bot, step, opts = {}) {
         return ok({ swum: true, ...(r.data ?? {}) });
     }
 
+    // ---- ★ walk：先试 `stepInto`（原子层一步进格），失败**回落** pathfinder ----
+    //
+    // ★★ 根因记要（2026-11-03，打点定位）：
+    //   `stepInto` 要的是**脚位格**（`act_step.js:52` 写明"**脚位**所在的格"，
+    //   且它拿 `cell.y - 1` 判"脚下"）。而 `path_3d` 的 `step.y` 是**面位**。
+    //   直接把 `step.y` 喂进去 → 它去看 `step.y - 1` = 实心地块 →
+    //   一律 `UNSAFE「脚下是 stone」`、位移 0.00（真机打点：每步都这样）。
+    //   所以必须用 `targetFeetY`（= step.y + 1，上面已算好）。
+    //   ★ 不写第二处 `+1` —— 决策 1B：换算只在 execStep 内部做一次。
+    //
+    // ★ 只处理 `walk`（同层相邻）。`down`/`jump`/`dig`/`climb` **一律跳过**：
+    //   `stepInto` 只会按前进，不会下降也不会往上跳。
+    //   （打点实证：digdown 的 `down(6009,-61,8000)` 盖沿 y -58→-61 就是上次被它害死的那一步。）
+    //
+    // ★★ 为什么**不加**"连续失败 → STUCK"的闸（2026-11-03 用户的结论，记在这里防后人再加）：
+    //   `insideCell` 已经要求"脚位格子 == 目标格"（三轴都比），**不可能假成功** ——
+    //   而三周前那次死循环的**唯一根因就是假成功**（"水平≤0.5"让她停在边缘也判成功
+    //   → stalled 被重置 → 永远到不了 STUCK）。根因已从结构上消除。
+    //   实测加过那道闸（N=3/0.1）会**误杀 `gap-bridge`**（5/5→0/5，5 次 STUCK）：
+    //   那个场景"站着不动"是在等 pathfinder 搭桥，是正常工作状态，不是卡住。
+    //   → **修掉根因之后，为旧根因加的"保险"必须重新评估，否则它变成新的伤害源。**
+    //
+    //   所以这里只有两步：**成功就走 / 失败就回落**。落回 pathfinder 后若还失败，
+    //   交给 `walkTo` 原有的 `stalled` 逻辑处理，**不在这里重试**。
+    if (step.action === 'walk') {
+        const { stepInto } = await import('./act_step.js');
+        const cell = { x: Math.floor(step.x), y: targetFeetY, z: Math.floor(step.z) };
+        const si = await stepInto(bot, cell, { timeoutMs: 1600 });
+        onEvent({ type: 'step-into', x: cell.x, y: cell.y, z: cell.z, ok: si.ok, code: si.code ?? 'OK' });
+        if (si.ok) return si;      // 真进格了（insideCell 保证不是假成功）→ 走这条
+        // 失败 → 落下去走 pathfinder（行为与未接入时完全一致）
+    }
+
     // ---- 水平移动（walk / jump / down 都交给 pathfinder）----
     // pathfinder 自己会跳 1 格、会往下掉，所以这三类不需要分开处理。
     // tol: 0.8 —— 水平容差略小于 1 格。
