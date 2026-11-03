@@ -185,9 +185,12 @@ playerBot.chat('!do("first_night", "")');
 await sleep(15000);
 // 若还没父单，再发一次（agent 可能正被 idle 单占着）
 {
+    // ★ 第 25 跑（captain 要求）：**去掉重发逻辑** —— 上一轮 16_56z 就是它造成的
+    //   重复 first_night 父单，抢走 18/19/20 三张子单，让一只 bot 同时应付 4 个 running，
+    //   很可能是 STUCK 的诱因之一。现在**只发一次**。
     const dbx = openBoard().db;
     const hasFn = dbx.prepare("SELECT COUNT(*) c FROM jobs WHERE skill='first_night'").get().c > 0;
-    if (!hasFn) { console.log('  15 秒仍无父单 → 重发一次命令'); playerBot.chat('!do("first_night", "")'); }
+    console.log('  [确认] 15 秒检查：first_night 父单数 = ' + dbx.prepare("SELECT COUNT(*) c FROM jobs WHERE skill='first_night'").get().c + '（不重发）');
 }
 await sleep(4000);
 

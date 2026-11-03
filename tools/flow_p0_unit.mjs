@@ -9,6 +9,7 @@
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
+import Vec3 from 'vec3';
 import { makeFakeBot, worldOf } from './fixtures/fake_bot.mjs';
 import { CODES, isResult } from '../src/agent/library/contract.js';
 import { craft, manifest as craftManifest } from '../src/agent/library/flow_craft.js';
@@ -132,9 +133,16 @@ function smeltBot({ withInput = 4, withFuel = 2, products = 1, occupied = false,
         feet: { x: 0, y: 64, z: 0 },
         items,
         registry: { itemsByName: { raw_iron: { id: 10 }, coal: { id: 11 }, iron_ingot: { id: 12 } }, blocksByName: { furnace: { id: 61 } } },
+        // t68：`x===1 就是熔炉、其余都是石头` → **真 world**（只有那一格是熔炉）。
+        //   以前任何 x=1 的格子都返回同一个 furnaceBlock → 读错 y/z 也照样通过；
+        //   现在只有 (1,64,0) 是熔炉 → 读错位置拿到 air → 该红就红。
+        world: worldOf([[1, 64, 0, 'furnace']]),
+        unloaded: 'air',
         stubs: {
-            findBlocks: () => [{ x: 1, y: 64, z: 0 }],
-            blockAt: (v) => (v && Math.floor(v.x) === 1 ? furnaceBlock : { name: 'stone', position: v }),
+            // ★ t68：findBlocks 必须返回 **Vec3**（真 mineflayer 如此）。
+            //   产品把 findBlocks 的结果**直接喂给 blockAt**（flow_smelt.furnacesNearby:70），
+            //   返回裸对象时 `strictPoints` 会抛 → 被它的 catch 吞成"附近没有熔炉"。
+            findBlocks: () => [new Vec3(1, 64, 0)],
             openFurnace: async () => ({
                 inputItem: () => (occupied ? { name: 'raw_gold', count: 3 } : null),
                 fuelItem: () => ({ name: 'coal', count: 1 }),
@@ -217,9 +225,13 @@ function storeBot({ inv = [{ name: 'coal', type: 11, count: 8, slot: 0 }], chest
         feet: { x: 0, y: 64, z: 0 },
         items: inv,
         registry: { itemsByName: { coal: { id: 11 } }, blocksByName: { chest: { id: 54 } } },
+        // t68：箱子**只在 x=1..chests 那几格**（以前 `x>=1 就返回箱子` → 读错 y/z 也照样通过）
+        world: worldOf(Array.from({ length: chests }, (_, i) => [i + 1, 64, 0, 'chest'])),
+        unloaded: 'air',
         stubs: {
-            findBlocks: () => Array.from({ length: chests }, (_, i) => ({ x: i + 1, y: 64, z: 0 })),
-            blockAt: (v) => ({ name: Math.floor(v?.x ?? 0) >= 1 ? 'chest' : 'stone', position: v }),
+            // ★ t68：同上 —— findBlocks 返回 Vec3（产品会直接喂给 blockAt）
+            findBlocks: () => Array.from({ length: chests }, (_, i) => new Vec3(i + 1, 64, 0)),
+            // 已删除（t68）：`x>=1 就是箱子` 是纯回声桩 → 改用真 world（见上 world:）
             openContainer: async () => { bot.currentWindow = { slots: [] }; return { ok: true }; },
             closeWindow: () => { bot.currentWindow = null; },
             ...extraStubs,

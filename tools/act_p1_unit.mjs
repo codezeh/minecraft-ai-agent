@@ -170,6 +170,48 @@ function assertResult(name, r) {
     } else badCase('toggleBlock 锁住 → BLOCKED', { code: r.code });
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 10c. ★★ **能力自检**：`getProperties()` 同一引用 ⇒ 能抓「没改状态却报 ok」
+//
+//   这条不是在测产品，是在**验证夹具这个能力真的会挡**（你 ③ 的要求：
+//   "每条能力都要有一条反向用例证明它真的会挡"）。
+//   否则"同一引用"就只是个说法 —— 和今晚那些"装了但没人验证会挡"的闸一样。
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // (a) 同一引用：两次 blockAt 拿到的 getProperties() 必须是**同一个对象**
+    const props = { open: false };
+    const bot = makeFakeBot({
+        feet: { x: 0, y: 64, z: 0 },
+        world: worldOf([[0, 64, 1, 'oak_door', props]]),
+        unloaded: 'air',
+    });
+    const b1 = bot.blockAt(new Vec3(0, 64, 1), false);
+    const b2 = bot.blockAt(new Vec3(0, 64, 1), false);
+    const sameRef = b1.getProperties() === b2.getProperties();
+    if (sameRef) okCase('10c-1 能力自检：getProperties() 两次读到**同一个对象**（不是每次新壳）', `sameRef=${sameRef}`);
+    else badCase('10c-1 能力自检：同一引用', { sameRef });
+
+    // (b) 世界是单一真相：改 props → 下一次读立刻反映
+    props.open = true;
+    const after = bot.blockAt(new Vec3(0, 64, 1), false).getProperties().open;
+    if (after === true) okCase('10c-2 改 props 后下一次读到 open=true（状态只有一份，不在测试的闭包里）', `open=${after}`);
+    else badCase('10c-2 改 props 可见', { open: after });
+
+    // (c) ★ 反向用例：产品**没改状态**却想报 ok → 必须不 ok
+    //     activateBlock 什么都不做（= 产品"假装按了一下"），于是 before===after
+    const lockedProps = { open: false };
+    const fakeBot = makeFakeBot({
+        feet: { x: 0, y: 64, z: 0 },
+        world: worldOf([[0, 64, 1, 'oak_door', lockedProps]]),
+        unloaded: 'air',
+        stubs: { activateBlock: async () => { /* 假装按了，其实没改状态 */ } },
+    });
+    const r = await toggleBlock(fakeBot, { pos: { x: 0, y: 64, z: 1 } });
+    // 判据：不许 ok。若产品只"报 ok"而不复核，这里会绿 → 说明能力是摆设。
+    if (r.ok !== true) okCase('10c-3 ★ 反向用例：产品没改状态却想报成功 → 必然**不 ok**（能抓「假装改了」）', `ok=${r.ok} code=${r.code}`);
+    else badCase('10c-3 反向用例：没改状态却报 ok 必须被抓', { ok: r.ok, code: r.code, data: r.data });
+}
+
 // ── 10b. 「方块名 → 可交互类别」的匹配广度（承重正则的钉子）────────────
 //
 // ★ 为什么补这一节（t44 收尾，2026-11-03）：
