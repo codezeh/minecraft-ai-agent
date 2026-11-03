@@ -81,6 +81,17 @@ export async function craftOnce(bot, itemName, n = 1) {
     // 3) 合（按"料的限制"和 want 取小）
     const recipe = recipes[0];
     const before = countItem(bot, itemName);
+    // ★ t89：合成**前**的完整背包快照（诊断用；必须在 bot.craft 之前抓，否则没意义）
+    const snapInv = () => {
+        const out = {};
+        try {
+            for (const it of (bot.inventory?.items?.() ?? [])) {
+                if (it?.name) out[it.name] = (out[it.name] ?? 0) + (it.count ?? 0);
+            }
+        } catch { /* 读不到就空 */ }
+        return out;
+    };
+    const invBefore = snapInv();
     let limit = want;
     try {
         const inv = (bot.inventory?.items?.() ?? []).reduce((m, it) => {
@@ -108,11 +119,32 @@ export async function craftOnce(bot, itemName, n = 1) {
         return fail('INTERNAL', msg, { error: msg, item: itemName });
     }
 
-    const after = countItem(bot, itemName);
+    // ★★ 2026-11-04（t89）：**合成后立刻读背包会读到旧值 —— 要等一下再判。**
+    //
+    //   真机证据（第 34 跑）：
+    //     `craft oak_planks c=3 → blocked «合成了但 oak_planks 没增加（料可能刚好不够）»`
+    //   消息本身是诚实的（`bot.craft` 没抛错 = 合成了），但**紧接着 `countItem` 没看到增加**。
+    //
+    //   两个可能：
+    //     ① 服务端**槽位同步有延迟** —— `bot.craft` resolve 时本地 `bot.inventory` 还没更新
+    //     ② 真的没产出（料不足）—— 但我们前面已经用 `calculateLimitingResource` 限过 `limit`
+    //
+    //   ① 完全可以通过"等一小会儿再读"区分开：**这次改成轮询到计数变化或超时**，
+    //   并在失败时把 `before/after` 的**完整背包快照**放进 data（verify 要的诊断）。
+    let after = countItem(bot, itemName);
+    const tWait = Date.now();
+    while (after - before <= 0 && Date.now() - tWait < 1500) {
+        if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了', { item: itemName });
+        await new Promise((r) => setTimeout(r, 120));
+        after = countItem(bot, itemName);
+    }
     const produced = after - before;
     if (produced <= 0) {
         return fail('NO_ITEM', `合成了但 ${itemName} 没增加（料可能刚好不够）`, {
             item: itemName, want, got: 0, produced: 0, costMs: Date.now() - t0,
+            // 诊断三件套（verify 要求）：合成前后的完整背包 + 限流算出多少
+            invBefore, invAfter: snapInv(), limit,
+            matCounts: { [itemName]: after },
         });
     }
     return ok({
