@@ -87,7 +87,12 @@ export async function clickSlot(bot, slot, opts = {}) {
  *
  * @returns ActionResult ok(data:{closed}) / INTERNAL
  */
-export async function closeWindow(bot) {
+// ★ 2026-11-03：**刻意是同步函数**（体内没有 await）。
+//   原来这里写的是 `async`，而 `act_container.closeContainer` 反向调它时
+//   就把"同步返回 ActionResult"变成了"返回 Promise" → 调用方 `closeContainer(bot).ok`
+//   拿到 undefined 而静默失败（atom_container 两条用例实测红）。
+//   **被 await 的同步函数照样能用；但被当成同步用的 async 函数会静默坏掉。**
+export function closeWindow(bot) {
     if (!bot?.currentWindow) return ok({ closed: false });
     try {
         bot.closeWindow(bot.currentWindow);

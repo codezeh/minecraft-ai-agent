@@ -43,7 +43,9 @@ if (!(await serverUp('127.0.0.1', 25566))) {
 }
 
 /** 原子层测试（单文件前缀 atom_） */
-const ATOM_ORDER = ['move', 'dig', 'place', 'items', 'container', 'use', 'attack', 'stand', 'drops', 'look', 'safe', 'query', 'wait'];
+// 2026-11-03（t44）：去掉 'use' —— act_use.js / tools/atom_use.mjs 已删（拆完没清理的空壳）。
+// 留着会让 atom_all 每次都去跑一个不存在的文件（MODULE_NOT_FOUND）。
+const ATOM_ORDER = ['move', 'dig', 'place', 'items', 'container', 'attack', 'stand', 'drops', 'look', 'safe', 'query', 'wait'];
 /** 复合层测试（plan/runSteps 那套），跑在原子之后 */
 const SKILL_TESTS = ['skill_collect', 'skill_clear'];
 /** 原子层契约专项测试（不属于 atom_* 命名，单独列） */
