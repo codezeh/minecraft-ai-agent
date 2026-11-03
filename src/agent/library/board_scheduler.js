@@ -49,6 +49,11 @@ import { jobDeadlineTimeoutMinutes } from './control.js';
 //   claimFor 用的是 store 那份（真正决定能不能领），而这里的抢占/领单判定用的是本地这份，
 //   于是"没配角色的 bot 能不能领"取决于你走哪条路。已改成 import，删掉本地副本。
 import { meetsRequires } from './board_store.js';
+// ★ t39：`isNightFalling` **只允许有一份实现**，真身在查询层 `query_perceive.js`
+//   （`strat_first_night` 只是 re-export 它）。为什么不用 strat 那份：
+//   分层规矩里 `board` 只能 import `query`/`infra`（board → strat 是**新违规**，
+//   preflight 的 prefix 检查会红）。放 query 则"只有一份实现 + 两边都能用"同时成立。
+import { isNightFalling } from './query_perceive.js';
 
 // ───────────────────────────────────────────────────────────────────────────
 // 纯函数（不碰 I/O，好离线测）
@@ -146,6 +151,138 @@ export function idlePlanEmission(verdict, lastKey = null) {
     return { emit: key !== lastKey, next: key };
 }
 
+// ─── t39：第 1 层「补短板」要的 5 个状态字段 ────────────────────────────────
+//
+// 背景：`idle_planner.planNeeds()` 要 `inventoryFull / hasBasicTool / nightFalling /
+// nearShelter / foodCount` 五个字段，而调度器原来**只传了 availableSkills**
+// → `planNeeds()` 恒返回 null → 第 1 层四条分支（store/obtain/shelter/food）全是死的。
+//
+// ★ 三态原则（这里最容易写错的地方）：**读不到传 null，绝不传 false**。
+//   `planNeeds` 用的是严格比较（`hasBasicTool === false`、`nearShelter === false`），
+//   把"读不到"写成 false 就会**误触发** —— 明明背包里有钻石镐却被派去 obtain 石镐。
+// ★ 每个字段各自 try/catch：一个字段炸了不影响别的，也不许整段吞（D14 的老毛病：
+//   落点检查被一整段空 catch 吞掉，加了 20 天一次都没执行过）。
+
+/**
+ * 「有基础工具」= 背包里有一把**石镐或更好**的镐（t39）。
+ *
+ * 为什么不复用 `strat_tool_tier.tierOfItem`：那个是**策略层的档位规划表**
+ * （只认 木/石/铁 三档，用来排"先石再铁"的升级顺序），而这里只回答一个是非题
+ * "够不够基础工具"。更要紧的是分层：`board` 只能 import query/infra，
+ * `board → strat` 是 preflight 会报的新违规。所以这里按物品名直接列全 5 种镐，
+ * 只覆盖"石及以上"这一档（木镐不算、石/铁/金/钻石/下界合金算）。
+ */
+const BASIC_PICKAXES = new Set([
+    'stone_pickaxe', 'iron_pickaxe', 'golden_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe',
+]);
+
+/** 头顶探针："这几格都是空的"才算没有遮蔽（feet+2 起 = 过了她 1.8 的身高）。 */
+const SHELTER_PROBE_DY = Object.freeze([2, 3, 4, 5]);
+const OPEN_SKY_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
+
+/** 读一个字段；**单字段失败只影响它自己**（返回 null = "读不到"）。 */
+function safeField(read) {
+    try { return read(); } catch { return null; }
+}
+
+/**
+ * 头顶有没有盖（nearShelter 的判据，**保守**）。
+ *
+ * 为什么只判头顶：要求是"不许阻塞调度器"——扫附近要么 `findBlocks`（重查询，禁止），
+ * 要么自己写一套盒子判据（第二套真相）。所以这里只回答一个诚实的小问题：
+ * **头顶 4 格里有没有非空气方块**。
+ *   · 有 → true（洞里、屋里、树冠下，都算"能待着"）
+ *   · 4 格全空 → false（露天）
+ *   · 任一格读不到 → null（不确定，**不触发** shelter，宁可不动手也不乱搭屋子）
+ *
+ * 注意这**不是** `query_stand.PASSABLE`（那套判"人能不能站进去"，水算可穿过）；
+ * 这里问的是"有没有东西挡在上面"，所以水/草也算盖 —— 保守方向正确。
+ */
+function readOverheadShelter(bot) {
+    const p = bot?.entity?.position;
+    if (!p || typeof bot.blockAt !== 'function') return null;
+    const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
+    for (const dy of SHELTER_PROBE_DY) {
+        const b = bot.blockAt({ x: fx, y: fy + dy, z: fz });
+        if (!b || !b.name) return null;                     // 没加载 → 不猜
+        if (!OPEN_SKY_BLOCKS.has(b.name)) return true;      // 头上有盖
+    }
+    return false;                                           // 露天
+}
+
+/**
+ * 现算 idle_planner 第 1 层要的 5 个字段（**全是内存读**：背包 / 时间 / 头顶 4 格）。
+ *
+ * 每个字段的三态处理见各自注释；任何一个算炸 → 那个字段 null，其余照常。
+ *
+ * @param {object} agent Agent 实例（用 agent.bot）
+ * @returns {{inventoryFull:boolean|null, hasBasicTool:boolean|null,
+ *            nightFalling:boolean|null, nearShelter:boolean|null, foodCount:number|null}}
+ */
+export function readIdleState(agent) {
+    const bot = agent?.bot ?? null;
+
+    // 背包物品只读一次，给 hasBasicTool / foodCount 共用（避免一个人读两遍）
+    const items = safeField(() => {
+        const inv = bot?.inventory;
+        if (!inv || typeof inv.items !== 'function') return null;   // 读不到
+        return inv.items() ?? null;
+    });
+    const counts = safeField(() => {
+        if (!Array.isArray(items)) return null;
+        const m = {};
+        for (const it of items) {
+            if (!it?.name) continue;
+            m[it.name] = (m[it.name] ?? 0) + Number(it.count ?? 0);
+        }
+        return m;
+    });
+
+    return {
+        // 「满」= **一格空位都没有**（`emptySlotCount() === 0`）。
+        // 留 1 格不算满：还能捡东西，为这个专门跑一趟 store 是白折腾。
+        inventoryFull: safeField(() => {
+            const inv = bot?.inventory;
+            if (!inv || typeof inv.emptySlotCount !== 'function') return null;
+            const empty = inv.emptySlotCount();
+            return Number.isFinite(empty) ? empty === 0 : null;
+        }),
+
+        // 背包里有没有**石镐或更好**（三态：true / false / null=读不到）。
+        // 读不到必须 null：planNeeds 判的是 `=== false`，写成 false 就会误派 obtain。
+        hasBasicTool: safeField(() => {
+            if (!counts) return null;
+            for (const [name, n] of Object.entries(counts)) {
+                if (n > 0 && BASIC_PICKAXES.has(name)) return true;
+            }
+            return false;
+        }),
+
+        // 复用 strat_first_night.isNightFalling（**不写第二套**）。
+        // 时间读不到 → null（falsy，不触发 shelter；和 false 效果一样但语义是"不知道"）。
+        nightFalling: safeField(() => {
+            const n = Number(bot?.time?.timeOfDay);
+            return Number.isFinite(n) ? isNightFalling(n) : null;
+        }),
+
+        // 附近有没有能待的地方（保守判据，见 readOverheadShelter）。
+        nearShelter: safeField(() => readOverheadShelter(bot)),
+
+        // 背包里的食物总数。数不清（没有 registry.foodsByName）→ null；
+        // 空背包 → 0（真的没吃的，该去补）。planNeeds 里 `Number(null ?? 99) = 99` → 不触发，安全。
+        foodCount: safeField(() => {
+            if (!counts) return null;
+            const foods = bot?.registry?.foodsByName;
+            if (!foods) return null;
+            let n = 0;
+            for (const [name, c] of Object.entries(counts)) {
+                if (foods[name]) n += Number(c ?? 0);
+            }
+            return n;
+        }),
+    };
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // 调度器
 // ───────────────────────────────────────────────────────────────────────────
@@ -215,6 +352,18 @@ export class BoardScheduler {
          *   否则"发呆 → 干活 → 再发呆"时第二次发呆会被当成重复而不播报。
          */
         this._lastIdleTick = null;
+        /**
+         * 第 1 层状态读取器（t39）。默认是本文件的 `readIdleState()`；
+         * 可注入只是为了**离线用例能模拟"某个字段没传"**（反向验证）+ 真机诊断。
+         */
+        this.readIdleState = deps.readIdleState ?? readIdleState;
+        /**
+         * 可用流程清单的注入点（t39）。生产不给 → 每次从 composite_registry 现取。
+         * 为什么留这个口子：`planNeeds()` 会产出 `skill: 'food'`，而注册表里目前**没有**
+         * `food` 这个流程（只有 `eat`）→ 食物那条分支到 `have.has('food')` 就断了。
+         * 用例要能证明"接线通了"，就得能把 availableSkills 设成含 food 的样子。
+         */
+        this.availableSkillsOverride = Array.isArray(deps.availableSkills) ? deps.availableSkills : null;
     }
 
     /** 自动领单开关（③）。关掉≠停止：正在跑的单接着跑。 */
@@ -317,14 +466,24 @@ export class BoardScheduler {
                 // ★ 必须把"现在有哪些流程可用"传进去，否则 idle_planner 第 1 层
                 //   永远看到空集合 → "天黑没地方待→shelter" 那条分支永远不走（死分支）。
                 //   这里从注册表实时取（加流程时自动生效，不用改两处）。
-                let availableSkills = [];
-                try {
-                    const reg = await import('./composite_registry.js');
-                    availableSkills = reg.SKILL_NAMES ?? [];
-                } catch { /* 取不到就当没有（第 1 层会跳过，退回第 2/3 层） */ }
+                //   `deps.availableSkills` 只是**测试/诊断的注入口**，生产不给就走注册表。
+                let availableSkills = this.availableSkillsOverride ?? [];
+                if (!this.availableSkillsOverride) {
+                    try {
+                        const reg = await import('./composite_registry.js');
+                        availableSkills = reg.SKILL_NAMES ?? [];
+                    } catch { /* 取不到就当没有（第 1 层会跳过，退回第 2/3 层） */ }
+                }
+                // ★ t39：第 1 层要的 5 个状态字段，现算现传（每个字段各自容错，见 readIdleState）
+                const idleState = this.readIdleState(this.agent);
                 const verdict = await idleTick(this.agent, {
                     now,
-                    state: { availableSkills },
+                    // ★ t39：第 1 层「补短板」的 5 个状态字段原来**一个都没传**
+                    //   （只有 availableSkills）→ `planNeeds()` 恒返回 null → 第 1 层是**死分支**
+                    //   （4 条 store / obtain / shelter / food 一条都不会走）。
+                    //   死因和之前 availableSkills 那个 bug 同一类：**传参漏了 → 分支永不走**。
+                    //   现在由 readIdleState() 现算现传；每个字段各自容错，读不到传 null（三态）。
+                    state: { availableSkills, ...idleState },
                     jobsBusy: () => (this.boardClient?.list?.({ states: [JOB_STATE.READY, JOB_STATE.CLAIMED, JOB_STATE.RUNNING] }) ?? []).length > 0,
                     reflectionBusy: () => !!this.actions?.executing,
                     enqueue: async (job) => {

@@ -6,6 +6,36 @@
  */
 import Vec3 from 'vec3';
 
+/**
+ * 「天黑」判据（t39）。**全仓唯一一份实现**。
+ *
+ * 为什么挪到查询层（原来只在 `strat_first_night.js`）：
+ *   需要它的地方不止策略层 —— `board_scheduler` 的空闲第 1 层也要判"天快黑了吗"。
+ *   而分层规矩（preflight 的 prefix import 检查）是 **board 只能 import query/infra**，
+ *   `board → strat` 是新违规；`strat → query` 合法。所以判据放查询层：
+ *   strategy 和 board 都能用，且**只有一份**（同一条规矩两处各写一份是本项目反复踩的坑）。
+ *   读 `bot.time.timeOfDay` 是纯读世界状态，无副作用，符合查询层语义。
+ *
+ * 数值出处：04 §6.3 第一夜（夜 ≈ 13000–23000，提前 2000 就开始准备遮蔽）。
+ */
+export const NIGHT = Object.freeze({
+    START: 13000,      // MC 时间：入夜
+    END: 23000,        // MC 时间：天亮前
+    DUSK_LEAD: 2000,   // 提前量：12000 起就该准备遮蔽了
+});
+
+/**
+ * 现在是不是"该准备过夜了"（纯函数，`t` 可注入）。
+ *
+ * @param {number} t Minecraft timeOfDay（0–24000）
+ * @returns {boolean}
+ */
+export function isNightFalling(t) {
+    const n = Number(t);
+    if (!Number.isFinite(n)) return false;
+    return n >= NIGHT.START - NIGHT.DUSK_LEAD || n >= NIGHT.END;
+}
+
 /** 接受 Vec3 或 {x,y,z}，统一成 Vec3。 */
 export function vec(pos) {
     if (pos instanceof Vec3) return pos;

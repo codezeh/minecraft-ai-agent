@@ -23,12 +23,16 @@
  */
 
 import { ok, fail } from './contract.js';
+// ★ t39：天黑判据的真身已挪到查询层（`query_perceive.NIGHT / isNightFalling`）。
+//   原因：`board_scheduler` 的空闲第 1 层也要用；分层规矩不准 board → strat，
+//   但 strat → query 合法 → 放 query 才能"只有一份实现"且两边都能用。
+import { NIGHT, isNightFalling } from './query_perceive.js';
 
 /** 04 §6.3 的起步值（全部具名，不散魔数）。 */
 export const FIRST_NIGHT = Object.freeze({
-    NIGHT_START: 13000,      // MC 时间：入夜
-    NIGHT_END: 23000,        // MC 时间：天亮前
-    DUSK_LEAD: 2000,         // 提前量：12000 起就该准备遮蔽了
+    NIGHT_START: NIGHT.START,   // MC 时间：入夜（真身在 query_perceive.NIGHT）
+    NIGHT_END: NIGHT.END,       // MC 时间：天亮前
+    DUSK_LEAD: NIGHT.DUSK_LEAD, // 提前量：12000 起就该准备遮蔽了
     WOOD_TARGET: 8,          // 够做 工作台(4木板) + 木镐(3木板+2棍) + 余量
     FOOD_MIN: 6,             // 食物少于这个数就吃/补
     // ★★ 为什么需要这道全局闸（2026-11-03 用户要求写明）：
@@ -48,14 +52,11 @@ export const FIRST_NIGHT = Object.freeze({
 /**
  * 现在是不是"该准备过夜了"（纯函数，`t` 可注入）。
  *
- * @param {number} t Minecraft timeOfDay（0–24000）
- * @returns {boolean}
+ * ★ t39：**真身在 `query_perceive.js`**，这里只 re-export（对外 API 不变，
+ *   `strat_first_night_unit` 等既有调用方照旧从这里取）。为什么搬走见那边的注释：
+ *   board_scheduler 也要用，而 board → strat 属于违规 import（board → query 合法）。
  */
-export function isNightFalling(t) {
-    const n = Number(t);
-    if (!Number.isFinite(n)) return false;
-    return n >= FIRST_NIGHT.NIGHT_START - FIRST_NIGHT.DUSK_LEAD || n >= FIRST_NIGHT.NIGHT_END;
-}
+export { isNightFalling };
 
 /** 现在是不是已经入夜（更严格的判据，用于"必须进屋了"）。 */
 export function isNight(t) {

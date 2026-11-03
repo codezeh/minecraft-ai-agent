@@ -16,7 +16,7 @@
  */
 import {
     BoardScheduler, preempts, pickBest, meetsRequires, argsToString,
-    idlePlanEmission,
+    idlePlanEmission, readIdleState,
     CLAIM_BACKOFF_MS, HEARTBEAT_MS,
 } from '../src/agent/library/board_scheduler.js';
 import { JOB_STATE, STOP_REASONS, BRIEF_REQUEUE_MS } from '../src/agent/library/control.js';
@@ -96,6 +96,14 @@ function makeFakeBoard(initialJobs = []) {
             return { ok: true };
         },
         async getAsync(id) { return { ok: true, data: { job: jobs.get(id) ?? null } }; },
+        /** t39：idle_planner 第 1 层自己找的单要真的落板（`enqueue` → `board.add`）。 */
+        async add(job) {
+            calls.push({ op: 'add', job });
+            const id = job?.id ?? `auto${jobs.size + 1}`;
+            const j = { ...job, id, state: job?.state ?? JOB_STATE.READY };
+            jobs.set(id, j);
+            return { ok: true, data: { job: { ...j } } };
+        },
         async hello() { return { ok: true }; },
         async refresh() { return { ok: true }; },
         async checkpoint() { return { ok: true }; },
@@ -841,8 +849,191 @@ const idlePreset = {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// t39（清遗留⑤）：idle_planner 第 1 层的 5 个状态字段 —— 原来一个都没传
+//
+// 缺陷原貌：调度器只传了 `state: { availableSkills }`，而 `planNeeds()` 要
+// `inventoryFull / hasBasicTool / nightFalling / nearShelter / foodCount`
+// → 恒返回 null → **第 1 层四条分支（store/obtain/shelter/food）全是死分支**。
+// 修法：`readIdleState(agent)` 现算现传（三态：读不到传 null，绝不传 false）。
+// ══════════════════════════════════════════════════════════════════════════
+
+/** 食物表（真 minecraft-data 的 foodsByName 形状，只留测试要用的几种）。 */
+const TEST_FOODS = { bread: { foodPoints: 5 }, cooked_beef: { foodPoints: 8 }, apple: { foodPoints: 4 } };
+
+/**
+ * 假 bot（只做 t39 要的那几个内存读）。
+ *
+ * @param {object} o
+ *   items        背包物品 [{name,count}]
+ *   emptySlots   inventory.emptySlotCount() 的结果
+ *   timeOfDay    bot.time.timeOfDay（1000 = 白天，14000 = 夜里）
+ *   overhead     头顶 dy=2,3,4,5 的方块名（undefined 元素 = 未加载 → blockAt 返回 null）
+ *   noInventoryItems  故意不给 inventory.items（模拟"背包读不到"）
+ *   foods        registry.foodsByName；null = 没这张表（数不清食物）
+ */
+function makeIdleBot({
+    items = [], emptySlots = 20, timeOfDay = 1000,
+    overhead = ['air', 'air', 'air', 'air'], foods = TEST_FOODS,
+    noInventoryItems = false, noInventory = false,
+} = {}) {
+    const bot = {
+        entity: { position: { x: 0, y: 64, z: 0 } },
+        time: { timeOfDay },
+        registry: foods === null ? {} : { foodsByName: foods },
+        blockAt: ({ y }) => {
+            const name = (overhead ?? [])[y - 66];        // dy=2 → 下标 0
+            return name === undefined ? null : { name };
+        },
+    };
+    if (!noInventory) {
+        bot.inventory = {
+            emptySlotCount: () => emptySlots,
+            items: noInventoryItems ? undefined : () => items,
+        };
+    }
+    return bot;
+}
+
+/** 真 readIdleState：把假 bot 塞进 agent，看 5 个字段各算出什么。 */
+const stateOf = (bot) => readIdleState({ bot });
+
+/**
+ * 跑**一拍真 tick**（生产路径：claim 不到单 → idleTick → readIdleState → planNeeds）。
+ * @returns {Promise<{plan, jobs, sched, events}>} plan = 那条 idle-plan 事件
+ */
+async function tickIdle({ bot, availableSkills = null, reader = null } = {}) {
+    const clock = makeClock();
+    const board = makeFakeBoard([]);
+    const actions = makeFakeActions();
+    const agent = { name: 'tester', bot, _lastTalkAt: 0, _lastIdleThinkAt: clock.now(), _idlePaused: false };
+    const events = [];
+    const { runSkill } = makeRunner({ clock, actions });
+    const deps = {
+        agent, board, actions, runSkill,
+        now: clock.now, sleep: clock.sleep,
+        onEvent: (e) => events.push(e),
+    };
+    if (availableSkills) deps.availableSkills = availableSkills;
+    if (reader) deps.readIdleState = reader;         // 反向验证用：模拟"某个字段没传"
+    const sched = new BoardScheduler(deps);
+    clock.advance(3000);
+    await sched.tick();
+    return {
+        plan: events.find((e) => e.type === 'idle-plan') ?? null,
+        jobs: [...board.jobs.values()],
+        sched, events,
+    };
+}
+
+// 24. 生产 deps + 背包满 → store / need:inventory-full
+//     「满」的判据 = emptySlotCount() === 0（留 1 格不算满）
+{
+    const r = await tickIdle({ bot: makeIdleBot({ emptySlots: 0, items: [{ name: 'cobblestone', count: 64 }] }) });
+    const job = r.jobs[0] ?? null;
+    if (r.plan?.action === 'job' && r.plan?.reason === 'need:inventory-full'
+        && job?.skill === 'store' && job?.source === 'self' && job?.priority === 1) {
+        okCase('t39① 背包满（0 空位）→ job/store，且任务板真有这张单',
+            `reason=${r.plan.reason} skill=${job.skill} state=${job.state}`);
+    } else {
+        badCase('t39① 背包满没触发 store（第 1 层死分支？）', { plan: r.plan, job });
+    }
+}
+
+// 25. 生产 deps + 没基本工具 → obtain / need:no-basic-tool
+{
+    const r = await tickIdle({ bot: makeIdleBot({ items: [{ name: 'oak_log', count: 3 }] }) });
+    const job = r.jobs[0] ?? null;
+    if (r.plan?.action === 'job' && r.plan?.reason === 'need:no-basic-tool' && job?.skill === 'obtain') {
+        okCase('t39② 只有木棍木头、没有镐 → job/obtain', `reason=${r.plan.reason} skill=${job.skill}`);
+    } else {
+        badCase('t39② 没基本工具没触发 obtain', { plan: r.plan, job });
+    }
+}
+
+// 26. 生产 deps + 天黑 + 头顶无遮蔽 → shelter / need:night-no-shelter
+{
+    const r = await tickIdle({
+        bot: makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }], timeOfDay: 14000, overhead: ['air', 'air', 'air', 'air'] }),
+    });
+    const job = r.jobs[0] ?? null;
+    if (r.plan?.action === 'job' && r.plan?.reason === 'need:night-no-shelter' && job?.skill === 'shelter') {
+        okCase('t39③ 天黑(timeOfDay=14000) + 头顶4格全空 → job/shelter', `reason=${r.plan.reason} skill=${job.skill}`);
+    } else {
+        badCase('t39③ 天黑没遮蔽没触发 shelter', { plan: r.plan, job });
+    }
+}
+
+// 27. 生产 deps + 食物 3 → food / need:food-low
+//     ⚠️ 注册表里没有 `food` 这个流程（只有 `eat`），所以这里显式注入 availableSkills；
+//        生产里这条分支仍会停在 `have.has('food')` —— 见报告里的「遗留」一条。
+{
+    const r = await tickIdle({
+        bot: makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'bread', count: 3 }] }),
+        availableSkills: ['store', 'obtain', 'shelter', 'food'],
+    });
+    const job = r.jobs[0] ?? null;
+    if (r.plan?.action === 'job' && r.plan?.reason === 'need:food-low' && job?.skill === 'food') {
+        okCase('t39④ 食物 3（< 5）→ job/food', `reason=${r.plan.reason} skill=${job.skill}`);
+    } else {
+        badCase('t39④ 食物少没触发 food', { plan: r.plan, job });
+    }
+}
+
+// 28. ★ 三态安全：读不到 → null → **不触发**（绝不许写 false 误派活）
+{
+    // (a) hasBasicTool 读不到（inventory.items 不存在）→ 不触发 obtain
+    const noItems = await tickIdle({ bot: makeIdleBot({ noInventoryItems: true }) });
+    const stA = stateOf(makeIdleBot({ noInventoryItems: true }));
+    const aOk = stA.hasBasicTool === null && stA.foodCount === null
+        && noItems.plan?.action !== 'job' && !/no-basic-tool/.test(String(noItems.plan?.reason ?? ''));
+
+    // (b) nearShelter 读不到（头顶未加载）→ 天黑也不触发 shelter
+    const noSky = await tickIdle({
+        bot: makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }], timeOfDay: 14000, overhead: [undefined, undefined, undefined, undefined] }),
+    });
+    const stB = stateOf(makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }], timeOfDay: 14000, overhead: [undefined] }));
+    const bOk = stB.nearShelter === null && stB.nightFalling === true
+        && noSky.plan?.action !== 'job' && !/night-no-shelter/.test(String(noSky.plan?.reason ?? ''));
+
+    // (c) foodCount 读不到（没有 registry.foodsByName）→ 不触发 food
+    const noFoods = await tickIdle({
+        bot: makeIdleBot({ items: [{ name: 'stone_pickaxe', count: 1 }, { name: 'bread', count: 1 }], foods: null }),
+        availableSkills: ['food'],
+    });
+    const stC = stateOf(makeIdleBot({ items: [{ name: 'bread', count: 1 }], foods: null }));
+    const cOk = stC.foodCount === null && noFoods.plan?.action !== 'job' && !/food-low/.test(String(noFoods.plan?.reason ?? ''));
+
+    if (aOk && bOk && cOk) {
+        okCase('t39⑤ 三态安全：三处「读不到」都传 null，都没误触发',
+            `hasBasicTool=${stA.hasBasicTool} nearShelter=${stB.nearShelter} foodCount=${stC.foodCount}`);
+    } else {
+        badCase('t39⑤ 读不到被当成 false 了（会误派活）', {
+            hasBasicTool: stA.hasBasicTool, aPlan: noItems.plan,
+            nearShelter: stB.nearShelter, bPlan: noSky.plan,
+            foodCount: stC.foodCount, cPlan: noFoods.plan,
+        });
+    }
+}
+
+// 29. ★ 反向验证：把字段改回"不传"（这里用空的对象代替 readIdleState）→ ①②③④ 必须全军覆没
+{
+    const bot = makeIdleBot({ emptySlots: 0, items: [{ name: 'cobblestone', count: 64 }] });
+    const noState = await tickIdle({ bot, reader: () => ({}) });
+    // 上面四条用例的判据（action==='job' 且 reason==='need:*'）在这里必须**不成立**
+    const wouldFail = noState.plan?.action !== 'job' && !/^need:/.test(String(noState.plan?.reason ?? ''))
+        && noState.jobs.length === 0;
+    if (wouldFail) {
+        okCase('t39⑥ 反向验证：不传字段 → 退回 idle-mode、一张单都不下（①②③④会变红）',
+            `action=${noState.plan?.action} reason=${noState.plan?.reason} jobs=${noState.jobs.length}`);
+    } else {
+        badCase('t39⑥ 反向验证失败：不传字段居然还能命中第 1 层 → 用例形同虚设', { plan: noState.plan, jobs: noState.jobs.length });
+    }
+}
+
 /** 小工具：给失败信息一点可读性 */
 function busyReason(r) { return r?.reason ?? '?'; }
+
 console.log('============================================');
 console.log(`${pass}/${pass + fails} 个用例通过`);
 console.log('============================================');
