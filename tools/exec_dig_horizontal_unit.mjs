@@ -84,14 +84,34 @@ const WALL = [
         `脚位格=${feetAfter}（应 stone） 头格=${headAfter}（应 air） ok=${r.ok}`);
 }
 
-// ③ ★ 假成功守卫：**循环一次都没跑**时（step.y 使 targetY <= 脚位），
-//    旧代码直接 `return ok({dug:0})` = 假成功。脚位格还是实心，必须报失败。
+// ③ ★ 隧道边退化情形（t49 修的就是这个）：**step.y = 当前层（面位）**时，
+//    目标脚位 = 她当前脚位 → 直接拿 `targetFeetY` 当终点的话 `while (y < targetY)` 一次都不跑
+//    → `dug=0` → 一格没挖。真机就是这么卡住的（t48 NAV_DEBUG：
+//    `[step] dig→(10000,-61,6000) 结果=DIG_FAIL …脚位格还是 stone`）。
+//    **现在必须真的把脚位格 + 头格挖掉**（隧道终点 = 脚位 + 2）。
 {
     const bot = botAt(0, -60, 0, { world: WALL });
-    // step.y = -61 → targetFeetY = -60，while(-60 < -60) 不成立 → dug=0
+    // step.y = -61 = 她脚下面位 → 隧道边就是这个形状（target y = cur.y）
     const r = await execStep(bot, { action: 'dig', x: 1, y: -61, z: 0 }, { onEvent: () => { } });
     const feetAfter = nameAt(bot, 1, -60, 0);
-    check('③ ★ 假成功守卫：邻列一步没挖、脚位格仍 stone → 必须失败（旧代码 ok({dug:0})）',
+    const headAfter = nameAt(bot, 1, -59, 0);
+    check('③ ★ 隧道边目标 y = 当前层时，必须真的挖 2 格（t49 修的空转）',
+        r.ok && feetAfter === 'air' && headAfter === 'air',
+        `ok=${r.ok} code=${r.code ?? "-"} 脚位格=${feetAfter} 头格=${headAfter}`);
+}
+
+// ④ ★ 假成功守卫仍然有效：**循环提前 break、脚位格没被挖成空气 → 必须失败**。
+//    用"脚位格是液体"触发 `liquidBlocked` 的 break（这正是守卫存在的理由：
+//    别让"没挖成"被当成"挖好了"）。
+{
+    const world = [
+        ...WALL.filter((b) => !(b.x === 1 && b.y === -60)),
+        { x: 1, y: -60, z: 0, name: 'water' },   // 脚位格是水 → 循环 break
+    ];
+    const bot = botAt(0, -60, 0, { world });
+    const r = await execStep(bot, { action: 'dig', x: 1, y: -61, z: 0 }, { onEvent: () => { } });
+    const feetAfter = nameAt(bot, 1, -60, 0);
+    check('④ ★ 假成功守卫：脚位格没挖成空气（循环提前 break）→ 必须失败，不许 ok({dug:0})',
         r.ok === false,
         `ok=${r.ok} code=${r.code ?? "-"} 脚位格=${feetAfter} msg=${r.message ?? ""}`);
 }

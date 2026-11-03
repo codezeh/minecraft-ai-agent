@@ -203,7 +203,21 @@ export async function execStep(bot, step, opts = {}) {
         const sameColumn = (bx === curX && bz === curZ);
 
         let y = Math.floor(p.y);
-        const targetY = targetFeetY;   // D1：以脚位为终点，不是方块 y
+        // ★★ 2026-11-03（t49）：**邻列（横向隧道）的终点是"脚位 + 2"，不是 `targetFeetY`**。
+        //
+        //   隧道边（`path_3d` 的 `tunnel: true`）目标 y = `cur.y`（面位）→
+        //   `targetFeetY = cur.y + 1` = **她当前脚位** → `while (y < targetY)` 一次都不跑！
+        //   于是 `dug = 0`，假成功守卫如实报 `DIG_FAIL 脚位格还是 stone`。
+        //
+        //   真机证据（t48 的 NAV_DEBUG 逐步行）：
+        //     [step] dig→(10000,-61,6000) 结果=DIG_FAIL 现在=(9999.4,-60.0,6000.5)
+        //     第1轮 步8 dig 失败: DIG_FAIL 邻列 (10000,-60,6000) 的脚位格还是 stone
+        //   → 规划给了 dig 边（index 8/9，在 MAX_STEPS 之内），但执行层一格没挖。
+        //
+        //   语义：横向钻洞要开出**人形通道高 2**（她身高 1.8）= 脚位格 + 头格。
+        //   所以终点是 `脚位 + 2`，循环正好跑两轮（cellY = 脚位、脚位+1）。
+        //   **同列分支保持 `targetFeetY` 不变**（"往上挖穿天花板"的语义，digdown 5/5 靠它）。
+        const targetY = sameColumn ? targetFeetY : (Math.floor(p.y) + 2);
         let dug = 0;
         let liquidBlocked = false;
         while (y < targetY && dug < 32) {

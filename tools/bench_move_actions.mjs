@@ -83,6 +83,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });
 const NAME = 'ma' + (Date.now() % 100000);
 const ROUNDS = Number(process.argv[2] ?? 3);
+// 测试工具参数：--only=场景名 只跑该场景（省时间用，不影响产品）
+const ONLY = (process.argv.find((a) => a.startsWith('--only=')) ?? '').split('=')[1] ?? '';
 
 const bot = mineflayer.createBot({
     host: '127.0.0.1', port: 25566, username: NAME, auth: 'offline', version: '1.21.8',
@@ -312,6 +314,11 @@ bot.once('spawn', async () => {
     // 跑的是"从出生点横跨一万格"。把它算成一次失败会稀释基准，让真正的回归看不出来。
     const tpFlakes = [];
     for (const sc of scenarios) {
+        // ★ 2026-11-03（t48）：`--only=场景名` 真的生效（原来 ONLY 定义了却没被用，
+        //   导致"只跑 dig-through"其实跑的是全套，日志里拿到的是 walk-flat 的行 →
+        //   atoms 因此把 walk-flat 的日志当成 dig-through 读了，诊断作废。
+        //   **过滤必须在这里、且必须在 build 之前就 continue，而不是事后筛日志。**）
+        if (ONLY && sc.name !== ONLY) continue;
         await sc.build();
         await sleep(700);
 
@@ -347,6 +354,26 @@ bot.once('spawn', async () => {
             console.log(`  SKIP ${sc.name}: 起点非法（脚下=${bBelow?.name} 身上=${bFeet?.name}）`);
         }
 
+        // ★★ 2026-11-03（t48）：**还要等"扫描范围内的另一侧"也加载出来**。
+        //
+        // `waitLoaded` 只等她**脚下那格**。而 `scanSphere` 半径 24 格，跨好几个区块。
+        // 实测（dig-through，决定性证据）：
+        //   她起点 x=9992（区块 9984–9999），墙在 x=10000（**下一个区块** 10000–10015）
+        //   → 墙那格 `blockAt` 返回 **null（未加载）**，即使在 8 格之内。
+        //   → `scanSphere` 扫不到墙 → terrain3d 里那儿是空的
+        //   → 规划以为是一片平地 → **永远不生成 dig 边**。
+        //
+        // 这就是 dig-through 折腾五轮的真正元凶：**场景本身没被扫进去**，
+        // 前面几轮修的 terrain3d / executor / path_3d 都是必要的真 bug，但只要这一层不通，
+        // 它们全都被"看不到墙"掩盖着。
+        //
+        // 修法：等**目标那一侧**的格子也读得到（它在扫描范围内，代表这一段区块已到）。
+        {
+            const farX = AX + sc.dest.dx, farZ = AZ + sc.dest.dz;
+            const okFar = await waitLoaded(farX, sy0, farZ);
+            if (!okFar) console.log(`  ⚠ ${sc.name}: 目标侧 (${farX},${sy0},${farZ}) 未加载，扫描会缺数据`);
+        }
+
         const mapDir = join('tmp', 'bench-actions-map', sc.name);
         mkdirSync(mapDir, { recursive: true });
         let actionHist = {};
@@ -354,12 +381,31 @@ bot.once('spawn', async () => {
             const sx = sx0, sz = sz0;
             const dx = AX + sc.dest.dx, dz = AZ + sc.dest.dz;
             const startY = Math.floor(bot.entity.position.y);
+            // ★ 2026-11-03（t48）：**扫描前先确认障碍物真的在客户端加载出来了**。
+            //   这条是 dig-through 折腾五轮的元凶线索：t48 的 `--only` 日志里她
+            //   直接 walk 过 x=AX（步的面位 = 地面 -61，不是墙顶），说明**扫描时墙不在**。
+            //   只要墙没扫进 terrain3d，规划就会以为那儿是空地 → 永远不会生成 dig 边。
+            //   断言放在**传送 + waitLoaded 之后**（build 时人还在出生点，远处区块本来就没加载）。
+            if (sc.name === 'dig-through') {
+                const wv = new Vec3(AX, S, AZ);
+                const wb = bot.blockAt(wv, false);
+                if (!wb || wb.name !== 'stone') {
+                    throw new Error(`dig-through 场地无效：墙格 (${AX},${S},${AZ}) 实际 ${wb ? wb.name : 'null(未加载)'}`);
+                }
+            }
             scanSphere(bot, mapDir, { x: sx, y: startY, z: sz }, 24);
             const plan = plan3D(mapDir,
                 { x: sx, y: startY, z: sz },
                 { x: dx, y: S + (sc.dest.up ?? 0), z: dz },
                 { maxNodes: 60000, margin: 20 });
             if (plan.ok) {
+                // ★ 2026-11-03（t48）：把**完整的动作序列**打出来 —— 这是"dig 在 path 第几步、
+                //   同一列有没有 walk + dig 两条边"的唯一直接证据（NAV_DEBUG 只打执行到的步）。
+                if (process.env.NAV_DEBUG) {
+                    const seq = plan.path.map((s, i) => `${i}:${s.action}@${s.x},${s.y},${s.z}`);
+                    console.log(`[plan] ${sc.name} 共${plan.path.length}步`);
+                    console.log(`[plan] 序列 ${seq.join(' | ')}`);
+                }
                 for (const step of plan.path) {
                     if (step.action === 'start') continue;
                     actionHist[step.action] = (actionHist[step.action] ?? 0) + 1;
