@@ -401,16 +401,33 @@ export async function obtain(agent, item, count = 1, deps = {}) {
     //   离线用例没抓到，是因为我用的是**假板**（假板的 add 不校验 skill）。
     //   修法：父单的 skill 写 `obtain`（它本身就是一张 obtain 单，写它是诚实的，
     //   不是凑数）；`kind` 仍是 personal，真正的活都在子单上。
-    const parent = await board.add({
-        kind: 'personal', title: `弄到 ${count} 个 ${item}`, skill: 'obtain',
-        args: { item, count }, priority: 5, source: 'self',
-        assignee: agent?.name ?? null, state: 'running',
-    });
-    if (!parent?.ok) {
-        return fail('INTERNAL', `父单没下进去：${parent?.message ?? ''}`, { item });
+    // ★★ 2026-11-03（t62）：「外壳父单」**只在"我没在跑某张单"时才建**。
+    //
+    //   真机根因（verify 查库定位，我复核）：
+    //     0010（first_night 的子单）**自己的子单数 = 0**，而 0002/0003 这一对更说明问题：
+    //       0002 obtain blocked att=3  子单数 0     ← idle 下的那张
+    //       0003 obtain blocked        子单数 5     ← 它运行时**又建出来的壳**，子单挂这
+    //   也就是说 `strat_obtain` **每次运行都多建一张 obtain 壳**：
+    //     外层那张（调度器正在跑的）永远 0 子单 → 被当叶子单重试 → attempts 烧到 3 → blocked
+    //     真正干活的壳与子单挂在旁边，外层那张永远"没做成"
+    //
+    //   正确语义：这张单**自己就是** obtain 单（`ctx.jobId` 有值 = 我正被调度器执行），
+    //   子单应当挂**在我名下**，不需要再套一层。只有在"没有 job 上下文"（比如离线直调、
+    //   `!do obtain` 直接跑）时才建壳，因为那时确实没有承载子单的单。
+    const myJobId = deps.ctx?.jobId ?? null;
+    let parentId = myJobId;
+    if (!myJobId) {
+        const parent = await board.add({
+            kind: 'personal', title: `弄到 ${count} 个 ${item}`, skill: 'obtain',
+            args: { item, count }, priority: 5, source: 'self',
+            assignee: agent?.name ?? null, state: 'running',
+        });
+        if (!parent?.ok) {
+            return fail('INTERNAL', `父单没下进去：${parent?.message ?? ''}`, { item });
+        }
+        parentId = parent.data?.id ?? parent.data?.job?.id ?? null;
     }
 
-    const parentId = parent.data?.id ?? parent.data?.job?.id ?? null;
     const created = [];
     for (const step of planned.plan) {
         const r = await board.add({

@@ -58,6 +58,30 @@ const check = (n, cond, e = '') => (cond ? ok(n, e) : bad(n, e));
         `jobs=${r.plan.length} 源=${[...new Set(r.plan.map((p) => p.source))].join('/')}`);
 }
 
+// ⑥b ★ t62：**被调度器执行时（有 ctx.jobId）不许再建壳**，子单直接挂自己名下。
+//
+// 真机根因：strat_obtain 每次运行都多建一张 obtain 壳 → 外层那张永远 0 子单
+//   → 被当叶子单重试 → attempts 烧到 3 → blocked，而真正干活的壳/子单挂在旁边。
+//   证据（查库）：0002 obtain blocked att=3 子单数 0；0003 obtain 子单数 5 ← 壳。
+{
+    const added = [];
+    const fakeBoard = {
+        async add(job) {
+            if (!job?.skill) return { ok: false, message: '缺少 skill' };
+            added.push(job);
+            return { ok: true, data: { id: 'j_' + added.length } };
+        },
+    };
+    const r = await obtain({ name: 'tester' }, 'iron_pickaxe', 1, {
+        board: fakeBoard, inventory: {}, chests: {}, ctx: { jobId: 'JOB_SELF' },
+    });
+    const shells = added.filter((j) => j.skill === 'obtain');
+    const children = added.filter((j) => j.skill !== 'obtain');
+    check('⑥b ★ 有 ctx.jobId 时不建壳，子单 parentId === 自己那张单',
+        r.ok && shells.length === 0 && children.length > 0 && children.every((c) => c.parentId === 'JOB_SELF'),
+        `壳数=${shells.length} 子单=${children.length} parentId=${JSON.stringify(children.map((c) => c.parentId))}`);
+}
+
 // ⑦ 子单带 parentId + why
 {
     const added = [];
