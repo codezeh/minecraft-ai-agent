@@ -297,7 +297,34 @@ export async function mine(bot, ore, count = 1, opts = {}) {
             }
 
             const dug = await digBlock(bot, { kind: 'block', pos: { x: block.position.x, y: block.position.y, z: block.position.z } });
-            if (dug.ok) { mined++; continue; }
+            if (dug.ok) {
+                mined++;
+                // ★★ 2026-11-04（t72）：**每挖一块就顺手捡，别攒到最后一次性捡。**
+                //
+                //   真机证据（第 20 跑）：
+                //     «挖了 7 个 oak_log，但只捡到 2 个（掉落物没到手）»   ← 产品自己报的
+                //     obtain:oak_log 因此只到 1/8 → 505 秒后 blocked
+                //
+                //   根因有两个，都是"攒到最后"造成的：
+                //     ① **掉落物 5 分钟就消失** —— 这一趟跑了 505 秒（8.4 分钟），
+                //        早期挖的早就没了；最后那次 collectDrops 只能捡到最近的两块。
+                //     ② **她边走边挖，位置一直在变** —— 末尾那次 collectDrops 的
+                //        `origin` 是"当时脚下的位置"，`radius: 10` 够不到远处掉的。
+                //
+                //   改成"挖一块、捡一块"：每块挖完就在**那一块的位置**附近捡，
+                //   半径小（4）、预算短（2.5s）—— 不攒、不跨区、不超时。
+                //   末尾那次仍然保留（兜底捡漏）。
+                try {
+                    if (countAll() - before < want) {
+                        await collectDrops(bot, { x: block.position.x, y: block.position.y, z: block.position.z }, {
+                            countFn: () => countAll(),
+                            radius: 4,
+                            deadlineMs: Math.max(1500, Math.min((ctx.deadline ?? Date.now() + 2500) - Date.now(), 2500)),
+                        });
+                    }
+                } catch { /* 捡不到就继续挖（末尾还有一次兜底） */ }
+                continue;
+            }
 
             if (dug.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了', { ore, count: mined, want });
             if (dug.code === 'NO_TOOL') {
