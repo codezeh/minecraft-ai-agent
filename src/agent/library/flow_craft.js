@@ -145,8 +145,30 @@ export async function craft(bot, itemName, count = 1) {
         const withTable = bot.recipesFor?.(id, null, want, true) ?? [];
         if (!withTable.length) {
             // 连"有工作台就能合"都不成立 = 缺料（卡片的 NO_ITEM）
+            //
+            // ★★ 2026-11-05（t126，control 的 unreachable_guard_audit 扫出来的）：
+            //   这条早退**是合法的**（料真不够就该早停，不必先去找工作台），
+            //   但它给的 `data` **只有 4 个键** `{item,want,got,missing}` ——
+            //   而同样场景下 `act_craft` 会给 `inv` / `limit` / `invBefore` / `invAfter`。
+            //   **上层早退把下层更全的诊断遮住了**（今晚第 4 例同族）。
+            //
+            //   修法：**早退保留（行为不变），但把同样的诊断字段补齐** ——
+            //   让"料不够"这件事在任何一层都能看到完整背包，不用靠"哪些键没出现"反推。
             const missing = missingFor(bot, itemName);
-            return fail('NO_ITEM', `料不够合 ${itemName}`, { item: itemName, want, got: 0, missing });
+            let inv = null;
+            try {
+                inv = (bot.inventory?.items?.() ?? []).reduce((m, it) => {
+                    if (it?.name) m[it.name] = (m[it.name] ?? 0) + (it.count ?? 0);
+                    return m;
+                }, {});
+            } catch { /* ignore */ }
+            return fail('NO_ITEM', `料不够合 ${itemName}`, {
+                item: itemName, want, got: 0, missing,
+                inv,                                   // ★ 补齐：完整背包
+                recipesInInventory: recipes.length,     // ★ 0（2x2 合不了）
+                recipesWithTable: withTable.length,     // ★ 0（有台也合不了）
+                reason: 'insufficient-materials-both',  // ★ 明确"两条路都试过了"
+            });
         }
         needTable = true;
     }
