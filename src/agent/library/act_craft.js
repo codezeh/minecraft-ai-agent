@@ -218,6 +218,28 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     //
     //   注意：这里**不能**因为读不到就 fail —— 假 bot / 区块未加载都会读不到。
     //   只记诊断，让 `produced=0` 时能看出"表当时是否还在"。
+    // ★★★ 2026-11-04（t121）：**3x3 配方但没拿到工作台 → 必须失败，不能静默走 2x2。**
+    //
+    //   真机证据（第 49 跑，逐条排除到最后）：
+    //     invBefore {oak_planks:6, stick:4}（需 3+2，远超）｜recipesWithTable: 1
+    //     produced=0 ｜ costMs=1628（**1.6 秒就返回**）｜windowOpen:null ｜ heldItem='crafting_table'
+    //
+    //   mineflayer `craftOnce` 的分支只有两条：
+    //     if (craftingTable) { activateBlock + await once('windowOpen') /* 20s 超时 */ }
+    //     else                { startClicking(bot.inventory, 2, 2) }        ← **只用 2x2**
+    //   而 `wooden_pickaxe` 是 **3x3** 配方。若 `tableBlock` 为 null → 走 2x2 →
+    //   **摆不下 3x3 → 一枚也不产出，而且不抛错、1~2 秒就返回**（完全符合 1628ms + produced=0）。
+    //
+    //   （若是"开了窗口但被拒"，会等满 20s 才抛 —— 与 1.6s 不符，故排除。）
+    //
+    //   修法：**配方需要工作台而 `tableBlock` 为空时直接 fail**，不让它静默降级到 2x2。
+    const requiresTable = !!recipe?.requiresTable;
+    if (requiresTable && !tableBlock) {
+        return fail('NO_WORKSTATION', `合成 ${itemName} 需要 3x3 工作台，但这次没拿到工作台（不能退化成 2x2）`, diag({
+            requiresTable, tableBlockUsed: null, reason: 'needs-table-but-none',
+        }));
+    }
+
     let tableStillThere = null;
     if (tableBlock?.position) {
         try {
