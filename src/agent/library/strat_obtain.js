@@ -117,16 +117,43 @@ export function sourcesOf(itemName) {
         }
     } catch { /* ignore */ }
 
-    // ★ t102：**有熔炼来源时，合成要降级**（避免"用铁粒造铁锭"这种反向配方成环）。
+    // ★★★ 2026-11-04（t103）：**只降级「反向配方」，不要动正常配方。**
     //
-    //   ★ 注意：这个数组最后会被 `out.sort((a,b) => a.cost - b.cost)` 重排（:131），
-    //     所以**光调 push 顺序没用**（我第一版就这么写，被 sort 冲掉了）。
-    //     必须改 `cost` 让排序自然把它排到后面。
-    const smeltHonored = !!smeltSrc;
+    //   问题：`iron_ingot` 能从 `iron_nugget` 合成、`raw_iron` 能从 `raw_iron_block` 合成 ——
+    //   而这两个材料**本身是用这个物品合成的**（铁锭→铁粒、粗铁→粗铁块）。
+    //   选它们 = **往原材料更稀缺的方向走** → 计划成环，`gaps` 报"缺 raw_iron"（而它能挖）。
+    //   实测：15 个实战目标里 **13 个不可执行**（铁/金/铜全套工具 + bucket/shears/shield/anvil）。
+    //
+    //   ★ 但我试过两个"更大范围"的改法，都错了（留档）：
+    //     ① 「有 smelt 来源 → craft 一律降级」：救不了 `raw_iron`（它是 craft vs **collect**）
+    //     ② 「有 collect 来源 → craft 一律降级」：**把一切搞坏** ——
+    //        因为 `getItemBlockSources('crafting_table')` 返回 `['crafting_table']`
+    //        （**它自己的方块形态**！`torch` 返回 `['torch','wall_torch']`），
+    //        于是几乎每个可放置物品都"能采" → `crafting_table` 变成 `mine:crafting_table`。
+    //
+    //   → 精确判据：**某个合成材料 X 自己是用 `name` 合成的 → 这个 craft 是"反向"的，降级。**
+    //     例：`iron_nugget` 的配方含 `iron_ingot` → 对 `iron_ingot` 而言是反向 ✓
+    //         `raw_iron_block` 的配方含 `raw_iron` → 对 `raw_iron` 而言是反向 ✓
+    //         `oak_planks` 的配方**不含** `crafting_table` → 正常，不动 ✓
+    const isReverseRecipe = (craftSrc) => {
+        try {
+            for (const mat of Object.keys(craftSrc.recipe ?? {})) {
+                for (const [r] of (mc.getItemCraftingRecipes(mat) ?? [])) {
+                    if (Object.prototype.hasOwnProperty.call(r, name)) return true;
+                }
+            }
+        } catch { /* 查不到就当不是反向 */ }
+        return false;
+    };
+
     if (smeltSrc) out.push(smeltSrc);
     for (const c of craftSrcs) {
-        // 有熔炼来源 → craft 的 cost 抬到 smelt 之后（+10 保证严格靠后，不依赖具体数值）
-        out.push(smeltHonored ? { ...c, cost: SOURCE_ORDER.smelt + 10 } : c);
+        if (isReverseRecipe(c)) {
+            // 反向配方：排到所有自然来源之后（+10 保证严格靠后，不依赖具体数值）
+            out.push({ ...c, cost: SOURCE_ORDER.collect + 10, reverse: true });
+        } else {
+            out.push(c);
+        }
     }
 
     // 打怪掉落
