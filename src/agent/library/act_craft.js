@@ -133,6 +133,26 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         return fail('NO_ITEM', `料不够合 ${itemName}`, diag({ got: 0, limit }));
     }
 
+    // ★★★ 2026-11-04（t110）：**开着的窗口会让 `bot.craft` 静默失败。**
+    //
+    //   真机实证（第 42 跑，`craft oak_planks c=2`）：
+    //     invBefore = {oak_planks:1, crafting_table:1, **oak_log:3**, stick:4}
+    //     invAfter  = 完全相同          ← 木材充足，但**一块都没产出**
+    //     limit=2, produced=0, costMs=1536（轮询 1.5s 超时）
+    //   `bot.craft` **没抛错**，背包也**没变** —— 典型的"窗口状态不对"。
+    //
+    //   来源：`flow_store`/`flow_fetch`/`deposit`/`withdraw` 会打开容器窗口。
+    //   如果它们异常退出而没关窗，`bot.currentWindow` 就一直是那个容器 →
+    //   `bot.craft` 往一个**不是合成台**的窗口里塞配方 → 服务端忽略 → 客户端 resolve。
+    //
+    //   修法：**craft 之前先确保没有别的窗口开着。**
+    //   （`tableBlock` 是真工作台时 mineflayer 会自己开窗，所以这里只关"别人的窗口"。）
+    try {
+        if (bot.currentWindow && !bot.currentWindow.type?.includes('crafting')) {
+            await bot.closeWindow?.(bot.currentWindow);
+        }
+    } catch { /* 关不掉就照常试，让下面如实报 */ }
+
     try {
         await bot.craft(recipe, limit, tableBlock ?? undefined);
     } catch (e) {
@@ -167,6 +187,11 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             // 诊断三件套（verify 要求）：合成前后的完整背包 + 限流算出多少
             invBefore, invAfter: snapInv(), limit,
             matCounts: { [itemName]: after },
+            // ★ t110：**"合成成功但背包没变"的诊断**（真机第 42 跑的现象）。
+            //   带上这几项才能分清是"窗口不对"还是"配方/槽位不对"：
+            windowOpen: bot.currentWindow?.type ?? null,   // 有别的窗口开着 = 怀疑对象
+            heldItem: bot.heldItem?.name ?? null,
+            recipesForCount: (() => { try { return (bot.recipesFor?.(mc.getItemId(itemName), null, limit, null) ?? []).length; } catch { return null; } })(),
         });
     }
     return ok({
