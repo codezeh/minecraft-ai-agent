@@ -79,22 +79,55 @@ export function sourcesOf(itemName) {
         }
     } catch { /* 查不到就没有这种来源 */ }
 
-    // 合成
+    // ★★★ 2026-11-04（t102）：**有熔炼来源的物品，熔炼必须排在合成前面。**
+
+    //   真机/离线证据：`planObtain('iron_pickaxe')` 拆出
+    //     craft:iron_pickaxe → craft:iron_ingot×3 → craft:iron_nugget×27 → …
+    //   也就是**用 27 个铁粒合成 3 个铁锭**，而不是**烧 3 个铁矿**。
+    //
+    //   而 `planObtain('iron_nugget', 27)` →
+    //     c:iron_nugget×27 + c:iron_ingot×3      gaps={"iron_nugget":27}
+    //   铁粒要铁锭、铁锭又要铁粒 —— **是个环**，`seen` 挡住了继续展开，
+    //   于是计划**只到"要 27 个铁粒"就停了，而铁粒根本弄不到**（gaps 里它自己都承认了）。
+    //   → **`obtain iron_pickaxe / iron_sword / iron_axe` 永远不可能成功**，
+    //     而且报错会说"缺铁粒"，把人引去挖一个挖不到的东西。
+    //
+    //   根因：`SOURCE_ORDER` 里 `craft(1)` 排在 `smelt(2)` 前面。
+    //   对"既能合成又能熔炼"的物品（铁锭/金锭这类），**合成配方是"反向"的**
+    //   （铁粒本来是从铁锭造出来的）→ 必须让 **smelt 优先**。
+    //
+    //   改动范围：**只对同时有两种来源的物品调整顺序**，其它物品完全不变。
+
+    // 熔炼（先收集）
+    let smeltSrc = null;
+    try {
+        const ing = mc.getItemSmeltingIngredient(name);
+        if (ing) smeltSrc = { type: 'smelt', ingredient: ing, cost: SOURCE_ORDER.smelt };
+    } catch { /* ignore */ }
+
+    // 合成（后收集）
+    const craftSrcs = [];
     try {
         for (const [recipe, meta] of (mc.getItemCraftingRecipes(name) ?? [])) {
             // ★★ t97：**必须带上 `craftedCount`（一次合成产出几个）。**
             //   原来写成 `for (const [recipe] of ...)`，把第二个元素整个丢掉 →
             //   `expand` 只能按 `per * stillNeed` 算材料，**不知道"一次产 N 个"**，
             //   于是把需求**算大**（stick: 2 木板 → 4 根，只要 2 根却按 2 次合成算 → 4 木板）。
-            out.push({ type: 'craft', recipe, craftedCount: Math.max(1, Number(meta?.craftedCount) || 1), cost: SOURCE_ORDER.craft });
+            craftSrcs.push({ type: 'craft', recipe, craftedCount: Math.max(1, Number(meta?.craftedCount) || 1), cost: SOURCE_ORDER.craft });
         }
     } catch { /* ignore */ }
 
-    // 熔炼
-    try {
-        const ing = mc.getItemSmeltingIngredient(name);
-        if (ing) out.push({ type: 'smelt', ingredient: ing, cost: SOURCE_ORDER.smelt });
-    } catch { /* ignore */ }
+    // ★ t102：**有熔炼来源时，合成要降级**（避免"用铁粒造铁锭"这种反向配方成环）。
+    //
+    //   ★ 注意：这个数组最后会被 `out.sort((a,b) => a.cost - b.cost)` 重排（:131），
+    //     所以**光调 push 顺序没用**（我第一版就这么写，被 sort 冲掉了）。
+    //     必须改 `cost` 让排序自然把它排到后面。
+    const smeltHonored = !!smeltSrc;
+    if (smeltSrc) out.push(smeltSrc);
+    for (const c of craftSrcs) {
+        // 有熔炼来源 → craft 的 cost 抬到 smelt 之后（+10 保证严格靠后，不依赖具体数值）
+        out.push(smeltHonored ? { ...c, cost: SOURCE_ORDER.smelt + 10 } : c);
+    }
 
     // 打怪掉落
     try {
