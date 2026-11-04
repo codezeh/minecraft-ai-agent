@@ -208,8 +208,33 @@ export async function holdDig(bot, block, opts = {}) {
     //
     //   所以换一个不会被清掉的量：**我们自己维护的 in-flight 计数**。
     //   进入时若 `__digInFlight > 0` → **铁证：上一个 dig 还没结束**。
+    // ★★★ 2026-11-04（t94）：**上一个 dig 泄漏了就主动清理，别在它身上叠新的。**
+    //
+    //   铁证（verify 第 39 跑，in-flight 计数）：
+    //     seq 1~5  CONCURRENT=no      ← 正常
+    //     seq 5    heldMs= **3007**   ← 这一挖挂了 3 秒
+    //     seq 6~∞  CONCURRENT= **YES(1)** 永久，再也没有 no
+    //   完整因果链：
+    //     ① 一次慢 dig（3007ms）没有正常收尾，`__digInFlight` 停在 1
+    //     ② 每个新 dig 一进来，mineflayer 的 `dig()` 就 `if (targetDigBlock) stopDigging()`
+    //        → **cancel 掉上一个** → 上一个报 `Digging aborted`
+    //     ③ 而**新的那个又被下一个 cancel** → 永久 abort 链（heldMs 全是 0~1ms）
+    //
+    //   所以：**检测到"上一个还没结束"时，先 stopDigging + 等它真的 settle，再开始新的。**
+    //   这一步是打破自锁的关键 —— 光靠"每个新 dig 都 cancel 旧的"永远解不开。
     const seq = (bot.__digSeq = (bot.__digSeq ?? 0) + 1);
-    const inFlightAtEntry = bot.__digInFlight ?? 0;
+    let inFlightAtEntry = bot.__digInFlight ?? 0;
+    if (inFlightAtEntry > 0) {
+        // 有泄漏：先让旧的彻底停掉，再等它 settle
+        try { bot.stopDigging?.(); } catch { /* ignore */ }
+        for (let i = 0; i < 10 && (bot.__digInFlight ?? 0) > 0; i += 1) {
+            await new Promise((r) => setTimeout(r, 60));
+        }
+        // 等不到就强制归零（宁可漏计一次，也不能让它永久卡住整条挖矿链）
+        if ((bot.__digInFlight ?? 0) > 0) bot.__digInFlight = 0;
+        inFlightAtEntry = 0;
+        if (process.env.TRACE) console.log('[DIG] broke-stale-lock seq=', seq);
+    }
     bot.__digInFlight = inFlightAtEntry + 1;
     if (process.env.TRACE) {
         const busy = bot.targetDigBlock?.name ?? null;
@@ -220,7 +245,15 @@ export async function holdDig(bot, block, opts = {}) {
             'targetDigBlock=', busy,
             'keys=', JSON.stringify(keys), 'goal=', goal, 'caller=', bot.__digCaller ?? '?');
     }
-    const digging = bot.dig(block, true).catch((e) => { digErr = e; }).finally(() => {
+    let digPromise;
+    try {
+        digPromise = bot.dig(block, true);
+    } catch (e) {
+        // ★ 同步抛错也要把计数减回来（否则和"慢 dig 泄漏"一样会永久卡住）
+        bot.__digInFlight = Math.max(0, (bot.__digInFlight ?? 1) - 1);
+        return fail('INTERNAL', String(e?.message ?? e), { error: String(e?.message ?? e), dugBlock: block.name });
+    }
+    const digging = digPromise.catch((e) => { digErr = e; }).finally(() => {
         bot.__digInFlight = Math.max(0, (bot.__digInFlight ?? 1) - 1);
     });
 
