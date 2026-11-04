@@ -224,10 +224,30 @@ export async function craft(bot, itemName, count = 1) {
             }
         }
 
+        // ★★★ 2026-11-04（t123）：**删掉这个前置检查 —— 它让 `act_craft` 的守卫永远不执行。**
+        //
+        //   真机证据（第 50 跑，我要求贴【完整不截断】data 之后）：
+        //     `data` 的键并集只有 `{item, want, got, missing}`  —— **4 个键**
+        //     `requiresTable` / `tableBlockUsed` / `recipesWithTable` / `heldItem` **一个都没有**
+        //   → 证明失败**根本没进 `act_craft`**，而是死在这里。
+        //
+        //   ★ 这就是今晚「**防护装了但没生效**」这一族的又一例：
+        //     我今天在 `act_craft` 加的 t121（3x3 无表必败）和 t122（requiresTable 诊断）
+        //     **在这条路径上是死代码** —— 因为这里先 return 了。
+        //
+        //   而且这个检查本身是**劣质的**：
+        //     · `missingFor` 只看 `all[0][0]`（第一条配方、1 次的量）
+        //     · 报错只有 `{item,want,got,missing}` —— 没有 `inv`/`limit`/`windowOpen`
+        //     · 和 `act_craft` 各自判断"料够不够"，**两个地方各自算同一件事**
+        //
+        //   修法：**把"能不能合"完全交给 `act_craft`**（它知道工作台、知道 limit、知道 stale 表），
+        //   这里不再预判。真合不了时 `act_craft` 会带着完整的 `diag()` 失败。
         recipes = bot.recipesFor?.(id, null, want, table) ?? [];
         if (!recipes.length) {
-            const missing = missingFor(bot, itemName);
-            return fail('NO_ITEM', `料不够合 ${itemName}（在工作台旁也合不出）`, { item: itemName, want, got: 0, missing });
+            // 只记一条可观测事件，**不 return** —— 继续走 craftOnce，让 act_craft 给出精确原因
+            try {
+                bot.__craftPrecheckMiss = { item: itemName, want, missing: missingFor(bot, itemName), at: Date.now() };
+            } catch { /* ignore */ }
         }
     }
 
