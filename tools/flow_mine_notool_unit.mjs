@@ -15,7 +15,8 @@
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
-import { makeFakeBot } from './fixtures/fake_bot.mjs';
+import Vec3 from 'vec3';
+import { makeFakeBot, assertPointLike } from './fixtures/fake_bot.mjs';
 import { CODES, isResult } from '../src/agent/library/contract.js';
 import { canDigWithInventory, canDigReason } from '../src/agent/library/act_dig.js';
 import { mine, manifest } from '../src/agent/library/flow_mine.js';
@@ -48,10 +49,15 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
             itemsByName: { iron_pickaxe: { id: 892 }, raw_iron: { id: 867 } },
         },
         stubs: {
+            // t74：findBlocks 必须返回 **Vec3**（产品会把它直接喂给 blockAt；真 mineflayer 如此）
             findBlocks: () => [...world.keys()]
                 .map((k) => k.split(',').map(Number))
-                .map(([x, y, z]) => ({ x, y, z })),
+                .map(([x, y, z]) => new Vec3(x, y, z)),
             blockAt: (v) => {
+                // t74：严格守卫（坐标形状与真 mineflayer 一致）
+                //   这文件测的是"工具/背包三态"，不是地形 —— 但**读方块的坐标形状**
+                //   仍是同一类风险（t70 家族），所以借共享守卫，不换世界。
+                assertPointLike(v);
                 const k = `${Math.floor(v?.x ?? 0)},${Math.floor(v?.y ?? 0)},${Math.floor(v?.z ?? 0)}`;
                 return world.get(k) ?? { name: 'air', position: v };
             },
@@ -152,11 +158,14 @@ function mineBot({ picks = [{ name: 'iron_pickaxe', type: 892, count: 1, slot: 3
         items: [],                                     // 空背包，但**读得到**
         registry: { blocksByName: { iron_ore: { id: 15 } }, itemsByName: {} },
         stubs: {
-            findBlocks: () => [{ x: 1, y: 16, z: 0 }],
-            blockAt: () => ({
-                name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 },
-                diggable: true, canHarvest: () => true, harvestTools: { 877: true },
-            }),
+            findBlocks: () => [new Vec3(1, 16, 0)],   // t74：Vec3（见上）
+            blockAt: (v) => {
+                assertPointLike(v);   // t74：坐标形状守卫（同 t70 家族）
+                return {
+                    name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 },
+                    diggable: true, canHarvest: () => true, harvestTools: { 877: true },
+                };
+            },
         },
     });
     const why = canDigReason(bot, { name: 'iron_ore', diggable: true, canHarvest: () => true, harvestTools: { 877: true } });

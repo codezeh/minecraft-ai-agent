@@ -675,6 +675,20 @@ export class BoardScheduler {
                     code: result?.code ?? 'OK',
                     message: result?.message ?? '',
                     progress: this._progressOf(result),
+                    // ★★★ 2026-11-04（t109）：**`data` 必须一起传 —— 这是今晚第 7 次"中间层重新组装"。**
+                    //
+                    //   真机实证（第 42 跑，`craft oak_planks c=3` 那条）：
+                    //     `act_craft:165` 明明带了 `{invBefore, invAfter, limit, matCounts}`
+                    //     但库里 `result.data` 是 **`null`**。
+                    //   原因：**这里重新组装了一个对象**，只挑 4 个字段 → `result.data` 被丢掉。
+                    //
+                    //   今天为这个 `data` 我改过 4 次（t89 `act_craft` 加 diag、t92/t95 `flow_craft`
+                    //   两处转发、t105 `board_store.finish` 存 data），**每次都是"看起来最像"的那层**。
+                    //   而真正的链路是四跳：
+                    //     act_craft.data → flow_craft（转发）→ **scheduler（这里，丢了）**
+                    //     → board_client → board_server → board_store.finish（存）
+                    //   **只修中间任一层都没用，必须四跳全对。**
+                    data: result?.data ?? null,
                 });
                 this.onEvent({ type: 'job-finished', id: job.id, code: result?.code ?? 'OK', costMs: this.now() - startedAt });
             } catch (e) {
