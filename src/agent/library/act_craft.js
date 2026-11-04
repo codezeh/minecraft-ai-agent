@@ -320,6 +320,11 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             recipesWithTable: _preDiag.recipesWithTable,
             limitUsed: limit,                                  // ★ t116：这次实际合几次（诊断单位混用）
             tableBlockUsed: tableBlock?.position ? { x: tableBlock.position.x, y: tableBlock.position.y, z: tableBlock.position.z } : null,
+            // ★ t122：**`requiresTable` 是决定性字段** ——
+            //   `true` + `tableBlockUsed:null` = 走了 2x2（一枚不产出、不报错、1~2 秒返回）
+            //   `true` + `tableBlockUsed` 有值 = 表拿到了，问题在开窗/摆料/取产物
+            requiresTable: !!recipe?.requiresTable,
+            recipeResultCount: Number(recipe?.result?.count) || null,
             tableStillThere: tableStillThere ?? 'unknown',
             tableInInventory: (() => { try { return (bot.inventory?.items?.() ?? []).filter((i) => i?.name === 'crafting_table').reduce((a, i) => a + (i.count ?? 0), 0); } catch { return null; } })(),
         });
