@@ -151,6 +151,27 @@ for (let r = 1; r <= ROUNDS; r++) {
         met.planksTotal = planksAll.length;
         met.planksRetried = planksAll.filter((x) => (x.attempts ?? 0) >= 2).length;
     }
+    // ★ 第 53 跑（t88 要求）：**所有 craft 单（含成功）按时间排开**，带 produced / invAfter，建消耗链
+    try {
+        const chainDb = openBoard().db;
+        const rows = chainDb.prepare("SELECT id,skill,args,state,attempts,createdAt,result FROM jobs WHERE skill='craft' ORDER BY createdAt").all();
+        const chain = rows.map((c) => {
+            let r = null; try { r = JSON.parse(c.result ?? 'null'); } catch { }
+            const a = JSON.parse(c.args || '{}');
+            const d = r?.data ?? null;
+            return {
+                round: r0, id: c.id, createdAt: c.createdAt, item: a.item ?? a.ore ?? '', count: a.count ?? null,
+                state: c.state, attempts: c.attempts,
+                produced: d?.produced ?? null,
+                invAfter_planks: d?.invAfter?.oak_planks ?? null,
+                invAfter_stick: d?.invAfter?.stick ?? null,
+                invAfter_log: d?.invAfter?.oak_log ?? null,
+                invAfter_table: d?.invAfter?.crafting_table ?? null,
+            };
+        });
+        if (chain.length) fs.appendFileSync('tmp/t51-craft-chain.jsonl', JSON.stringify(chain) + String.fromCharCode(10));
+    } catch (e) { console.log('  chain dump 失败: ' + String(e?.message ?? e)); }
+
     // ★ 第 50 跑：把**所有 craft 单**（不限 oak_planks/wooden_pickaxe）的失败 data **完整** dump 到文件
     try {
         const allCraft = db2.prepare("SELECT id,skill,args,state,attempts,createdAt,result FROM jobs WHERE skill='craft' ORDER BY createdAt").all();

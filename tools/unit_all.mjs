@@ -46,6 +46,7 @@ const UNITS = [
     'code_hints_unit',           // M9：code_hints 覆盖全部 38 个码 + 一行 ≤200 字格式
     'protect_owner_unit',        // M9：护主判定（跟随才生效/不打苦力怕玩家/6-8格/收手四条）
     'idle_planner_unit',         // M9：空闲三定义 + 08 §6.1 三层顺序
+    'strat_alloc_unit',           // t91：库存池统筹分配（5-手上=应补，含 3 板应补 2 的双计杀手）
     'strat_obtain_reverse_unit', // t76：反向配方降级（铁/铜走 smelt、crafting_table 不降级、wooden_pickaxe 逐字不变）+ cycles↔gaps 共存
     'strat_obtain_unit',         // M10：strat_obtain 来源顺序 + ★防无限展开 + 不碰身体
     'strat_cycles_unit',         // t73：cycles 独立出口（成环 vs 真缺料）
