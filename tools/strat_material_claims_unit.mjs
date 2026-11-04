@@ -42,8 +42,10 @@ const run = async (item, count, extraDeps = {}) => {
 
 // ── ① 正向：wooden_pickaxe 的 craft 子单带 item claim ──────────────────
 {
-    chk('开关默认是开的（MATERIAL_CLAIMS === true）', MATERIAL_CLAIMS === true, `MATERIAL_CLAIMS=${MATERIAL_CLAIMS}`);
-    const { board } = await run('wooden_pickaxe', 1);
+    // ★ t134：**默认改成关**（control 的建议：`item:` 是名字级互斥、会串行化材料消费者）。
+    //   所以这里的"开启"用例要**显式传** `materialClaims: true`，而不是依赖默认值。
+    chk('开关默认是关的（MATERIAL_CLAIMS === false，保守）', MATERIAL_CLAIMS === false, `MATERIAL_CLAIMS=${MATERIAL_CLAIMS}`);
+    const { board } = await run('wooden_pickaxe', 1, { materialClaims: true });
     const crafts = board.added.filter((j) => j.skill === 'craft');
     const withClaims = crafts.filter((j) => Array.isArray(j.claims) && j.claims.length);
     chk('① craft 子单里至少一张带 claims', withClaims.length > 0, `craft 共 ${crafts.length} 张，带 claims 的 ${withClaims.length} 张`,

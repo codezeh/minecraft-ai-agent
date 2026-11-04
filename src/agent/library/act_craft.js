@@ -107,7 +107,21 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         }
         recipes = bot.recipesFor?.(id, null, 1, tableBlock) ?? [];
         if (recipes.length === 0) {
-            return fail('NO_ITEM', `料不够合 ${itemName}（工作台旁也合不出）`, diag({ usedTable: !!tableBlock }));
+            // ★★★ 2026-11-05（t133，verify 的建议）：**这里必须能看出"是料不够还是表没拿到"。**
+            //
+            //   真机证据（第 54 跑）：失败 `data` 只有 5 键，**没有 `limit`/`invBefore`** ——
+            //   说明死在这条早退。而 `inv` 里没有 `crafting_table`，
+            //   所以真正的原因是"**工作台不在手边**"，不是"料不够"。
+            //   但这条 `fail` 的文字写的是"料不够合 X（在工作台旁也合不出）" —— **误导**。
+            return fail('NO_ITEM', `${itemName}：有工作台也算不出配方（料可能不够，或工作台不是合成台）`, diag({
+                usedTable: !!tableBlock,
+                // ★ 区分"表的问题"和"料的问题"所需的三个数
+                recipesInInventory: (() => { try { return (bot.recipesFor?.(id, null, 1, null) ?? []).length; } catch { return null; } })(),
+                recipesWithTable: (() => { try { return (bot.recipesFor?.(id, null, 1, true) ?? []).length; } catch { return null; } })(),
+                tableInInventory: (() => { try { return (bot.inventory?.items?.() ?? []).filter((i) => i?.name === 'crafting_table').reduce((a, i) => a + (i.count ?? 0), 0); } catch { return null; } })(),
+                tableBlockUsed: tableBlock?.position ? { x: tableBlock.position.x, y: tableBlock.position.y, z: tableBlock.position.z } : null,
+                reason: tableBlock ? 'with-table-no-recipe' : 'needs-table-but-none',
+            }));
         }
     }
 

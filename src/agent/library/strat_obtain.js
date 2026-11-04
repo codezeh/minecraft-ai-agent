@@ -43,6 +43,22 @@ export const MAX_JOBS = 30;
  * 来源优先级（04 §6.3 原文：箱子 > 合成 > 熔炼 > 采集 > 交易 > 打怪掉落）。
  * 数字越小越先试。
  */
+/**
+ * ★★ 2026-11-05（t131）：**跨单材料预约总开关**。
+ *
+ * `true`  = 建 `craft` 子单时，把它要消耗的材料声明成 `item:<name>:<qty>` claim
+ *           → 调度器跑单前 `reserve` 它 → 同一材料的其它单会收到 `CLAIM_CONFLICT` 并回 ready 等。
+ * `false` = 完全回到旧行为（一个 claim 都不加），用于快速回滚/对照。
+ *
+ * 也可以用 `planObtain({ deps: { materialClaims: false } })` **单次**关闭。
+ */
+// ★ 2026-11-05（t134）：**默认关**（control 的建议 #1）。
+//   理由：`item:` 是**名字级互斥、不是数量配额** → 会把并行的材料消费者**串行化**。
+//   对第一夜（单 bot 顺次跑）没影响，但多 bot 时会明显变慢。
+//   **先把机制装进去、默认不启用**；等真机确认收益（或按数量配额改造）再打开。
+//   想启用：改这里为 true，或单次传 `deps.materialClaims: true`。
+export const MATERIAL_CLAIMS = false;
+
 export const SOURCE_ORDER = Object.freeze({
     container: 0,     // 箱子里拿（最省事：不用做任何东西）
     craft: 1,         // 合成
@@ -206,6 +222,31 @@ function haveCount(item, inventory, chests) {
  *          `cycles` 非空 = 环（规划不出来）；`gaps` 非空但 `cycles` 空 = 真缺料（没有可行来源/缺那项能力）。
  *          `gaps` 里**包含** `cycles`（保留原语义，上层不受影响）。
  */
+/**
+ * ★ t131：给一张 `craft` 子单算它要占的材料 claim。
+ *
+ * @param {object} step  plan 里的一步（skill/args）
+ * @param {object} opts  { needsQtyOf, needsPerCraft, enabled }
+ * @returns {string[]}  形如 `['item:oak_planks:3']`；非 craft 单或关闭时返回 []
+ */
+export function materialClaimsForStep(step, opts = {}) {
+    const enabled = opts.enabled !== false;
+    if (!enabled) return [];
+    if (String(step?.skill ?? '') !== 'craft') return [];
+    const item = step?.args?.item;
+    const want = Math.max(1, Math.floor(Number(step?.args?.count) || 1));
+    const qty = opts.needsQtyOf?.get?.(item) ?? null;
+    if (!item || !qty) return [];
+    const per = Math.max(1, Number(opts.needsPerCraft?.get?.(item)) || 1);
+    const times = Math.ceil(want / per);          // 要合几次（★ t115 的单位教训）
+    const out = [];
+    for (const [mat, perCraft] of Object.entries(qty)) {
+        const need = Math.max(1, Math.ceil(Number(perCraft) || 1) * times);
+        out.push(`item:${mat}:${need}`);
+    }
+    return out;
+}
+
 export function planObtain(args = {}) {
     const item = String(args.item ?? '');
     const want = Math.max(1, Math.floor(Number(args.count) || 1));
@@ -260,6 +301,27 @@ export function planObtain(args = {}) {
     //   改动面太大、容易漏。改成**旁路记录**，最后统一后处理，风险小得多。
     //   `needsOf[成品] = [材料, ...]`
     const needsOf = new Map();
+    /**
+     * ★★ 2026-11-05（t131）：**跨单材料预约**（06 §9.2）—— 把"要消耗的材料"声明成 `item:` claim。
+     *
+     * 背景：`board_claims.js` 早就支持第六种 key `item:<name>[:n]`，`deriveClaims(job)` 也
+     * **优先用 `job.claims`**（`if (Array.isArray(job?.claims) && job.claims.length) return job.claims`），
+     * 调度器 `_reserveClaims` 会在跑单前逐个 reserve —— **机制是现成的，只是没有一处策略声明过材料**。
+     *
+     * 语义（重要）：`item:` 是**名字级互斥**，不是数量级分配 ——
+     * `item:oak_planks:5` 与 `item:oak_planks:1` **也冲突**（`claimsConflict` 只比 name）。
+     * 所以这里的效果是"同一材料同一时间只让一张单用" = **串行化材料消费者**，而不是精确配额。
+     *
+     * 为什么仍然安全（读过调度器确认）：
+     *   · 冲突 → `setState(job.id, READY, 'claim-conflict')` 并 return false，**不烧 attempts**；
+     *   · `finish` 时 `release(db, id, owner, null)` **释放该单全部 claim** —— 所以
+     *     "claim 了但没消耗"（craft 失败/被中断）不会永久占着，最坏等 TTL（30s）过期；
+     *   · `item:` 与 `block:`/`area:` 等**跨类型不冲突**（`claimsConflict` 里没有 item×其它 的分支）。
+     *
+     * 开关：`MATERIAL_CLAIMS = false` 可整体关闭（回滚用），或用 `deps.materialClaims === false` 单次关闭。
+     */
+    const needsQtyOf = new Map();       // 成品 → { 材料: 每合成一次用量 }
+    const needsPerCraft = new Map();    // 成品 → 每次合成产出几个
 
     /**
      * ★★ 2026-11-04（t85）：**同层同物品的需求必须合并成一张单。**
@@ -410,6 +472,9 @@ export function planObtain(args = {}) {
             if (src.type === 'craft') {
                 // ★ t65：记录"这个成品需要哪些材料"（后处理时用来补 dependsOn）
                 needsOf.set(name, Object.keys(src.recipe ?? {}));
+                // ★ t131：材料用量 + 每次产出，用来算"这张 craft 单要占多少材料"
+                needsQtyOf.set(name, { ...(src.recipe ?? {}) });
+                needsPerCraft.set(name, Math.max(1, Number(src.craftedCount) || 1));
                 pushStep({
                     skill: SOURCE_TO_SKILL.craft,
                     args: { item: name, count: stillNeed },
@@ -568,6 +633,21 @@ export function planObtain(args = {}) {
         }
     }
 
+    // ★★ t131：**在最终返回前**给每张 craft 单附上材料 claim。
+    //   放在这里的原因：`pushStep` 会合并同键步骤，count 只有在全部展开完才最终确定。
+    // ★★ t134：**显式传参要能覆盖默认值（三态），不能只是"能关不能开"。**
+    //   原实现 `MATERIAL_CLAIMS && ...` 意味着默认关时传 `true` 也打不开
+    //   —— 那测试就没法验"开启后的行为"，等于机制不可测。
+    //   语义：显式 `true`/`false` 优先；都没传才用 `MATERIAL_CLAIMS`。
+    const explicitClaims = args.materialClaims ?? args.deps?.materialClaims ?? null;
+    const claimsEnabled = explicitClaims === null ? MATERIAL_CLAIMS : explicitClaims === true;
+    if (claimsEnabled) {
+        for (const step of plan) {
+            if (String(step.skill ?? '') !== 'craft') continue;
+            step.claims = materialClaimsForStep(step, { needsQtyOf, needsPerCraft, enabled: true });
+        }
+    }
+
     return {
         ok: Object.keys(gaps).length === 0 && !hitDepth && !hitJobs,
         plan, gaps,
@@ -640,6 +720,9 @@ export async function obtain(agent, item, count = 1, deps = {}) {
 
     const planned = (deps.planObtain ?? planObtain)({
         item, count, inventory: inv, chests,
+        // ★ t131：把"材料预约"开关透传下去（`planObtain` 也从 `args.deps.materialClaims` 读，
+        //   但 `obtain()` 这条路径原本不转发 deps —— 不补这一行，开关在运行时是失效的）。
+        materialClaims: deps.materialClaims,
     });
 
     if (planned.plan.length === 0) {
@@ -732,6 +815,9 @@ export async function obtain(agent, item, count = 1, deps = {}) {
             priority: 5,
             source: 'self',
             assignee: agent?.name ?? null,
+            // ★ t131：跨单材料预约 —— claim 由 `planObtain` 在计划阶段算好（它才知道材料用量），
+            //   这里只负责搬运。空数组 = 不预约（`deriveClaims` 会回落到按 skill/args 推导）。
+            claims: Array.isArray(step.claims) && step.claims.length ? step.claims : undefined,
             state: 'ready',
         });
         if (r?.ok) {
@@ -773,6 +859,9 @@ export async function obtain(agent, item, count = 1, deps = {}) {
             priority: 5,
             source: 'self',
             assignee: agent?.name ?? null,
+            // ★ t131：跨单材料预约 —— claim 由 `planObtain` 在计划阶段算好（它才知道材料用量），
+            //   这里只负责搬运。空数组 = 不预约（`deriveClaims` 会回落到按 skill/args 推导）。
+            claims: Array.isArray(step.claims) && step.claims.length ? step.claims : undefined,
             state: 'ready',
         });
         if (r?.ok) {

@@ -20,6 +20,7 @@ import * as mc from '../../utils/mcdata.js';
 import { ok, fail } from './contract.js';
 import { craftOnce } from './act_craft.js';
 import { placeBlockAt } from './act_place.js';
+import { Vec3 } from 'vec3';
 import { findItem } from './act_items.js';
 import { countItem, blockAt } from './query_perceive.js';
 import { waitUntil } from './atom_wait.js';
@@ -79,10 +80,31 @@ function tableSpotsFor(bot) {
     return out;
 }
 
-/** 附近有没有现成的工作台（够得着的优先）。 */
+/** 附近有没有现成的工作台（够得着的优先）。
+ *
+ *  ★★★ 2026-11-05（t133）：**先看"我记得自己放过的那个位置"。**
+ *
+ *    真机证据（第 54 跑）：`craft crafting_table` 做出表 → 某次 `craft` 把表放下去了
+ *    （`table: 1 → null`）→ 下一张 `craft wooden_pickaxe` 找不到表 → 3x3 查不到配方 → blocked。
+ *
+ *    为什么 `findBlock` 找不到：可能是放的位置超出 `maxDistance`、或区块未加载、
+ *    或放置后没等方块同步。**但"我放的"这件事是确定知道的** —— 记住坐标比反复搜更可靠。
+ *    → 先查记忆位置；读不到再退回 `findBlock` 搜索。
+ */
 function nearbyTable(bot, maxDistance = 16) {
+    const id = mc.getItemId('crafting_table');
+    // ① 先看记忆位置
     try {
-        const id = mc.getItemId('crafting_table');
+        const p = bot.__placedTablePos;
+        if (p) {
+            const b = bot.blockAt?.(new Vec3(p.x, p.y, p.z), false);
+            if (b?.name === 'crafting_table') return b;
+            // 记忆位置已经不是工作台 → 清掉（被别人挖了/根本没放成功）
+            bot.__placedTablePos = null;
+        }
+    } catch { /* ignore */ }
+    // ② 再搜附近
+    try {
         return bot.findBlock?.({ matching: id, maxDistance }) ?? null;
     } catch {
         return null;
@@ -212,6 +234,16 @@ export async function craft(bot, itemName, count = 1) {
                     { item: itemName, tried: spots });
             }
             placedTable = true;
+            // ★★★ 2026-11-05（t133）：**记住"我把表放哪了"。**
+            //
+            //   真机证据（第 54 跑轮 1）：`craft crafting_table` 做出表（`table:1`）→
+            //   几十秒后 `craft stick` 结束时报 `table:null` → 紧接着 `wooden_pickaxe`
+            //   失败，`inv` 里没有工作台。
+            //   **不管是谁放的，后果一样：表在世界上，但下一张单找不到它。**
+            //
+            //   `invAfter` 是**那一刻的快照**，不一定是"这个单的效果"（并发下会串味）。
+            //   所以不要靠归因，**直接记住位置** —— 后面任何单都能用。
+            if (spot) { try { bot.__placedTablePos = { x: spot.x, y: spot.y, z: spot.z }; } catch { /* ignore */ } }
             // ★ t90：放置成功后**等方块同步**再读（第 34 跑 `act_craft` 已踩过同类：
             //   "动作 resolve ≠ 服务端状态已同步到本地"）。轮询到读出来或 1.2s。
             table = blockAt(bot, spot);
