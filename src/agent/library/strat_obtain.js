@@ -248,6 +248,8 @@ export function planObtain(args = {}) {
      *   所以这里**是新增诊断字段，不是替换** —— 环的那部分会同时出现在两个字段里。
      */
     const cycles = {};
+    // ★ t130：本计划已经从库存池里分配出去的数量（"统筹"用的账本）
+    const allocated = new Map();
     const seen = new Set();          // 防止同一物品被反复展开（环）
     let hitDepth = false;
     let hitJobs = false;
@@ -340,9 +342,35 @@ export function planObtain(args = {}) {
             return;
         }
 
-        const h = haveCount(name, inventory, chests);
-        if (h.total >= need) return;               // 已经有了，不用下子单
+        // ★★★ 2026-11-05（t130）：**同一个库存池必须按需求顺序分配，不能每个消费者都拿全量。**
+        //
+        //   真机证据（第 52 跑）：`craft wooden_pickaxe` 失败 `missing:{oak_planks:1}`，
+        //   而 `inv={oak_planks:2}`、`oak_log:2`（够做 8 块板）。
+        //
+        //   离线复现（这就是那个"统筹"缺失的具体数学错误）：
+        //     背包 `{oak_planks:2}` → 拆单只补 **1** 块板   （正确应为 3）
+        //     背包 `{oak_planks:3}` → 拆单补 **0** 块板     （正确应为 3）★ 最能说明问题
+        //
+        //   为什么错：木镐要 3 板、木棍要 2 板，共 5 板。
+        //     `expand` 递归到 `oak_planks` 时会**各算一次**：
+        //       · 为镐算：need=3, have=3 → "够了，不用做"
+        //       · 为棍算：need=2, have=3 → "够了，不用做"
+        //     **同一批 3 块板被两个消费者各认领了一遍** → 计划里一块都不派。
+        //
+        //   修法：维护 `allocated`（本计划已经从池子里分配出去多少），
+        //   `have` 只能用"**剩下的**"。这样第一个消费者拿走后，第二个就看不到它了。
+        const hRaw = haveCount(name, inventory, chests);
+        const alreadyAllocated = Math.max(0, Number(allocated.get(name) ?? 0));
+        const haveTotal = Math.max(0, hRaw.total - alreadyAllocated);
+        const haveChest = Math.max(0, hRaw.chest - Math.min(alreadyAllocated, hRaw.chest));
+        const h = { total: haveTotal, chest: haveChest };
+        if (h.total >= need) {
+            // 从池子里划走 need（后面还有别的消费者要用剩下的）
+            allocated.set(name, alreadyAllocated + need);
+            return;
+        }
         const deficit = need - h.total;
+        allocated.set(name, alreadyAllocated + h.total);   // 手上这部分已经分配掉了
 
         // ── 先看箱子（04 §6.3 来源顺序第一）：能从箱子补就不用做 ──
         if (h.chest >= deficit) {
