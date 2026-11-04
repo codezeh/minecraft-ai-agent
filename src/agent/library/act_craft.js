@@ -115,6 +115,7 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     //   `snapInv` 已在函数开头定义（t91 统一诊断用），这里直接调。
     const invBefore = snapInv();
     let limit = want;
+    let _requiredForDiag = null;                        // ★ t111：算 limit 用的原料表（诊断）
     try {
         const inv = (bot.inventory?.items?.() ?? []).reduce((m, it) => {
             if (it?.name) m[it.name] = (m[it.name] ?? 0) + (it.count ?? 0);
@@ -123,6 +124,7 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         const required = typeof mc.ingredientsFromPrismarineRecipe === 'function'
             ? mc.ingredientsFromPrismarineRecipe(recipe)
             : null;
+        _requiredForDiag = required;                    // ★ t111：失败时要能带出来
         const cap = typeof mc.calculateLimitingResource === 'function'
             ? mc.calculateLimitingResource(inv, required)
             : null;
@@ -186,10 +188,16 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             item: itemName, want, got: 0, produced: 0, costMs: Date.now() - t0,
             // 诊断三件套（verify 要求）：合成前后的完整背包 + 限流算出多少
             invBefore, invAfter: snapInv(), limit,
-            matCounts: { [itemName]: after },
-            // ★ t110：**"合成成功但背包没变"的诊断**（真机第 42 跑的现象）。
-            //   带上这几项才能分清是"窗口不对"还是"配方/槽位不对"：
-            windowOpen: bot.currentWindow?.type ?? null,   // 有别的窗口开着 = 怀疑对象
+            // ★★★ t111：**改掉会误导人的字段名。**
+            //   原名 `matCounts: {[itemName]: after}` 听起来像"材料数量"，
+            //   实际是"**产出物现在有几个**" → verify 把它读成"限制材料取错项"，
+            //   于是我按"取错原料"的方向查了一轮（错方向）。
+            //   **字段名必须让人读对，否则诊断越详细越误导。**
+            craftedItemCount: { [itemName]: after },
+            // 真正算 `limit` 用的原料表（`ingredientsFromPrismarineRecipe` 的输出）
+            requiredMaterials: _requiredForDiag ?? null,
+            // "合成成功但背包没变"的诊断（真机第 42 跑的现象）
+            windowOpen: bot.currentWindow?.type ?? null,
             heldItem: bot.heldItem?.name ?? null,
             recipesForCount: (() => { try { return (bot.recipesFor?.(mc.getItemId(itemName), null, limit, null) ?? []).length; } catch { return null; } })(),
         });
