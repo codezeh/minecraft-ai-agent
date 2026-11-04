@@ -239,10 +239,20 @@ export async function craft(bot, itemName, count = 1) {
         //   整段"找表/合表/放表/走表"全白做，而 craftOnce 自己按 4 格又找不到 → NO_WORKSTATION。
         const r = await craftOnce(bot, itemName, want - got, table);
         if (!r.ok) {
-            // craftOnce 的码直接往上报；NO_ITEM 在这里也是 abort（缺料）
-            return fail(r.code, r.message ?? `合成 ${itemName} 失败`, {
-                item: itemName, count: r.data?.got ?? got, want, got, missing: r.code === 'NO_ITEM' ? missingFor(bot, itemName) : null,
-            });
+            // ★★ 2026-11-04（t92）：**必须把底层 `r.data` 一起转发，不能重新组装一份。**
+            //
+            //   真机证据（verify 第 36/37 跑，报了**两次**）：
+            //     `craft oak_planks → blocked`，而 `data = {}` 是空的 ——
+            //     `act_craft` 明明加了 `diag()`（inv / want / limit），可作业单上看不到。
+            //
+            //   原因就在这几行：这里**重新写了一个对象**，只挑 `got/want/missing` 三个字段，
+            //   **`r.data` 里的 `inv` / `limit` / `knownTable` 全被丢掉**。
+            //   → 两处各自组装同一份 data，后者覆盖前者（和 t90 的"工作台没传"同族）。
+            //
+            //   改成 `...r.data` 展开在前，本层要补充/覆盖的字段写在后面。
+            const base = { item: itemName, count: r.data?.got ?? got, want, got };
+            if (r.code === 'NO_ITEM') base.missing = missingFor(bot, itemName);
+            return fail(r.code, r.message ?? `合成 ${itemName} 失败`, { ...(r.data ?? {}), ...base });
         }
         got += Number(r.data?.produced ?? r.data?.got ?? 0);
         if (r.data?.produced === 0) break;           // 没产出，别空转

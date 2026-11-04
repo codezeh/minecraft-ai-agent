@@ -218,6 +218,11 @@ export async function holdDig(bot, block, opts = {}) {
     }
 
     if (interrupted || timedOut) {
+        if (process.env.TRACE) {
+            console.log('[DIG] self-stop', interrupted ? 'interrupted' : 'timeout',
+                '| heldMs=', Date.now() - t0, 'budget=', budget,
+                '| targetDigBlock=', bot.targetDigBlock?.name ?? null);
+        }
         try { bot.stopDigging?.(); } catch { /* ignore */ }
         if (interrupted) {
             return fail('INTERRUPTED', '被取消了', { dugBlock: block.name, costMs: Date.now() - t0 });
@@ -226,8 +231,16 @@ export async function holdDig(bot, block, opts = {}) {
     }
     if (digErr) {
         const msg = String(digErr?.message ?? digErr);
+        // ★★ t92：**abort 归因打点** —— verify 第 37 跑指出 `abort:digOK ≈ 100:1`
+        //   是"紧凑重试死循环"，需要看 heldMs / budget / 是不是我们自己的 stopDigging。
+        if (process.env.TRACE) {
+            console.log('[DIG] err reason=', msg,
+                '| heldMs=', Date.now() - t0, 'budget=', budget,
+                '| interrupted=', interrupted, 'timedOut=', timedOut,
+                '| targetDigBlock=', bot.targetDigBlock?.name ?? null);
+        }
         if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { dugBlock: block.name });
-        return fail('INTERNAL', msg, { error: msg, dugBlock: block.name });
+        return fail('INTERNAL', msg, { error: msg, dugBlock: block.name, heldMs: Date.now() - t0, budget });
     }
     return ok({ dugBlock: block.name, costMs: Date.now() - t0 });
 }
