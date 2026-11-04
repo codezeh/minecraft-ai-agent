@@ -547,7 +547,24 @@ export function finish(db, id, result = {}, opts = {}) {
     const count = Number(progress?.count ?? 0);
     const want = Number(progress?.want ?? 0);
     // 规则③：ok **且** count>=want 才算完成；want 未知（0）时退化为只看 ok
-    const completed = okFlag && (want <= 0 || count >= want);
+    //
+    // ★★★ 2026-11-04（t125）：**`craft` 单不能用 `count >= want` 这个短路。**
+    //
+    //   真机证据（第 51 跑，三轮完全一致）：
+    //     `craft:oak_planks x1` → `state=done`、`attempts=0`、**木板数始终停在 2**
+    //     而轮2 她手上有 **6 个原木**（够做 24 块板）→ **这张单报了 done 却零产出**。
+    //
+    //   机制就在这里：`want=1`、`count`=**背包里 oak_planks 总数=2** → `2 >= 1` → `completed=true` → DONE。
+    //   **但 `count` 是"库存总量"，`want` 是"这张单要做几个"** —— 两个口径不同（今晚第 4 次同族）。
+    //   她本来就有 2 块板，所以"看起来达标"，可这单根本不需要做就会被标完成。
+    //
+    //   t120 只关了 `convergeIfSatisfied` 那一条路径，**这是同一病的第二处**。
+    //
+    //   修法：`craft` 单的完成只看 `okFlag` ——
+    //   因为 `act_craft` 在 `produced <= 0` 时**必然返回 fail**，
+    //   所以"ok=true"就意味着"真的产出够了"，不需要再用库存数二次判断。
+    const isCraftJob = String(job.skill) === 'craft';
+    const completed = okFlag && (isCraftJob || want <= 0 || count >= want);
 
     let next;
     let counted = false;
