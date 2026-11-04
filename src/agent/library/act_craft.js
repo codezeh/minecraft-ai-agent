@@ -51,7 +51,10 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         } catch { /* 读不到就空 */ }
         return out;
     };
-    const diag = (extra = {}) => ({ item: itemName, want, inv: snapInv(), ...extra });
+    // ★ t123：把 `flow_craft` 的前置检查结果也带上（它现在不 return 了，只记事件）。
+    //   这样一次失败里既有"上游怎么看料"也有"act_craft 怎么算 limit / 表 / 窗口"。
+    const precheck = (() => { try { return bot?.__craftPrecheckMiss ?? null; } catch { return null; } })();
+    const diag = (extra = {}) => ({ item: itemName, want, inv: snapInv(), precheck, ...extra });
 
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!itemName) return fail('NO_TARGET', '没说要合成什么');
