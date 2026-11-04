@@ -307,6 +307,34 @@ export async function craft(bot, itemName, count = 1) {
         if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了', { craftedItem: itemName, got });
         // ★ t90：**必须把找到/放好的工作台传进去** —— 原来这里只传 3 个参数，
         //   整段"找表/合表/放表/走表"全白做，而 craftOnce 自己按 4 格又找不到 → NO_WORKSTATION。
+        // ★★★ 2026-11-05（t136）：**每一轮 craftOnce 之前都确认离表够近。**
+        //
+        //   真机证据（第 56 跑）：`heldItem:null`、`tableStillThere:"crafting_table"`、
+        //   `recipesWithTable:1`，但 `windowOpen:null`、`invBefore==invAfter`、`costMs=1543`。
+        //   同一轮里另一次 `wooden_pickaxe done prod=1` —— **站得近就成，走开了就败。**
+        //
+        //   机制：`bot.activateBlock` 只是个右键包，**服务端按距离校验**；
+        //   超出约 4.5 格就既不报错也不开窗 → `once('windowOpen')` 等不到。
+        //
+        //   为什么放在循环里而不是外面：外面那段 goTo 只在"首次找表/放表"时跑，
+        //   而**多轮 craft 之间**她可能被别的动作带走了（捡掉落物、被怪推）。
+        if (table?.position && bot.entity?.position) {
+            const tp = table.position, sp = bot.entity.position;
+            const d = Math.hypot(tp.x + 0.5 - sp.x, tp.y + 0.5 - sp.y, tp.z + 0.5 - sp.z);
+            if (d > 3.5) {
+                const near = await goTo(bot, { kind: 'point', pos: { x: tp.x, y: tp.y, z: tp.z } }, {
+                    mapDir: mapDirOf(bot),
+                    deadlineMs: Math.max(4000, Date.now() + 30000),
+                    arriveTol: 2,
+                });
+                if (!near.ok) {
+                    if (near.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
+                    return fail('OUT_OF_REACH', `走不到工作台（${near.code}，相距 ${d.toFixed(1)} 格）`,
+                        { item: itemName, dist: d });
+                }
+            }
+        }
+
         const r = await craftOnce(bot, itemName, want - got, table);
         if (!r.ok) {
             // ★★ 2026-11-04（t92）：**必须把底层 `r.data` 一起转发，不能重新组装一份。**

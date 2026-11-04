@@ -306,6 +306,32 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         }));
     }
 
+    // ★★★ 2026-11-05（t136，verify 第 56 跑的排除法推进到只剩 `windowOpen`）：
+    //   **`activateBlock` 对超出交互距离的方块会静默失败 → 等不到 `windowOpen`。**
+    //
+    //   真机证据（第 56 跑，`heldItem` 已排除）：
+    //     `heldItem:null`（t135 生效）｜`tableStillThere:"crafting_table"`｜`recipesWithTable:1`
+    //     `tableBlockUsed:{6201,-58,8801}`｜`windowOpen:null`｜`costMs=1543`｜`invBefore==invAfter`
+    //   → **表在、配方有、手是空的，就是窗口不开。**
+    //   而同一轮里另一次 `wooden_pickaxe done prod=1` —— **站得近就成，走开了就败。**
+    //
+    //   机制：`bot.activateBlock` 是"发一个右键包"，**服务端按距离校验**；
+    //   超出 `maxReach`（约 4~5 格）就既不报错也不开窗。
+    //
+    //   修法：**craft 前先量距离，太远就走到表旁。**
+    //   （`flow_craft` 里也有一段 goTo，但它量的是"到表"的距离，那时还没 `tableBlock`；
+    //     而且它只在放置后立刻走，`act_craft` 里这次可能又走开了。）
+    let distToTable = null;
+    if (tableBlock?.position && bot.entity?.position) {
+        const tp = tableBlock.position; const sp = bot.entity.position;
+        distToTable = Math.hypot(tp.x + 0.5 - sp.x, tp.y + 0.5 - sp.y, tp.z + 0.5 - sp.z);
+    }
+    // ★ t136 修正：**act 层不判死距离，只记诊断** —— 导航是 flow 层的职责（02 §5 分层）。
+    //   在 act 层 `fail('OUT_OF_REACH')` 会让"本来走两步就能成"变成失败，
+    //   而且 `flow_craft` 已经有一段 goTo 表旁（它才是该负责这个的地方）。
+    //   → 这里只把 `distToTable` 记进 diag，让失败时一眼能看出"是不是够不着"。
+    const tableTooFar = (distToTable !== null && distToTable > 4.5);
+
     try {
         await bot.craft(recipe, limit, tableBlock ?? undefined);
     } catch (e) {
@@ -359,6 +385,8 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             recipesInInventory: _preDiag.recipesInInventory,
             recipesWithTable: _preDiag.recipesWithTable,
             limitUsed: limit,                                  // ★ t116：这次实际合几次（诊断单位混用）
+            distToTable: distToTable ?? null,                  // ★ t136：离表多远（>4.5 = activateBlock 可能静默失败）
+            tableTooFar,                                       // ★ t136：够不够得着（诊断，不判死）
             tableBlockUsed: tableBlock?.position ? { x: tableBlock.position.x, y: tableBlock.position.y, z: tableBlock.position.z } : null,
             // ★ t122：**`requiresTable` 是决定性字段** ——
             //   `true` + `tableBlockUsed:null` = 走了 2x2（一枚不产出、不报错、1~2 秒返回）
