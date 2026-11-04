@@ -146,9 +146,20 @@ export function sourcesOf(itemName) {
         return false;
     };
 
+    // ★★ t104（control 的补充）：**能熔炼的物品，合成一律降级。**
+    //
+    //   它抓到 `isReverseRecipe` 只查「直接一环」，抓不到**两跳间接反向**：
+    //     `copper_ingot` 的配方里有 `waxed_copper_block`（蜡铜块 = 铜块 + 蜜脾），
+    //     而**铜块又由铜锭合成** → 两跳。于是它选了蜡铜块这条路 → `gaps={honeycomb:1}`，
+    //     被误判成"缺掏蜂巢能力"。
+    //
+    //   实测：补上 `|| hasSmelt` 后 `copper_ingot` 首步 = `smelt`、`gaps={}` ✅。
+    //   **安全性**：只影响"能熔炼"的 4 个物品（iron/gold/copper_ingot、dried_kelp），
+    //   对这 4 个来说合成确实是反向/转换路径 —— 不影响任何第一夜物品。
+    const hasSmeltSrc = !!smeltSrc;
     if (smeltSrc) out.push(smeltSrc);
     for (const c of craftSrcs) {
-        if (isReverseRecipe(c)) {
+        if (isReverseRecipe(c) || hasSmeltSrc) {
             // 反向配方：排到所有自然来源之后（+10 保证严格靠后，不依赖具体数值）
             out.push({ ...c, cost: SOURCE_ORDER.collect + 10, reverse: true });
         } else {
