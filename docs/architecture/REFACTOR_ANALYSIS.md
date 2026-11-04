@@ -2789,6 +2789,244 @@ jobs=6  maxDepth=6  hitDepth=true  hitJobs=false  gaps={"mat_6":1}
 > **纪律：给测试夹具加一个"能观察状态变化"的能力时，必须同时写一条反向用例证明它真的会挡**
 > —— 否则它和"装了但没人走"的闸一样，只是看起来有保护。
 
+#### 环形配方与来源顺序（**已修** t103 `f7958b3` + t104 `129e04c`；含两次失败尝试留档）
+
+**最终状态：已修。15 个实战目标 1/15 → 13/15 可执行**（独立复验两次：t103 时 12/15 → t104 后 13/15）。
+
+**判据（t103）：只降级「反向配方」—— 材料本身是用它合成的**
+
+```js
+const isReverseRecipe = (craftSrc) => {
+    for (const mat of Object.keys(craftSrc.recipe ?? {})) {
+        for (const [r] of (mc.getItemCraftingRecipes(mat) ?? [])) {
+            if (Object.prototype.hasOwnProperty.call(r, name)) return true;   // 材料是用它合成的
+        }
+    }
+    return false;
+};
+```
+- `iron_ingot` ← `iron_nugget`，而 `iron_nugget` 的配方含 `iron_ingot` → **反向** ✓
+- `raw_iron` ← `raw_iron_block`，而 `raw_iron_block` 的配方含 `raw_iron` → **反向** ✓
+- `crafting_table` ← `oak_planks`，而 `oak_planks` 配方**不含** `crafting_table` → **正常，不动** ✓
+
+实测（`f7958b3`）：`iron_pickaxe → craft → smelt:raw_iron×3 → mine:raw_iron`、`iron_ingot → smelt → mine`、
+`raw_iron → mine`、`gold_ingot → smelt → mine`，全部 `gaps={}`。
+
+**判据补强（t104 `129e04c`）：`|| hasSmeltSrc` 覆盖「两跳」反向**
+
+`isReverseRecipe` 只查**直接一环**，抓不到两跳链。典型（修前实测）：
+```
+copper_ingot 配方含 {waxed_copper_block:1}；蜡铜块 = 铜块 + 蜜脾；而铜块又由铜锭合成
+→ 只查一环抓不到 → 选了蜡铜块 → craft:copper_ingot → craft:waxed_copper_block → mine:copper_block，gaps={honeycomb:1}
+```
+补法：`if (isReverseRecipe(c) || hasSmeltSrc)` —— **有熔炼来源的物品，合成一律让位**。
+**安全性**：只影响"能熔炼"的 4 个物品（`iron_ingot` / `gold_ingot` / `copper_ingot` / `dried_kelp`），
+对这 4 个而言合成确实是反向/转换路径。→ `copper_ingot` 首步变 `smelt`、`gaps={}` ✅
+
+**最终数据：15 目标 13/15**；剩 `flint_and_steel`（`{flint:1}`）与 `golden_apple`（`{apple:1}`）。
+
+**★ 剩这两个的准确归类：不是"缺采集能力"，是缺「概率掉落」这个能力**
+
+实测核对过我们**已经能做到什么**：
+- `gravel` 是可识别的采集目标（`collect_targets.js:41` 有 `gravel/沙砾` 映射）、**徒手可挖**（`harvestTools` 为空）
+- `oak_leaves` 同理可挖；`flow_mine` 有完整掉落拾取（`import { collectDrops } from './flow_pickup.js'`）
+- **→"挖沙砾/撸树叶并拾取"这条路是通的**，缺的不是采集能力
+
+缺的是 **`flint` 与 `apple` 是「概率掉落」**（gravel → flint 概率、leaves → apple 概率），
+而 `getItemBlockSources('flint')` / `('apple')` 都返回空（数据源只登记"必掉"）。
+**要支持它们，需要的新能力是「挖 N 次直到掉落物出现」**（带次数上限 + 放弃条件），而不是"再登记一个来源"。
+
+> 判据：**"概率产出"和"必然产出"是两种能力。** 记成"已知边界"会掩盖一个真实的能力缺口；
+> 记成"缺 `概率掉落` 能力"才能被排进计划。
+
+**★ 两次失败尝试（留档，因为它们"看起来更彻底"）**
+
+| 尝试 | 想法 | 结果 |
+|---|---|---|
+| ① `smelt` 一律优先于 `craft` | 有 smelt 就降 craft | **救不了 `raw_iron`** —— 它是 craft vs **collect**，跟 smelt 无关 |
+| ② 有 `collect` 就把 `craft` 一律降级 | 有"能挖的"就别合成 | **把一切搞坏**：`getItemBlockSources('crafting_table')` 返回 `['crafting_table']`（**它自己的方块形态**）、`torch` 返回 `['torch','wall_torch']` → 几乎每个可放置物品都"能采" → `crafting_table` 变成 `mine:crafting_table` |
+
+> **判据：凡是"某些来源降级"的规则，先问"这个来源列表里有没有'自己'"。**
+
+**四步对照：判据要贴着缺陷的形状写**
+
+| 改法 | 范围 | 结果 |
+|---|---|---|
+| ① smelt 降级 | 太大 | 救不了 `raw_iron`（craft vs collect）|
+| ② collect 降级 | 太大 | **把一切搞坏**（来源含"自己"）|
+| ③ `isReverseRecipe`（直接一环）| 贴形状 | ✅ 12/15，但漏两跳 |
+| ④ **③ + `hasSmelt`**（t104）| 贴形状 + 覆盖边界 | **✅ 13/15** |
+
+> **范围越大 ≠ 越好** —— 判据要贴着缺陷的形状写，不要贴着"看起来更全面"写。
+
+**待办 → 一项已完成、一项仍开着**
+
+1. ✅ **已完成（t106 `73c2859`）：`cycles` 独立出口**
+
+   `planObtain` / `obtain` 的返回里新增 **`cycles`** 字段，与 `gaps` 并列；`gaps` **保留**（上层 `strat_tool_tier` 等仍按它算总缺口）。
+
+   ```js
+   // seen.has(name) 命中（= 重新进入递归栈上已有的物品）
+   cycles[name] = (cycles[name] ?? 0) + need;
+   gaps[name]   = (gaps[name] ?? 0) + need;   // 保留，兼容上层
+   ```
+
+   **判据（这就是两个出口的分工）：**
+   > **`cycles` 非空 = 环**（我们规划不出来，再挖多久也没用，该去**查配方**）；
+   > **`gaps` 非空 + `cycles` 空 = 真缺料**（没有可行来源，该去**补能力/找料**）。
+
+   **只记重入节点，不记路径上的正常节点** —— 否则健康节点会被误标成环，`cycles` 就成了假警报源。
+
+   覆盖的 5 个出口：`planObtain` 早退 / `planObtain` 最终 return / `obtain()` alreadyHave / **`obtain()` 的 `fail('NO_ITEM')`** / `obtain()` noBoard / `obtain()` 主 ok。
+   用例：`tools/strat_cycles_unit.mjs`（**11 断言，已注册进 `unit_all`，脚本数 54 → 55**）——
+   正向构造 A⇄B 环 → `cycles={"A":1}`；反向 `wooden_pickaxe` → `cycles={}`；`golden_apple` → `gaps={apple:1}` 但 `cycles={}`。
+   第一夜四件的 `plan` **逐字不变**。
+
+2. ⬜ **仍开着：新能力需求「概率掉落」**
+
+   **现状**：`getItemBlockSources` 只登记「**必掉**」的来源，所以 `flint`（gravel 概率掉）与 `apple`（leaves 概率掉）返回**空**，
+   规划层只能把它们记成 `gaps`（看起来像"没有来源"）。
+
+   **采集路线本身是通的**（实测核对）：
+   - `gravel` 是可识别的采集目标（`collect_targets.js:41` 有 `gravel/沙砾` 映射）、**徒手可挖**（`harvestTools` 为空）
+   - `oak_leaves` 同理可挖；`flow_mine` 有完整掉落拾取（`import { collectDrops } from './flow_pickup.js'`）
+   - **所以缺的不是"挖不了"，是"挖一次不一定掉"。**
+
+   **要补的能力**：**「挖 N 次直到掉落物出现」** —— 带上限（次数/时间）+ 放弃条件（超限则报 `NO_ITEM` 并说明是概率未中），
+   而不是"再往来源登记表里加一条"。
+
+   **判据**：
+   > **「概率产出」和「必然产出」是两种能力，不能用同一张来源登记表表达。**
+   > 硬塞进 `getItemBlockSources` 会让"必掉"和"概率"共用出口 —— 又一次"两种东西共用一个出口"。
+
+   **影响面**：`flint`（`flint_and_steel` 的料）、`apple`（`golden_apple` 的料）；以及后续任何依赖概率掉落物的配方。
+
+**下面保留当时的详细诊断（历史记录，结论以上面为准）**
+
+**结论：这是真 bug（不是设计选择），且 `iron_*` / `gold_*` / `copper_*` 整条链都中招。**
+
+`planObtain` 按 `SOURCE_ORDER` 选第一个可行来源，而 `craft(1) < smelt(2) < collect(3)`。
+问题在于：**很多物品的 craft 配方是"反向"的**（是解压缩/拆包，材料本身要用该物品做）：
+
+| 物品 | 反向 craft 配方 | 该物品的自然来源 |
+|---|---|---|
+| `iron_ingot` | `{iron_nugget:9}` `{iron_block:1}` | 熔炼 `raw_iron` |
+| `gold_ingot` | `{gold_nugget:9}` `{gold_block:1}` | 熔炼 `raw_gold` |
+| `copper_ingot` | `{copper_block:1}` | 熔炼 `raw_copper` |
+| **`raw_iron`** | `{raw_iron_block:1}` | **可挖 `iron_ore`** |
+| **`raw_gold` / `raw_copper`** | `{raw_*_block:1}` | **可挖对应矿** |
+
+**这就是环**（实测，非推断）：
+```
+planObtain('raw_iron', 9)  →  craft:raw_iron×9      ← 选了 craft
+                              craft:raw_iron_block×1 ← 而粗铁块要 9 个粗铁
+                              gaps = {"raw_iron": 9} ← 环被当成"缺口"
+```
+`expand` 里的 `seen` **能防住无限展开，但防不住"计划本身是环"** ——
+它只把环记进 `gaps`，于是**"成环"和"资源不足"在报告里长得一模一样**
+（又一次"两种东西共用一个出口"，与今晚 `catch` 吞错同族）。
+
+**实测影响面（离线，`md5 442a2d7c` 快照）**：15 个实战目标里 **13 个不可执行**：
+
+| 目标 | gaps |
+|---|---|
+| `iron_pickaxe` / `iron_sword` / `iron_axe` / `iron_helmet` | `{raw_iron:9}` |
+| `bucket` / `shears` / `shield` | `{raw_iron:9}` |
+| `anvil` | `{raw_iron:36}` |
+| `flint_and_steel` | `{raw_iron:9, flint:1}` |
+| `golden_pickaxe` / `golden_apple` | `{raw_gold:9}` |
+| `copper_ingot` / `raw_iron` / `iron_nugget` | `{raw_*:9}` |
+| `dried_kelp` | ✅ 可执行（唯一没中招的：它的材料 kelp 可挖、无环） |
+
+**危害**：`obtain iron_pickaxe` 永远失败，而**报错会写"缺 raw_iron 9"** ——
+粗铁**是能挖的**（`iron_ore`），这句话把人引去"找粗铁"而不是"去挖矿"。
+**错的不是资源量，是路径选择。**
+
+**已修的部分（截至 `442a2d7c`）**：`sourcesOf` 里已加「有 smelt 来源 → craft 的 cost 抬到 `smelt+10`」，
+所以 `iron_ingot` 现在**熔炼优先**了（`smelt(2) | craft(12)`），`dried_kelp` 也随之可执行。
+**但缺"有 collect 来源 → craft 也要降级"这一支** —— 于是环从 `iron_nugget` 下移到 `raw_iron`，
+**整条链仍然不可执行**。（注：该文件当时正在被并发编辑，我看到过一个含 `hasCollect` 分支的中间版本；
+若最终版没有它，就是这一支漏了。）
+
+**修法建议（三选一，推荐 B）**：
+- **A 全局把 smelt 排到 craft 前**：**不够** —— `raw_iron` 的问题是 craft vs **collect**，调 smelt 顺序救不了。
+- **B（推荐）把判据从"固定顺序"改成"自然来源优先"**：
+  `if (有 collect) craft.cost = collect+10; else if (有 smelt) craft.cost = smelt+10;`
+  （两条都写、互不覆盖）。改动约 2 行，只影响"反向配方 + 另有自然来源"的物品（实测 44 个，
+  其余物品 cost 不变）。**并且**：`seen` 命中时不要只记 `gaps`，要**单独记一条"环"**
+  （如 `cycles: ['raw_iron → raw_iron_block → raw_iron']`），否则排障时仍然分不清"缺料"和"成环"。
+  **→ 本条已于 t106 `73c2859` 落地**（字段名就是 `cycles`；实际形态是 `{name: 数量}` 映射，不是路径列表）。
+- **C 不修**：**不可行** —— 已实测 13/15 目标不可执行，不是"绕远路"而是"走不通"。
+
+**为什么记成遗留而不是直接修**：本轮任务口径是"只评估、不改 `src/`"，且该文件当时正被并发编辑（`git status` 显示 `M`）。
+改动只有 2 行，但必须**由当前持有该文件的人**改，否则会覆盖他手上的编辑。
+
+**后续（同日，`3a4694b` t102 / 未提交的 t103）**：已按\"只改 cost\"落地，剩余两类见下一节。
+
+#### 「自反来源」判据与剩余两类（评估明细；结论以上一节为准）
+
+> **本节是评估明细**：判据与实测都在这里，但**结论以上一节「环形配方与来源顺序（已修）」为准**
+> （尤其 `honeycomb` 那条：它不是"缺能力"，是可修的两跳反向）。
+
+评估期间 `strat_obtain.js` 被并发编辑了 3 个版本（`442a2d7c` → `4ab9bb1d` 等），**每个结论都钉 md5**。
+下面按 `4ab9bb1d`（t103，含 `isReverseRecipe`）实测。
+
+**已修（t102/t103）**
+| 类 | 物品 | 修法 | 实测 |
+|---|---|---|---|
+| A 熔炼+合成，合成是反向 | `iron_ingot` / `gold_ingot` | craft 判反向 → `cost=collect+10` | ✅ `smelt(2) \\| craft(13)★REV` |
+| B 可挖+合成，合成是反向 | `raw_iron` / `raw_gold` / `raw_copper` | 同上 | ✅ `collect(3)×2 \\| craft(13)★REV` |
+
+→ `iron_pickaxe / iron_sword / iron_axe / anvil / bucket / shears / shield / golden_pickaxe / raw_iron / dried_kelp`
+**全部 `gaps={}`（可执行）**，此前是 13/15 不可执行。
+
+**仍存在的两类**
+
+1. **间接反向（深一层）**：`copper_ingot` → `gaps={honeycomb:1}`
+   它的 craft 配方有 `{waxed_copper_block:1}`；蜡铜块 = 铜块 + **蜜脾**，而铜块又是铜锭做的。
+   `isReverseRecipe` 只查"**直接**一环"（材料自己的配方是否含 `name`），抓不到这条**两跳**的链。
+2. **自反 collect 抢跑**：`iron_block` / `coal_block` / `gold_block` / `diamond_block` / `lapis_block`
+   这些物品的 `getItemBlockSources` 返回**它自己的方块形态**（`['iron_block']`），
+   降级反向 craft 之后，`collect(3)` 反而排第一 → 计划首步 `mine:iron_block`（**世界里不生成的方块 = 死路**）。
+
+**★ 怎么区分"自己的方块形态"和"真能从世界挖到"（关键判据）**
+
+**不能用"方块名 == 物品名"** —— 会误杀真来源：
+
+| 物品 | `getItemBlockSources` | 该物品可合成？ | 判定 |
+|---|---|---|---|
+| `oak_log` | `['oak_log']` | **否** | **真来源**（世界里的橡木原木），必须保留 |
+| `cobblestone` | `['stone','cobblestone']` | 否 | 真来源，保留 |
+| `coal` | `['coal_ore','deepslate_coal_ore']` | 否 | 真来源，保留 |
+| `crafting_table` | `['crafting_table']` | **是** | **自反**（放下去再挖回来）→ 排除 |
+| `furnace` / `iron_block` / `coal_block` | `['furnace']` / `['iron_block']` / `['coal_block']` | **是** | **自反** → 排除 |
+
+**判据：`blk === name`（或 `name_block`）** 且 **该物品本身可合成** → 自反来源；
+**物品不可合成** → 那个方块就是世界方块，是真来源。
+
+> 这条判据同时解释了为什么"有 collect 就降级 craft"那条**更大范围的改法会把一切搞坏**：
+> `getItemBlockSources('crafting_table')` 返回 `['crafting_table']`、`torch` 返回 `['torch','wall_torch']`，
+> 于是**几乎每个可放置物品都"能采"** → `crafting_table` 变成 `mine:crafting_table`。
+> **凡是"某些来源降级"的规则，先问"这个来源列表里有没有'自己'"。**
+
+**推荐修法（仍只改 cost，已离线模拟 18/18 正确）**
+```js
+const isCraftable = (n) => [...(mc.getItemCraftingRecipes(n) ?? [])].length > 0;
+// ① 反向 craft（现有）+ ② 间接反向（item 有 smelt 来源时，所有 craft 都降）
+if (s.type === 'craft' && (isReverseRecipe(s) || hasSmelt)) cost = SOURCE_ORDER.collect + 10;
+// ③ 自反 collect 排到反向 craft 之后
+if (s.type === 'collect' && isCraftable(name) && (s.source === name || s.source === `${name}_block`))
+    cost = SOURCE_ORDER.collect + 20;
+```
+实测（模拟注入）：`copper_ingot` → 首步 `smelt` ✅；`iron_block/coal_block/gold_block` → 首步 `craft` ✅；
+`crafting_table / furnace / chest / torch / wooden_pickaxe / stone_pickaxe / oil_log…` **全部不变**。
+
+**两个诚实说明**
+- `flint_and_steel` 的 `gaps={flint:1}` 是**真缺料**（燧石只有砂砾随机掉落，没有 craft/方块来源），不是环。
+- **`gaps={}` 不代表计划正确**：`mine:iron_block` 也能得到空 gaps（规划期不知道\"世界里没有这个方块\"）。
+  所以验收要看**首步来源是否合理**，不能只看 gaps 是否为空。
+
+
 #### 已知设计选择（**不是遗留 bug**，别去"修"）
 
 盘点 `deps` 注入时（`tools/deps_injection_audit.mjs` 的 C 档）发现四个字段
