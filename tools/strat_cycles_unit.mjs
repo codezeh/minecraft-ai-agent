@@ -54,7 +54,7 @@ const check = (name, cond, ev, actual) => cond ? ok(name, ev) : bad(name, actual
     const sig = (p) => (p.plan ?? []).map((s) => `${s.depth}|${s.skill}|${s.args?.item ?? ''}|${s.args?.count ?? ''}|${s.source}`).join(';');
     // 期望值来自 t103/t104 之后的实测（captain 报告 + control 独立复验一致）
     const expect = {
-        wooden_pickaxe: '1|craft|wooden_pickaxe|1|craft;2|craft|oak_planks|3|craft;3|mine||1|collect;2|craft|stick|2|craft;3|craft|oak_planks|2|craft;4|mine||1|collect',
+        wooden_pickaxe: '1|craft|wooden_pickaxe|1|craft;2|craft|oak_planks|5|craft;3|mine||1|collect;2|craft|stick|2|craft;4|mine||1|collect',
         stone_pickaxe: '1|craft|stone_pickaxe|1|craft;2|mine||3|collect;2|craft|stick|2|craft;3|craft|oak_planks|2|craft;4|mine||1|collect',
         crafting_table: '1|craft|crafting_table|1|craft;2|craft|oak_planks|4|craft;3|mine||1|collect',
     };

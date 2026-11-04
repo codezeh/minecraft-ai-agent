@@ -119,15 +119,17 @@ const stepOf = (r, pred) => r.plan.find(pred);
     const r = plan('wooden_pickaxe');
     const seq = r.plan.map((s) => `${s.skill}:${s.args?.item ?? s.args?.input ?? s.args?.ore ?? ''}x${s.args?.count ?? ''}`);
     // 任务书给的就是：planks×3 / log×1 / stick×2 / planks×2 / log×1
+    // ★ t119：木板需求改成**跨深度累加**（3+2=5 合成一张单）。
+    //   原因：两张木板单会让 `convergeIfSatisfied` 用"背包总数"提前收敛
+    //   → 木棍吃掉 2 块后木镐缺 1 块（真机第 47 跑 `missing:{oak_planks:1}`）。
     const want = [
         'craft:wooden_pickaxex1',
-        'craft:oak_planksx3',
+        'craft:oak_planksx5',
         'mine:oak_logx1',
         'craft:stickx2',
-        'craft:oak_planksx2',
         'mine:oak_logx1',
     ];
-    check('④-4 wooden_pickaxe：拆单逐字不变（planks×3 / log×1 / stick×2 / planks×2 / log×1）',
+    check('④-4 wooden_pickaxe：拆单逐字不变（planks×5(累加) / log×1 / stick×2 / log×1）',
         JSON.stringify(seq) === JSON.stringify(want) && reverseSteps(r).length === 0,
         `got=${JSON.stringify(seq)}`);
 }

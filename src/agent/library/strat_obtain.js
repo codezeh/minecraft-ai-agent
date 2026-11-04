@@ -456,6 +456,48 @@ export function planObtain(args = {}) {
 
     expand(item, want, 1, null, `需要 ${want} 个 ${item}`);
 
+    // ★★★ 2026-11-04（t119）：**同物品的 craft 需求必须跨深度累加成一个单。**
+    //
+    //   真机证据（第 47 跑，`craft wooden_pickaxe`）：
+    //     `{"missing":{"oak_planks":1}}` —— 只差 1 块木板，而 `craft oak_planks` 全部 done。
+    //
+    //   机制（读 `board_store.convergeIfSatisfied`）：
+    //     它拿 `job.progress.count`（= **背包里该物品总数**）和 `want` 比，达标就直接收敛成 done。
+    //     而 plan 里有**两张** `craft oak_planks`：`c=3`(d=2) 和 `c=2`(d=3)。
+    //     第一张做完 → 背包有 4 块木板 → 第二张 `want=2`、`count=4` ≥ 2 → **直接收敛、不合成**
+    //     → 然后 `craft stick` 吃掉 2 块 → 只剩 2 块 → 木镐要 3 块 → **`missing: 1`**。
+    //
+    //   `craft` 的 `want` 语义是"**还要再做几个**"，而收敛判据用的是"**背包总数**" ——
+    //   当同一物品被多处需要（木镐要 3 板、木棍又要 2 板），这个口径就会提前收敛。
+    //
+    //   修法：**把同物品的 craft 需求在最浅的那一层累加成一个单**（3+2=5），
+    //   这样 `want=5` > 背包 4 → 不会提前收敛，会真的再合一次。
+    {
+        const byItem = new Map();
+        for (const st of plan) {
+            if (st.skill !== SOURCE_TO_SKILL.craft) continue;
+            const k = st.args?.item;
+            if (!k) continue;
+            if (!byItem.has(k)) byItem.set(k, []);
+            byItem.get(k).push(st);
+        }
+        for (const [item, steps] of byItem) {
+            if (steps.length <= 1) continue;
+            // 保留最浅的那一步，把其余的数量累加进去，然后删掉其余
+            steps.sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0));
+            const keep = steps[0];
+            const others = steps.slice(1);
+            const total = steps.reduce((a, st) => a + Number(st.args?.count ?? 0), 0);
+            keep.args.count = total;
+            keep.why = `${keep.why}（含更深层同物品需求 ${others.map((o) => o.args.count).join('+')}）`;
+            keep.dependsOnKeys = [...new Set(steps.flatMap((st) => st.dependsOnKeys ?? []))];
+            for (const o of others) {
+                const idx = plan.indexOf(o);
+                if (idx >= 0) plan.splice(idx, 1);
+            }
+        }
+    }
+
     // ★★ 2026-11-03（t65）：**给每个 crafts 步骤补 `dependsOnKeys`** ——
     //   材料必须先做出来，成品才能合（真机第 11 跑：crafting_table 抢在 oak_planks 前面跑 → NO_ITEM）。
     //
