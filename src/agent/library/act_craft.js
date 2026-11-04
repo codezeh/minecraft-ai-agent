@@ -137,7 +137,22 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     // ★ t89：合成**前**的完整背包快照（必须在 bot.craft 之前抓，否则没意义）
     //   `snapInv` 已在函数开头定义（t91 统一诊断用），这里直接调。
     const invBefore = snapInv();
-    let limit = want;
+    // ★★★ 2026-11-04（t115）：**`limit` 是"合成次数"不是"件数" —— 单位混用让需求放大 2.75 倍。**
+    //
+    //   真根因（control 核账 + 读码确认）：
+    //     `want`     = 要几**件**（3 块木板）
+    //     `cap.num`  = 能合几**次**（`calculateLimitingResource` = 可用量 ÷ 每次用量，floor）
+    //     `bot.craft(recipe, count, table)` 的 `count` 是**次数**！
+    //   于是 `limit = Math.min(want, cap.num)` 把"3 件"当成"3 次" → **3 个原木、12 块板**。
+    //
+    //   全链实测影响（权威配方）：
+    //     按件数（正确）：crafting_table 1 + wooden_pickaxe 1 + stick 1 + stone_pickaxe 1 = **4 原木**
+    //     按次数（修前）：4 + 3 + 2 + 2 = **11 原木**
+    //   → `WOOD_TARGET=8` 不够 → "挖了 8 个只剩 1 个"。**需求被放大 2.75 倍。**
+    //
+    //   修法：**先把"件数"折成"次数"**（`ceil(want / 每次产出几件)`），再和 `cap.num`（次数）取小。
+    const perCraft = Math.max(1, Number(recipe?.result?.count) || 1);
+    let limit = Math.ceil(want / perCraft);            // ← 次数（不是件数）
     let _requiredForDiag = null;                        // ★ t111：算 limit 用的原料表（诊断）
     try {
         const inv = (bot.inventory?.items?.() ?? []).reduce((m, it) => {
@@ -151,7 +166,7 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         const cap = typeof mc.calculateLimitingResource === 'function'
             ? mc.calculateLimitingResource(inv, required)
             : null;
-        if (cap && Number.isFinite(cap.num)) limit = Math.min(want, cap.num);
+        if (cap && Number.isFinite(cap.num)) limit = Math.min(limit, cap.num);   // ★ t115：两边都必须是"次数"
     } catch { /* 算不出限制就按 want 试，让 bot.craft 自己报错 */ }
 
     if (limit <= 0) {

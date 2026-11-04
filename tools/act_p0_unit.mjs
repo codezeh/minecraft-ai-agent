@@ -89,10 +89,14 @@ function assertResult(name, r) {
         },
     });
     const r = await craftOnce(bot, 'stick', 2);
-    if (assertResult('craftOnce 成功', r) && r.ok && r.data.produced === 8) {
-        okCase('craftOnce 成功 → 产物 +8', `produced=${r.data.produced}`);
+    // ★ t115：**断言改成"按次数折算"后的正确结果。**
+    //   `stick` 一次产 4 根 → 要 2 根只需**合 1 次** → produced = 4（不是 8）。
+    //   旧断言 `produced === 8` 钉的是"件数当次数"的旧行为（合 2 次、多做一半）。
+    //   新判据：produced 必须 **≥ 需要的 2 根**，且**恰好是 1 次的产量 4**（不多做）。
+    if (assertResult('craftOnce 成功', r) && r.ok && r.data.produced === 4 && r.data.produced >= 2) {
+        okCase('craftOnce 成功 → 要 2 根只合 1 次（produced=4，不再多做一半）', `produced=${r.data.produced}`);
     } else {
-        badCase('craftOnce 成功 → 产物 +8', { code: r.code, data: r.data });
+        badCase('craftOnce 成功 → 按次数折算', { code: r.code, data: r.data });
     }
 }
 
