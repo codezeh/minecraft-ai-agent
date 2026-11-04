@@ -276,6 +276,7 @@ export async function craft(bot, itemName, count = 1) {
     // ── plan 第 5 步：craftOnce 到够数（可能一轮就够，也可能要几轮）──
     let got = 0;
     let rounds = 0;
+    let lastData = null;                             // ★ t128：最后一轮 craftOnce 的 data（转发用）
     const MAX_ROUNDS = 8;
     while (countItem(bot, itemName) - before < want && rounds++ < MAX_ROUNDS) {
         if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了', { craftedItem: itemName, got });
@@ -298,6 +299,7 @@ export async function craft(bot, itemName, count = 1) {
             if (r.code === 'NO_ITEM') base.missing = missingFor(bot, itemName);
             return fail(r.code, r.message ?? `合成 ${itemName} 失败`, { ...(r.data ?? {}), ...base });
         }
+        lastData = r.data ?? null;                   // ★ t128：留住最后一轮的诊断（含 invAfter）
         got += Number(r.data?.produced ?? r.data?.got ?? 0);
         if (r.data?.produced === 0) break;           // 没产出，别空转
     }
@@ -310,6 +312,9 @@ export async function craft(bot, itemName, count = 1) {
         });
     }
 
+    // ★ t128：**转发每一轮的 `data`（尤其 `invAfter`），不要只挑几个字段重建。**
+    //   今晚这个坑已经踩了 6 次（t92/t95/t105/t109/t126/…），这次提前做对：
+    //   `lastData` 是最后一轮 `craftOnce` 的 data，里面已经有 `invBefore`/`invAfter`。
     return ok({
         craftedItem: itemName,
         count: produced,
@@ -318,5 +323,7 @@ export async function craft(bot, itemName, count = 1) {
         usedTable: !!table,
         placedTable,
         costMs: Date.now() - t0,
+        ...(lastData ?? {}),           // ★ 保留底层诊断（invAfter / limitUsed / tableBlockUsed …）
+        count: produced,               // 但本层的 count 语义（产出数）要压在最后，别被覆盖
     });
 }

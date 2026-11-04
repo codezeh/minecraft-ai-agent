@@ -339,6 +339,16 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         produced,
         usedTable: !!tableBlock,
         costMs: Date.now() - t0,
+        // ★★★ 2026-11-05（t128）：**成功也要留背包快照。**
+        //
+        //   真机（第 52 跑）现象：`craft oak_planks` 两张都报 `done`（`count/produced=4`），
+        //   但 `craft wooden_pickaxe` 失败时 `inv={oak_planks:2}`。
+        //   **8 块板产出了，可是失败时只剩 2 块 —— 中间谁吃了 6 块，查不出来。**
+        //   因为「成功」的记录里**只有 produced，没有产出后的背包**。
+        //
+        //   → 让每次成功都带上 `invAfter`。这样下一次可以按时间把
+        //     「谁产出多少 → 谁消耗多少」整条链重建出来，不用再靠猜。
+        invAfter: snapInv(),
     });
 }
 
