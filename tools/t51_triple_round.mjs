@@ -14,11 +14,15 @@ const results = [];
 const rc = async (cmd) => { try { return String(await rcon(cmd, { port: 25576 })); } catch { return ''; } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ★ 第 46 跑修：原来只数片区 1（6200,8800），而实际有两片 → 91 vs 10 的口径差
+const GROVES = [[6200, 8800], [6260, 8855]];
 async function countRealLogs() {
     let n = 0;
-    for (const [dx, dz] of SPOTS) {
-        for (let dy = -60; dy <= -45; dy++) {
-            if (/passed/i.test(await rc(`execute if block ${6200 + dx} ${dy} ${8800 + dz} minecraft:oak_log`))) n++;
+    for (const [AX, AZ] of GROVES) {
+        for (const [dx, dz] of SPOTS) {
+            for (let dy = -60; dy <= -45; dy++) {
+                if (/passed/i.test(await rc(`execute if block ${AX + dx} ${dy} ${AZ + dz} minecraft:oak_log`))) n++;
+            }
         }
     }
     return n;
@@ -134,6 +138,18 @@ for (let r = 1; r <= ROUNDS; r++) {
             met.wpKidCount = all.length;
         }
     }
+    // ★ 第 46 跑：craft oak_planks 的 attempts 分布（验"重试是否重复消耗"）
+    if (pid) {
+        const planksAll = db2.prepare(`SELECT id,state,attempts,args,result FROM jobs WHERE skill='craft' AND args LIKE '%oak_planks%' ORDER BY createdAt`).all();
+        met.planksAttempts = planksAll.map((x) => {
+            const a = JSON.parse(x.args || '{}');
+            let produced = null;
+            try { const rr = JSON.parse(x.result || 'null'); produced = rr?.data?.produced ?? null; } catch { }
+            return `c${a.count ?? '?'}:att${x.attempts}:${x.state}:prod${produced}`;
+        }).join(' | ');
+        met.planksTotal = planksAll.length;
+        met.planksRetried = planksAll.filter((x) => (x.attempts ?? 0) >= 2).length;
+    }
     // craft wooden_pickaxe 失败诊断（t90/t91 直接证据）
     const wp = db2.prepare("SELECT state,result FROM jobs WHERE skill='craft' AND args LIKE '%wooden_pickaxe%' ORDER BY createdAt DESC LIMIT 1").get();
     if (wp?.result) {
@@ -179,6 +195,7 @@ console.log(`  obtain:crafting_table done : ${tableDone}/${valid.length}`);
 console.log(`  obtain:wooden_pickaxe done : ${woodDone}/${valid.length}`);
 console.log(`  parent done                : ${parentDone}/${valid.length}`);
 
+for (const r of valid) if (r.planksAttempts) console.log(`  轮${r.round} craft oak_planks 共 ${r.planksTotal} 张（重试≥2 的 ${r.planksRetried} 张）: ${r.planksAttempts}`);
 for (const r of valid) if (r.wpKids) console.log(`  轮${r.round} wood_pick 共 ${r.wpKidCount} 张子单（${r.wpDispatchCount} 次 dispatch）:
     ${r.wpKids}`);
 for (const r of valid) if (r.craftData) console.log(`  轮${r.round} ★ craft 失败 data = ${r.craftData}`);
