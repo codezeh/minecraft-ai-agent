@@ -606,7 +606,17 @@ export function finish(db, id, result = {}, opts = {}) {
         next, attempts,
         j(progress ?? job.progress),
         j(result.checkpoint ?? job.checkpoint),
-        j({ ok: okFlag, code, message: result.message ?? '', at: now }),
+        // ★★★ 2026-11-04（t105）：**必须存 `result.data` —— 这是 diag() 加了 4 次还看不见的真因。**
+        //
+        //   verify 报了 **4 次**「`craft` 失败时 `data={}`」，我改了 3 处转发：
+        //     t89 加 `diag()`、t92 修 `flow_craft:255` 重建对象、t95 修 `flow_craft:167` 同型泄漏。
+        //   但**数据仍然看不到** —— 因为**最后一层 `finish()`（唯一写库的地方）只存四个字段**：
+        //     `{ ok, code, message, at }`   ← `data` 被整个丢掉
+        //
+        //   → 前面每一层都传对了，**最后一层不存**。这和今晚那些"中间层丢字段"是同一族的**终点版本**：
+        //     **一路传到底，最后一步扔了。**
+        //   → 也说明我前三次修的都是"看起来最像"的那一层，而没从"数据最终落在哪"往下查。
+        j({ ok: okFlag, code, message: result.message ?? '', at: now, data: result.data ?? null }),
         // 回到 ready 时清掉 interrupted（与 control.js 的 requeue 语义一致）；
         // 其它状态保留（paused 时要留着"被打断的原因/时刻"）
         next === JOB_STATE.READY ? null : j(result.interrupted ?? job.interrupted),
