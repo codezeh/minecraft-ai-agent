@@ -155,6 +155,27 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         }
     } catch { /* 关不掉就照常试，让下面如实报 */ }
 
+    // ★★★ 2026-11-04（t112）：**`tableBlock` 可能是 stale 对象 —— 重新读一次确认它还在。**
+    //
+    //   真机证据（第 43 跑，`craft wooden_pickaxe`）：
+    //     材料完全够（oak_planks:5 需 3、stick:4 需 2）、`limit=1`
+    //     `bot.craft` **没抛错**、`produced=0`
+    //     `windowOpen=null`、`heldItem='crafting_table'`（工作台还在**手上/背包**里没消耗）
+    //
+    //   如果 `tableBlock` 是"放置前拿到的旧对象"（坐标对、但那次放置其实没成功，
+    //   或者被后续动作挪走），`bot.craft` 拿它开窗口会**静默失败** ——
+    //   和 t91 的"幽灵方块"是同一族（**stale 数据当权威输入**）。
+    //
+    //   注意：这里**不能**因为读不到就 fail —— 假 bot / 区块未加载都会读不到。
+    //   只记诊断，让 `produced=0` 时能看出"表当时是否还在"。
+    let tableStillThere = null;
+    if (tableBlock?.position) {
+        try {
+            const b = bot.blockAt?.(tableBlock.position, false);
+            tableStillThere = b?.name ?? null;
+        } catch { /* ignore */ }
+    }
+
     try {
         await bot.craft(recipe, limit, tableBlock ?? undefined);
     } catch (e) {
@@ -199,7 +220,16 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             // "合成成功但背包没变"的诊断（真机第 42 跑的现象）
             windowOpen: bot.currentWindow?.type ?? null,
             heldItem: bot.heldItem?.name ?? null,
-            recipesForCount: (() => { try { return (bot.recipesFor?.(mc.getItemId(itemName), null, limit, null) ?? []).length; } catch { return null; } })(),
+            // ★★★ t112：**`recipesForCount` 用的是 `table=null`（= 只看背包 2x2）** ——
+            //   对 3x3 物品（木镐/石镐/工作台…）它**必然是 0**，因为背包合不了 3x3。
+            //   verify 把它读成"新根因：查配方拿到 0 条"，**又是我字段名/语义没写清造成的误读**
+            //   （第 2 次：上一次是 `matCounts`）。
+            //   → 改成两个语义明确的名字，并把"到底用哪张工作台"也带出来。
+            recipesInInventory: (() => { try { return (bot.recipesFor?.(mc.getItemId(itemName), null, limit, null) ?? []).length; } catch { return null; } })(),
+            recipesWithTable: (() => { try { return (bot.recipesFor?.(mc.getItemId(itemName), null, limit, true) ?? []).length; } catch { return null; } })(),
+            tableBlockUsed: tableBlock?.position ? { x: tableBlock.position.x, y: tableBlock.position.y, z: tableBlock.position.z } : null,
+            tableStillThere: tableStillThere ?? 'unknown',
+            tableInInventory: (() => { try { return (bot.inventory?.items?.() ?? []).filter((i) => i?.name === 'crafting_table').reduce((a, i) => a + (i.count ?? 0), 0); } catch { return null; } })(),
         });
     }
     return ok({
