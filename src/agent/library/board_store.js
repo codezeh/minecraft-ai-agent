@@ -404,6 +404,24 @@ function convergeIfSatisfied(db, id, now, reason = 'satisfied') {
     const want = Number(job.progress?.want ?? job.want ?? 0);
     const count = Number(job.progress?.count ?? 0);
     if (!(want > 0) || count < want) return null;            // 没达标 → 不收敛
+
+    // ★★★ 2026-11-04（t120）：**`craft` 单不能用"背包总数"收敛。**
+    //
+    //   真机证据（第 47/48 跑，两轮完全一样）：
+    //     `craft wooden_pickaxe → missing:{"oak_planks":1}`
+    //     而所有 `craft oak_planks` 都 done。
+    //
+    //   机制：`craft` 的 `progress.want` 语义是"**这一单还要再做几个**"，
+    //   而 `progress.count` 被赋成"**背包里该物品总数**"（`strat_obtain` 的 `count` = `countInventory`）。
+    //   两个口径不同 → 当同一物品被多处需要（木镐要 3 板、木棍又要 2 板）时：
+    //     · 第一张 `c=3` 做完 → 背包 4 块
+    //     · 第二张 `c=2`：`count=4 ≥ want=2` → **这里提前收敛、压根不合成**
+    //     · `craft stick` 吃掉 2 块 → 剩 2 块 → 木镐要 3 块 → **missing: 1**
+    //
+    //   修法：**`craft` 单必须真的跑一次**（它才是产出动作），不做"按库存收敛"。
+    //   `mine`/`collect`/`obtain` 这些"弄到 N 个"的语义用库存收敛是对的（库存真有就够了），
+    //   所以只对 `craft` 关掉 —— 改动面最小。
+    if (String(job.skill) === 'craft') return null;
     if (isTerminal(job.state)) return job;                    // 已是终态
     if (!canTransition(job.state, JOB_STATE.DONE)) return null;
 
