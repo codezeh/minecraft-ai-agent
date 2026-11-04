@@ -110,6 +110,32 @@ export async function holdDig(bot, block, opts = {}) {
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!block || !block.position) return fail('NO_TARGET', 'holdDig 需要一个方块对象');
 
+    // ★★ 2026-11-04（t91）：**挖之前先确认"那块还在" —— 幽灵方块会制造 abort 风暴。**
+    //
+    //   真机证据（第 36 跑，3 轮**全部未重建树**）：
+    //     轮1 abort 0（全新场地）｜ 轮2 abort 2556 ｜ 轮3 abort 2570（同一片被挖过的场地）
+    //   而 `digOK` 与 `abort` **同时变高** → "在挖，但每条命令被打断很多次"。
+    //
+    //   机制（读 mineflayer 源码 `plugins/digging.js`）：
+    //     `dig()` 开头：`if (bot.targetDigBlock) bot.stopDigging()`
+    //     而 `stopDigging()` → `diggingTask.cancel(new Error('Digging aborted'))`
+    //   → **上一次 dig 没干净收尾（targetDigBlock 留着），下一次 dig 就把它 cancel 掉**，
+    //     报的正是 `Digging aborted`。
+    //   而被挖过的场地里，`findBlocks` 可能仍返回**已经变成空气的坐标**（幽灵方块）：
+    //     对这种坐标 `bot.dig` 会一直等到 `waitTime` 超时 → 状态没清干净 → 下一块撞上 abort。
+    //
+    //   修法：**挖前用新鲜读取确认方块还在、还能挖**；不在就报 `NO_TARGET`（可跳过该候选），
+    //   而不是把 stale 对象丢给 `bot.dig` 制造一次超时 + 一次 abort。
+    try {
+        const fresh = bot.blockAt?.(new Vec3(Math.floor(block.position.x),
+            Math.floor(block.position.y), Math.floor(block.position.z)), false);
+        if (!fresh || fresh.name !== block.name || fresh.diggable === false) {
+            return fail('NO_TARGET', `那块已经不是 ${block.name} 了（现在是 ${fresh?.name ?? '未加载'}），跳过`, {
+                expected: block.name, actual: fresh?.name ?? null, reason: 'stale-block',
+            });
+        }
+    } catch { /* 读不到就按原样往下走，不因诊断失败而拒绝挖 */ }
+
     // ★★ 2026-11-04（t80）：**挖之前必须让导航静默 —— 这是挖矿的前提，由这里保证。**
     //
     //   真机证据（第 26 跑，`[MINE] dig` 的 err= 分布）：

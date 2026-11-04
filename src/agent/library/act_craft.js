@@ -35,13 +35,31 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     const t0 = Date.now();
     const want = Math.max(1, Math.floor(Number(n) || 1));
 
+    // ★★ 2026-11-04（t91）：**所有失败分支都要带诊断数字。**
+    //
+    //   真机证据（第 36 跑）：`craft wooden_pickaxe` 两轮失败，`data={}` ——
+    //   只有一句消息、没有任何数字，所以判断不了"料不够"还是"读太早"。
+    //   t89 只在 `oak_planks` 那条路径加了快照，覆盖不全。
+    //
+    //   这里统一：**每个 `fail(...)` 都带 `inv`（当前背包）+ `want` + `limit`（若已算出）**。
+    const snapInv = () => {
+        const out = {};
+        try {
+            for (const it of (bot.inventory?.items?.() ?? [])) {
+                if (it?.name) out[it.name] = (out[it.name] ?? 0) + (it.count ?? 0);
+            }
+        } catch { /* 读不到就空 */ }
+        return out;
+    };
+    const diag = (extra = {}) => ({ item: itemName, want, inv: snapInv(), ...extra });
+
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!itemName) return fail('NO_TARGET', '没说要合成什么');
 
     // 1) 有没有这个配方（getItemCraftingRecipes 对不存在的物品返回 null，直接 .length 会炸）
     const known = typeof mc.getItemCraftingRecipes === 'function' ? mc.getItemCraftingRecipes(itemName) : null;
     if (!known || known.length === 0) {
-        return fail('NO_RECIPE', `${itemName} 没有合成配方（或不是物品）`, { item: itemName });
+        return fail('NO_RECIPE', `${itemName} 没有合成配方（或不是物品）`, diag());
     }
 
     // 2) **先看料够不够，再要工作台**（顺序有讲究）。
@@ -61,7 +79,7 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         const withTable = bot.recipesFor?.(id, null, 1, true) ?? [];
         if (withTable.length === 0) {
             // 连"有工作台就能合"的配方都没有 → 料不够（02 §3 的 NO_ITEM）
-            return fail('NO_ITEM', `料不够合 ${itemName}`, { item: itemName });
+            return fail('NO_ITEM', `料不够合 ${itemName}`, diag());
         }
         table = true;
         // 需要工作台：只找**手上这把**，不放工作台（放工作台是流程的事）
@@ -82,27 +100,19 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             maxDistance: 4,                     // maxReach
         }) ?? null;
         if (!tableBlock) {
-            return fail('NO_WORKSTATION', `合成 ${itemName} 需要工作台，4 格内没有`, { item: itemName });
+            return fail('NO_WORKSTATION', `合成 ${itemName} 需要工作台，4 格内没有`, diag({ knownTable: !!knownTable }));
         }
         recipes = bot.recipesFor?.(id, null, 1, tableBlock) ?? [];
         if (recipes.length === 0) {
-            return fail('NO_ITEM', `料不够合 ${itemName}（工作台旁也合不出）`, { item: itemName });
+            return fail('NO_ITEM', `料不够合 ${itemName}（工作台旁也合不出）`, diag({ usedTable: !!tableBlock }));
         }
     }
 
     // 3) 合（按"料的限制"和 want 取小）
     const recipe = recipes[0];
     const before = countItem(bot, itemName);
-    // ★ t89：合成**前**的完整背包快照（诊断用；必须在 bot.craft 之前抓，否则没意义）
-    const snapInv = () => {
-        const out = {};
-        try {
-            for (const it of (bot.inventory?.items?.() ?? [])) {
-                if (it?.name) out[it.name] = (out[it.name] ?? 0) + (it.count ?? 0);
-            }
-        } catch { /* 读不到就空 */ }
-        return out;
-    };
+    // ★ t89：合成**前**的完整背包快照（必须在 bot.craft 之前抓，否则没意义）
+    //   `snapInv` 已在函数开头定义（t91 统一诊断用），这里直接调。
     const invBefore = snapInv();
     let limit = want;
     try {
@@ -120,7 +130,7 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     } catch { /* 算不出限制就按 want 试，让 bot.craft 自己报错 */ }
 
     if (limit <= 0) {
-        return fail('NO_ITEM', `料不够合 ${itemName}`, { item: itemName, want, got: 0 });
+        return fail('NO_ITEM', `料不够合 ${itemName}`, diag({ got: 0, limit }));
     }
 
     try {
@@ -128,7 +138,7 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     } catch (e) {
         const msg = String(e?.message ?? e);
         if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item: itemName });
-        return fail('INTERNAL', msg, { error: msg, item: itemName });
+        return fail('INTERNAL', msg, diag({ error: msg, limit }));
     }
 
     // ★★ 2026-11-04（t89）：**合成后立刻读背包会读到旧值 —— 要等一下再判。**
