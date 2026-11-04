@@ -109,7 +109,30 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     }
 
     // 3) 合（按"料的限制"和 want 取小）
-    const recipe = recipes[0];
+    // ★★★ 2026-11-04（t113）：**必须按"产出物 == 目标物品"精确挑 recipe，不能用 `recipes[0]`。**
+    //
+    //   真机决定性证据（第 44 跑）：
+    //     轮2: invBefore {oak_log:6, oak_planks:1, stick:4}
+    //          invAfter  {oak_button:1, oak_planks:1, stick:4}
+    //     **6 个原木全没了，凭空出现 `oak_button`（木按钮）** ——
+    //     她"合成了"，但合出来的是**木按钮**，不是木板。
+    //
+    //   `oak_button` 的配方是「1 木板 → 1 按钮」。而我们要的是「1 原木 → 4 木板」。
+    //   → `bot.recipesFor(id, ...)` 返回的列表里，**`recipes[0]` 不是我们要的那条**。
+    //     （`recipesFor` 的语义是"能产出这个 itemType 的配方"，但 mineflayer 的返回里
+    //       可能混入 result 不匹配的条目 —— 本轮实测 `recipesInInventory: 1` 说明它确实返回了东西。）
+    //
+    //   修法：**按 `recipe.result.id === 目标 id` 过滤**，取第一条匹配的。
+    //   如果一条都不匹配，如实报（不要退回 `[0]` —— 那正是这个 bug 的来源）。
+    const wantId = mc.getItemId(itemName);
+    const resultId = (r) => (r?.result?.id ?? r?.result?.itemId ?? null);
+    const exact = recipes.filter((r) => resultId(r) === wantId);
+    if (!exact.length) {
+        return fail('NO_RECIPE', `${itemName} 的配方里没有「产出 ${itemName}」的那条（拿到 ${recipes.length} 条，产出都不匹配）`, diag({
+            gotResults: recipes.slice(0, 5).map((r) => ({ id: resultId(r), name: (() => { try { return mc.getItemName(resultId(r)); } catch { return null; } })() })),
+        }));
+    }
+    const recipe = exact[0];
     const before = countItem(bot, itemName);
     // ★ t89：合成**前**的完整背包快照（必须在 bot.craft 之前抓，否则没意义）
     //   `snapInv` 已在函数开头定义（t91 统一诊断用），这里直接调。
@@ -174,6 +197,24 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             const b = bot.blockAt?.(tableBlock.position, false);
             tableStillThere = b?.name ?? null;
         } catch { /* ignore */ }
+    }
+    // ★★★ t113（control 建议）：**从"仅诊断"升级为"前置阻断"。**
+    //
+    //   原因（它的源码研究）：mineflayer 的 `requirementsMetForRecipe` 对第 4 参只做**真值判断**：
+    //     `if (recipe.requiresTable && !craftingTable) return false`
+    //   → **传一个 stale Block 也照样返回 3x3 配方**（"recipesFor 返回非空 ≠ 能合成"）。
+    //   而 `bot.craft` **不校验 recipe 与背包匹配** → 服务端忽略 → **resolve 且零产出**。
+    //   这正是第 44 跑"快、无错、produced=0"的机制。
+    //
+    //   所以：**读到表不在就立刻停**，别把 stale Block 交给 bot.craft。
+    //   ★ 只在"确实读到了方块对象、且它不是 crafting_table"时阻断 ——
+    //     `blockAt` 返回 null（区块未加载 / 假 bot）时**不阻断**，否则会造成假红。
+    if (tableBlock?.position && tableStillThere !== null && tableStillThere !== 'crafting_table') {
+        return fail('NO_WORKSTATION', `工作台不在了（那个位置现在是 ${tableStillThere}）`, diag({
+            tableBlockUsed: { x: tableBlock.position.x, y: tableBlock.position.y, z: tableBlock.position.z },
+            tableStillThere,
+            reason: 'stale-table-block',
+        }));
     }
 
     try {

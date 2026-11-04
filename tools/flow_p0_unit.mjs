@@ -46,7 +46,8 @@ function craftBot({ withPlanks = 8, withTable = false, extraStubs = {} } = {}) {
                 const hasMats = (bot.inventory.slots.find((i) => i.name === 'oak_planks')?.count ?? 0) > 0
                     || (bot.inventory.slots.find((i) => i.name === 'oak_log')?.count ?? 0) > 0;
                 if (!hasMats) return [];
-                return [{ delta: [{ count: 4, id }] }];
+                // ★ t113：假 recipe 必须带 result.id（真实 recipe 一定有）
+                return [{ result: { id, count: 4 }, delta: [{ count: 4, id }] }];
             },
             craft: async (recipe, n) => {
                 const d = recipe?.delta?.[0];
@@ -104,7 +105,7 @@ function craftBot({ withPlanks = 8, withTable = false, extraStubs = {} } = {}) {
         feet: { x: 0, y: 64, z: 0 },
         items: [{ name: 'oak_log', type: 17, count: 3, slot: 0 }],
         stubs: {
-            recipesFor: () => [{ delta: [{ count: 4, id: 5 }] }],
+            recipesFor: (id) => [{ result: { id, count: 4 }, delta: [{ count: 4, id: 5 }] }],
             craft: async (recipe, n) => {
                 const d = recipe?.delta?.[0] ?? { count: 4 };
                 const cur = bot.inventory.slots.find((i) => i.name === 'oak_planks');

@@ -59,7 +59,9 @@ function assertResult(name, r) {
     const bot = makeFakeBot({
         items: [{ name: 'oak_planks', type: 5, count: 8 }],
         stubs: {
-            recipesFor: (_id, _md, _n, table) => (table ? [{ delta: [{ count: 1, id: 340 }] }] : []),
+            // ★ t113：假 recipe **必须带 result.id**（真实 mineflayer recipe 一定有）——
+            //   否则 `act_craft` 按产出物过滤时匹配不到，会误报 NO_RECIPE（假件太松/太假）。
+            recipesFor: (id, _md, _n, table) => (table ? [{ result: { id, count: 1 }, delta: [{ count: 1, id: 340 }] }] : []),
             findBlock: () => null,                  // 4 格内没有工作台
         },
     });
@@ -77,7 +79,7 @@ function assertResult(name, r) {
     const bot = makeFakeBot({
         items: slots,
         stubs: {
-            recipesFor: () => [{ delta: [{ count: 4, id: 340 }] }],
+            recipesFor: (id) => [{ result: { id, count: 4 }, delta: [{ count: 4, id: 340 }] }],
             craft: async (_recipe, n) => {
                 // 模拟合成产出：往背包里加 4*n 个 stick
                 const stick = bot.inventory.slots.find((i) => i.name === 'stick');
