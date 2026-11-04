@@ -169,7 +169,19 @@ const ENTRIES = [
     },
     {
         manifest: manifestToolTier,
-        run: (bot, args, ctx) => runToolTier(ctx?.agent ?? bot, args.target, { board: ctx?.board ?? null, ctx }),
+        // ★★ t96：**`deps.obtain` 必须注入。**
+        //   control 扫出来的真 bug：`strat_tool_tier:124` 是 `const obtainFn = deps.obtain ?? null;`
+        //   而这里原来只传 `{ board, ctx }` → `!obtainFn` 永远成立 →
+        //   `return ok({ plan, note: '没有 obtain 注入，只返回计划' })`
+        //   → **`!do tool_tier` 永远报 ok，却一件工具都不去弄。**
+        //   旁证：`tools/strat_tool_tier_unit.mjs` 三处**都显式注入 `obtain`** ——
+        //   **单测靠注入才测得到真分支，生产却没有**（"单测注入 → 生产不注入"这个口子）。
+        //   ★ 不会递归：`obtain` 不会回调 `tool_tier`。
+        run: (bot, args, ctx) => runToolTier(ctx?.agent ?? bot, args.target, {
+            board: ctx?.board ?? null,
+            ctx,
+            obtain: (a, item, count) => runObtain(a, item, count, { board: ctx?.board ?? null, ctx }),
+        }),
     },
     {
         manifest: manifestFirstNight,
@@ -416,6 +428,21 @@ export function makeCtx(agent, job = null, manifest = null) {
     //   预约从来没真正经过任务板。这类"两个名字指同一个东西"的错在本项目反复出现。
     //   这里两个都认，以实际接上的那个为准。
     const board = agent?.boardClient ?? agent?.board ?? null;
+
+    // ★★ 2026-11-04（t96）：**把 board 挂到 bot 上。**
+    //
+    //   control 扫出来的真 bug：`flow_store.boardOf(bot)` 读 `bot?.agent?.board ?? bot?.board ?? null`，
+    //   而 flow 的调用约定是 `entry.run(agent?.bot ?? agent, …)` —— **收到的是 mineflayer bot**，
+    //   全仓 `bot.agent =` 赋值 0 处、`bot.board` 也没人设 → **恒 null**
+    //   → `rememberChest` 的 `if (!board?.sharedPut) return;` **永远早退**
+    //   → **B4「箱子内容写进任务板库、全 bot 共享」在生产从不发生**
+    //     （B4 真机 5/5 是直接调 board API，**没走 flow_store** —— 所以测不出来）。
+    //
+    //   和 t66 的 `bot.__navJobId` 同一个模式：flow 层拿不到 ctx，就把需要的句柄挂 bot 上。
+    //
+    //   ★ 注意：这段**必须放在 `board` 声明之后** —— 我第一版插在前面，
+    //     `const` 暂时性死区抛错被 `catch` 吞掉 → **静默不生效**（又一个"容错不留痕"）。
+    try { if (bot && board) bot.board = board; } catch { /* 假 bot 上写不进去就算了 */ }
 
     return {
         jobId,
