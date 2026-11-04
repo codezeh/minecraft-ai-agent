@@ -520,6 +520,35 @@ const freshDb = () => {
     else badCase('t60 叶子单语义不该变', { state: after.state, attempts: after.attempts });
 }
 
+// ── 32. ★★ t76：`finish` 必须把 `result.data` **存进库**（今晚为这个 data 修了 5 次）──
+//
+//   今晚的教训：t89 在 act_craft 加了 diag、t92/t95 在 flow_craft 两处转发、
+//   t105 在这里存 —— **每次都是"看起来最像"的那层**，而链路是四跳
+//   （act_craft.data → flow_craft → scheduler → client/server → 这里）。
+//   如果第一次就有这条用例（断言 finish 后 `result.data` 非空），不可能修 5 次。
+{
+    const { db } = freshDb();
+    const job = addJob(db, { title: 'data-guard', skill: 'mine', assignee: 'alpha' });
+    claimFor(db, 'alpha');
+    finish(db, job.id, {
+        ok: false, code: 'NO_ITEM', message: 'x',
+        data: { inv: { a: 1 }, limit: 2 },
+    });
+    const after = getJob(db, job.id);
+    const d = after?.result?.data ?? null;
+    const good = !!d && d.inv?.a === 1 && d.limit === 2;
+    if (good) okCase('★ t76 finish 把 result.data 存进库（四跳链路的最后一跳）',
+        `result.data=${JSON.stringify(d)}`);
+    else badCase('t76 finish 丢了 result.data', { result: after?.result ?? null });
+
+    // code/message 也要在（防止"只挑几个字段重新组装"的老毛病）
+    if (after?.result?.code === 'NO_ITEM') {
+        pass++; console.log(`PASS ★ t76 finish 同时保留 code（code=${after.result.code}）`);
+    } else {
+        fail++; console.log(`FAIL t76 finish 丢了 code ${JSON.stringify(after?.result)}`);
+    }
+}
+
 console.log('============================================');
 console.log(`${pass}/${pass + fail} 个用例通过`);
 console.log('============================================');

@@ -1090,6 +1090,45 @@ async function tickIdle({ bot, availableSkills = null, reader = null } = {}) {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ⑨ ★★ t76：「第 5 跳」—— 调度器调 `finish` 时必须把 `result.data` 一起传下去
+//
+//   今晚 `data` 为 null 修了 5 次（t89/t92/t95/t105/t109）。真正的链路是四跳：
+//     act_craft.data → flow_craft（转发）→ **scheduler（这里，最容易漏）**
+//     → board_client → board_server → board_store.finish（存）
+//   这条守卫盯的就是"调度器重新组装对象时把 data 丢掉"这个动作。
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const clock = makeClock();
+    const board = makeFakeBoard([{ id: 'j-data', state: JOB_STATE.READY, skill: 'mine', args: { count: 3 }, priority: 5 }]);
+    const actions = makeFakeActions();
+    // runner 返回**带 data 的失败**（模拟 act/flow 层把 diag 带上来）
+    const runSkill = async () => ({
+        ok: false, code: 'NO_ITEM', message: '料不够',
+        data: { inv: { a: 1 }, limit: 2, got: 0 },
+    });
+    const sched = new BoardScheduler({
+        agent: { name: 'tester' }, board, actions, runSkill,
+        now: clock.now, sleep: clock.sleep,
+    });
+    await sched.tick();
+
+    const fin = board.calls.filter((c) => c.op === 'finish').pop();
+    const d = fin?.result?.data ?? null;
+    if (!!fin && !!d && d.inv?.a === 1 && d.limit === 2 && d.got === 0) {
+        okCase('★ t76 调度器把 result.data 传进 finish（第 5 跳不丢字段）',
+            `finish.data=${JSON.stringify(d)}`);
+    } else {
+        badCase('t76 调度器丢了 result.data（第 5 跳）', { finish: fin ?? null });
+    }
+
+    if (fin?.result?.code === 'NO_ITEM' && fin?.result?.message === '料不够') {
+        okCase('★ t76 调度器同时保留 code/message', `code=${fin.result.code}`);
+    } else {
+        badCase('t76 调度器丢了 code/message', { finish: fin ?? null });
+    }
+}
+
 /** 小工具：给失败信息一点可读性 */
 function busyReason(r) { return r?.reason ?? '?'; }
 

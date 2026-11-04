@@ -126,7 +126,14 @@ export async function plantSeed(bot, target, seed) {
     const cropName = planted?.name ?? null;
     const becameCrop = cropName && /wheat|carrots|potatoes|beetroots/.test(cropName);
     if (!becameCrop) {
-        return fail('BLOCKED', `种下去了但上方没出现作物（现在是 ${cropName ?? '空'}）`, { seed, got: cropName });
+        // ★ 2026-11-04（t114）：字段名 `got` → `crop`（纯重命名，零行为变化）。
+        //   理由：`got` 在本仓**兼两种类型** —— `act_craft`/`flow_craft`/`flow_smelt` 的 `got`
+        //   是**数字**（拿了几个），而这里塞的是**字符串**（作物名）。同名跨文件既表"什么"
+        //   又表"几个"，读的人只能猜（captain 因此把 verify 带偏过一轮）。
+        //   另有一条硬理由：**本函数成功分支已经用 `crop: cropName`**（下一行），
+        //   失败分支改成同名后两个出口口径一致。
+        //   已核实：`flow_farm` 不读这个字段、无测试断言它 → 零连带影响。
+        return fail('BLOCKED', `种下去了但上方没出现作物（现在是 ${cropName ?? '空'}）`, { seed, crop: cropName });
     }
 
     return ok({ seed, pos: { x: soil.x, y: soil.y, z: soil.z }, crop: cropName });
