@@ -163,10 +163,12 @@ export async function craft(bot, itemName, count = 1) {
             if (countItem(bot, 'crafting_table') === 0) {
                 const made = await craftOnce(bot, 'crafting_table', 1);
                 if (!made.ok) {
-                    // 合不出工作台：多半是木板不够
+                    // ★★ t95：**转发 `made.data`** —— 这是 t92 漏掉的另一处（fixture 扫出来的）。
+                    //   t92 只改了下面 `:255` 那一处，这里仍然重新组装 → `craftOnce` 的
+                    //   `inv`/`limit`/`got` 全丢，失败原因永远查不出来。
                     return fail(made.code === 'NO_ITEM' ? 'NO_ITEM' : 'NO_WORKSTATION',
                         `需要工作台，但背包里没有、也合不出来（${made.message ?? ''}）`,
-                        { item: itemName, missing: missingFor(bot, 'crafting_table') });
+                        { ...(made.data ?? {}), item: itemName, missing: missingFor(bot, 'crafting_table') });
                 }
             }
 

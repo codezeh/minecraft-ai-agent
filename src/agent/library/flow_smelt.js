@@ -135,8 +135,10 @@ export async function smelt(bot, input, count = 1, opts = {}) {
         if (countItem(bot, 'furnace') === 0) {
             const made = await craftOnce(bot, 'furnace', 1);
             if (!made.ok) {
+                // ★ t95：转发 `made.data`（与 flow_craft 同型，fixture 扫出来的）
                 return fail(made.code === 'NO_ITEM' ? 'NO_ITEM' : 'NO_WORKSTATION',
-                    `需要熔炉，背包里没有、也合不出来（${made.message ?? ''}）`, { input });
+                    `需要熔炉，背包里没有、也合不出来（${made.message ?? ''}）`,
+                    { ...(made.data ?? {}), input });
             }
         }
         const p = bot.entity?.position;

@@ -128,15 +128,27 @@ export async function toolTier(agent, target, deps = {}) {
 
     const results = [];
     let firstFail = null;
+    let firstFailData = null;                 // ★ t95：留下第一处失败的下层 data
     for (const step of planned.plan) {
         const r = await obtainFn(agent, step.item, 1);
         results.push({ item: step.item, ok: r?.ok === true, code: r?.code ?? 'OK' });
-        if (!r?.ok && !firstFail) firstFail = { item: step.item, code: r?.code };
+        if (!r?.ok && !firstFail) {
+            firstFail = { item: step.item, code: r?.code };
+            firstFailData = r?.data ?? null;
+        }
     }
 
     if (firstFail) {
+        // ★★ 2026-11-04（t95）：**必须转发下层的 `data`。**
+        //
+        //   fixture 扫出来的（t92 同形、且在**最上游**）：原来这里手工组装
+        //   `{ target, results }`，把 `strat_obtain` 返回的 **`gaps`（缺什么来源）**
+        //   和 **`jobs`（下了哪些单）全部丢掉** →
+        //   **策略层失败永远不可诊断**（只能看到"有一步没成"，看不到缺什么、派了什么单）。
+        const base = { target, results };
         return fail(firstFail.code === 'NO_ITEM' ? 'NO_ITEM' : (firstFail.code ?? 'INTERNAL'),
-            `升到 ${target} 档时有一步没成：${firstFail.item}`, { target, results });
+            `升到 ${target} 档时有一步没成：${firstFail.item}`,
+            { ...(firstFailData ?? {}), ...base, failedItem: firstFail.item });
     }
     return ok({ target, obtained: results, alreadyAt: planned.alreadyAt });
 }
