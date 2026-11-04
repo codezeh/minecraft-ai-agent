@@ -793,7 +793,63 @@ function namedImportSymbols(line) {
     if (violations.length === 0) console.log('  ✓ 前缀 import 规矩没有命中');
 }
 
-// ---- [6/6] 代码规模（**统计信息，不参与失败判定**）----------------------
+// ---- [6/6] 依赖注入审计（**A 档死分支参与失败判定**）----------------------
+//
+// ★★ 2026-11-04（t97）：把 control 写的 `deps_injection_audit` 接进门禁。
+//
+//   为什么必须接：今晚最大的教训之一是「**单测注入 → 生产不注入**」
+//   （同族 5 例：availableSkills / planNeeds 5 字段 / ctx.board / ctx.jobId / tool_tier 的 obtain）。
+//   这类 bug 让 **`!do xxx` 报 ok 却什么都不干**，而所有单测都是绿的 ——
+//   「**单测越绿，越说明生产那条路没人走**」（control 的原话）。
+//
+//   工具判据：
+//     A 档（死分支）= `deps.F` 有 `if (!F) return ok/fail/continue` 早退，
+//                    但注册表 `run:` 绑定没提供 F → **exit 1**
+//     C 档（信息）= 读了 `deps.F` 但没有早退分支（静默退化成空）→ 只报告
+//   **A 档有货就判失败**。
+console.log("");console.log("[6/6] 依赖注入审计（A 档 = 单测能测到、生产走不到的死分支）");
+{
+    try {
+        const { spawnSync } = await import('node:child_process');
+        // ★ 注意：preflight 里的 `ROOT` 是 **`src/agent/`**（看第 14 行），不是仓库根！
+        //   我第一版用 `join(ROOT, 'tools', ...)` → 拼出 `src/agent/tools/...` → 文件不存在
+        //   → spawnSync status 非 0 → **误判成"A 档有货"**。
+        //   （工具没跑起来 ≠ 工具报了问题 —— 这两件事必须分开。）
+        const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));   // tools/ 的上一级 = 仓库根
+        const r = spawnSync(process.execPath, [join(REPO_ROOT, 'tools', 'deps_injection_audit.mjs')],
+            { cwd: REPO_ROOT, encoding: 'utf8' });
+        const out = (r.stdout ?? '').trim();
+        // 只摘出 A 档那几行，别把 C 档的 13 条全铺开（那是"需要人判断"的信息）
+        // ★ 只摘「A·」那一段 —— 工具的 A 档段落以 `── A·...` 开头，到 `── C·` 或 `合计` 结束。
+        //   （不能匹配 "A 档" 三个字：C 档说明里也有"A 档要求……"，会误判成失败。
+        //     也不能只匹配 ✗：工具在 A 档段落里用的是 `·` 前缀。）
+        const allLines = out.split(String.fromCharCode(10));
+        const aStart = allLines.findIndex((l) => /──\s*A·/.test(l));
+        let aLines = [];
+        if (aStart >= 0) {
+            for (let i = aStart; i < allLines.length; i += 1) {
+                if (i > aStart && /──\s*C·|^合计/.test(allLines[i])) break;
+                aLines.push(allLines[i]);
+            }
+        }
+        if (r.status !== 0 && aLines.length) {
+            failed++;
+            console.log('  ✗ A 档有货（生产绑定没提供 deps 字段，对应分支永远走不到）:');
+            for (const l of aLines) console.log('     ' + l.trim());
+        } else if (r.status !== 0) {
+            // 退出码非 0 但没有 ✗ 行 = **工具自己崩了**，不是发现了问题 → 不判失败，但要说出来
+            console.log(`  ⚠ 审计工具异常退出（status=${r.status}），不判失败。`
+                + ` stderr=${(r.stderr ?? '').slice(0, 120)}`);
+        } else {
+            console.log('  ✓ A 档 0 处（没有"单测能测到、生产走不到"的死分支）');
+        }
+    } catch (e) {
+        // 工具本身跑不起来**不判失败**（避免工具故障阻塞门禁），但要明确说出来
+        console.log(`  ⚠ 审计工具没跑起来（不判失败）：${String(e?.message ?? e).slice(0, 80)}`);
+    }
+}
+
+// ---- [7/7] 代码规模（**统计信息，不参与失败判定**）----------------------
 //
 // 为什么放这里：§九「代码规模」原来写死在交接文档里（55 / 89），
 // 之后 M10 收尾 + A 系列 + 遗留清理又加了 33 个提交，一直没更新 → 数字变旧没人发现。
@@ -878,7 +934,7 @@ function namedImportSymbols(line) {
     };
 
     const units = unitStats();
-    console.log('[6/6] 代码规模（统计信息，不参与失败判定；**算不出来显示 `—`**）');
+    console.log('[7/7] 代码规模（统计信息，不参与失败判定；**算不出来显示 `—`**）');
     console.log(`  源文件（src/**/*.js）     ${countJs(join(ROOT, '..'))}      ← find src -name '*.js' | wc -l`);
     console.log(`  注册表技能                ${await skillCount()}      ← composite_registry.SKILL_NAMES.length`);
     console.log(`  测试脚本                  ${units ? `${units.executed}（+${units.skipped} 跳过）` : UNKNOWN}`

@@ -71,14 +71,24 @@ const check = (n, cond, e = '') => (cond ? ok(n, e) : bad(n, e));
     // 同一层不许出现两张同物品的 craft 单
     const dupPlanks = [1, 2, 3, 4].some((d) => planksAt(d).length > 1);
     const dupLogs = [1, 2, 3, 4].some((d) => logsAt(d).length > 1);
-    // 数量必须 > 1（旧的 bug 是 c=1）
-    const allCounts = r.plan.filter((p) => p.skill === 'mine' && p.args?.ore === 'oak_log')
-        .map((p) => Number(p.args.count));
-    const countsOk = allCounts.length > 0 && allCounts.every((c) => c >= 1)
-        && allCounts.some((c) => c > 1);
+    // ★ t97：判据改成"**总量对得上**"，不再用"某个 count > 1"当代理。
+    //
+    //   为什么改：`stick` 一次产 4 根（2 木板 → 4 根），所以"要 2 根木棍"只需 **1 次合成 = 2 木板**。
+    //   修好 `craftedCount` 折算后，木镐链是 `oak_planks c=3` + `oak_planks c=2`（共 **5 块木板**），
+    //   而 1 原木产 4 木板 → **2 个原木**，每个深度各 `c=1`。
+    //   → 旧断言"某个 count > 1"在**账算对之后反而不成立**（这正是"断言依赖了错误实现"的例子）。
+    //
+    //   新判据（对得上权威配方）：
+    //     木镐 = 3 木板 + 2 木棍；2 木棍 = 1 次 stick 合成 = 2 木板 → 共 **5 木板**
+    //     1 原木 = 4 木板 → 需要 **2 原木**
+    const totalPlanks = r.plan.filter((p) => p.skill === 'craft' && p.args?.item === 'oak_planks')
+        .reduce((a, p) => a + Number(p.args.count ?? 0), 0);
+    const totalLogs = r.plan.filter((p) => p.skill === 'mine' && p.args?.ore === 'oak_log')
+        .reduce((a, p) => a + Number(p.args.count ?? 0), 0);
+    const countsOk = totalPlanks === 5 && totalLogs === 2;
     check('⑥a ★ 同层同物品合并（无重复 craft/mine），且原木数量 > 1',
         !dupPlanks && !dupLogs && countsOk,
-        `重复木板=${dupPlanks} 重复原木=${dupLogs} 原木数=${JSON.stringify(allCounts)}`);
+        `重复木板=${dupPlanks} 重复原木=${dupLogs} 木板总数=${totalPlanks} 原木总数=${totalLogs}`);
 }
 
 // ⑥b ★ t62：**被调度器执行时（有 ctx.jobId）不许再建壳**，子单直接挂自己名下。

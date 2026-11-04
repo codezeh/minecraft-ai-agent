@@ -180,6 +180,9 @@ const ENTRIES = [
         run: (bot, args, ctx) => runToolTier(ctx?.agent ?? bot, args.target, {
             board: ctx?.board ?? null,
             ctx,
+            // ★ t96：`deps.obtain` 必须注入 —— 否则 `strat_tool_tier:125` 永远走
+            //   "没有 obtain 注入，只返回计划" 的早退分支 → **报 ok 却一件工具都不弄**。
+            //   （control 的 `deps_injection_audit` 扫出来的 A 档死分支）
             obtain: (a, item, count) => runObtain(a, item, count, { board: ctx?.board ?? null, ctx }),
         }),
     },

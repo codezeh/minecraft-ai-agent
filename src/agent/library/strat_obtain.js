@@ -81,8 +81,12 @@ export function sourcesOf(itemName) {
 
     // 合成
     try {
-        for (const [recipe] of (mc.getItemCraftingRecipes(name) ?? [])) {
-            out.push({ type: 'craft', recipe, cost: SOURCE_ORDER.craft });
+        for (const [recipe, meta] of (mc.getItemCraftingRecipes(name) ?? [])) {
+            // ★★ t97：**必须带上 `craftedCount`（一次合成产出几个）。**
+            //   原来写成 `for (const [recipe] of ...)`，把第二个元素整个丢掉 →
+            //   `expand` 只能按 `per * stillNeed` 算材料，**不知道"一次产 N 个"**，
+            //   于是把需求**算大**（stick: 2 木板 → 4 根，只要 2 根却按 2 次合成算 → 4 木板）。
+            out.push({ type: 'craft', recipe, craftedCount: Math.max(1, Number(meta?.craftedCount) || 1), cost: SOURCE_ORDER.craft });
         }
     } catch { /* ignore */ }
 
@@ -294,8 +298,20 @@ export function planObtain(args = {}) {
                 if (plan.length >= effCap) { hitJobs = true; return; }
                 // 合成要材料 → 把材料也展开（这才是"需求图"）
                 seen.add(name);
+                // ★★ t97：**按"一次产几个"折算合成次数**，而不是直接用需求数。
+                //
+                //   真机证据（第 40 跑，craft 隔离探针"用例 C"）：
+                //     背包 `{oak_planks: 3}` + 有工作台 → `NO_ITEM «料不够合 wooden_pickaxe»`
+                //   `wooden_pickaxe` 配方 = 3 木板 + 2 木棍；而 `stick` 配方是 2 木板 → **产 4 根**。
+                //   只要 2 根木棍 → **只需 1 块木板**。→ 总共 3 + 1 = **4 块木板**。
+                //   但 `planObtain` 派了 `craft oak_planks c=3` —— **少算 1 块**，
+                //   因为 `2 木棍 × 每根 2 木板 = 4 木板`（把"一次产 4 根"当成了"一次产 1 根"）。
+                //
+                //   折算：合成次数 = ceil(要几个 / 一次产几个)，材料 = 次数 × 每次用量。
+                const perCraft = Math.max(1, Number(src.craftedCount) || 1);
+                const times = Math.ceil(stillNeed / perCraft);
                 for (const [mat, per] of Object.entries(src.recipe ?? {})) {
-                    expand(mat, per * stillNeed, depth + 1, name, `为了合成 ${name}`);
+                    expand(mat, per * times, depth + 1, name, `为了合成 ${name}`);
                     if (hitJobs || hitDepth) return;
                 }
                 seen.delete(name);
@@ -433,7 +449,30 @@ export async function obtain(agent, item, count = 1, deps = {}) {
 
     const board = deps.board ?? agent?.board ?? null;
     const inv = deps.inventory ?? countInventory(agent);
-    const chests = deps.chests ?? countChestsFromBoard(deps.chestRows);
+
+    // ★★ 2026-11-04（t97）：**`chestRows` 全仓无提供方 → 「箱子优先」永久失效。**
+    //
+    //   control 用 `deps_injection_audit` 扫出来的：
+    //     `deps.chestRows` 从来没有调用方提供 → `countChestsFromBoard(undefined)`
+    //     → `for (const row of (rows ?? []))` → **静默返回 `{}`**
+    //     → 策略以为"一个箱子都不知道" → **每次都得合成/现采**（04 §6.3 的"先看箱子"白写）。
+    //
+    //   ★ 它和 A 档的那些"死分支"不同：**它没有早退分支，是静默退化成空** ——
+    //     所以只按"有 if (!F) 早退"去扫**永远扫不出来**（这是 control 加 C 档的理由）。
+    //
+    //   修法：在 `obtain()`（async 入口）里**自己把箱子数据取来**。
+    //   没有 board 就继续用 `{}`（诚实降级：确实不知道箱子里有什么）。
+    let chestRows = deps.chestRows;
+    if (chestRows == null && board?.sharedList) {
+        try {
+            const r = await board.sharedList('chest');
+            if (r?.ok) {
+                const list = r.data?.items ?? r.data?.rows ?? r.data ?? [];
+                chestRows = Array.isArray(list) ? list : [];
+            }
+        } catch { /* 取不到就当不知道箱子 */ }
+    }
+    const chests = deps.chests ?? countChestsFromBoard(chestRows);
 
     const planned = (deps.planObtain ?? planObtain)({
         item, count, inventory: inv, chests,
