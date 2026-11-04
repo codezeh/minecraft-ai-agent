@@ -16,6 +16,10 @@
  *   再把账本那行改成 `alreadyAllocated = 0`（= 回到修前），import 变异体对比。
  *   —— 这是"提取/复制 + 编译/加载"的等价做法，真文件一字未改。
  *
+ * ★ 哪几条不能砍（实测标注，见各条的 ）：**②③⑤**。
+ *   ①④⑥ 是两种实现都对的用例（变异体也照样通过），删了不心疼；
+ *   ②③⑤ 去掉账本就立刻红 —— **精简用例时只许砍 ①④⑥**。
+ *
  * 输出：PASS / FAIL，全过退出码 0。
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -39,9 +43,12 @@ const plan = (inventory, item = 'wooden_pickaxe') => planObtain({ item, count: 1
 // ══════════════════════════════════════════════════════════════════════════
 const CASES = [
     { n: '①', inv: { oak_planks: 0 }, want: 5, why: '全缺' },
+    // ★鉴别器（去掉账本 → 3 变 1，本条必红）
     { n: '②', inv: { oak_planks: 2 }, want: 3, why: '部分有（旧代码算 1 ← 回归杀手）' },
+    // ★鉴别器（去掉账本 → 2 变 0，本条必红）
     { n: '③', inv: { oak_planks: 3 }, want: 2, why: '旧代码算 0 ← 双计最明显' },
     { n: '④', inv: { oak_planks: 5 }, want: 0, why: '刚好够' },
+    // ★鉴别器（棍已经够 → 只剩 3 板要补，账本错了这条也会偏）
     { n: '⑤', inv: { oak_planks: 2, stick: 4 }, want: 1, why: '有棍了，只需 3 板 - 2' },
     { n: '⑥', inv: { oak_planks: 10 }, want: 0, why: '超量' },
 ];

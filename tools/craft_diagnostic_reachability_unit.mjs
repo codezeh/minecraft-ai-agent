@@ -71,34 +71,44 @@ const sliceFrom = (src, anchor, len = 400) => {
     //   所以判据是"data 够全"，不是"有没有 precheck"（precheck 只在 act_craft 那条路上有）。
     check('① flow_craft 失败时 data 里有完整诊断（inv 存在）',
         r.ok === false && hasInv, `keys=${JSON.stringify(keys)}`);
-    check('①-b 键数 ≥ 6（远多于旧形状的 4 个 {item,want,got,missing}）',
-        keys.length >= 6, `keys=${keys.length}：${JSON.stringify(keys)}`);
+    // ★ t132 之后：`flow_craft` 里两道预检都删了，失败信息全部来自 `act_craft` 的 `diag()`。
+    //   `data` 形状变成 `{item, want, inv, precheck, missing, ...}`（由 `:299` 的
+    //   `{ ...r.data, ...base }` 透传）。**判据改成"含 act_craft 的 diag 标记"**，
+    //   比"键数 ≥ 6"稳定（键数会随 diag 增减而变，而标记语义不变）。
+    check('①-b data 含 act_craft 的 diag 标记（inv 或 precheck）—— 证明走的是下层诊断',
+        hasInv || hasPrecheck, `keys=${keys.length}：${JSON.stringify(keys)}`);
     check('①-c 不再是旧形状的 4 键', !legacyShape, `legacyShape=${legacyShape} hasPrecheck=${hasPrecheck}`);
 }
 
 // ①-反向验证（源码级 + 内存变异）：两道前置检查都在 = ① 必红
 {
+    // ★ t132：**两道预检都删了**，`act_craft` 是"能不能合"的唯一 owner。
+    //   守卫改成断言"`flow_craft` 里不再有 NO_ITEM 预检"——
+    //   如果谁又把"料够不够"写回来（那是今晚反复复发的那一族），这条立刻红。
     const guard = (src) => {
-        // second：`if (!recipes.length)` 分支**只许记 precheck，不许 return fail**
-        const a = sliceFrom(src, 'if (!recipes.length) {');
-        // first：第一道早退**必须是"带完整诊断的 fail"**（t126）——即含 `inv:`
-        const b = sliceFrom(src, 'if (!withTable.length) {', 1600);   // 中间有一大段 t126 注释，切 900 不够
-        // 注意：`inv` 在源码里是**简写属性**（`inv,`）而不是 `inv:` —— 别只匹配后者。
-        return {
-            second: a ? a.includes('return fail(') : null,
-            first: b ? (b.includes('return fail(') && (b.includes('inv,') || b.includes('inv:'))) : null,
-        };
+        // ★ t132：`t132` 之后这一段带了大段注释，默认 400 字符窗口切不到 `needTable`，
+        //   变异插入点会落在窗口外 → 反向验证会**假绿**（我第一版就踩了这个）。
+        const a = sliceFrom(src, 'if (!recipes.length) {', 3000);    // 第一道（原 :141-150）
+        const b = sliceFrom(src, 'if (!withTable.length) {', 400);   // 第二道（原 :225）
+        const noItemPrecheck = (x) => !!x && /return fail\('NO_ITEM'/.test(x);
+        return { first: noItemPrecheck(a), second: noItemPrecheck(b) };
     };
     const g = guard(FLOW_SRC);
-    check('①-反向 源码：第二道前置检查（:225 附近）**没有** return fail（6146d22：只记 precheck）',
+    check('①-反向 源码：第一道预检（原 :141-150）**不再** return fail(NO_ITEM)（t132 删）',
+        g.first === false, `first=${g.first}`);
+    check('①-反向 源码：第二道预检（原 :225）**不再** return fail(NO_ITEM)（t123 已删）',
         g.second === false, `second=${g.second}`);
-    check('①-反向 源码：第一道（:141-150）的早退**带着 inv 诊断**（t126 的成果）',
-        g.first === true, `first=${g.first}`);
 
-    // 内存变异：把第一道早退的诊断字段删掉（退回旧 4 键）→ 守卫必须报红
-    const brokenFirst = FLOW_SRC.replace('                inv,                                   // ★ 补齐：完整背包', '');
-    check('①-反向验证：把第一道早退的 `inv` 诊断删掉 → 守卫报红（① 会立刻红）',
-        guard(brokenFirst).first === false, `mutant first=${guard(brokenFirst).first}`);
+    // 反向验证：把预检写回去 → 守卫必须报红
+    // ★ 关键：src/ 是 CRLF —— 用 LF 拼锚点永远匹配不到（今晚第 3 次栽在换行上）。
+    const NL = String.fromCharCode(13, 10);
+    const reintroduced = FLOW_SRC.replace(
+        '        needTable = true;' + NL + '    }',
+        "        if (!withTable.length) { return fail('NO_ITEM', 'x', {}); }" + NL + '        needTable = true;' + NL + '    }',
+    );
+    check('①-反向验证：把 NO_ITEM 预检写回去 → 守卫报红（① 会立刻红）',
+        guard(reintroduced).first === true || guard(reintroduced).second === true,
+        `mutant first=${guard(reintroduced).first} second=${guard(reintroduced).second}`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════

@@ -142,34 +142,27 @@ export async function craft(bot, itemName, count = 1) {
     let recipes = bot.recipesFor?.(id, null, want, null) ?? [];
     let needTable = false;
     if (!recipes.length) {
-        const withTable = bot.recipesFor?.(id, null, want, true) ?? [];
-        if (!withTable.length) {
-            // 连"有工作台就能合"都不成立 = 缺料（卡片的 NO_ITEM）
-            //
-            // ★★ 2026-11-05（t126，control 的 unreachable_guard_audit 扫出来的）：
-            //   这条早退**是合法的**（料真不够就该早停，不必先去找工作台），
-            //   但它给的 `data` **只有 4 个键** `{item,want,got,missing}` ——
-            //   而同样场景下 `act_craft` 会给 `inv` / `limit` / `invBefore` / `invAfter`。
-            //   **上层早退把下层更全的诊断遮住了**（今晚第 4 例同族）。
-            //
-            //   修法：**早退保留（行为不变），但把同样的诊断字段补齐** ——
-            //   让"料不够"这件事在任何一层都能看到完整背包，不用靠"哪些键没出现"反推。
-            const missing = missingFor(bot, itemName);
-            let inv = null;
-            try {
-                inv = (bot.inventory?.items?.() ?? []).reduce((m, it) => {
-                    if (it?.name) m[it.name] = (m[it.name] ?? 0) + (it.count ?? 0);
-                    return m;
-                }, {});
-            } catch { /* ignore */ }
-            return fail('NO_ITEM', `料不够合 ${itemName}`, {
-                item: itemName, want, got: 0, missing,
-                inv,                                   // ★ 补齐：完整背包
-                recipesInInventory: recipes.length,     // ★ 0（2x2 合不了）
-                recipesWithTable: withTable.length,     // ★ 0（有台也合不了）
-                reason: 'insufficient-materials-both',  // ★ 明确"两条路都试过了"
-            });
-        }
+        // ★★★ 2026-11-05（t132）：**这里不再做"料够不够"的预检 —— 判断权交给 `act_craft`。**
+        //
+        //   真机决定性证据（第 53 跑，两轮完全同构）：
+        //     22913 craft oak_planks → done，`invAfter.oak_planks = 6`（木镐只要 3）
+        //     22915 craft wooden_pickaxe → blocked，`inv.oak_planks = 2`、`missing = {oak_planks:1}`
+        //   **6 → 2 之间没有任何 craft 单，也没有 2ms 内吃掉 4 块板的操作。**
+        //   → **木板从来没少过；那个 `inv`/`missing` 是过期快照。**
+        //
+        //   为什么过期：这里在**预检时刻**调 `recipesFor` 算一次，
+        //   而真正执行时库存可能已被同一棵树的其它子单补足了
+        //   （本轮正是：它自己派的 `craft oak_planks c1` 后来把板做到了 6）。
+        //   **同一份判断写两处（这里 + `act_craft`），前一处必然更容易过期。**
+        //
+        //   t123 已删掉下面第二道预检（`:225`），`t126` 又把第一道补了诊断 ——
+        //   **但补诊断不治本**。fixture 早就提醒过"`flow_craft` 有两道同形状的预检"。
+        //   本轮**两道一起删**：`act_craft` 成为"能不能合"的**唯一 owner**，
+        //   它在**执行那一刻**重新 `recipesFor`，拿到的永远是最新库存。
+        //
+        //   行为变化：料真不够时，不再在这里早停，而是多走一次 `craftOnce`
+        //   → `act_craft` 用完整 `diag()`（`inv`/`limit`/`invBefore`/`invAfter`/`precheck`）失败。
+        //   **代价**：多一次寻表/空转（毫秒级）；**收益**：诊断准确 + 不再有"过期快照"这类假失败。
         needTable = true;
     }
 
