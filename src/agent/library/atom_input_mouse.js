@@ -195,14 +195,34 @@ export async function holdDig(bot, block, opts = {}) {
     //
     //   这行打点就是判据：**如果进入时 `targetDigBlock` 已经非 null，
     //   说明有另一个 dig 在跑，我们正要把它 cancel 掉。**
+    // ★★ 2026-11-04（t93）：**并发 dig 的硬证据：in-flight 标志 + 序号。**
+    //
+    //   第 38 跑已排除：`self-stop=0`、`interrupted=false`、`timedOut=false`、`stale-block=0`。
+    //   而 mineflayer 里 `Digging aborted` **只有一个来源**：
+    //     `digging.js:127  if (bot.targetDigBlock) bot.stopDigging()   // 在 dig() 开头`
+    //   → **必然是"第二个 `bot.dig()` 在第一个还在飞的时候进来了"**。
+    //
+    //   但 `[DIG] enter` 看到 `targetDigBlock=null`（1294/1294）—— 与上面矛盾。
+    //   解释只有一个：**`stopDigging()` 把 `targetDigBlock` 清成 null 之后，第二个才进来**，
+    //   所以"进入时非 null"永远观测不到。
+    //
+    //   所以换一个不会被清掉的量：**我们自己维护的 in-flight 计数**。
+    //   进入时若 `__digInFlight > 0` → **铁证：上一个 dig 还没结束**。
+    const seq = (bot.__digSeq = (bot.__digSeq ?? 0) + 1);
+    const inFlightAtEntry = bot.__digInFlight ?? 0;
+    bot.__digInFlight = inFlightAtEntry + 1;
     if (process.env.TRACE) {
         const busy = bot.targetDigBlock?.name ?? null;
         const keys = Object.keys(bot.controlState ?? {}).filter((k) => bot.controlState[k]);
         const goal = bot.pathfinder?.goal ? 'yes' : 'no';
-        console.log('[DIG] enter block=', block.name, 'targetDigBlock=', busy,
+        console.log('[DIG] enter seq=', seq, 'block=', block.name,
+            'CONCURRENT=', inFlightAtEntry > 0 ? 'YES(' + inFlightAtEntry + ')' : 'no',
+            'targetDigBlock=', busy,
             'keys=', JSON.stringify(keys), 'goal=', goal, 'caller=', bot.__digCaller ?? '?');
     }
-    const digging = bot.dig(block, true).catch((e) => { digErr = e; });
+    const digging = bot.dig(block, true).catch((e) => { digErr = e; }).finally(() => {
+        bot.__digInFlight = Math.max(0, (bot.__digInFlight ?? 1) - 1);
+    });
 
     // 中断 / 超时二选一先到者：都要 stopDigging，否则客户端会一直举着手
     let interrupted = false;
@@ -234,9 +254,10 @@ export async function holdDig(bot, block, opts = {}) {
         // ★★ t92：**abort 归因打点** —— verify 第 37 跑指出 `abort:digOK ≈ 100:1`
         //   是"紧凑重试死循环"，需要看 heldMs / budget / 是不是我们自己的 stopDigging。
         if (process.env.TRACE) {
-            console.log('[DIG] err reason=', msg,
+            console.log('[DIG] err seq=', seq, 'reason=', msg,
                 '| heldMs=', Date.now() - t0, 'budget=', budget,
                 '| interrupted=', interrupted, 'timedOut=', timedOut,
+                '| inFlight=', bot.__digInFlight ?? 0,
                 '| targetDigBlock=', bot.targetDigBlock?.name ?? null);
         }
         if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { dugBlock: block.name });
