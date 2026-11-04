@@ -832,20 +832,44 @@ console.log("");console.log("[6/6] 依赖注入审计（A 档 = 单测能测到�
                 aLines.push(allLines[i]);
             }
         }
-        if (r.status !== 0 && aLines.length) {
+        // ★★★ 2026-11-04（t98，control 的建议 —— 它正中我踩过的坑）：
+        //   **工具没跑起来 ≠ 工具报了"没有问题"。**
+        //
+        //   我接线时把 ENOENT 当成了"A 档有货"，但反过来更危险：
+        //   如果审计**静默失败**（路径错 / 崩溃 / 输出为空），我原来的写法会打一句警告
+        //   然后 `failed` 不 ++ → **绿灯** → 读成"0 处 = 干净"。
+        //   **"什么都没检测到"和"检测了、没有"在报告里长得一模一样。**
+        //
+        //   所以：**必须看到工具确实跑完的指纹**（A· 或 C· 段标记 + 合计行），
+        //   看不到就判失败（"审计没跑起来"），而不是给绿灯。
+        const sawASection = /──\s*A·|A·策略|未发现"有早退分支但生产不提供"/.test(out);
+        const sawCSection = /──\s*C·/.test(out);
+        const ranOk = sawASection || sawCSection;
+
+        if (!ranOk) {
+            failed++;
+            console.log('  ✗ 审计**没跑起来**（输出里没有 A·/C· 段标记）—— 不能当成"0 处干净"');
+            console.log(`     status=${r.status}  stdout 前 120 字=${out.slice(0, 120).replace(RegExp(String.fromCharCode(10), 'g'), ' | ')}`);
+            console.log(`     stderr=${(r.stderr ?? '').slice(0, 160)}`);
+        } else if (r.status !== 0 && aLines.length) {
             failed++;
             console.log('  ✗ A 档有货（生产绑定没提供 deps 字段，对应分支永远走不到）:');
             for (const l of aLines) console.log('     ' + l.trim());
         } else if (r.status !== 0) {
-            // 退出码非 0 但没有 ✗ 行 = **工具自己崩了**，不是发现了问题 → 不判失败，但要说出来
-            console.log(`  ⚠ 审计工具异常退出（status=${r.status}），不判失败。`
-                + ` stderr=${(r.stderr ?? '').slice(0, 120)}`);
+            // 有段标记但退出码非 0 且没有 A 段内容 → 工具自身异常
+            failed++;
+            console.log(`  ✗ 审计工具异常退出（status=${r.status}，有段标记但无 A 档明细）`);
+            console.log(`     stderr=${(r.stderr ?? '').slice(0, 160)}`);
         } else {
             console.log('  ✓ A 档 0 处（没有"单测能测到、生产走不到"的死分支）');
         }
     } catch (e) {
-        // 工具本身跑不起来**不判失败**（避免工具故障阻塞门禁），但要明确说出来
-        console.log(`  ⚠ 审计工具没跑起来（不判失败）：${String(e?.message ?? e).slice(0, 80)}`);
+        // ★ t98：**工具跑不起来也判失败。**
+        //   原来的写法是"只警告不失败" —— 但那等于"防护失效时绿灯"，
+        //   比"防护发现了问题"危险得多（control 的建议）。
+        //   审计工具是**门禁的一部分**：它自己坏了，门禁就不成立。
+        failed++;
+        console.log(`  ✗ 审计工具没跑起来（判失败 —— 防护失效不能当通过）：${String(e?.message ?? e).slice(0, 120)}`);
     }
 }
 

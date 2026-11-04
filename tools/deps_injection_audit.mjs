@@ -40,8 +40,7 @@ const isComment = (l) => /^\s*(\/\/|\*|\/\*)/.test(l);
 // ───────────────────────────────────────────────────────────────────────────
 
 /** `makeCtx()` 返回对象里的键（ctx 能提供什么，以它为准，不靠记忆）。 */
-function ctxProvidedKeys() {
-    const src = read(REGISTRY);
+function ctxProvidedKeys(src = read(REGISTRY)) {
     const start = src.indexOf('export function makeCtx');
     if (start < 0) return { keys: [], src: null };
     const seg = src.slice(start);
@@ -66,8 +65,7 @@ function ctxProvidedKeys() {
 }
 
 /** 注册表里的 `import { x as runY } from './file.js'` → runY 属于哪个文件。 */
-function importMap() {
-    const src = read(REGISTRY);
+function importMap(src = read(REGISTRY)) {
     const map = new Map();           // runY → file base
     for (const m of src.matchAll(/import\s*\{([^}]+)\}\s*from\s*'\.\/([\w.]+)\.js'/g)) {
         const file = m[2];
@@ -83,9 +81,9 @@ function importMap() {
  * 找某个 runY 的绑定：`run: (bot, args, ctx) => runY(... { k: v, ... })`。
  * 返回 { line, text, keys:Set, spreadCtx:boolean }。
  */
-function bindingsFor(runY) {
+function bindingsFor(runY, src = read(REGISTRY)) {
     const out = [];
-    const ls = lines(REGISTRY);
+    const ls = src.split(/\r?\n/);
     for (let i = 0; i < ls.length; i++) {
         if (!ls[i].includes(`run:`) || !ls[i].includes(runY)) continue;
         // 绑定可能跨行：抓到出现 `}` 收尾为止（最多 6 行）
@@ -127,8 +125,8 @@ function bindingsFor(runY) {
  * @returns {Array<{field, line, aliasLine, guardLine, action, ret}>}
  *   action: 'ok' | 'fail' | 'bare'（裸 return / continue，静默跳过）
  */
-function earlyReturns(filePath, { prefixes = ['deps', 'opts'] } = {}) {
-    const ls = lines(filePath);
+function earlyReturns(sourceText, { prefixes = ['deps', 'opts'] } = {}) {
+    const ls = String(sourceText).split(/\r?\n/);
     const out = [];
 
     // alias 表：alias → { field, line }
@@ -188,6 +186,133 @@ function earlyReturns(filePath, { prefixes = ['deps', 'opts'] } = {}) {
     return out;
 }
 
+/** `deps.F ?? <fallback>` 里的 fallback 文本（只取到表达式边界，不吃过 `(` `)` `,` `;`）。 */
+function fallbackOf(tailText) {
+    const fb = String(tailText).match(/\?\?\s*([^\s;,()]+)/);
+    return fb ? fb[1].trim().slice(0, 90) : null;
+}
+
+/**
+ * `deps` 也可能是**局部数组变量**（strat_obtain 里 `deps` 是"依赖 key 列表"）。
+ * `deps.push(k)` / `deps.length` 不是"从注入对象取字段" —— 第一版误报了这两条。
+ */
+const ARRAY_MEMBERS = new Set(['push', 'pop', 'shift', 'unshift', 'length', 'map', 'filter', 'forEach',
+    'find', 'some', 'every', 'join', 'includes', 'indexOf', 'slice', 'concat', 'sort', 'reduce', 'flat']);
+
+// ───────────────────────────────────────────────────────────────────────────
+// ★★ --selftest：扫描器自测（**先证明工具看得见，再说"没有"**）
+//
+// 为什么必须有这个（2026-11-04）：本工具开发过程中我踩了 **7 次"扫描器比代码窄"** ——
+// 方法简写、对象简写属性、嵌套花括号、嵌套字段、局部 `deps` 数组、裸标识符 fallback、
+// fallback 正则吃过头。每一次都是"工具报了个可疑结果 → 回头怀疑工具"才发现的。
+//
+// 最危险的一次是「嵌套花括号」：它让工具**误报"`deps.obtain` 仍未注入"**，
+// 而实际已经修好了 —— 差点让 captain 以为自己的修复白做。
+//
+// **所以：工具报 0 处时，我们必须能回答"是真的没有，还是它看不见"。**
+// 这 6 条断言就是那个回答。全绿才谈得上"A 档 0 处"这个结论可信。
+// ───────────────────────────────────────────────────────────────────────────
+if (process.argv.includes('--selftest')) {
+    let pass = 0, fail = 0;
+    const ok = (name, ev = '') => { pass++; console.log(`  PASS  ${name}  ${ev}`); };
+    const bad = (name, actual) => { fail++; console.log(`  FAIL  ${name}  ${JSON.stringify(actual)}`); };
+    const chk = (name, cond, ev, actual) => cond ? ok(name, ev) : bad(name, actual);
+
+    console.log('=== 扫描器自测（6 种代码形态，全绿才算可信）===');
+
+    // ① 方法简写（`async checkpoint(...) {`）—— 第一版只认 `name(...) {`，丢了 4 个 ctx 键
+    {
+        // 夹具必须长得像真的：`makeCtx` 是 `return { … };`（第一版夹具漏了 `return {`，
+        // 于是 keys=[] —— **自测当场抓到的是夹具的错，不是扫描器的错**，这也是自测的价值）
+        const src = `export function makeCtx(a, b, m) {
+    return {
+        agent,
+        board,
+        async checkpoint(key = 'default') {
+            return 1;
+        },
+        save(extra) {
+            return 2;
+        },
+    };
+}`;
+        const keys = ctxProvidedKeys(src).keys;
+        chk('① 方法简写（async checkpoint / save）能被识别',
+            keys.includes('checkpoint') && keys.includes('save') && keys.includes('agent') && keys.includes('board'),
+            `keys=${keys.join(',')}`, { keys });
+    }
+
+    // ② 对象**简写属性**（`{ board: …, ctx }`）—— 第一版只认 `key:`，把 deps.ctx 误报
+    {
+        const src = `const x = [
+    {
+        run: (bot, args, ctx) => runObtain(ctx?.agent ?? bot, args.item, args.count, { board: ctx?.board ?? null, ctx }),
+    },
+];`;
+        const b = bindingsFor('runObtain', src)[0];
+        chk('② 对象简写属性（裸 `ctx`）能被识别为已提供',
+            !!b && b.keys.has('ctx') && b.keys.has('board'),
+            `keys=${[...(b?.keys ?? [])].join(',')}`, { keys: [...(b?.keys ?? [])] });
+    }
+
+    // ③ 嵌套花括号（内层 `{ board, ctx }`）—— 第一版 `[^{}]*` 崩，把 obtain 误报成未注入
+    {
+        const src = `const x = [
+    {
+        run: (bot, args, ctx) => runToolTier(ctx?.agent ?? bot, args.target, {
+            board: ctx?.board ?? null,
+            ctx,
+            obtain: (a, item, count) => runObtain(a, item, count, { board: ctx?.board ?? null, ctx }),
+        }),
+    },
+];`;
+        const b = bindingsFor('runToolTier', src)[0];
+        chk('③ 嵌套花括号里的 `obtain:` 仍能被识别（不因内层 {} 而漏）',
+            !!b && b.keys.has('obtain'),
+            `keys=${[...(b?.keys ?? [])].join(',')}`, { keys: [...(b?.keys ?? [])] });
+    }
+
+    // ④ 嵌套字段路径（`deps.ctx?.jobId`）—— 第一版只取第一段，记成 `ctx`
+    {
+        const src = `const myJobId = deps.ctx?.jobId ?? null;
+if (!myJobId) return ok({ note: '没有 job 上下文' });`;
+        const ers = earlyReturns(src, { prefixes: ['deps'] });
+        chk('④ 嵌套字段 deps.ctx?.jobId 记成 `ctx.jobId`（不是 `ctx`）',
+            ers.length === 1 && ers[0].field === 'ctx.jobId',
+            `field=${ers[0]?.field}`, ers);
+    }
+
+    // ⑤ 局部 `deps` 数组（`deps.push/length`）—— 第一版在 C 档误报成"注入字段缺失"
+    {
+        const src = `if (deps.length) s.dependsOnKeys = [...new Set(deps)];
+if (byKey.has(k)) { deps.push(k); break; }`;
+        const ers = earlyReturns(src, { prefixes: ['deps'] });
+        // ① A 档不该误报：`if (deps.length)` 不是 `!` 守卫，且体内没有 return/continue/break 的早退
+        chk('⑤ A 档不会把 `if (deps.length)` 误判成早退分支',
+            ers.length === 0,
+            `findings=${ers.length}`, ers);
+        // ② C 档会看到 length/push（它有"任何 deps.F 读取"都会记），所以排除表是必需的
+        const seenByC = [...src.matchAll(/\bdeps\??\.([a-zA-Z_$][\w$]*)/g)].map((m) => m[1]);
+        chk('⑤b C 档会看到 length/push（故排除表必需），且排除表能挡住',
+            seenByC.includes('length') && seenByC.includes('push')
+            && ARRAY_MEMBERS.has('length') && ARRAY_MEMBERS.has('push'),
+            `C 看到=[${seenByC.join(',')}] 排除表 size=${ARRAY_MEMBERS.size}`,
+            { seenByC, size: ARRAY_MEMBERS.size });
+    }
+
+    // ⑥ 裸标识符 fallback（`deps.planObtain ?? planObtain` = 测试接缝）—— 第一版正则吃过头
+    {
+        const f1 = fallbackOf('deps.planObtain ?? planObtain)({');
+        const f2 = fallbackOf('deps.inventory ?? countInventory(agent);');
+        chk('⑥ fallback 只取到表达式边界（裸标识符不吃过 `)`）',
+            f1 === 'planObtain' && f2 === 'countInventory',
+            `planObtain=${f1} inventory=${f2}`, { f1, f2 });
+    }
+
+    console.log(`\n扫描器自测：${pass} passed, ${fail} failed`);
+    process.exit(fail === 0 ? 0 : 1);
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // 2) 两条检查
 // ───────────────────────────────────────────────────────────────────────────
@@ -199,7 +324,7 @@ const findings = [];   // {family, file, line, field, action, ret, why, impact}
 const stratFiles = readdirSync(LIB).filter((f) => /^strat_.*\.js$/.test(f));
 for (const f of stratFiles) {
     const p = join(LIB, f);
-    const ers = earlyReturns(p, { prefixes: ['deps'] });
+    const ers = earlyReturns(read(p), { prefixes: ['deps'] });
     if (!ers.length) continue;
     // 该文件对应的 runY
     const runYs = [...IMPORTS.entries()].filter(([, file]) => file === f.replace(/\.js$/, '')).map(([runY]) => runY);
@@ -232,7 +357,7 @@ for (const f of stratFiles) {
 const scanFiles = readdirSync(LIB).filter((f) => /^(flow_|act_|atom_|query_|nav_|board_).*\.js$/.test(f));
 for (const f of scanFiles) {
     const p = join(LIB, f);
-    let ers = earlyReturns(p, { prefixes: ['ctx'] });
+    let ers = earlyReturns(read(p), { prefixes: ['ctx'] });
     // 也覆盖 `const A = ctx.F` 的 alias 形式里 field 来自 ctx 的（earlyReturns 已用 prefixes=['ctx'] 处理）
     if (!ers.length) continue;
     for (const er of ers) {
@@ -260,10 +385,6 @@ for (const f of scanFiles) {
 //
 // 这一档**不影响退出码**（信息），但要逐个判断：fallback 是"从 agent 现算"（安全）还是"退化成空"（可疑）。
 const infoFindings = [];
-// ★ 排除：`deps` 也可能是**局部数组变量**（strat_obtain 里 `deps` 是"依赖 key 列表"）。
-//   `deps.push(k)` / `deps.length` 不是"从注入对象取字段" —— 第一版误报了这两条。
-const ARRAY_MEMBERS = new Set(['push', 'pop', 'shift', 'unshift', 'length', 'map', 'filter', 'forEach',
-    'find', 'some', 'every', 'join', 'includes', 'indexOf', 'slice', 'concat', 'sort', 'reduce', 'flat']);
 for (const f of stratFiles) {
     const p = join(LIB, f);
     const ls = lines(p);
@@ -286,21 +407,32 @@ for (const f of stratFiles) {
             //   否则 `deps.planObtain ?? planObtain)({` 会被抓成 `planObtain)({`，
             //   于是"裸标识符=测试接缝"这条判据永远不成立）
             const tail = ls[i].slice(m.index);
-            const fb = tail.match(/\?\?\s*([^\s;,()]+)/);
-            const fallback = fb ? fb[1].trim().slice(0, 90) : null;
+            const fallback = fallbackOf(tail);
             // 形态：`name: deps.F,` = **入参透传**（不是 fallback 场景）→ 低危
             const passthrough = new RegExp(`[a-zA-Z_$][\\w$]*\\s*:\\s*deps\\??\\.${field}\\s*,`).test(ls[i]);
             // 形态：fallback 是**裸标识符**（`deps.planObtain ?? planObtain`）= 同名函数/测试接缝 → 安全
             const bareFnFallback = !!fallback && /^[a-zA-Z_$][\w$]*$/.test(fallback);
+            // 形态：`let X = deps.F;` 之后**同函数内再赋值**（`X = await …` / `if (X == null && …) X = …`）
+            //   = 运行时自取兜底（t97 修 `chestRows` 用的正是这个形态）→ 安全。
+            //   不认这个形态，就会把"已经修好的代码"继续标成可疑 —— 那就是误报。
+            const aliasM = ls[i].match(/\b(?:const|let|var)\s+([a-zA-Z_$][\w$]*)\s*=\s*deps\??\.\w+\s*;/);
+            let laterAssign = false;
+            if (aliasM) {
+                const a = aliasM[1];
+                for (let k = 1; k <= 20 && i + k < ls.length; k++) {
+                    if (new RegExp(`\\b${a}\\s*(?:\\?\\?=|=)(?!=)`).test(ls[i + k])) { laterAssign = true; break; }
+                }
+            }
             infoFindings.push({
                 file: `${f}:${i + 1}`,
                 field: `deps.${field}`,
                 fallback,
                 passthrough,
                 bareFnFallback,
-                // 判"是否静默退化成空"：透传/裸函数 fallback 都不算；
+                laterAssign,
+                // 判"是否静默退化成空"：透传/裸函数/下游赋值兜底都不算；
                 // 无 fallback = 缺了就是 undefined；fallback 不含 agent/bot = 不是"现算"
-                silentEmpty: (passthrough || bareFnFallback) ? false
+                silentEmpty: (passthrough || bareFnFallback || laterAssign) ? false
                     : (!fallback ? true : !/\bagent\b|\bbot\b/.test(fallback)),
                 raw: ls[i].trim().slice(0, 120),
             });
@@ -342,8 +474,9 @@ if (infoFindings.length) {
     for (const x of infoFindings) {
         const mark = x.passthrough ? '⚪ 入参透传（缺失=undefined，策略层按"未知"处理）'
             : x.bareFnFallback ? '🟢 fallback 是同名函数/测试接缝，生产有默认实现'
-                : x.silentEmpty ? '🟡 可疑（fallback 不像"现算"，可能静默退化成空）'
-                    : '🟢 fallback 从 agent 现算，可接受';
+                : x.laterAssign ? '🟢 下游有赋值兜底（运行时自取，如 `chestRows` 的 board.sharedList）'
+                    : x.silentEmpty ? '🟡 可疑（fallback 不像"现算"，可能静默退化成空）'
+                        : '🟢 fallback 从 agent 现算，可接受';
         console.log(`  · ${x.file}  ${x.field}  → ${mark}`);
         console.log(`      原文：${x.raw}`);
         if (x.fallback) console.log(`      fallback：${x.fallback}`);
