@@ -30,7 +30,7 @@ const MC_PORT = 25566;
 const MS_PORT = 18090;
 const OWNER = 'HEAVENZEH';        // profile 里的 owner（能下命令）
 const AGENT_NAME = 'deepseek';    // profile 里的 bot 名
-const WAIT_MS = 12 * 60 * 1000;
+const WAIT_MS = 15 * 60 * 1000;
 
 let pass = 0, fail = 0;
 const chk = (n, c, i) => { if (c) { pass++; console.log('  PASS  ' + n + (i ? '   ' + i : '')); } else { fail++; console.log('  FAIL  ' + n + '   ' + JSON.stringify(i)); } };
@@ -93,7 +93,9 @@ for (const biome of ['minecraft:forest', 'minecraft:birch_forest', 'minecraft:ta
 }
 // ★ t60：世界没有森林（locate biome 全部 Could not find），改用 RCON 造的橡树林
 //   场地已验证：bot.findBlocks('oak_log', 32格) = 31 个方块（≥20）
-if (!FOREST) { FOREST = { x: 6203, z: 8803, biome: '(RCON 手造橡树林 6 棵)' }; }
+// ★ 第 33 跑：落点必须避开树干 —— (6203,8803) 正是被我造的树占据（y=-59/-58 都是 oak_log），
+//   tp 到那一列会把她塞进树干内部 → 卡死（这正是模式 B 的根因）。改用已验证的空地 (6193,8793)。
+if (!FOREST) { FOREST = { x: 6193, z: 8793, biome: '(RCON 手造橡树林 · 落点取空地)' }; }
 console.log(`  森林: ${FOREST.x}, ${FOREST.z} [${FOREST.biome}]`);
 await RC(`forceload add ${FOREST.x - 48} ${FOREST.z - 48} ${FOREST.x + 48} ${FOREST.z + 48}`).catch(() => { });
 await sleep(800);
@@ -125,16 +127,16 @@ console.log('  [TP] before(raw) = ' + JSON.stringify(beforeRaw).slice(0, 180));
 
 let landed = null;
 for (let attempt = 1; attempt <= 3; attempt++) {
-    await RC(`tp ${AGENT_NAME} ${TX} ${TARGET_Y + 3} ${TZ}`).catch(() => { });
+    await RC(`tp ${AGENT_NAME} ${TX} ${TARGET_Y} ${TZ}`).catch(() => { });
     await sleep(2200);
     const afterRaw = await rawPos();
     const p2 = parsePos(afterRaw);
     console.log(`  [TP] attempt${attempt} after(raw) = ` + JSON.stringify(afterRaw).slice(0, 180));
     console.log(`  [TP] attempt${attempt} parsed = ` + JSON.stringify(p2));
     if (p2) {
-        const atTrees = Math.abs(p2.x - TX) <= 10 && Math.abs(p2.z - TZ) <= 10 && p2.y >= -62 && p2.y <= -56;
+        const atTrees = Math.abs(p2.x - TX) <= 4 && Math.abs(p2.z - TZ) <= 4 && p2.y >= -60 && p2.y <= -57;
         if (atTrees) { landed = p2; break; }
-        console.log(`  [TP] 不在树林（要求 ${TX},${TZ} ±10 且 y∈[-62,-56]）→ 重试`);
+        console.log(`  [TP] 不在落点（要求 ${TX},${TZ} ±4 且 y∈[-60,-57]）→ 重试`);
     } else {
         console.log('  [TP] Pos 串解析失败（上面的 raw 就是证据）→ 重试');
     }

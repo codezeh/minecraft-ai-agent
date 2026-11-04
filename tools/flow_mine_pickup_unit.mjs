@@ -23,7 +23,7 @@
  */
 import { readFileSync } from 'node:fs';
 import Vec3 from 'vec3';
-import { makeFakeBot, assertPointLike } from './fixtures/fake_bot.mjs';
+import { makeFakeBot, assertPointLike, worldOf, realRegistry } from './fixtures/fake_bot.mjs';
 import { mine } from '../src/agent/library/flow_mine.js';
 
 let pass = 0, fail = 0;
@@ -94,6 +94,24 @@ function mineBot({ ores = 3, dropsLand = false, onCollect = null } = {}) {
         },
     });
     bot.__collectCalls = 0;
+    // ══════════════════════════════════════════════════════════════════════
+    // ★★ t74：**主观测点换成 `findDrops` 的入口**，不再靠 `clearControlStates`。
+    //
+    //   为什么换：`clearControlStates` 是**别人（collectDrops）的副作用**，
+    //   借它数自己 = 脆的判据。今晚已被证伪两次：
+    //     · t82 在 collectDrops 里加无条件静默 → 计数 3→6
+    //     · t80 `holdDig` 也开始调它 → 只能靠 `__silencingForDig` 打补丁排除
+    //   （上面那段"计数口径修正"就是补丁的痕迹 —— 补丁会越打越多）
+    //
+    //   新观测点：`query_drops.findDrops()` 的第一行就是 `Object.values(bot.entities ?? {})`
+    //   → 给 `bot.entities` 装 getter，"被读一次" = "collectDrops 真的去找了一次掉落物"。
+    //   这是它的**必要路径**（不读 entities 就找不到掉落物），比"某副作用被调"稳定。
+    // ══════════════════════════════════════════════════════════════════════
+    bot.__findDropsCalls = 0;
+    Object.defineProperty(bot, 'entities', {
+        configurable: true,
+        get() { bot.__findDropsCalls++; return {}; },   // 空实体表：没有掉落物可捡
+    });
     return bot;
 }
 
@@ -102,9 +120,10 @@ function mineBot({ ores = 3, dropsLand = false, onCollect = null } = {}) {
     const bot = mineBot({ ores: 3, dropsLand: false });
     const r = await mine(bot, 'iron', 3, { ctx: { deadline: Date.now() + 20000 } });
     // 3 块各一次（每块后）+ 末尾兜底一次 = 4；至少必须 ≥3（"每块后都调"）
-    const perBlockOk = bot.__collectCalls >= 3;
+    // ★ t74：主判据看 `findDrops` 调用次数（稳）；旧的 __collectCalls 只做交叉验证
+    const perBlockOk = bot.__findDropsCalls >= 3 && bot.__collectCalls >= 3;
     check('① 挖 3 块、掉落物没进包 → 每块后都调 collectDrops（calls ≥ 3，不是只在最后调一次）',
-        perBlockOk, `collectDrops 调用 ${bot.__collectCalls} 次（期望 3 次/块 + 1 次兜底 = 4）code=${r.code}`);
+        perBlockOk, `findDrops ${bot.__findDropsCalls} 次 / 旧计数器 ${bot.__collectCalls} 次（期望各 ≥3）code=${r.code}`);
 }
 
 // 2. 正常情形（挖一块就进包）：够数以后不再白捡，但仍然"每块后都试过"
@@ -113,7 +132,8 @@ function mineBot({ ores = 3, dropsLand = false, onCollect = null } = {}) {
     const r = await mine(bot, 'iron', 3, { ctx: { deadline: Date.now() + 20000 } });
     // 挖第 1 块后 1<3 → 调；第 2 块后 2<3 → 调；第 3 块后 3<3 不成立 → 跳过；末尾兜底 1 次 → 共 3
     check('② 掉落物真的进包时：每块后按"还差多少"决定捡不捡（共 3 次 = 2 次/块 + 1 次兜底）',
-        bot.__collectCalls === 3 && r.ok === true, `calls=${bot.__collectCalls} code=${r.code}`);
+        bot.__findDropsCalls === 3 && bot.__collectCalls === 3 && r.ok === true,
+        `findDrops=${bot.__findDropsCalls} 旧计数=${bot.__collectCalls} code=${r.code}`);
 }
 
 // 3. 一块都没挖成（没有矿）→ 不该有"每块后"的调用（只有末尾可能 0 次，因为 mined<want）
@@ -121,7 +141,8 @@ function mineBot({ ores = 3, dropsLand = false, onCollect = null } = {}) {
     const bot = mineBot({ ores: 0, dropsLand: false });
     const r = await mine(bot, 'iron', 2, { ctx: { deadline: Date.now() + 5000 } });
     check('③ 附近没矿 → 不会产生"每块后"的 collectDrops（守卫不是无条件乱调）',
-        bot.__collectCalls === 0, `calls=${bot.__collectCalls} code=${r.code}`);
+        bot.__findDropsCalls === 0 && bot.__collectCalls === 0,
+        `findDrops=${bot.__findDropsCalls} 旧计数=${bot.__collectCalls} code=${r.code}`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -192,7 +213,71 @@ const PICKUP_BLOCK = extractPickupBlock(SRC);
         normalCalls === 3 && commentedOut === 0, `normal=${normalCalls} removed=${commentedOut}`);
 }
 
-console.log('============================================');
+// ── ③-4 ★ t74：把"那段在不在" × "**真 collectDrops** × **新观测点(findDrops)**" 交叉验证 ──
+//   前三条用的是打桩的 collectDrops（数的是桩自己被调几次）；这条换成**真的 collectDrops**，
+//   于是计数变成"findDrops 真被读了几次" —— 这才是新观测点。
+//   预期：那段在 → 3；那段被注释掉 → 0。
+{
+    const { collectDrops } = await import('../src/agent/library/flow_pickup.js');
+    // 注意：`new Function('collectDrops', 'return (...)')` 才是"把 collectDrops 注入进去"；
+    //   早前写成 `new Function(一系列参数, body)(collectFn)` —— 那个 `(collectFn)` 是**调用**，
+    //   把 collectFn 绑定到了第一个参数 `bot` 上，导致块里的 collectDrops 是 undefined
+    //   → 被块自己的 try/catch 吞掉 → 计数 0（一个"看起来像产品没调用"的假象）。
+    const compileWith = (blockText, collectFn) => new Function(
+        'collectDrops',
+        'return (async (bot, block, before, want, countAll, trace, ctx) => {\n'
+        + String(blockText).trimEnd() + '\n});',
+    )(collectFn);
+
+    const driveReal = async (blockText) => {
+        const b = makeFakeBot({ feet: { x: 0, y: 16, z: 0 }, registry: realRegistry(), world: worldOf([]), unloaded: 'air' });
+        b.__findDropsCalls = 0;
+        Object.defineProperty(b, 'entities', { configurable: true, get() { b.__findDropsCalls++; return {}; } });
+        const run = compileWith(blockText, (bot2, origin, opts) => collectDrops(bot2, origin, { ...opts, deadlineMs: 3000 }));
+        for (let i = 0; i < 3; i++) {
+            await run(b, { name: 'iron_ore', position: { x: i, y: 16, z: 0 } }, 0, 3, () => 0, null, () => {}, { deadline: Date.now() + 12000 });
+        }
+        return b.__findDropsCalls;
+    };
+
+    const on = PICKUP_BLOCK ? await driveReal(PICKUP_BLOCK) : -1;
+    const off = PICKUP_BLOCK
+        ? await driveReal(PICKUP_BLOCK.trimEnd().split('\n').map((l) => '// ' + l).join('\n'))
+        : -1;
+    check('③-4 真 collectDrops + 新观测点：那段在 → findDrops 3 次；注释掉 → 0 次（用例① 会红）',
+        on === 3 && off === 0, `在=${on} 注释掉=${off}`);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ④ ★★ 观测点自检（t74）：证明"数 findDrops"这个**观测点本身**是活的
+//
+//   换了观测点之后必须证明它真会动、也会不动 —— 否则又是一个"装了但没人验证会挡"的闸。
+//   这里直接调 `collectDrops`（绕过 mine()）：
+//     a) 正常调用 → 必须真的去找掉落物（`__findDropsCalls` ≥ 1）
+//     b) 一进来就被中断 → **不该去找**（= 0）→ 证明计数不是"进来就 +1"的假信号
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const { collectDrops } = await import('../src/agent/library/flow_pickup.js');
+
+    // 注意：collectDrops 找不到掉落物时会走到"踩一脚/走位"分支 → 需要**完整 registry**
+    // （pathfinder 的 Movements 会读 blocksByName 一堆）。所以这里用 realRegistry()。
+    const botA = makeFakeBot({ feet: { x: 0, y: 16, z: 0 }, registry: realRegistry(), world: worldOf([]), unloaded: 'air' });
+    botA.__findDropsCalls = 0;
+    Object.defineProperty(botA, 'entities', { configurable: true, get() { botA.__findDropsCalls++; return {}; } });
+    // deadline 要够长：collectDrops 第 1 步是"原地静默 ~400ms"，之后才去 findDrops
+    await collectDrops(botA, { x: 0, y: 16, z: 0 }, { countFn: () => 0, radius: 4, deadlineMs: 3000 });
+    check('④-a 观测点自检：collectDrops 正常调用 → findDrops 真的被调用（计数是活的）',
+        botA.__findDropsCalls >= 1, `calls=${botA.__findDropsCalls}`);
+
+    const botB = makeFakeBot({ feet: { x: 0, y: 16, z: 0 }, registry: realRegistry(), world: worldOf([]), unloaded: 'air' });
+    botB.__findDropsCalls = 0;
+    Object.defineProperty(botB, 'entities', { configurable: true, get() { botB.__findDropsCalls++; return {}; } });
+    botB.interrupt_code = 'USER_STOP';
+    const rB = await collectDrops(botB, { x: 0, y: 16, z: 0 }, { countFn: () => 0, radius: 4, deadlineMs: 300 });
+    check('④-b 观测点自检：被中断时不去找（计数不是"进来就 +1"的假信号）',
+        rB.code === 'INTERRUPTED' && botB.__findDropsCalls === 0, `code=${rB.code} calls=${botB.__findDropsCalls}`);
+}
+
 console.log(`${pass}/${pass + fail} 个用例通过  （产品文件未改动）`);
 console.log('============================================');
 process.exit(fail === 0 ? 0 : 1);

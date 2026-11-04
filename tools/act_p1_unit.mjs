@@ -396,7 +396,10 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         items: [{ name: 'fishing_rod', type: 1, count: 1, slot: 0 }],
-        stubs: { blockAt: () => ({ name: 'stone' }) },
+        // t74：`stone 遍地` → **只有目标那格是 stone**，其余"未加载"。
+        //   多抓到：读错格子会拿到 null → 报 NO_DATA 而不是 NO_TARGET → 红。
+        world: worldOf([[1, 62, 0, 'stone']]),
+        unloaded: 'null',
     });
     const r = await fishOnce(bot, { pos: { x: 1, y: 62, z: 0 } });
     if (assertResult('fishOnce 非水', r) && !r.ok && r.code === 'NO_TARGET') okCase('fishOnce 目标不是水 → NO_TARGET', r.code);
@@ -432,7 +435,8 @@ function assertResult(name, r) {
 
 // ── 24. swimStep：目标格不是水 → NO_TARGET ──────────────────────
 {
-    const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 }, stubs: { blockAt: () => ({ name: 'stone' }) } });
+    // t74：stone 只在目标那格；其余未加载（读错位置 → NO_DATA → 红）
+    const bot = makeFakeBot({ feet: { x: 0, y: 64, z: 0 }, world: worldOf([[0, 62, 1, 'stone']]), unloaded: 'null' });
     const r = await swimStep(bot, { pos: { x: 0, y: 62, z: 1 } });
     if (assertResult('swimStep 非水', r) && !r.ok && r.code === 'NO_TARGET') {
         okCase('swimStep 目标格不是水 → NO_TARGET（本动作只处理水面）', r.code);
@@ -467,8 +471,10 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         feet: { x: 0, y: 63, z: 0 },
+        // t74：水只在目标那格；其余未加载
+        world: worldOf([[5, 62, 0, 'water']]),
+        unloaded: 'null',
         stubs: {
-            blockAt: () => ({ name: 'water' }),
             setControlState: () => {},
             lookAt: async () => {},
         },
@@ -501,7 +507,10 @@ function assertResult(name, r) {
 {
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
-        stubs: { blockAt: () => ({ name: 'air' }) },     // 脚下那格也是 air
+        // t74：落点脚下那格**显式**是 air，其余未加载
+        //   多抓到：读错列（比如读成自己脚下）会拿到 null → 报 NO_DATA 而不是 UNSAFE → 红
+        world: worldOf([[0, 63, 1, 'air']]),
+        unloaded: 'null',
     });
     const r = await stepInto(bot, { pos: { x: 0, y: 64, z: 1 } });
     if (assertResult('stepInto 悬空', r) && !r.ok && r.code === 'UNSAFE') {

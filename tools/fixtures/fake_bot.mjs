@@ -65,10 +65,19 @@ let cachedRegistry = null;
  * `tools/unit_all.mjs` 会把各子进程的数字汇总起来 —— **那就是单测盲区宽度的下限**。
  */
 export let fakeBotStrictBypassCount = 0;
+/** 其中**已调 assertPointLike** 的次数（三档口径里的"已加守卫"档）。 */
+export let fakeBotStrictGuardedCount = 0;
 
 /** 读当前计数（给 unit_all 汇总用；没 import 夹具的测试文件自然报 0）。 */
 export function getStrictBypassCount() {
     return fakeBotStrictBypassCount;
+}
+
+/** 三档口径：返回 { total, guarded, naked }（naked = 真盲区）。 */
+export function getStrictBypassBreakdown() {
+    const total = fakeBotStrictBypassCount;
+    const guarded = fakeBotStrictGuardedCount;
+    return { total, guarded, naked: Math.max(0, total - guarded) };
 }
 
 /**
@@ -146,6 +155,13 @@ export function worldOf(entries = []) {
 
     // 非枚举属性：不干扰 Map 的遍历/序列化，只有本夹具（和想读它的测试）看得见。
     Object.defineProperty(w, '__props', { value: props, enumerable: false, configurable: true });
+    // ★★ 2026-11-04（t68）：**明确标记"这是一份副本"** —— 同一个坑已经踩了两次：
+    //   ① `scaffold_tracker_unit` 的 `__setBlock` 写自己的 Map，夹具看不见 → 清理永远 0 条；
+    //   ② `flow_p1_unit` 的 `farmBot.dig` 改外面那份 → "收了但 wheat 还在" → skipped。
+    //   根因：`makeFakeBot` 会再 `worldOf(rawWorld)` **复制一次** ——
+    //   所以"传进去的 Map"和"夹具在用的 Map"是**两个对象**。
+    //   **要改世界请用 `bot.__world`（夹具自己那份），不要改外面那个变量。**
+    Object.defineProperty(w, '__isCopy', { value: true, enumerable: false, configurable: true });
     return w;
 }
 
@@ -217,12 +233,23 @@ export function makeFakeBot(opts = {}) {
     //   好让 `unit_all` 统计"有多少用例绕过了严格假件"——**那就是单测盲区宽度的下限**。
     // ══════════════════════════════════════════════════════════════════════
     const BYPASS_MARKER = '[fake_bot][STRICT-BYPASS]';
+    const GUARDED_MARKER = '[fake_bot][STRICT-GUARDED]';
     if (stubs && Object.prototype.hasOwnProperty.call(stubs, 'blockAt')) {
         fakeBotStrictBypassCount++;
+        // ★ 三档口径（t68，captain 定）：单纯数"覆盖了多少次"会误导人 ——
+        //   它把"完全裸奔"和"已加 assertPointLike 守卫"算成一回事。
+        //   所以这里再分一档：**这个覆盖函数的源码里有没有调 assertPointLike**。
+        //   （source-text 启发式：`Function.prototype.toString` 拿得到函数体；
+        //     比"运行期打标"简单，且不需要每个用例改写法。）
+        const stubSrc = (() => { try { return String(stubs.blockAt); } catch { return ''; } })();
+        const guarded = /assertPointLike/.test(stubSrc);
+        if (guarded) fakeBotStrictGuardedCount++;
         if (process.env.FAKE_BOT_NOTICE !== '0') {
-            const msg = `${BYPASS_MARKER} 覆盖了 blockAt 的严格默认实现：裸坐标检查失效（strictPoints 不再保护本用例）`;
+            const msg = guarded
+                ? `${GUARDED_MARKER} 覆盖了 blockAt，但**已调用 assertPointLike**（坐标形状仍受保护）`
+                : `${BYPASS_MARKER} 覆盖了 blockAt 的严格默认实现：裸坐标检查失效（strictPoints 不再保护本用例）`;
             if (process.env.FAKE_BOT_NOTICE_STDOUT === '1') console.log(msg);
-            else console.warn(`[fake_bot] ⚠ 你覆盖了 blockAt 的严格默认实现：裸坐标检查失效（strictPoints 不再保护这个用例）`);
+            else console.warn(`[fake_bot] ⚠ ${msg.slice(msg.indexOf(']') + 1).trim()}`);
         }
     }
 

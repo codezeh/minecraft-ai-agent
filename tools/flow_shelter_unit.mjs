@@ -2,6 +2,7 @@
 import { shelterBlueprint, shelterBuildOrder, capCell, isOutsideShelter, shelter, manifest } from '../src/agent/library/flow_shelter.js';
 import { decideIdle, isIdle, IDLE } from '../src/agent/library/idle_planner.js';
 import { CODES } from '../src/agent/library/contract.js';
+import { worldOf } from './fixtures/fake_bot.mjs';
 import { SKILL_NAMES } from '../src/agent/library/composite_registry.js';
 import { makeFakeBot } from './fixtures/fake_bot.mjs';
 
@@ -126,7 +127,9 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
     // 脚下要读得到（否则先撞 NO_TARGET，测不到材料判断）
     const bot = makeFakeBot({
         items: [{ name: 'stick', type: 1, count: 4, slot: 0 }],
-        stubs: { blockAt: (v) => ({ name: 'stone', position: v }) },
+        // t68：`stone 遍地` → **只有脚下那一格是 stone**（读错位置会拿到"未加载"→ 换码 → 红）
+        world: worldOf([[0, 63, 0, 'stone']]),
+        unloaded: 'null',
     });
     bot.entity = { position: { x: 0.5, y: 64, z: 0.5 } };
     const r = await shelter(bot, {});
@@ -154,14 +157,16 @@ const check = (n, c, e = '') => (c ? ok(n, e) : bad(n, e));
 }
 {
     // ⑤b 脚下是真空气/虚空 → NO_TARGET（不在虚空搭屋子）
-    const bot = makeFakeBot({ items: [{ name: 'cobblestone', type: 1, count: 64, slot: 0 }], stubs: { blockAt: () => ({ name: 'air', position: { x: 0, y: 63, z: 0 } }) } });
+    // t68：脚下那格**显式**是 air（其余格 = 未加载）→ 若产品读错格子会拿到 null → NO_DATA 而不是 NO_TARGET → 红
+    const bot = makeFakeBot({ items: [{ name: 'cobblestone', type: 1, count: 64, slot: 0 }], world: worldOf([[0, 63, 0, 'air']]), unloaded: 'null' });
     bot.entity = { position: { x: 0.5, y: 64, z: 0.5 } };
     const r = await shelter(bot, {});
     check('⑤b 脚下是空气 → NO_TARGET（不在虚空搭屋子）', !r.ok && r.code === 'NO_TARGET', r.code);
 }
 {
     // ⑤c 脚下是水 → NO_TARGET（水上不搭）
-    const bot = makeFakeBot({ items: [{ name: 'cobblestone', type: 1, count: 64, slot: 0 }], stubs: { blockAt: () => ({ name: 'water', position: { x: 0, y: 63, z: 0 } }) } });
+    // t68：同上 —— 脚下那格显式是 water，其余未加载
+    const bot = makeFakeBot({ items: [{ name: 'cobblestone', type: 1, count: 64, slot: 0 }], world: worldOf([[0, 63, 0, 'water']]), unloaded: 'null' });
     bot.entity = { position: { x: 0.5, y: 64, z: 0.5 } };
     const r = await shelter(bot, {});
     check('⑤c 脚下是水 → NO_TARGET', !r.ok && r.code === 'NO_TARGET', r.code);

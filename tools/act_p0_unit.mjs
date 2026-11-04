@@ -430,9 +430,11 @@ function assertResult(name, r) {
 // ── 21. harvestCrop：没熟 → NOT_READY ───────────────────────────────
 {
     const bot = makeFakeBot({
-        world: worldOf([[1, 64, 0, 'wheat']]),
+        // t74：`wheat 遍地 + age 常量` → **只有目标那格是 wheat，且 age 来自 world 的属性**
+        //   多抓到：读错格子会拿到 air（→ NO_TARGET 而不是 NOT_READY）；属性来自世界而非测试闭包。
+        world: worldOf([[1, 64, 0, 'wheat', { age: 3 }]]),
+        unloaded: 'air',
         feet: { x: 0, y: 64, z: 0 },
-        stubs: { blockAt: (v, dflt) => ({ name: 'wheat', position: v, getProperties: () => ({ age: 3 }) }) },
     });
     const r = await harvestCrop(bot, { pos: { x: 1, y: 64, z: 0 } });
     if (assertResult('harvestCrop 没熟', r) && !r.ok && r.code === 'NOT_READY') {
@@ -445,7 +447,9 @@ function assertResult(name, r) {
 // ── 22. harvestCrop：不是作物 → NO_TARGET ───────────────────────────
 {
     const bot = makeFakeBot({
-        stubs: { blockAt: (v) => ({ name: 'stone', position: v, getProperties: () => ({}) }) },
+        // t74：stone 只在目标那格（读错位置 → air）
+        world: worldOf([[0, 64, 0, 'stone', {}]]),
+        unloaded: 'air',
     });
     const r = await harvestCrop(bot, { pos: { x: 0, y: 64, z: 0 } });
     if (assertResult('harvestCrop 非作物', r) && !r.ok && r.code === 'NO_TARGET') {
@@ -457,12 +461,11 @@ function assertResult(name, r) {
 
 // ── 23. harvestCrop：熟了 → 挖掉且方块消失 ──────────────────────────
 {
-    let present = true;
+    // t74：真 world + 属性(age:7)；dig 把那一格改成 air（**改夹具那份 world**）
     const bot = makeFakeBot({
-        stubs: {
-            blockAt: (v) => (present ? { name: 'wheat', position: v, getProperties: () => ({ age: 7 }), diggable: true, canHarvest: () => true, digTime: () => 100 } : { name: 'air', position: v }),
-            dig: async () => { present = false; },
-        },
+        world: worldOf([[0, 64, 0, 'wheat', { age: 7 }]]),
+        unloaded: 'air',
+        stubs: { dig: async () => { bot.__world.set('0,64,0', 'air'); bot.__world.__props?.delete?.('0,64,0'); } },
     });
     const r = await harvestCrop(bot, { pos: { x: 0, y: 64, z: 0 } });
     if (assertResult('harvestCrop 成功', r) && r.ok && r.data.harvested === 1) {
@@ -522,16 +525,12 @@ function assertResult(name, r) {
 
 // ── 27. plantSeed：成功 → 上方长成作物 ──────────────────────────────
 {
-    let planted = false;
+    // t74：真 world（64 层耕地、65 层初始空气）；plant 把 65 层改成 wheat
     const bot = makeFakeBot({
         items: [{ name: 'wheat_seeds', type: 1, count: 4, slot: 0 }],
-        stubs: {
-            blockAt: (v) => {
-                if (v.y === 64) return { name: 'farmland', position: v };
-                return planted ? { name: 'wheat', position: v } : { name: 'air', position: v };
-            },
-            plant: async () => { planted = true; },
-        },
+        world: worldOf([[0, 64, 0, 'farmland', {}], [0, 65, 0, 'air']]),
+        unloaded: 'air',
+        stubs: { plant: async () => { bot.__world.set('0,65,0', 'wheat'); } },
     });
     const r = await plantSeed(bot, { pos: { x: 0, y: 64, z: 0 } }, 'wheat_seeds');
     if (assertResult('plantSeed 成功', r) && r.ok && r.data.crop === 'wheat') {
@@ -575,13 +574,12 @@ function assertResult(name, r) {
 
 // ── 30. tillSoil：成功 → 变耕地 ────────────────────────────────────
 {
-    let tilled = false;
+    // t74：真 world（初始 dirt）；activateBlock 把那一格改成 farmland
     const bot = makeFakeBot({
         items: [{ name: 'iron_hoe', type: 1, count: 1, slot: 0 }],
-        stubs: {
-            blockAt: (v) => (tilled ? { name: 'farmland', position: v } : { name: 'dirt', position: v }),
-            activateBlock: async () => { tilled = true; },
-        },
+        world: worldOf([[0, 64, 0, 'dirt', {}]]),
+        unloaded: 'air',
+        stubs: { activateBlock: async () => { bot.__world.set('0,64,0', 'farmland'); } },
     });
     const r = await tillSoil(bot, { pos: { x: 0, y: 64, z: 0 } });
     if (assertResult('tillSoil 成功', r) && r.ok && r.data.after === 'farmland') {

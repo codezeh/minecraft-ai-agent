@@ -9,7 +9,8 @@
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
-import { makeFakeBot, worldOf } from './fixtures/fake_bot.mjs';
+import Vec3 from 'vec3';
+import { makeFakeBot, worldOf, assertPointLike } from './fixtures/fake_bot.mjs';
 import { CODES, isResult } from '../src/agent/library/contract.js';
 import { eatToFull, manifest as eatManifest } from '../src/agent/library/flow_eat.js';
 import { mine, manifest as mineManifest } from '../src/agent/library/flow_mine.js';
@@ -97,8 +98,10 @@ function mineBot({ withOre = 2, canDig = true } = {}) {
         items: [{ name: 'iron_pickaxe', type: 257, count: 1, slot: 0, maxDurability: 250, durabilityUsed: 0 }],
         registry: { blocksByName: { iron_ore: { id: 15 }, deepslate_iron_ore: { id: 16 } }, itemsByName: { iron_pickaxe: { id: 257 } } },
         stubs: {
-            findBlocks: () => oreBlocks.filter((b) => !dug.has(b.position.x)).map((b) => ({ ...b.position })),
+            // ★ t68：findBlocks 返回 Vec3（产品会把它直接喂给 blockAt）
+            findBlocks: () => oreBlocks.filter((b) => !dug.has(b.position.x)).map((b) => new Vec3(b.position.x, b.position.y, b.position.z)),
             blockAt: (v) => {
+                assertPointLike(v);      // ★ t68：严格守卫
                 if (v && dug.has(Math.floor(v.x))) return { name: 'air', position: v };
                 const b = oreBlocks.find((x) => x.position.x === Math.floor(v?.x ?? -1));
                 return b ? { ...b, position: { ...b.position, distanceTo: () => 1 } } : { name: 'stone', position: v };
@@ -160,7 +163,7 @@ function mineBot({ withOre = 2, canDig = true } = {}) {
         registry: { blocksByName: { iron_ore: { id: 15 } }, itemsByName: { iron_pickaxe: { id: 257 } } },
         stubs: {
             findBlocks: () => [{ x: 1, y: 16, z: 0 }],
-            blockAt: (v) => ({ name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 }, diggable: true, canHarvest: () => true, harvestTools: { 877: true }, digTime: () => 100 }),
+            blockAt: (v) => { assertPointLike(v); return { name: 'iron_ore', position: { x: 1, y: 16, z: 0, distanceTo: () => 1 }, diggable: true, canHarvest: () => true, harvestTools: { 877: true }, digTime: () => 100 }; },
             dig: async () => { /* 挖不动：方块一直在 */ },
         },
     });
@@ -175,34 +178,34 @@ function mineBot({ withOre = 2, canDig = true } = {}) {
 
 /** 造一块地：farmland + 成熟/未熟作物。 */
 function farmBot({ mature = 2, farmland = 2, seeds = 4 } = {}) {
-    const world = [];
-    for (let i = 0; i < mature; i++) world.push({ x: i, y: 63, z: 0, name: 'wheat', age: 7 });
-    for (let i = 0; i < farmland; i++) world.push({ x: i + 10, y: 63, z: 0, name: 'farmland', age: 0 });
+    // ★ t68：改用 `worldOf` 的**第 5 元素**承载方块属性（作物 age）。
+    //   多抓到的一层：**属性来自世界本身**（同一引用），产品若"没真收获却报成功"，
+    //   再读那一格仍是 age:7 → 后置复核会露出来。
+    const cells = [];
+    for (let i = 0; i < mature; i++) cells.push([i, 63, 0, 'wheat', { age: 7 }]);
+    for (let i = 0; i < farmland; i++) cells.push([i + 10, 63, 0, 'farmland', { age: 0 }]);
     const items = [];
     if (seeds > 0) items.push({ name: 'wheat_seeds', type: 1, count: seeds, slot: 0 });
     let harvestedCount = 0, plantedCount = 0;
+    const farmWorld = worldOf(cells);
     const bot = makeFakeBot({
         feet: { x: 0, y: 64, z: 0 },
         items,
+        world: farmWorld,
+        unloaded: 'air',
         stubs: {
-            blockAt: (v) => {
-                const x = Math.floor(v?.x ?? -999), y = Math.floor(v?.y ?? -999), z = Math.floor(v?.z ?? -999);
-                const b = world.find((w) => w.x === x && w.y === y && w.z === z);
-                if (b) {
-                    return {
-                        name: b.name, position: { x, y, z },
-                        getProperties: () => ({ age: b.age }),
-                        diggable: true, canHarvest: () => true, harvestTools: { 877: true }, digTime: () => 100,
-                    };
-                }
-                return { name: 'air', position: { x, y, z } };
-            },
             // ★ 必须真的把方块从 world 里删掉：`harvestCrop` 有"挖完那格是否变空"的后置复核，
             //   只计数而不改动世界 → 它会判 TIMEOUT，流程就把这棵算成 skip。
             dig: async (b) => {
-                const i = world.findIndex((w) => w.x === b.position.x && w.y === b.position.y && w.z === b.position.z);
-                if (i >= 0) world.splice(i, 1);
-                harvestedCount++;
+                const k = `${Math.floor(b.position.x)},${Math.floor(b.position.y)},${Math.floor(b.position.z)}`;
+                // ★ 必须改**夹具自己那份** world：`makeFakeBot` 会 `worldOf(rawWorld)` **复制** Map，
+                //   改外面那个 `farmWorld` 夹具看不见（踩过一次：症状是"收了但 wheat 还在"→ skipped）。
+                const live = bot.__world;
+                if (live.get(k) !== undefined) {
+                    live.set(k, 'air');
+                    live.__props?.delete?.(k);
+                    harvestedCount++;
+                }
             },
             plant: async () => { plantedCount++; },
         },
@@ -371,6 +374,8 @@ function buildBot({ items = [{ name: 'cobblestone', type: 4, count: 32, slot: 0 
         items,
         stubs: {
             blockAt: (v) => {
+                // ★ t68：严格守卫（坐标形状与真 mineflayer 一致）
+                assertPointLike(v);
                 const k = `${Math.floor(v?.x ?? 0)},${Math.floor(v?.y ?? 0)},${Math.floor(v?.z ?? 0)}`;
                 if (placedMap.has(k)) return { name: placedMap.get(k), position: v };
                 if (Math.floor(v?.y ?? 0) < 64) return { name: 'stone', position: v };
