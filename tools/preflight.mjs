@@ -16,6 +16,28 @@ const ROOT = fileURLToPath(new URL('../src/agent/', import.meta.url));
 let failed = 0;
 let loaded = 0;
 
+/**
+ * ★★ 2026-11-04（t99）：「**扫到 0 个样本 = 通过**」的通用护栏。
+ *
+ * 这是今晚一整族 bug 的门禁版：**"什么都没检测到"和"检测了、没有"在报告里长得一模一样**。
+ * 每一段审计的本质都是「扫 N 个样本 → 有命中就失败」。可当 N=0 时：
+ *   - 命中数必然 0 → 打 ✓
+ *   - 于是"路径错了 / glob 挂了 / 目录空了"全都被读成"干净"
+ *
+ * **判据：任何审计段在打 ✓ 之前，必须先断言"我确实扫到了样本"。**
+ * 这和 `--selftest`（断言"扫描器看得见"）是同一原则的不同层：
+ *   - selftest   → 证明**判据**有效
+ *   - 本护栏     → 证明**输入**非空
+ * 两者缺一，"0 处命中"就不可信。
+ */
+function requireScanned(section, n, what, hint = '') {
+    if (Number(n) > 0) return true;
+    failed++;
+    console.log(`  ✗ [${section}] **扫到 0 个${what}** —— 不能当成"没有违规"`);
+    if (hint) console.log(`     ${hint}`);
+    return false;
+}
+
 function walk(dir) {
     const out = [];
     for (const f of readdirSync(dir)) {
@@ -28,6 +50,9 @@ function walk(dir) {
 
 const files = walk(ROOT);
 console.log(`检查 ${files.length} 个模块...\n`);
+// ★ t99 护栏：0 个模块时后面那句「✓ 所有模块导入成功（0/0）」是假绿
+const gotModules = requireScanned('1 模块导入', files.length, '模块（src/agent/**/*.js）',
+    '检查 ROOT 是否指对（preflight 的 ROOT 是 src/agent/）');
 
 for (const f of files) {
     const rel = f.replace(/\\/g, '/').split('/src/agent/')[1] || f;
@@ -164,7 +189,12 @@ try {
     }
     const missing2 = [...used2.keys()].filter(k => !CODES.includes(k)).sort();
     const dup2 = CODES.filter((c, i) => CODES.indexOf(c) !== i);
-    if (missing2.length) {
+    // ★ t99 护栏：0 个源文件 → missing2 必然为空 → 会打「✓ 错误码审计通过」，那是假绿
+    const gotSrcFiles = requireScanned('3 错误码审计', files2.length, 'src 源文件',
+        '检查 projectRoot2/src 是否指对；扫不到源码时"没有未注册的码"毫无意义');
+    if (!gotSrcFiles) {
+        // 不判"通过"，也不重复报 missing
+    } else if (missing2.length) {
         failed++;
         console.log(`  ✗ 有 ${missing2.length} 个错误码没注册：${missing2.join(', ')}`);
         for (const k of missing2) console.log(`      ${k} ← ${[...used2.get(k)].join(', ')}`);
@@ -474,6 +504,11 @@ function locateInText(text, index) {
     const sources = collectApiScanSources();
     const active = API_SCAN_RULES.filter((r) => r.enabled !== false);
     console.log(`  扫 ${sources.length} 个文件，${active.length} 条规则`);
+    // ★ t99 护栏（两条）：0 个文件 / 0 条规则 → 命中数必然 0 → 会打「✓ API 扫描没有命中」，假绿。
+    const gotApiFiles = requireScanned('4 API 扫描', sources.length, '源文件（glob 没匹配到任何文件）',
+        '检查 collectApiScanSources() 的 glob 与 cwd；扫不到文件时"0 处命中"没有意义');
+    const gotApiRules = requireScanned('4 API 扫描', active.length, '启用中的规则',
+        '规则表为空曾是"骨架阶段合法"，现在规则已存在 → 空表意味着规则没加载成功');
 
     let totalHits = 0;
     for (const rule of active) {
@@ -505,9 +540,13 @@ function locateInText(text, index) {
     }
 
     if (active.length === 0) {
-        console.log('  · 规则表是空的（骨架阶段合法，后续任务往里填）');
-    } else if (totalHits === 0) {
+        // ★ t99：原来这里只打 `·` 不判失败（骨架阶段合法）。现在规则已存在，
+        //   空表 = 规则没加载成功 → 已在上面 requireScanned 判失败，这里只补充说明。
+        console.log('  · 规则表是空的（骨架阶段曾合法；现在出现即表示规则没加载）');
+    } else if (totalHits === 0 && gotApiFiles) {
         console.log('  ✓ API 扫描没有命中');
+    } else if (totalHits === 0) {
+        console.log('  · 命中 0 处，但**扫描输入无效** → 已按护栏判失败，不算通过');
     } else {
         console.log(`  · 共 ${totalHits} 处命中：现在只报告不判失败；` +
             '规则填严后用 `node tools/preflight.mjs --strict-api` 验，再翻默认值。');
@@ -708,6 +747,11 @@ function namedImportSymbols(line) {
 
     console.log('\n[5/5] 前缀 import 规矩（02 §5）');
     console.log(`  扫 ${sources.length} 个文件，检查 ${checked} 条本地 import，违规 ${violations.length} 处`);
+    // ★ t99 护栏（两条）：0 个文件 / 0 条 import → violations 必然为空 → 会打「✓ 没有命中」，假绿。
+    const gotPrefixFiles = requireScanned('5 前缀规矩', sources.length, '源文件',
+        '检查 layerOfFile/扫描根是否指对；扫不到文件时"0 处违规"没有意义');
+    const gotPrefixImports = requireScanned('5 前缀规矩', checked, '本地 import 语句',
+        '一条 import 都没读到 → 可能是解析正则失效（不是"没有违规"）');
     // ── 已知违规（点名记录，不是悄悄放过）────────────────────────────────
     //
     // 这些是**真问题**，只是不在 t9（改名+收敛）的范围里：改它们要动结构。
@@ -786,11 +830,16 @@ function namedImportSymbols(line) {
             if (v.why) console.log(`      ${v.why}`);
             console.log(`      ${v.snippet}`);
         }
-    } else if (violations.length) {
+    } else if (violations.length && gotPrefixFiles && gotPrefixImports) {
         const extra = tightened.length ? `，其中 ${tightened.length} 处为收紧后新暴露（${STRICT_PREFIX ? '已判失败' : '默认只报告'}）` : '';
         console.log(`  ✓ 除 ${violations.length} 处已知违规外没有新违规${extra}`);
     }
-    if (violations.length === 0) console.log('  ✓ 前缀 import 规矩没有命中');
+    // ★ t99：只有"确实扫到了文件 + 确实读到了 import"时才敢说"没有命中"
+    if (violations.length === 0 && gotPrefixFiles && gotPrefixImports) {
+        console.log('  ✓ 前缀 import 规矩没有命中');
+    } else if (violations.length === 0) {
+        console.log('  · 违规 0 处，但**扫描输入无效** → 已按护栏判失败，不算通过');
+    }
 }
 
 // ---- [6/6] 依赖注入审计（**A 档死分支参与失败判定**）----------------------
