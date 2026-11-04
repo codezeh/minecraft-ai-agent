@@ -25,6 +25,7 @@ const UNITS = [
     'atom_classify_unit',        // 原子纯函数化 + 地标缓存按 bot 隔离
     'atom_input_unit',           // Phase A：输入原子唯一出口 + A3/A7（中断/松键）+ 白名单
     'composite_registry_unit',   // M5：注册表启动校验 / params 解析 / ctx 工厂 / listSkills（D24 正解）
+    'craft_diagnostic_reachability_unit', // t86：craft 失败时 data 必须带完整诊断（防上层早退遮住）
     'act_craft_limit_unit',      // t82：limit 单位修复（次数≠件数）+ 全链账目（4→5/17 定量）
     'act_craft_recipe_unit',     // t79：act_craft 按产出物精确挑 recipe（按钮混在前面）+ stale 工作台前置阻断
     'act_p0_unit',               // M6 P0：11 个动作的 ActionResult 契约与错误码归类

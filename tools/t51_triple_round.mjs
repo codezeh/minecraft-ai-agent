@@ -29,6 +29,7 @@ async function countRealLogs() {
 }
 
 for (let r = 1; r <= ROUNDS; r++) {
+    const r0 = r;
     console.log(`\n========== 第 ${r}/${ROUNDS} 轮 ==========`);
 
     const list = await rc('list');
@@ -150,6 +151,20 @@ for (let r = 1; r <= ROUNDS; r++) {
         met.planksTotal = planksAll.length;
         met.planksRetried = planksAll.filter((x) => (x.attempts ?? 0) >= 2).length;
     }
+    // ★ 第 50 跑：把**所有 craft 单**（不限 oak_planks/wooden_pickaxe）的失败 data **完整** dump 到文件
+    try {
+        const allCraft = db2.prepare("SELECT id,skill,args,state,attempts,createdAt,result FROM jobs WHERE skill='craft' ORDER BY createdAt").all();
+        const dump = [];
+        for (const c of allCraft) {
+            let r = null;
+            try { r = JSON.parse(c.result ?? 'null'); } catch { }
+            if (r && r.ok === false) {
+                dump.push({ round: r0, id: c.id, args: JSON.parse(c.args || '{}'), state: c.state, attempts: c.attempts, code: r.code, message: r.message, data: r.data ?? null });
+            }
+        }
+        if (dump.length) fs.appendFileSync('tmp/t51-craft-fail-full.jsonl', JSON.stringify(dump) + String.fromCharCode(10));
+    } catch (e) { console.log('  dump 失败: ' + String(e?.message ?? e)); }
+
     // craft wooden_pickaxe 失败诊断（t90/t91 直接证据）
     const wp = db2.prepare("SELECT state,result FROM jobs WHERE skill='craft' AND args LIKE '%wooden_pickaxe%' ORDER BY createdAt DESC LIMIT 1").get();
     if (wp?.result) {
