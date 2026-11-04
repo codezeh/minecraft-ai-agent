@@ -264,6 +264,29 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             tableStillThere = b?.name ?? null;
         } catch { /* ignore */ }
     }
+    // ★★★ 2026-11-05（t135，verify 的 24 键诊断逐条排除后的唯一异常）：
+    //   **`heldItem` 是方块/材料时，`bot.activateBlock` 打不开工作台 GUI。**
+    //
+    //   真机证据（第 55 跑，同一张 obtain 里一次成功一次失败）：
+    //     成功那张：`prod=1`、`windowOpen` 正常
+    //     失败那张：`windowOpen: **null**`、`heldItem: **"oak_planks"**`
+    //     而 `tableBlockUsed:{6201,-58,8801}` + `tableStillThere:"crafting_table"` + `recipesWithTable:1`
+    //     → **表找到了、配方有、limit 也算了，就是窗口没打开。**
+    //
+    //   机制：mineflayer 的 `activateBlock` 会把 `heldItem` 一起写进 `block_place` 包。
+    //   **手里拿着一块可放置的方块右键时，服务端优先"放置方块"而不是"打开 GUI"**
+    //   → `once(bot,'windowOpen')` 等不到窗口。
+    //
+    //   第 49 跑那次是 `heldItem:"crafting_table"`（同样是方块）—— **同一个原因**。
+    //
+    //   修法：**合成前把主手清空。** 和 `holdDig` 的"挖矿前静默导航"同一模式：
+    //   **动作前先把状态清干净，别指望下游容忍我的残留状态。**
+    try {
+        if (bot.heldItem && typeof bot.unequip === 'function') {
+            await bot.unequip('hand');
+        }
+    } catch { /* 卸不下来就照常试，让下面如实报 */ }
+
     // ★★★ t113（control 建议）：**从"仅诊断"升级为"前置阻断"。**
     //
     //   原因（它的源码研究）：mineflayer 的 `requirementsMetForRecipe` 对第 4 参只做**真值判断**：
