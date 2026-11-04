@@ -816,7 +816,46 @@ console.log("");console.log("[6/6] 依赖注入审计（A 档 = 单测能测到�
         //   → spawnSync status 非 0 → **误判成"A 档有货"**。
         //   （工具没跑起来 ≠ 工具报了问题 —— 这两件事必须分开。）
         const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));   // tools/ 的上一级 = 仓库根
-        const r = spawnSync(process.execPath, [join(REPO_ROOT, 'tools', 'deps_injection_audit.mjs')],
+        const AUDIT = join(REPO_ROOT, 'tools', 'deps_injection_audit.mjs');
+
+        // ══════════════════════════════════════════════════════════════════
+        // ★★ 6a：**先跑 `--selftest`（扫描器自测），过了才继续跑审计。**
+        //
+        // 为什么（2026-11-04，control 的建议 —— 「三态原则的递归应用」）：
+        //   `--selftest` 上线第一跑就抓到 **control 自己两个错**（夹具漏 `return {`、
+        //   断言写反）。这证明：**扫描器的自测也可能失效**。
+        //   如果 selftest 自己不跑，我们就不知道审计还准不准 ——
+        //   "审计报 0 处"到底是"真的没有"还是"它看不见"，永远无法区分。
+        //
+        //   原状态：检测了-有问题→失败 ✅｜检测了-没问题→通过 ✅｜**根本没检测→通过** ❌
+        //   现在补上第三态：**没检测 / 自测不过 → 失败**。
+        // ══════════════════════════════════════════════════════════════════
+        const st = spawnSync(process.execPath, [AUDIT, '--selftest'], { cwd: REPO_ROOT, encoding: 'utf8' });
+        const stOut = (st.stdout ?? '') + (st.stderr ?? '');
+        const stM = stOut.match(/扫描器自测[：:]\s*(\d+)\s*passed,\s*(\d+)\s*failed/);
+        const stPassed = stM ? Number(stM[1]) : 0;
+        const stFailed = stM ? Number(stM[2]) : -1;
+        // 阈值：至少 6 条（6 种形态）且 0 失败 —— "跑完了但只跑 2 条"同样不可信
+        const selftestOk = !!stM && stFailed === 0 && stPassed >= 6;
+
+        if (!selftestOk) {
+            failed++;
+            if (!stM) {
+                console.log('  ✗ 扫描器自测**没跑起来**（输出里没有「扫描器自测：N passed, M failed」指纹）');
+                console.log(`     status=${st.status}  输出前 120 字=${stOut.slice(0, 120).replace(RegExp(String.fromCharCode(10), 'g'), ' | ')}`);
+            } else {
+                console.log(`  ✗ 扫描器自测**不过**（${stPassed} passed / ${stFailed} failed，要求 ≥6 且 0 失败）`);
+                for (const l of stOut.split(String.fromCharCode(10))) if (/FAIL/.test(l)) console.log('     ' + l.trim());
+            }
+            console.log('     → **审计结果不可信**：自测不过时"审计报 0 处"没有意义，本段不判干净');
+        } else {
+            console.log(`  ✓ 扫描器自测 ${stPassed}/${stPassed} 通过（6 种代码形态都能看见，才开始信任审计）`);
+        }
+
+        if (!selftestOk) {
+            // 自测不过 → 不跑审计（跑了也不可信），本段到此结束
+        } else {
+        const r = spawnSync(process.execPath, [AUDIT],
             { cwd: REPO_ROOT, encoding: 'utf8' });
         const out = (r.stdout ?? '').trim();
         // 只摘出 A 档那几行，别把 C 档的 13 条全铺开（那是"需要人判断"的信息）
@@ -863,6 +902,7 @@ console.log("");console.log("[6/6] 依赖注入审计（A 档 = 单测能测到�
         } else {
             console.log('  ✓ A 档 0 处（没有"单测能测到、生产走不到"的死分支）');
         }
+        }   // ← 关闭 `if (selftestOk) { … }`（自测不过时不跑审计）
     } catch (e) {
         // ★ t98：**工具跑不起来也判失败。**
         //   原来的写法是"只警告不失败" —— 但那等于"防护失效时绿灯"，
