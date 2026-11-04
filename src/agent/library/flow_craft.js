@@ -195,7 +195,14 @@ export async function craft(bot, itemName, count = 1) {
                     { item: itemName, tried: spots });
             }
             placedTable = true;
+            // ★ t90：放置成功后**等方块同步**再读（第 34 跑 `act_craft` 已踩过同类：
+            //   "动作 resolve ≠ 服务端状态已同步到本地"）。轮询到读出来或 1.2s。
             table = blockAt(bot, spot);
+            const tB = Date.now();
+            while (!table && Date.now() - tB < 1200) {
+                await new Promise((r) => setTimeout(r, 100));
+                table = blockAt(bot, spot);
+            }
         }
 
         if (!table) return fail('NO_WORKSTATION', '找不到工作台', { item: itemName });
@@ -228,7 +235,9 @@ export async function craft(bot, itemName, count = 1) {
     const MAX_ROUNDS = 8;
     while (countItem(bot, itemName) - before < want && rounds++ < MAX_ROUNDS) {
         if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了', { craftedItem: itemName, got });
-        const r = await craftOnce(bot, itemName, want - got);
+        // ★ t90：**必须把找到/放好的工作台传进去** —— 原来这里只传 3 个参数，
+        //   整段"找表/合表/放表/走表"全白做，而 craftOnce 自己按 4 格又找不到 → NO_WORKSTATION。
+        const r = await craftOnce(bot, itemName, want - got, table);
         if (!r.ok) {
             // craftOnce 的码直接往上报；NO_ITEM 在这里也是 abort（缺料）
             return fail(r.code, r.message ?? `合成 ${itemName} 失败`, {

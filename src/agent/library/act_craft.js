@@ -31,7 +31,7 @@ import { GOAL_LOOK_AT_DEFAULT_REACH as REACH } from '../rules/rules.runtime.js';
  *   NO_ITEM   有配方但料不够 —— 补料还能继续
  *   NO_WORKSTATION 需要工作台但够不着 —— 与 OUT_OF_REACH 的区别：那是"走近一点"，这是"根本没有"
  */
-export async function craftOnce(bot, itemName, n = 1) {
+export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     const t0 = Date.now();
     const want = Math.max(1, Math.floor(Number(n) || 1));
 
@@ -65,7 +65,19 @@ export async function craftOnce(bot, itemName, n = 1) {
         }
         table = true;
         // 需要工作台：只找**手上这把**，不放工作台（放工作台是流程的事）
-        tableBlock = bot.findBlock?.({
+        // ★★ 2026-11-04（t90）：**优先用调用方给的工作台。**
+        //
+        //   真机证据（第 35 跑）：
+        //     `craft wooden_pickaxe → failed «需要工作台，4 格内没有»`
+        //   而 `flow_craft` 前面明明**找到了/放下了**工作台 —— 但它调的是
+        //     `craftOnce(bot, itemName, want - got)`，**第四个参数根本没传**（签名里也没有）。
+        //
+        //   → `flow_craft` 整套"找表 / 合表 / 放表 / 走表"的逻辑**全部白做**，
+        //     而 `act_craft` 又自己按 `maxDistance: 4` 找一遍 —— 她离得稍远就找不到。
+        //
+        //   修法：加第 4 个参数 `knownTable`，调用方知道表在哪就传进来，这里优先用。
+        //   仍然保留自找的兜底（`!knownTable` 时按 4 格找）—— 不破坏单独调用 `craftOnce` 的场景。
+        tableBlock = knownTable ?? bot.findBlock?.({
             matching: mc.getItemId('crafting_table'),
             maxDistance: 4,                     // maxReach
         }) ?? null;
