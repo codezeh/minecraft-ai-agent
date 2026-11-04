@@ -154,6 +154,18 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     const perCraft = Math.max(1, Number(recipe?.result?.count) || 1);
     let limit = Math.ceil(want / perCraft);            // ← 次数（不是件数）
     let _requiredForDiag = null;                        // ★ t111：算 limit 用的原料表（诊断）
+    // ★★★ t116：**这两个数必须在 craft 之前抓。**
+    //   原来是在**失败时**才调 `bot.recipesFor` —— 那时料已经被 craft 消耗掉了，
+    //   所以永远读到 0（verify 第 46 跑看到 `recipesInInventory:0 / recipesWithTable:0`，
+    //   而"3 个原木消失"正说明 craft 真的跑了）。**又一个"测量时点错"**。
+    const _preDiag = (() => {
+        try {
+            return {
+                recipesInInventory: (bot.recipesFor?.(mc.getItemId(itemName), null, 1, null) ?? []).length,
+                recipesWithTable: (bot.recipesFor?.(mc.getItemId(itemName), null, 1, true) ?? []).length,
+            };
+        } catch { return { recipesInInventory: null, recipesWithTable: null }; }
+    })();
     try {
         const inv = (bot.inventory?.items?.() ?? []).reduce((m, it) => {
             if (it?.name) m[it.name] = (m[it.name] ?? 0) + (it.count ?? 0);
@@ -281,8 +293,10 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
             //   verify 把它读成"新根因：查配方拿到 0 条"，**又是我字段名/语义没写清造成的误读**
             //   （第 2 次：上一次是 `matCounts`）。
             //   → 改成两个语义明确的名字，并把"到底用哪张工作台"也带出来。
-            recipesInInventory: (() => { try { return (bot.recipesFor?.(mc.getItemId(itemName), null, limit, null) ?? []).length; } catch { return null; } })(),
-            recipesWithTable: (() => { try { return (bot.recipesFor?.(mc.getItemId(itemName), null, limit, true) ?? []).length; } catch { return null; } })(),
+            // ★ t116：用 **craft 之前**抓的值（craft 之后再查会因料被消耗而恒为 0）
+            recipesInInventory: _preDiag.recipesInInventory,
+            recipesWithTable: _preDiag.recipesWithTable,
+            limitUsed: limit,                                  // ★ t116：这次实际合几次（诊断单位混用）
             tableBlockUsed: tableBlock?.position ? { x: tableBlock.position.x, y: tableBlock.position.y, z: tableBlock.position.z } : null,
             tableStillThere: tableStillThere ?? 'unknown',
             tableInInventory: (() => { try { return (bot.inventory?.items?.() ?? []).filter((i) => i?.name === 'crafting_table').reduce((a, i) => a + (i.count ?? 0), 0); } catch { return null; } })(),
