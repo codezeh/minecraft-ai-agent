@@ -44,6 +44,7 @@ const UNITS = [
     'protect_owner_unit',        // M9：护主判定（跟随才生效/不打苦力怕玩家/6-8格/收手四条）
     'idle_planner_unit',         // M9：空闲三定义 + 08 §6.1 三层顺序
     'strat_obtain_unit',         // M10：strat_obtain 来源顺序 + ★防无限展开 + 不碰身体
+    'strat_cycles_unit',         // t73：cycles 独立出口（成环 vs 真缺料）
     'strat_tool_tier_unit',      // M10：strat_tool_tier 不跳档 / 已够直接 ok / 三件工具
     'strat_first_night_unit',    // M10：first_night 跳过已满足 / dependsOn / 嵌套闸 / 不碰身体
     'job_budget_unit',           // A2：ctx.jobBudget 跨调用共享（无 ctx 行为不变 / 余量生效 / hitCap 上报）
@@ -105,6 +106,7 @@ let failed = 0;
 const results = [];
 /** t68：统计"绕过了严格假件（覆盖 stubs.blockAt）"的次数 = 单测盲区宽度的下限。 */
 let strictBypass = 0;
+let strictGuarded = 0;          // 其中已调用 assertPointLike 的
 let strictBypassFiles = [];
 
 for (const name of list) {
@@ -119,7 +121,12 @@ for (const name of list) {
         const printed = String(out);
         process.stdout.write(printed);
         const bypass = (printed.match(/\[fake_bot\]\[STRICT-BYPASS\]/g) || []).length;
-        if (bypass) { strictBypass += bypass; strictBypassFiles.push(`${name}(${bypass})`); }
+        const guarded = (printed.match(/\[fake_bot\]\[STRICT-GUARDED\]/g) || []).length;
+        if (bypass || guarded) {
+            strictBypass += bypass + guarded;
+            strictGuarded += guarded;
+            strictBypassFiles.push(`${name}(${bypass}+${guarded}守卫)`);
+        }
         // ★ 2026-11-01 修：只数**行首**的 PASS（同 atom_all）。汇总行里也含 "PASS" 字样，
         // 用词边界匹配会把汇总行算成一条用例，显示数系统性虚高。
         const passCount = (printed.match(/^\s*PASS\s/mg) || []).length;
@@ -150,8 +157,13 @@ console.log(`  ${results.length - failed}/${results.length} 个脚本通过${ski
 //   "门装了吗" 不等于 "有多少人走门"：`strictPoints` 只在**没被 stubs.blockAt 覆盖**时生效。
 //   这个数 = 当前有多少个用例走偏门、对"裸坐标"这类形状错误无感。
 if (strictBypass) {
-    console.log(`  ⚠ 绕过严格假件（stubs.blockAt 覆盖）：${strictBypass} 处 —— 这些用例里 strictPoints 不生效`);
-    console.log(`     来源：${strictBypassFiles.join(' ')}`);
+    const naked = Math.max(0, strictBypass - strictGuarded);
+    console.log(`  ⚠ blockAt 覆盖：${strictBypass} 处 —— 按"保护强度"分三档：`);
+    console.log(`     ├─ 完全裸奔（无任何形状守卫）：${naked} 处   ← **这才是真盲区**`);
+    console.log(`     ├─ 已加 assertPointLike 守卫：${strictGuarded} 处   ← 形状错会立刻抛，保护已在`);
+    console.log(`     └─ 已改 world / blockProps：见各测试文件（不再出现于本计数）  ← 最理想`);
+    console.log(`     明细（裸奔+守卫）：${strictBypassFiles.join(' ')}`);
+    console.log('     ★ 口径说明：只有"完全裸奔"是真盲区；把两个数混在一起会误导人。');
 } else {
     console.log('  ✓ 没有用例覆盖 stubs.blockAt（严格假件全量生效）');
 }

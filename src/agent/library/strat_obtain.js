@@ -198,10 +198,13 @@ function haveCount(item, inventory, chests) {
  *   chests     箱子里有多少（{name:count}）
  *   deps       可选：{ sourcesOf } 注入（测试用）
  * @returns {{
- *   ok:boolean, plan:Array, gaps:object, expanded:number, hitDepth:boolean, hitJobs:boolean
+ *   ok:boolean, plan:Array, gaps:object, cycles:object, expanded:number, hitDepth:boolean, hitJobs:boolean
  * }}
  *   plan   要下的子单（每个带 skill/args/why/depth/parentKey）
  *   gaps   缺口清单（04 §3.3）：{name: 还缺几个}
+ *   cycles ★ t73：其中**因成环而缺**的部分 {name: 还缺几个}。
+ *          `cycles` 非空 = 环（规划不出来）；`gaps` 非空但 `cycles` 空 = 真缺料（没有可行来源/缺那项能力）。
+ *          `gaps` 里**包含** `cycles`（保留原语义，上层不受影响）。
  */
 export function planObtain(args = {}) {
     const item = String(args.item ?? '');
@@ -223,11 +226,28 @@ export function planObtain(args = {}) {
     const have = haveCount(item, inventory, chests);
     if (have.total >= want) {
         // 已经够了 → 一张单都不用下（04 §6.3："背包里有 count 个"就算完成）
-        return { ok: true, plan: [], gaps: {}, expanded: 0, hitDepth: false, hitJobs: false, alreadyHave: have.total };
+        return { ok: true, plan: [], gaps: {}, cycles: {}, expanded: 0, hitDepth: false, hitJobs: false, alreadyHave: have.total };
     }
 
     const plan = [];
     const gaps = {};
+    /**
+     * ★★ 2026-11-04（t73）：「**成环**」与「**真缺料**」必须分两个出口。
+     *
+     * 为什么（今晚付过代价）：`seen.has(name)` 命中时只往 `gaps` 记一笔，
+     * 于是「`raw_iron` 之所以缺，是因为计划自己成环」和「`flint` 之所以缺，
+     * 是因为我们根本没有'概率掉落'这个能力」**在报告里长得一模一样** ——
+     * 都只是 `gaps={raw_iron:9}` / `{flint:1}`。
+     * 我今晚就因此把 `copper_ingot` 的 `{honeycomb:1}` 误判成"缺掏蜂巢能力"，
+     * 实际是**两跳反向配方**造成的环（t104 才修掉）。
+     *
+     * 语义：
+     *   `cycles` 非空      → **这些缺口是环**（我们规划不出来，再挖多久也没用）
+     *   `gaps` 非空、`cycles` 空 → **真缺料**（没有可行来源，或缺那项能力）
+     *   `gaps` 同时保留（上层 `strat_tool_tier` 等仍按 `gaps` 判总量），
+     *   所以这里**是新增诊断字段，不是替换** —— 环的那部分会同时出现在两个字段里。
+     */
+    const cycles = {};
     const seen = new Set();          // 防止同一物品被反复展开（环）
     let hitDepth = false;
     let hitJobs = false;
@@ -312,9 +332,11 @@ export function planObtain(args = {}) {
             gaps[name] = (gaps[name] ?? 0) + need;
             return;
         }
-        // 环：同一物品在一条链上再次出现 → 记缺口，不再展开
+        // 环：同一物品在一条链上再次出现 → 记缺口（**并单独记 `cycles`**，t73）
         if (seen.has(name)) {
-            gaps[name] = (gaps[name] ?? 0) + need;
+            // ★ 环是"规划不出来"，不是"世界里没有"。两个出口分开记：
+            cycles[name] = (cycles[name] ?? 0) + need;
+            gaps[name] = (gaps[name] ?? 0) + need;   // 保留：上层仍按 gaps 算总缺口
             return;
         }
 
@@ -479,6 +501,7 @@ export function planObtain(args = {}) {
     return {
         ok: Object.keys(gaps).length === 0 && !hitDepth && !hitJobs,
         plan, gaps,
+        cycles,                                  // ★ t73：成环的独立出口（gaps 里那部分是环，不是真缺料）
         expanded: plan.length,
         hitDepth, hitJobs,
         // ★ 预算相关信息（旧路径下恒为 false/null，行为不变）
@@ -554,9 +577,10 @@ export async function obtain(agent, item, count = 1, deps = {}) {
         //   "已经够了"这条路上两者相等，但统一口径，别让上层要按路径猜字段含义。
         if (planned.ok) {
             const have = inv?.[item] ?? 0;
-            return ok({ item, count: have, want: Number(count), jobs: [], alreadyHave: planned.alreadyHave ?? null });
+            return ok({ item, count: have, want: Number(count), jobs: [], alreadyHave: planned.alreadyHave ?? null, cycles: planned.cycles ?? {} });
         }
-        return fail('NO_ITEM', `弄不到 ${item}：没有可行来源`, { item, gaps: planned.gaps, jobs: [] });
+        // ★ t73：`cycles` 一并带出 —— 作业单要能看出"这是环，不是没料"
+        return fail('NO_ITEM', `弄不到 ${item}：没有可行来源`, { item, gaps: planned.gaps, cycles: planned.cycles ?? {}, jobs: [] });
     }
 
     // 没有板 → 只能把计划交回去（不执行，也不假装下了单）
@@ -578,7 +602,7 @@ export async function obtain(agent, item, count = 1, deps = {}) {
         const gotNow = countInventory(agent)[item] ?? 0;
         return ok({
             item, count: gotNow, want: Number(count), jobs: [], plan: planned.plan,
-            gaps: planned.gaps, noBoard: true,
+            gaps: planned.gaps, cycles: planned.cycles ?? {}, noBoard: true,
             note: '没有任务板：只返回拆单计划，没有真的下单',
         });
     }
@@ -702,7 +726,8 @@ export async function obtain(agent, item, count = 1, deps = {}) {
     const gotNow = countInventory(agent)[item] ?? 0;
     return ok({
         item, count: gotNow, want: Number(count), parentId, jobs: created,
-        gaps: planned.gaps, hitDepth: planned.hitDepth, hitJobs: planned.hitJobs,
+        gaps: planned.gaps, cycles: planned.cycles ?? {},
+        hitDepth: planned.hitDepth, hitJobs: planned.hitJobs,
         expanded: planned.expanded,
     });
 }
