@@ -22,7 +22,14 @@ check('CODES 是非空数组', Array.isArray(CODES) && CODES.length > 0, `${CODE
 check('CODES 无重复', new Set(CODES).size === CODES.length, `${new Set(CODES).size}/${CODES.length}`);
 check('CODES 全是大写加下划线', CODES.every(c => /^[A-Z][A-Z_]*$/.test(c)), '');
 
-// 2) 扫源码里所有 fail('XXX') 与 code: 'XXX'
+// 2) 扫源码里所有 fail('XXX')
+//
+// ★ T03 对齐（2026-11-05）：这里原来还扫 `code: 'XXX'`（宽口径），于是把任务板
+//   **停止/结果码** DIED 也当成了"未注册错误码"而报红。报告 §S20 已判定那是**口径错**：
+//   DIED 只出现在 `result: { code: 'DIED', at }` 这类数据载荷里，全仓 `fail('DIED'` = 0 次，
+//   它属于任务板的另一套词汇表，不该进 CODES（进了反而会让 assertResult 误认它是 ActionResult 码）。
+//   本文件的职责边界见文件头：「新模块用了新错误码但忘了注册，运行时 fail() 直接 throw」——
+//   管的正是 fail() 的实参，所以只扫 fail()。同样的收窄也应用在 preflight §3（T02）。
 const SRC = 'src';
 const files = [];
 (function walk(d) {
@@ -36,8 +43,7 @@ const files = [];
 
 const used = new Map();   // code -> Set<file>
 const PATTERNS = [
-    /\bfail\(\s*'([A-Z_]+)'/g,        // fail('XXX')
-    /\bcode:\s*'([A-Z_]+)'/g,         // { code: 'XXX' }
+    /\bfail\(\s*'([A-Z_]+)'/g,        // fail('XXX') —— 唯一会在运行期直接 throw 的路径
 ];
 for (const f of files) {
     const s = fs.readFileSync(f, 'utf8');

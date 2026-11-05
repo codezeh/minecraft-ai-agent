@@ -14,8 +14,15 @@ export default [
       "no-floating-promise": noFloatingPromise,
     },
     languageOptions: {
-      globals: globals.browser,
-      ecmaVersion: 2021,
+      // ★ 2026-11-05（T03 / 报告第 11 条）：globals.browser → globals.node。
+      //   这个仓库跑在 Node 里（mineflayer / fs / socket），浏览器全局一个都不用。
+      //   用 browser 的后果是：no-undef 57 条里 51 条是误报（process / __dirname 之类被判未定义），
+      //   真问题被埋在噪音里。
+      globals: globals.node,
+      // ecmaVersion 2021 解析不了较新的语法（class field 等），直接造成 src/models/
+      // 20 条 "Parsing error" —— 解析失败 = 那个文件根本没被 lint 过。
+      // "latest" 让 eslint 用自带解析器的最新语法，不再手工追版本。
+      ecmaVersion: "latest",
       sourceType: "module",
     },
     rules: {

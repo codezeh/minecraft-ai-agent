@@ -38,11 +38,12 @@ let passed = 0;
 
 function ok(name, detail = '') {
     passed++;
-    console.log(`  ✓ ${name}${detail ? `　${detail}` : ''}`);
+    // 行首 PASS —— tools/unit_all.mjs 按 `^\s*PASS` 数用例，本文件要被它自动纳入就得守这个约定。
+    console.log(`  PASS  ${name}${detail ? `　${detail}` : ''}`);
 }
 function bad(name, detail) {
     failed++;
-    console.log(`  ✗ ${name}`);
+    console.log(`  FAIL  ${name}`);
     if (detail) console.log(`     ${detail}`);
 }
 function assert(cond, name, detail) {
@@ -192,8 +193,7 @@ if (sawASection instanceof RegExp) {
 }
 
 // ---------- 汇总 ----------
-console.log(`\n${failed === 0 ? '✓ 全绿' : '✗ 有红项'}：${passed} 通过，${failed} 失败。`);
-if (failed === 0) {
+console.log(`\n${failed === 0 ? '✓ 全绿' : '✗ 有红项'}：${passed} 通过，${failed} 失败。`);if (failed === 0) {
     console.log('说明：本文件只证明"扫描器看得见"，不判断被扫描代码是否合规 —— 那是 preflight 的职责。');
 }
 process.exit(failed === 0 ? 0 : 1);

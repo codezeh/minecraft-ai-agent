@@ -1,0 +1,63 @@
+#!/bin/sh
+# ============================================================================
+# 门禁 pre-commit（T03 / 报告第 11 条）
+#
+# 为什么是 git hook 而不是 .github/workflows/ci.yml：
+#   这个仓库有三道门（lint / preflight / test），但**没有任何自动触发点** ——
+#   等于没配。CI yaml 只有在 push 到 GitHub 时才跑（且要先配 Actions），
+#   而这里的日常动作是**本地 commit**。钩子挂在那个真正会发生的动作上，
+#   不需要网络、不需要远端、反馈即时（preflight ≈3.1s，正则自检 ≈0.1s）。
+#
+# 装法（每次 clone 执行一次；已配 core.hooksPath 的机器不用重复）：
+#   npm run gate:install        # 等价于 git config core.hooksPath .githooks
+#
+# 临时跳过（中间态提交 / 紧急修复；**最终提交前必须补跑**）：
+#   SKIP_GATE=1 git commit -m "..."
+#
+# 为什么 SKIP_GATE 存在：三个并行修复任务会有"改到一半"的提交，
+# 强行拦截会把中间态提交逼成绕过门禁的习惯 —— 那比没有门禁更糟。
+# 所以留一个**显式、要打出来**的口子，而不是让人去 --no-verify 偷偷绕。
+# ============================================================================
+
+set -u
+
+if [ "${SKIP_GATE:-}" = "1" ]; then
+    echo ""
+    echo "  ⚠ SKIP_GATE=1 —— 本次提交**跳过了门禁**。"
+    echo "    最终提交前请补跑：npm run gate"
+    echo ""
+    exit 0
+fi
+
+echo ""
+echo "  [gate] 提交前门禁（SKIP_GATE=1 可跳过）"
+
+# ---- 1) 扫描器自检：门禁自己坏了，后面所有"通过"都不可信 ----
+if ! node tools/preflight_regex_unit.mjs > /tmp/gate_regex.$$ 2>&1; then
+    echo "  ✗ 门禁自检失败（审计正则看不见东西了）"
+    sed -n '1,80p' /tmp/gate_regex.$$ | sed 's/^/     /'
+    rm -f /tmp/gate_regex.$$
+    echo ""
+    echo "  这是**有意**的拦截。若你在改到一半的中间态，用 SKIP_GATE=1 git commit …"
+    echo ""
+    exit 1
+fi
+rm -f /tmp/gate_regex.$$
+
+# ---- 2) preflight：模块导入 + 规则/错误码/API 审计 ----
+if ! node tools/preflight.mjs > /tmp/gate_preflight.$$ 2>&1; then
+    echo "  ✗ preflight 失败"
+    grep -E '✗|启动自检失败' /tmp/gate_preflight.$$ | head -20 | sed 's/^/     /'
+    rm -f /tmp/gate_preflight.$$
+    echo ""
+    echo "  这是**有意**的拦截：本仓库要求提交前 preflight 通过。"
+    echo "  若你在改到一半的中间态，用 SKIP_GATE=1 git commit …，最终提交前补跑 npm run gate。"
+    echo ""
+    exit 1
+fi
+rm -f /tmp/gate_preflight.$$
+
+echo "  ✓ 门禁通过（preflight + 审计正则自检）"
+echo "    （完整测试请跑：npm test —— preflight + unit_all）"
+echo ""
+exit 0

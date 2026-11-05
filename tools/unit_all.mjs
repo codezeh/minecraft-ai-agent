@@ -17,88 +17,96 @@
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
+import { existsSync, readdirSync } from 'fs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 
-/** 离线回归脚本（新增离线测试后记得加进来） */
-const UNITS = [
-    'atom_classify_unit',        // 原子纯函数化 + 地标缓存按 bot 隔离
-    'atom_input_unit',           // Phase A：输入原子唯一出口 + A3/A7（中断/松键）+ 白名单
-    'composite_registry_unit',   // M5：注册表启动校验 / params 解析 / ctx 工厂 / listSkills（D24 正解）
-    'craft_diagnostic_reachability_unit', // t86：craft 失败时 data 必须带完整诊断（防上层早退遮住）
-    'act_craft_limit_unit',      // t82：limit 单位修复（次数≠件数）+ 全链账目（4→5/17 定量）
-    'act_craft_recipe_unit',     // t79：act_craft 按产出物精确挑 recipe（按钮混在前面）+ stale 工作台前置阻断
-    'act_p0_unit',               // M6 P0：11 个动作的 ActionResult 契约与错误码归类
-    'act_p1_unit',               // M6 P1：8 个动作（睡/醒/开关/骨粉/喂/交易/钓鱼/游泳）契约与错误码
-    'flow_p0_unit',              // M7 P0：craft/smelt/store/fetch 流程 + 注册表负向用例
-    'flow_p1_unit',              // M7 P0 第二批：eat/mine/farm/fight/build 流程
-    'board_store_unit',          // M8 B1：任务板状态机 / 领单原子性 / 租约过期（假时钟）/ 重启恢复
-    'board_iface_unit',          // M8 B1：client/server 契约（list/get 同步）+ 服务端三道安全校验
-    'board_nofallback_unit',     // M8 B1：无板降级回归（board=null 行为与加板前一致）
-    'board_cmd_unit',            // M8 B1：!addJob/!jobs/!cancelJob 三条命令 + 权限 + 参数校验
-    'flow_mine_orenames_unit',    // t94：oreNames 掉落物名→真实方块（含 import 守卫 + 静默降级复现）
-    'flow_mine_notool_unit',     // t21：mine 的 NO_TOOL 假失败 + 三态判据（读不到≠没工具）
-    'flow_mine_pickup_unit',     // t72：挖一块捡一块（每块后 collectDrops，不是攒到最后）+ 源码级守卫 + 行为差分
-    'find_stand_unit',           // t65：findStandNear 四邻站位判据（脚下悬空/水/岩浆不算 + 读炸不崩，含反向验证）
-    'board_orphan_parent_unit',    // t96：父单兜底收敛 convergeOrphanParents（含双重防线 A/B 反向验证）
-    'board_scheduler_unit',      // M8 B2：调度主循环 / 抢占规则 / autoClaim / requeueStaleBrief
-    'board_b3_unit',             // M8 B3：多人单拆单 / 6 种预约 key + TTL / 角色过滤 / dependsOn
-    'board_b4_unit',             // M8 B4：共享地标/危险点/箱子内容 + 迁移幂等 + 单一真相
-    'container_fix_unit',        // act_container 三个真机 bug 回归（.id 解析 / 窗口校验 / 计数口径）
-    'code_hints_unit',           // M9：code_hints 覆盖全部 38 个码 + 一行 ≤200 字格式
-    'protect_owner_unit',        // M9：护主判定（跟随才生效/不打苦力怕玩家/6-8格/收手四条）
-    'idle_planner_unit',         // M9：空闲三定义 + 08 §6.1 三层顺序
-    'strat_alloc_unit',           // t91：库存池统筹分配（5-手上=应补，含 3 板应补 2 的双计杀手）
-    'strat_obtain_reverse_unit', // t76：反向配方降级（铁/铜走 smelt、crafting_table 不降级、wooden_pickaxe 逐字不变）+ cycles↔gaps 共存
-    'strat_obtain_unit',         // M10：strat_obtain 来源顺序 + ★防无限展开 + 不碰身体
-    'strat_cycles_unit',         // t73：cycles 独立出口（成环 vs 真缺料）
-    'strat_material_claims_unit', // t131：跨单材料预约（craft 子单带 item: claim）
-    'reopen_orphan_blocked_unit', // t142：blocked 单兜底重开（含 LIMIT 饥饿证伪）
-    'strat_tool_tier_unit',      // M10：strat_tool_tier 不跳档 / 已够直接 ok / 三件工具
-    'strat_first_night_unit',    // M10：first_night 跳过已满足 / dependsOn / 嵌套闸 / 不碰身体
-    'job_budget_unit',           // A2：ctx.jobBudget 跨调用共享（无 ctx 行为不变 / 余量生效 / hitCap 上报）
-    'exec_dig_horizontal_unit',
-    'nav_lock_unit',   // t66：导航「单一驱动者」闸（含反向验证）
-    'path3d_tunnel_unit',        // t45：横向隧道 dig 边（目标 y=当前层 / 后继不变 / 垂直 dig 不变）
-    'flow_shelter_unit',         // t31：flow_shelter 蓝图形状 + 材料判断 + idle_planner 死分支接线
-    'flow_build_support_unit',   // t31：flow_build 支撑判据（A/B/C，含防循环论证反例）
-    'idle_fakeclock_unit',       // t31：idle_planner 假时钟（30s 阈值 / 有单不规划 / 5min 节流）
-    'board_payload_unit',        // M8 B1（t20 补）：10 个 board:* 事件的 payload 形状（表驱动，防"[object Object]"式恒 null）
-    'board_scope_unit',          // M8 B2（t23 补）：refresh({scope}) 语义边界 —— mine/claimable/all + 未知报错 + 共享单抢占端到端
-    'board_add_recall_unit',     // t65：board_client.add 超时回查（认得到当成功 / 认不到仍失败 / 非 TIMEOUT 不回查，含反向验证）
-    'board_store_converge_unit', // t65：claimFor 的 convergeIfSatisfied 收敛（达标不派发）+ dependsSatisfied 前置不存在/blocked/failed + ★静默阻塞实测
-    'board_store_finish_unit',   // t65：finish 活子单/全终结/已达标三分支 + FAILED·BLOCKED 耗尽 + progress 单调（3 条已知 bug 走 XFAIL）
-    'atom_stand_unit',           // D27 岩浆格不能站（脚位 / 头位）
-    'atom_stuck_detect_unit',    // 卡住判据（垂直权重 / 真实位移 / NaN）
-    'control_reasons_unit',      // M2：停的原因 → 任务单去哪 + D17/D18/D19/D10（控制层）
-    'detect_trapped_unit',       // 被困判据（面积/封顶/出口/地表）
-    'exec_landing_unit',         // D14 落点检查真的执行（岩浆面拦，水面照走）
-    'fall_risk_unit',            // 坠落/虚空反射（悬崖与虚空要拒绝；列无数据不算虚空）
-    'exec_step_dig_unit',        // D2 挖邻列 / 液体不假成功
-    'exec_step_y_unit',          // D1 y 语义（脚位 vs 面位）
-    'mindserver_local_only_unit', // socket 只放本机连接（第一轮安全项）
-    'nav_core_unit',             // 导航入口的坐标归一与前置
-    'permissions_unit',          // M1：按发言人分级 + 斜杠命令白名单（提示词注入改不了等级）
-    'scaffold_tracker_unit',     // D7 只清自己放的方块
-    'server_props_unit',         // M1：server.properties 读取 + RCON 凭据按端口认领（不写死密码）
-    'task_pickup_unit',          // 掉落物回收搬到复合层后语义不变
-    'terrain3d_unit',            // 连接复用 / fail 表 TTL / prune
-    'test_escape',               // skill_escape 规划（假 bot，纯读世界）
-    'test_tunnel',               // 掘进安全检查（含 D15 液体地板）
-    'tool_prep_timeout_unit',    // D12 goto/dig/craft 有上限
-    'verify_y_semantics',        // 在真机录的地图库上量化 y 语义（needsRealData）
+/* ============================================================================
+ * 脚本发现（第18条，2026-11-05 T03）
+ *
+ * 原来是一张**手写白名单**：新增离线测试忘了登记 → 那个测试永远不跑，
+ * 而且**看不出来谁没跑**（"没登记"和"没失败"长得一模一样，同第26条那族 bug）。
+ * 报告实测：tools/ 下有 13 个纯离线的 test_*.mjs 从来没进过门禁。
+ *
+ * 现在：`tools/*_unit.mjs` **自动纳入**（新增脚本零登记成本），
+ * 再用两张表处理命名模式覆盖不到的例外 —— 例外必须写理由，否则它自己就会烂掉。
+ * ========================================================================== */
+
+/** 名字像单测、但不能进默认集合的 —— 每条都要写清理由（不写理由的排除项等于藏红）。 */
+const EXCLUDE = new Map([
+    ['test_mca_import', '引用已删除的 src/agent/library/chunk_map.js（ERR_MODULE_NOT_FOUND）；陈旧测试，删/重写不在 T03 范围'],
+    ['test_tile_map', '同上：引用已删除的 chunk_map.js；陈旧测试'],
+    ['test_reconnect', '需要**在线 bot**（deepseek 不在线时 exit 2 SKIP），不是环境无关的单元测试'],
+    ['test_s0_afk', '同上：需要在线 bot 才能开始 S0'],
+]);
+
+/** 命名模式（*_unit.mjs）覆盖不到的离线脚本：老的 test_*.mjs 与历史上就在名单里的。 */
+const EXTRA_OFFLINE = [
+    'test_escape',            // skill_escape 规划（假 bot，纯读世界）
+    'test_tunnel',            // 掘进安全检查（含 D15 液体地板）
+    // ↓ 第18条补入：报告点名的纯离线 test_*.mjs（逐个实跑确认过能离线通过）
+    'test_climb',             // 攀爬判据
+    'test_codes',             // 错误码注册（口径已在 T03 对齐 preflight §3：只看 fail() 实参）
+    'test_collect_targets',   // 采集目标解析
+    'test_context_trim',      // 上下文裁剪
+    'test_goto_wiring',       // goToPlayer → hopTo 接线（假 bot；本机 RCON 探测失败也照常过）
+    'test_terrain3d',         // 连接复用 / fail 表 TTL / prune
 ];
 
 /**
  * 需要真机数据的脚本 —— 默认**跳过**，加 `--real` 才跑（见 docs/architecture/09_crosscut.md §5.2）。
  *
- * 为什么按名字单独标：这类脚本读 `bots/<名字>/map/` 里真机录的库，
- * 换台机器 / 清过 bots 目录就跑不动。混在默认集合里，
- * 要么每次都得手动摘掉，要么一红就以为是代码坏了。
+ * 为什么按名字单独标：这类脚本读 `bots/<名字>/map|memory.json` 里真机录的数据，
+ * 换台机器 / 清过 bots 目录就跑不动（`bots/` 在 .gitignore 里）。
+ * 混在默认集合里，要么每次都得手动摘掉，要么一红就以为是代码坏了。
+ *
+ * ★ T03：第18条补入 3 个 —— 它们读 `./bots/deepseek/*`，在本机是绿的，
+ *   但在一份干净克隆上是**必然红**的，所以归这里而不是默认集。
  */
 const NEEDS_REAL_DATA = new Set([
     'verify_y_semantics',        // 读真机地形库 terrain3d.db（没有那个库无法量化 y 语义）
+    'test_memory_cap',           // readFileSync('./bots/deepseek/memory.json')，无兜底
+    'test_nav_opt',              // REAL = './bots/deepseek/map'
+    'test_path3d',               // MAP = './bots/deepseek/map'，空库直接 exit 2
 ]);
+
+/** 自动发现 + 例外表合成最终名单。 */
+const UNITS = (() => {
+    const discovered = readdirSync(HERE)
+        .filter((f) => f.endsWith('_unit.mjs'))
+        .map((f) => f.slice(0, -'_unit.mjs'.length) + '_unit')
+        .sort();
+    // ★ NEEDS_REAL_DATA 里的名字必须进 UNITS：它们要「被登记、然后跳过」，
+    //   而不是「不在名单 → 默认集没有 → 也没人报它被跳过」—— 那就是静默不跑。
+    const all = [...new Set([...discovered, ...EXTRA_OFFLINE, ...NEEDS_REAL_DATA])]
+        .filter((n) => !EXCLUDE.has(n));
+    return all.sort();
+})();
+
+// 「登记了但文件不存在」必须当场炸：否则 execFileSync ENOENT 会被当成"测试红了"，
+// 或者更糟 —— 名字写错、测试静默不跑（又是一个"什么都没跑"的假绿）。
+{
+    const missing = UNITS.filter((n) => !existsSync(join(HERE, `${n}.mjs`)));
+    if (missing.length) {
+        console.log(`  ✗ 名单里有 ${missing.length} 个脚本找不到文件：${missing.join(', ')}`);
+        process.exit(1);
+    }
+    if (!UNITS.length) {
+        console.log('  ✗ 一个脚本都没发现 —— 发现规则坏了，不能当成"没有测试"');
+        process.exit(1);
+    }
+    // 反向也要查：NEEDS_REAL_DATA 写了名字却不在名单里 → 既不会被跑、也不会报"跳过"。
+    const orphanSkip = [...NEEDS_REAL_DATA].filter((n) => !UNITS.includes(n));
+    if (orphanSkip.length) {
+        console.log(`  ✗ NEEDS_REAL_DATA 里有 ${orphanSkip.length} 个名字不在名单中（永远不跑也不报跳过）：${orphanSkip.join(', ')}`);
+        process.exit(1);
+    }
+    const both = UNITS.filter((n) => EXCLUDE.has(n));
+    if (both.length) {
+        console.log(`  ✗ 名单里出现了被排除的脚本：${both.join(', ')}`);
+        process.exit(1);
+    }
+}
 
 const argv = process.argv.slice(2);
 const withReal = argv.includes('--real');
