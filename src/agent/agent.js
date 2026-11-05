@@ -273,11 +273,18 @@ export class Agent {
         // Bind events
         this.bot.once('kicked', (reason) => onDisconnect('Kicked', reason));
         this.bot.once('end', (reason) => onDisconnect('Disconnected', reason));
+        // S43：这里是 **bot 上唯一的一处 `error` 监听**。
+        // 原来 `startEvents()` 里还有第二份 `console.error('Error event!', err)`，
+        // 两次注册都在同一个 bot 上 ⇒ 同一次错误被处理/打印两遍（一条变成两条日志）。
+        // 合并策略：保留这份「能区分致命与否」的逻辑（Duplicate / ECONNREFUSED → 走 onDisconnect），
+        // 同时把被删那份的价值（把 err 本体打出来、带堆栈）并进这里的 console.error。
         this.bot.on('error', (err) => {
-            if (String(err).includes('Duplicate') || String(err).includes('ECONNREFUSED')) {
-                 onDisconnect('Error', err);
+            const fatal = String(err).includes('Duplicate') || String(err).includes('ECONNREFUSED');
+            console.error(`[${this.name}] bot error:`, err);   // 带堆栈，排查用（原来只在第二处打）
+            if (fatal) {
+                onDisconnect('Error', err);
             } else {
-                 log(this.name, `[LoginGuard] Connection Error: ${String(err)}`);
+                log(this.name, `[LoginGuard] Connection Error: ${String(err)}`);
             }
         });
 
@@ -314,7 +321,14 @@ export class Agent {
                 console.log(`${this.name} spawned.`);
                 this.clearBotLogs();
               
-                this._setupEventHandlers(save_data, init_message);
+                // S43：**必须 await**。这个方法是真 async（内部有 3 处 await：
+                // handleEnglishTranslation / self_prompter.handleLoad / handleMessage），
+                // 原来裸调用 = fire-and-forget，两个后果：
+                //   ① 它内部一抛就是 unhandled rejection —— 外层这个 try/catch 抓不到，
+                //      Node 只打一行 warning，然后进程继续在"事件处理器没装好"的状态下跑；
+                //   ② startEvents() / task.initBotTask() 会和它并发跑（顺序不确定）。
+                // 现在 await 进外层 try/catch：异常会被下面的 catch 记录下来并干净退出。
+                await this._setupEventHandlers(save_data, init_message);
                 this.startEvents();
               
                 if (!load_mem) {
@@ -781,9 +795,8 @@ export class Agent {
             prev_health = this.bot.health;
         });
         // Logging callbacks
-        this.bot.on('error' , (err) => {
-            console.error('Error event!', err);
-        });
+        // S43：`bot.on('error')` 的第二份注册已删（唯一注册在 start() 里，见那里的注释）。
+        // 同一次错误被两处处理会让日志翻倍，也会让 `fatal` 判定与纯打印互相干扰。
         // Use connection handler for runtime disconnects
         this.bot.on('end', (reason) => {
             if (!this._disconnectHandled) {

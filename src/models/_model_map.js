@@ -34,6 +34,20 @@ export function selectAPI(profile) {
     if (typeof profile === 'string' || profile instanceof String) {
         profile = {model: profile};
     }
+    // S44：`profile.model` 可能是缺省/非字符串，而下面到处都是 `profile.model.includes(...)`
+    // 和 `profile.model.replace(...)`。两种**合法**写法会直接崩：
+    //   - `{"api":"deepseek"}`  ← 用该 api 的默认模型（合法，但原来在 `.replace` 上 TypeError）
+    //   - profile 里干脆没写 model ← 原来在 `.includes` 上 TypeError
+    // 统一归一成空串：空串让下面的 `startsWith`/`includes` 全部为假、`replace` 原样返回，
+    // 最后 `model_name === "" ? null : …` 会把 model 设成 null ⇒ 走供应商默认模型。
+    if (typeof profile.model !== 'string') {
+        if (profile.model !== undefined && profile.model !== null) {
+            console.warn('[model] profile.model 不是字符串，按"用默认模型"处理:', JSON.stringify(profile.model));
+        } else {
+            console.debug(`[model] profile ${JSON.stringify(profile.api ?? '(no api)')} 未指定 model → 用该 api 的默认模型`);
+        }
+        profile.model = '';
+    }
     // backwards compatibility with local->ollama
     if (profile.api?.includes('local') || profile.model?.includes('local')) {
         profile.api = 'ollama';
