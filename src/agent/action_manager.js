@@ -88,7 +88,22 @@ export class ActionManager {
             });
         } catch { /* 控制层的失败不能挡住"停"本身 */ }
 
-        if (!this.executing) return;
+        if (!this.executing) {
+            // ★★★ T31 第6条②：**这里原来是一句直接 `return`。**
+            //
+            //   而调度器跑单时 `executing` 完全可能是 false（流程正处在两个动作之间的
+            //   等待里，甚至还没轮到第一个动作）→ 一次 `requestInterrupt()` 都不发 →
+            //   流程永远收不到"停"：玩家按 `!stop`，面板上的单变 paused 了，**身体却接着干活**。
+            //
+            //   现在：只要有**在飞的任务单**（`currentJobId` 非空）就补发一次中断。
+            //   ★ 刻意**不进入**下面那个 10 秒等待循环、也不触发 zombie 重启：
+            //     那套机制是给"真有动作在跑却停不下来"（D18）准备的，
+            //     套在这里会把"调度器在等模型/等 IO"误判成僵尸动作 → 白重启一次进程。
+            if (this.currentJobId != null) {
+                try { this.agent.requestInterrupt(); } catch { /* 发不出中断不该让 stop 抛 */ }
+            }
+            return;
+        }
         if (this.killed) return;   // 已经判定要重启了，别再发中断空转
 
         const waitedFrom = Date.now();
@@ -146,7 +161,12 @@ export class ActionManager {
         const new_resume = actionFn != null;
         if (new_resume) { // start new resume
             this.resume_func = actionFn;
-            assert(actionLabel != null, 'actionLabel is required for new resume');
+            // ★★★ T31（T03 的 no-undef 实测点名）：`assert` 在本文件里**从来没 import 过** ——
+            //   全仓唯一一处"以为有、其实没有"的名字，真跑到这里是 ReferenceError。
+            //   本仓 src/ 里**没有任何 assert 约定**（`node:assert` 0 处 import），
+            //   所以不引入新依赖，直接显式抛错：语义完全等价（就是"这个参数不该是 null"），
+            //   而且不再是个未声明标识符（T90 硬指标 no-undef = 0 的一部分）。
+            if (actionLabel == null) throw new Error('actionLabel is required for new resume');
             this.resume_name = actionLabel;
         }
         if (this.resume_func != null && (this.agent.isIdle() || new_resume) && (!this.agent.self_prompter.isActive() || new_resume)) {

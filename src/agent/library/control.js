@@ -156,6 +156,18 @@ export function planStop({ reason, job = null, now = Date.now() } = {}) {
                     state: JOB_STATE.PAUSED,
                     lease: null,
                     result: { code: 'INTERRUPTED', at: now },
+                    // ★★★ T31 第6条③：**必须留下"是玩家按停的"这条痕迹。**
+                    //
+                    //   原来 `pausedReason` 全仓**一处读、零处写** —— 于是
+                    //   `board_scheduler._resumeOwnPaused` 里那句
+                    //   `j.pausedReason !== 'player'` **恒为真**，
+                    //   下一拍（约 3 秒）调度器就把这张单自己 resume 回 ready：
+                    //   玩家按 `!stop` 的效果只维持一拍，看起来像"完全没生效"。
+                    //
+                    //   写进 `checkpoint`（而不是顶层）：`jobs` 表没有 pausedReason 列，
+                    //   `updateJob` 的白名单里也只有 checkpoint 能装这类上下文。
+                    //   **合并写入**——不许把已有的断点（parity/step 等）冲掉。
+                    checkpoint: { ...(job.checkpoint ?? {}), pausedReason: 'player' },
                 },
             };
 
@@ -238,8 +250,15 @@ export function applyStop({ agent, reason, label = null, jobId = null, now = Dat
     if (board && job?.id != null && plan.patch) {
         try { board.update(job.id, plan.patch); } catch { /* 任务板写失败不该让动作停不下来 */ }
     }
-    if (board && plan.pauseAutoClaim) {
-        try { board.setAutoClaim?.(false); } catch { /* 同上 */ }
+    if (plan.pauseAutoClaim) {
+        // ★★★ T31 第6条③：**两处都要关，因为它们读的不是同一个字段。**
+        //   · `board.setAutoClaim()`（board_client:264）只改**客户端镜像**的 `_autoClaim`，
+        //     服务端不看、**调度器也不看**；
+        //   · 真正决定"要不要领下一张"的是 `scheduler._autoClaim`（board_scheduler:441），
+        //     而它的开关方法 `scheduler.setAutoClaim()`（:385）此前**零调用方**。
+        //   → 于是玩家按停只关了一个没人读的开关：单子 paused 了，下一秒调度器照领新单。
+        if (board) { try { board.setAutoClaim?.(false); } catch { /* 同上 */ } }
+        try { agent?.scheduler?.setAutoClaim?.(false); } catch { /* 没有调度器 = 无板降级 */ }
     }
     // 只有真的牵扯到单子（或要暂停领单）才留痕，否则每换一次动作就一条噪音。
     if (job?.id != null || plan.pauseAutoClaim) {

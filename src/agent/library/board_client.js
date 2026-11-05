@@ -424,6 +424,20 @@ export class BoardClient {
         return this._call('board:shared-get', { kind, key });
     }
 
+    /**
+     * ★★★ T31 第16条：**箱子内容按增量原子合并**（服务端一次往返做完读-改-写）。
+     *
+     * 别再用 `sharedGet` + 本地叠加 + `sharedPut` 去改箱子：那两次往返之间
+     * 别的 bot 也能写，后写的会**整份覆盖**先写的（丢件）。
+     *
+     * @param {string} key `"x,y,z"`
+     * @param {object} delta `{ oak_log: +5, stone: -3 }`
+     * @param {{x:number,y:number,z:number}|null} [pos] 首次写入时用来种下坐标
+     */
+    async sharedMerge(key, delta, pos = null) {
+        return this._call('board:shared-merge', { key, delta, pos, owner: this.name });
+    }
+
     async sharedDel(kind, key) {
         return this._call('board:shared-del', { kind, key });
     }
@@ -464,6 +478,8 @@ export function makeNullBoard() {
         update: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         add: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         setAutoClaim: () => Promise.resolve(ok({ autoClaim: false })),
+        // ★ T31 第16条：无板时合并是"尽力而为"的 no-op（记忆不是交易的成败条件）
+        sharedMerge: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         hello: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         claim: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         heartbeat: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),

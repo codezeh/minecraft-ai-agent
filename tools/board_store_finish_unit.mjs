@@ -304,18 +304,25 @@ function runFinish({ state = JOB_STATE.RUNNING, maxAttempts = 3, attempts = 0, r
     }
 }
 
-// ④-c 兼容：不传 bot（老调用方）→ 不做归属校验，旧行为不变（不误杀现有调用方）
+// ④-c 【T31 补充A 后**由放行翻转为拒绝**】老调用方（不传 bot）遇到**活租约**照样被拒
+//
+//    ★ 这条原来断言的是"不传 bot 就不做归属校验 → 照常写入"。
+//      那是 T30 的 fail-open 行为，captain 已裁决**必须封掉**（那条 Must 级防护
+//      对"漏传 bot 的调用方"等于不存在）。现在反过来钉：
+//      不传 bot + 该行租约仍属于别人 → `LEASE_STALE`。
+//      "无租约/已过期时照常放行"由 ⑤-b / ⑤-c 覆盖（老签名与离线工具走的就是那两种形态）。
 {
     const { db } = freshDb();
     const t0 = 2000000;
     const job = addJob(db, { title: '老调用方', skill: 'mine', priority: 5, progress: { count: 0, want: 2 } });
-    claimFor(db, 'A', { now: t0 });
+    claimFor(db, 'A', { now: t0 });                       // A 持有活租约
     const r = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 2, want: 2 } }, { now: t0 + 10 });
     const after = getJob(db, job.id);
-    if (r.ok === true && after.state === JOB_STATE.DONE) {
-        okCase('④-c 不传 bot（老调用方）→ 不做归属校验，照常写入', `state=${after.state}`);
+    if (r.ok === false && r.code === 'LEASE_STALE' && after.state !== JOB_STATE.DONE) {
+        okCase('④-c 不传 bot（老调用方）+ 活租约 → 拒绝（原 fail-open 已封，见 ⑤）',
+            `code=${r.code} state=${after.state}`);
     } else {
-        badCase('④-c 不传 bot 时不该被拒', { ok: r.ok, code: r.code, state: after.state });
+        badCase('④-c 不传 bot 时又 fail open 了', { ok: r.ok, code: r.code, state: after.state });
     }
 }
 
@@ -336,6 +343,68 @@ function runFinish({ state = JOB_STATE.RUNNING, maxAttempts = 3, attempts = 0, r
             `state=${after.state} attempts=${after.attempts}`);
     } else {
         badCase('④-d 无租约时不该被拒', { ok: r.ok, code: r.code, state: after.state, attempts: after.attempts });
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ★★ ⑤ 【T31 补充A】`finish` 未传 `bot` 时的 **fail-closed** 窗口
+//
+//    T30 加上了租约归属校验，但留了个洞：调用方**漏传** `bot` 时判据是空串 →
+//    归属校验**静默消失**（fail open）。那条 Must 级防护等于对漏传者不存在。
+//
+//    现在只收紧危险窗口：`bot` 未传 **且** 该行 `lease_owner` 非空 **且** 租约
+//    **还没过期** → `LEASE_STALE` + 一行 warn（"我说不清我是谁、但这单确实有人在跑"）。
+//    其余情形（无租约 / 租约已过期 / 正常传了 bot）**行为完全不变**。
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const { db } = freshDb();
+    const t0 = 4000000;
+    const job = addJob(db, { title: '别人在跑', skill: 'mine', priority: 5, progress: { count: 1, want: 4 } });
+    claimFor(db, 'A', { now: t0 });                      // A 持有**活**租约
+    const before = getJob(db, job.id);
+    const r = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 4, want: 4 } },
+        { now: t0 + 100 });                              // ← 故意不传 bot
+    const after = getJob(db, job.id);
+    const untouched = after.state === before.state && after.attempts === before.attempts
+        && after.lease?.owner === before.lease?.owner
+        && JSON.stringify(after.result) === JSON.stringify(before.result);
+    if (r.ok === false && r.code === 'LEASE_STALE' && untouched) {
+        okCase('★ ⑤ 不传 bot + 别人的**活**租约 → LEASE_STALE 且一字不写（fail closed）',
+            `code=${r.code} owner=${after.lease?.owner} state=${after.state}`);
+    } else {
+        badCase('⑤ 漏传 bot 时 fail open 了（T30 留下的洞还在）', {
+            ok: r.ok, code: r.code, before: before.state, after: after.state,
+            owner: after.lease?.owner, result: after.result,
+        });
+    }
+
+    // ⑤-b 反证边界①：**租约已过期** → 必须放行（这是"刚过期 1 秒、还没人接手"的合法收尾）
+    {
+        const { db: db2 } = freshDb();
+        const j2 = addJob(db2, { title: '过期了', skill: 'mine', priority: 5, progress: { count: 0, want: 2 } });
+        claimFor(db2, 'A', { now: t0 });
+        expireLeases(db2, t0 + LEASE_MS + 1);            // 过期回收 → lease_owner=NULL
+        const r2 = finish(db2, j2.id, { ok: true, code: 'OK', progress: { count: 2, want: 2 } },
+            { now: t0 + LEASE_MS + 2 });
+        const a2 = getJob(db2, j2.id);
+        if (r2.ok === true && a2.state === JOB_STATE.DONE) {
+            okCase('⑤-b 边界：租约**已过期** + 不传 bot → 照常放行（不误杀残局收尾）', `state=${a2.state}`);
+        } else {
+            badCase('⑤-b 过期后漏传 bot 被误拒', { ok: r2.ok, code: r2.code, state: a2.state });
+        }
+    }
+
+    // ⑤-c 反证边界②：**本来就没有租约**的单（离线工具/老签名的典型形态）→ 必须放行
+    {
+        const { db: db3 } = freshDb();
+        const j3 = addJob(db3, { title: '无租约', skill: 'mine', priority: 5, progress: { count: 0, want: 1 } });
+        const r3 = finish(db3, j3.id, { ok: true, code: 'OK', progress: { count: 1, want: 1 } }, { now: t0 });
+        const a3 = getJob(db3, j3.id);
+        if (r3.ok === true && a3.state === JOB_STATE.DONE) {
+            okCase('⑤-c 边界：**无租约**的单 + 不传 bot → 照常放行（老签名/离线工具不受影响）', `state=${a3.state}`);
+        } else {
+            badCase('⑤-c 无租约单被误拒', { ok: r3.ok, code: r3.code, state: a3.state });
+        }
     }
 }
 

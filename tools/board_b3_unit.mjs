@@ -331,7 +331,8 @@ const freshDb = () => {
     //     既不是 done 也不是 failed → 父单卡在 in-progress（那是我的测试写错，不是逻辑错）。
     for (let i = 0; i < 3; i++) {
         claimFor(db, `bot${i}`, {});
-        finish(db, children[i].id, { ok: true, code: 'OK', progress: { count: 16, want: 16 } });
+        // ★ T31 补充A：领单者必须报名字（漏传 bot + 活租约 = LEASE_STALE，fail closed）
+        finish(db, children[i].id, { ok: true, code: 'OK', progress: { count: 16, want: 16 } }, { bot: `bot${i}` });
     }
     const partial = rollupParent(db, parent.id);
     const parentAfter3 = getJob(db, parent.id);
@@ -339,7 +340,7 @@ const freshDb = () => {
     // 最后一张 done → 父单 done
     const last = children[3];
     claimFor(db, 'bot9', {});
-    finish(db, last.id, { ok: true, code: 'OK', progress: { count: 16, want: 16 } });
+    finish(db, last.id, { ok: true, code: 'OK', progress: { count: 16, want: 16 } }, { bot: 'bot9' });
     const full = rollupParent(db, parent.id);
     const parentAfter4 = getJob(db, parent.id);
 
@@ -362,11 +363,11 @@ const freshDb = () => {
     });
     // children[0] 做成功
     claimFor(db, 'b1', {});
-    finish(db, children[0].id, { ok: true, code: 'OK', progress: { count: 2, want: 2 } });
+    finish(db, children[0].id, { ok: true, code: 'OK', progress: { count: 2, want: 2 } }, { bot: 'b1' });
     // children[1] 直接置 failed（模拟重试用尽）
     claimFor(db, 'b2', {});
     for (let i = 0; i < 5; i++) {
-        finish(db, children[1].id, { ok: false, code: 'TIMEOUT', progress: { count: 0, want: 2 } });
+        finish(db, children[1].id, { ok: false, code: 'TIMEOUT', progress: { count: 0, want: 2 } }, { bot: 'b2' });
         if (getJob(db, children[1].id).state === JOB_STATE.FAILED) break;
         claimFor(db, 'b2', {});
     }
@@ -388,10 +389,10 @@ const freshDb = () => {
         title: '两半', skill: 'mine', args: {}, countKey: 'count', total: 2, parts: 2,
     });
     claimFor(db, 'b1', {});
-    finish(db, children[0].id, { ok: true, code: 'OK', progress: { count: 1, want: 1 } });
+    finish(db, children[0].id, { ok: true, code: 'OK', progress: { count: 1, want: 1 } }, { bot: 'b1' });
     // 另一个直接 blocked（NO_TOOL 就是这类）
     claimFor(db, 'b2', {});
-    finish(db, children[1].id, { ok: false, code: 'NO_TOOL', progress: { count: 0, want: 1 } });
+    finish(db, children[1].id, { ok: false, code: 'NO_TOOL', progress: { count: 0, want: 1 } }, { bot: 'b2' });
     const childState = getJob(db, children[1].id).state;
     rollupParent(db, parent.id);
     const parentState = getJob(db, parent.id).state;
@@ -415,7 +416,7 @@ const freshDb = () => {
     const got = first?.id;
 
     // a 做完之后 → b 可领
-    finish(db, a.id, { ok: true, code: 'OK', progress: { count: 1, want: 1 } });
+    finish(db, a.id, { ok: true, code: 'OK', progress: { count: 1, want: 1 } }, { bot: 'bot1' });
     const second = claimFor(db, 'bot1', {});
 
     if (got === a.id && second?.id === b.id) {

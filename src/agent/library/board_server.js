@@ -31,6 +31,8 @@ import {
     sweepDeadDepJobs, blockOrphanParents,
     // B4：共享数据（06 §9.3）
     putShared, getShared, listShared, delShared, findItemInSharedChests,
+    // ★ T31 第16条：箱子内容的**原子合并**（读-改-写在服务端一次做完）
+    mergeSharedChest, SHARED_CHEST_KIND,
 } from './board_store.js';
 
 /** 单个 bot 上报的能力（`board:hello` 记下来，用于校验 add 的 skill）。 */
@@ -363,6 +365,24 @@ export function attachBoardServer(deps = {}) {
                     now: now(), owner: payload?.owner ?? null,
                 });
                 ack(cb, r.ok ? { ok: true } : { ok: false, reason: r.message ?? r.code });
+            } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        // ── ★★★ T31 第16条：`board:shared-merge` ──────────────────────
+        //
+        // 为什么要有它：箱子内容原来是客户端「读 → 本地叠加 → 写」，
+        // **两次往返之间**别的 bot 也能写 → 后写的整份覆盖先写的（丢件，且不报错）。
+        // 现在把"读-改-写"收进 store 的一个事务里，客户端只发**增量**。
+        socket.on('board:shared-merge', (payload, cb) => {
+            try {
+                const r = mergeSharedChest(
+                    db, payload?.key, payload?.delta,
+                    payload?.owner ?? null,
+                    { now: now(), pos: payload?.pos ?? null },
+                );
+                ack(cb, r.ok
+                    ? { ok: true, item: { kind: SHARED_CHEST_KIND, key: r.key, value: r.value } }
+                    : { ok: false, reason: r.message ?? r.code });
             } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
         });
 

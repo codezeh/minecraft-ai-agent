@@ -110,6 +110,11 @@ const freshDb = () => {
 }
 
 // ── 5. ② INTERRUPTED / PREEMPTED **不计** attempts ──────────────────
+//
+// ★ T31 补充A：这些用例都是"领了单再 finish"，所以**必须**把 bot 传下去 ——
+//   生产里 `board_server` 一直传 `payload.bot`（T30 第4条），
+//   而"漏传 bot + 别人持有活租约"现在会 **fail closed**（LEASE_STALE）。
+//   用例跟着改成真实形态，不是给判据开口子。
 {
     // 真实流程是"领一次 → finish 一次"。第二次要先重新领单
     // （不重新 claim 就去 finish，状态是 ready→ready，那是非法转移，会被正确拒绝）。
@@ -118,7 +123,7 @@ const freshDb = () => {
         const { db } = freshDb();
         const job = addJob(db, { title: code, skill: 'collect', assignee: 'alpha' });
         claimFor(db, 'alpha');
-        const r = finish(db, job.id, { ok: false, code, progress: { count: 3, want: 10 } });
+        const r = finish(db, job.id, { ok: false, code, progress: { count: 3, want: 10 } }, { bot: 'alpha' });
         const back = getJob(db, job.id);
         results.push({ code, counted: r.counted, attempts: back.attempts, state: back.state });
     }
@@ -137,7 +142,7 @@ const freshDb = () => {
         const { db } = freshDb();
         const job = addJob(db, { title: code, skill: 'collect', assignee: 'alpha', maxAttempts: 5 });
         claimFor(db, 'alpha');
-        const r = finish(db, job.id, { ok: false, code, progress: { count: 0, want: 5 } });
+        const r = finish(db, job.id, { ok: false, code, progress: { count: 0, want: 5 } }, { bot: 'alpha' });
         results.push({ code, counted: r.counted, attempts: getJob(db, job.id).attempts, state: getJob(db, job.id).state });
     }
     const good = results.every((r) => r.counted === true && r.attempts === 1 && r.state === JOB_STATE.READY);
@@ -152,7 +157,7 @@ const freshDb = () => {
         const { db } = freshDb();
         const job = addJob(db, { title: code, skill: 'collect', assignee: 'alpha', maxAttempts: 5 });
         claimFor(db, 'alpha');
-        const r = finish(db, job.id, { ok: false, code, progress: { count: 0, want: 5 } });
+        const r = finish(db, job.id, { ok: false, code, progress: { count: 0, want: 5 } }, { bot: 'alpha' });
         results.push({ code, state: r.next, counted: r.counted, attempts: getJob(db, job.id).attempts });
     }
     const good = results.every((r) => r.state === JOB_STATE.BLOCKED && r.attempts === 0);
@@ -166,13 +171,13 @@ const freshDb = () => {
     const job = addJob(db, { title: 'c', skill: 'collect', assignee: 'alpha', maxAttempts: 5 });
     claimFor(db, 'alpha');
     // ok=true 但只做了 3/10 → **不算完成**
-    const partial = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 3, want: 10 } });
+    const partial = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 3, want: 10 } }, { bot: 'alpha' });
     const afterPartial = getJob(db, job.id);
     const notDone = partial.next !== JOB_STATE.DONE && afterPartial.state !== JOB_STATE.DONE;
 
     // 再来一次做够 10/10 → done
     claimFor(db, 'alpha');
-    const full = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 10, want: 10 } });
+    const full = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 10, want: 10 } }, { bot: 'alpha' });
     const afterFull = getJob(db, job.id);
 
     if (notDone && full.next === JOB_STATE.DONE && afterFull.state === JOB_STATE.DONE) {
@@ -533,7 +538,7 @@ const freshDb = () => {
     finish(db, job.id, {
         ok: false, code: 'NO_ITEM', message: 'x',
         data: { inv: { a: 1 }, limit: 2 },
-    });
+    }, { bot: 'alpha' });
     const after = getJob(db, job.id);
     const d = after?.result?.data ?? null;
     const good = !!d && d.inv?.a === 1 && d.limit === 2;

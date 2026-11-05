@@ -777,6 +777,29 @@ export function finish(db, id, result = {}, opts = {}) {
     //   判据必须与 `heartbeat()` 的 LEASE_LOST 同源：
     //     `lease_owner IS NULL`（没人持有）**或** `lease_owner = 我`。
     //   `changes === 0` → 一个字段都不写，返回 `LEASE_STALE`（调用方立刻停手）。
+    // ★★★ 补充A（T31，补 T30 留下的 fail-open 洞）：**漏传 bot 时归属校验会静默消失。**
+    //
+    //   T30 的规则是"不传 bot 就不做归属校验"（那条 Must 级防护**对漏传者不存在**）。
+    //   这里只收紧**危险窗口**，不动其它：
+    //     `bot` 未传 **且** 该行 `lease_owner` 非空 **且** 租约**还没过期**
+    //     → `LEASE_STALE` + 一行 warn。
+    //   也就是"我说不清我是谁、但这单确实有人在跑"必须 fail **closed**。
+    //   其余情形一律不变：无租约 / 租约已过期 / 正常传了 bot —— 老签名与离线工具
+    //   操作的都是无租约单，所以它们完全不受影响。
+    if (bot == null && job.lease?.owner != null && job.lease?.owner !== '') {
+        const until = Number(job.lease?.until);
+        const stillHeld = !Number.isFinite(until) || until > now;
+        if (stillHeld) {
+            try {
+                console.warn(`[board] finish 未传 bot，而单 ${id} 的租约仍属于 ${job.lease.owner}`
+                    + `（until=${job.lease?.until ?? 'null'}）→ 拒绝写入（LEASE_STALE，fail closed）`);
+            } catch { /* 打不出日志也要拒 */ }
+            return {
+                ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
+                message: 'finish 未传 bot，且该单的租约仍在别人身上 —— 拒绝写入（fail closed）',
+            };
+        }
+    }
     const leaseGuard = bot == null ? '' : ' AND (lease_owner IS NULL OR lease_owner = ?)';
     const r = db.prepare(`UPDATE jobs
         SET state=?, attempts=?, lease_owner=NULL, lease_until=NULL,
@@ -837,6 +860,16 @@ export function expireLeases(db, now = Date.now()) {
         //   `attempts+1 >= maxAttempts` → `failed` + `result.code=LEASE_EXPIRED`（留痕，
         //   否则"这张单为什么没了"在库里看不出来）；没耗尽 → 回 `ready`，
         //   **不动 result**（保留上次结果/断点，留给下一个接手的）。
+        //
+        // ★★★ 补充B（T31）：**`assignee` 必须跟租约一起释放。**
+        //
+        //   领单时 `claimFor` 会把 `assignee` 写成领单的人；而这里原来只清 lease，
+        //   于是过期回 ready 的单**仍然"指派给"那个已经死掉的 bot** →
+        //   `claimFor` 的候选条件是 `assignee IS NULL OR assignee = 我` →
+        //   **别的 bot 永远抢不到这张单**（多 bot 下的永久死锁，且不报错）。
+        //   清空 assignee = 退回共享池（与"租约过期 = 这次尝试失败"同一语义）。
+        //   注意：这确实会让"原本只给 A 的个人单"在 A 崩后可能被 B 领走 ——
+        //   但另一条路是永久僵尸单，账算下来这样更划算，且与 06 §6「租约过期即回收」一致。
         const job = getJob(db, id);
         if (!job) continue;
         const attempts = Number(job.attempts ?? 0) + 1;
@@ -851,7 +884,8 @@ export function expireLeases(db, now = Date.now()) {
             : job.result;
         // 同样用"条件 UPDATE + changes"的写法，避免把刚刚续过租的单误回收
         const r = db.prepare(`
-            UPDATE jobs SET state=?, attempts=?, lease_owner=NULL, lease_until=NULL, result=?, updatedAt=?
+            UPDATE jobs SET state=?, attempts=?, assignee=NULL, lease_owner=NULL,
+                            lease_until=NULL, result=?, updatedAt=?
             WHERE id=? AND state IN ('claimed','running')
               AND lease_until IS NOT NULL AND lease_until < ?`)
             .run(next, attempts, j(result ?? null), now, id, now);
@@ -1647,6 +1681,66 @@ export function listShared(db, kind = null) {
         ? db.prepare('SELECT * FROM shared WHERE kind=? ORDER BY updatedAt DESC').all(String(kind))
         : db.prepare('SELECT * FROM shared ORDER BY kind, updatedAt DESC').all();
     return rows.map(sharedRowToObj);
+}
+
+/** 共享数据的种类常量（`mergeSharedChest` 只服务箱子）。 */
+export const SHARED_CHEST_KIND = 'chest';
+
+/**
+ * ★★★ T31 第16条：**箱子内容的原子合并**（服务端做，一次往返）。
+ *
+ * 病根：`flow_store.rememberChest` 原来是「`sharedGet` → 本地叠加 → `sharedPut`」，
+ *   跨**两次 socket 往返**。两个 bot 同时往同一个箱子存东西时：
+ *     A 读 {oak_log:5} → B 读 {oak_log:5} → A 写 {oak_log:5, stone:3} → B 写 {oak_log:5}
+ *   **A 那次写入被整份覆盖**（丢件），而且没人报错。
+ *
+ * 修法：把"读-改-写"**收进一个事务、放到唯一写库的进程里**（mindserver 是唯一写者，
+ *   06 §3）。`BEGIN IMMEDIATE` 先拿写锁再读，保证中间不会被插进来。
+ *
+ * ★ 合并语义（与原来一致，只是搬了个地方）：
+ *   `delta` 是**增量**（存 +N / 取 -N）；合计 ≤ 0 的条目直接删掉（别留 0 条垃圾）。
+ *
+ * @param {object} db
+ * @param {string} key `"x,y,z"`
+ * @param {object} delta `{ oak_log: +5, stone: -3 }`
+ * @param {string|null} [owner] 谁合并的（记进 value.owner）
+ * @param {{now?:number, pos?:{x:number,y:number,z:number}|null}} [opts]
+ * @returns {{ok:true, key:string, value:object} | {ok:false, code:string, message:string}}
+ */
+export function mergeSharedChest(db, key, delta, owner = null, opts = {}) {
+    const now = opts.now ?? Date.now();
+    if (key == null || String(key) === '') {
+        return { ok: false, code: 'NO_TARGET', message: '合并箱子需要 key' };
+    }
+    const k = String(key);
+    const d = (delta && typeof delta === 'object') ? delta : {};
+
+    let inTx = false;
+    try { db.exec('BEGIN IMMEDIATE'); inTx = true; } catch { inTx = false; }
+    try {
+        const prev = getShared(db, SHARED_CHEST_KIND, k);
+        const prevValue = prev?.value ?? null;
+        const items = { ...(prevValue?.items ?? {}) };
+        for (const [name, raw] of Object.entries(d)) {
+            const n = Number(raw);
+            if (!Number.isFinite(n) || n === 0) continue;
+            const next = Number(items[name] ?? 0) + n;
+            if (next > 0) items[name] = next;
+            else delete items[name];
+        }
+        const value = {
+            pos: prevValue?.pos ?? opts.pos ?? null,
+            items,
+            owner: owner ?? prevValue?.owner ?? null,
+            at: now,
+        };
+        putShared(db, SHARED_CHEST_KIND, k, value, { now, owner: owner ?? null });
+        if (inTx) db.exec('COMMIT');
+        return { ok: true, key: k, value };
+    } catch (e) {
+        if (inTx) { try { db.exec('ROLLBACK'); } catch { /* 回滚失败也别吞原始错误 */ } }
+        return { ok: false, code: 'INTERNAL', message: String(e?.message ?? e) };
+    }
 }
 
 /** 删一条。 */

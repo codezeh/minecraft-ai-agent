@@ -69,22 +69,20 @@ function boardOf(bot) {
  */
 async function rememberChest(bot, pos, delta) {
     const board = boardOf(bot);
-    if (!board?.sharedPut) return;                       // 没板就不写（不退回本地文件）
+    // ★★★ T31 第16条：**必须走服务端原子合并**。
+    //
+    //   原来这里写的是「`sharedGet` → 本地叠加 → `sharedPut`」，跨**两次 socket 往返**。
+    //   两个 bot 同时往同一个箱子存东西时：
+    //     A 读 {oak_log:5} → B 读 {oak_log:5} → A 写 {oak_log:5, stone:3} → B 写 → **A 那次没了**。
+    //   现在只发**增量**，读-改-写在 mindserver（唯一写者）的一个事务里完成。
+    //
+    //   ★ 不再保留"本地读-改-写"这条老路：留着它等于留第二条实现，
+    //     而两条实现一定会漂移（这个仓里已经因为"两处各叫一个名字"栽过很多次）。
+    if (!board?.sharedMerge) return;                     // 没板/老接口 → 不写（不退回本地文件）
     try {
         const key = `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
-        const cur = await board.sharedGet('chest', key);
-        const prev = cur?.ok ? (cur.data?.item?.value ?? null) : null;
-        const items = { ...(prev?.items ?? {}) };
-        for (const [name, n] of Object.entries(delta ?? {})) {
-            const next = (items[name] ?? 0) + n;
-            if (next > 0) items[name] = next;
-            else delete items[name];
-        }
-        await board.sharedPut('chest', key, {
-            pos: { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },
-            items,
-            owner: board.name ?? bot?.username ?? null,
-            at: Date.now(),
+        await board.sharedMerge(key, delta ?? {}, {
+            x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z),
         });
     } catch { /* 记忆写不进不影响主流程 */ }
 }

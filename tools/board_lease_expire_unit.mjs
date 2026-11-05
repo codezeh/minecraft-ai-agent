@@ -13,7 +13,7 @@
  *
  * 输出：PASS / FAIL，全过退出码 0。临时库在 tmp/，跑完删除。
  */
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
     openBoard, addJob, getJob, claimFor, expireLeases, JOB_STATE, LEASE_MS, BOARD_RESULT_CODES,
@@ -142,6 +142,48 @@ const freshDb = () => { const d = join(DIR, `db${++seq}`); rmSync(d, { recursive
 }
 
 try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+
+// ══════════════════════════════════════════════════════════════════════════
+// ★★ ⑧ 【T31 补充B】租约过期必须**一并回滚 `assignee`**
+//
+//    现状（T30 记下的独立缺陷）：`claimFor` 领单时会把 `assignee` 写成领单的人，
+//    而 `expireLeases` 原来只清 lease → 单子回 ready 却**仍"指派给"那个死掉的 bot**。
+//    `claimFor` 的候选条件是 `assignee IS NULL OR assignee = 我` ⇒
+//    **别的 bot 永远抢不到这张单**（多 bot 下的永久死锁，而且不报错）。
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const { db } = freshDb();
+    const t0 = 7000000;
+    const job = addJob(db, { title: 'A 领到的单', skill: 'mine', maxAttempts: 5 });
+    const gotA = claimFor(db, 'A', { now: t0 });
+    const afterClaim = getJob(db, job.id);
+
+    expireLeases(db, t0 + LEASE_MS + 1);                    // A 崩了 / 失联 → 租约过期
+    const afterExpire = getJob(db, job.id);
+    const gotB = claimFor(db, 'B', { now: t0 + LEASE_MS + 2 });   // ★ B 能不能接手
+
+    const assigneeCleared = afterExpire.assignee == null;
+    if (gotA?.id === job.id && afterClaim.assignee === 'A'
+        && assigneeCleared && gotB?.id === job.id) {
+        okCase('★ ⑧ A 领单 → 租约过期 → **B 能领到**（assignee 随租约一起释放）',
+            `afterClaim.assignee=${afterClaim.assignee} → afterExpire.assignee=${afterExpire.assignee} B领到=true`);
+    } else {
+        badCase('⑧ 过期后单子仍被"指派"给死掉的 A，B 抢不到（永久死锁）', {
+            gotA: gotA?.id ?? gotA, assigneeAfterClaim: afterClaim.assignee,
+            assigneeAfterExpire: afterExpire.assignee, gotB: gotB?.id ?? gotB,
+        });
+    }
+
+    // ⑧-b 反证：把 `assignee=NULL` 从 UPDATE 里拿掉 → 上面这条必然变红
+    //    （用源码文本 + 行为双重确认：这里查源码，证明"修的那一处"就是判据所在）
+    const src = readFileSync('src/agent/library/board_store.js', 'utf8');
+    const hasClear = src.includes('UPDATE jobs SET state=?, attempts=?, assignee=NULL, lease_owner=NULL,');
+    if (hasClear) {
+        okCase('⑧-b 判据在源码里（expireLeases 的 UPDATE 含 assignee=NULL）', 'found=1');
+    } else {
+        badCase('⑧-b expireLeases 的 UPDATE 里没有 assignee=NULL', { found: false });
+    }
+}
 
 console.log('============================================');
 console.log(`${pass}/${pass + fail} 个用例通过`);

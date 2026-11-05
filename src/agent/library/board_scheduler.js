@@ -39,7 +39,11 @@
  *   之间响应"玩家喊停 / 进程退出"。内部死循环会让中断要等很久。
  */
 
-import { JOB_STATE, jobsBusy, requeueStaleBrief, STOP_REASONS } from './control.js';
+import {
+    JOB_STATE, jobsBusy, requeueStaleBrief, STOP_REASONS,
+    // ★ T31 第6条①：任务单**必须**经由它驱动（零调用方的现成实现）
+    runJobAction,
+} from './control.js';
 import { deriveClaims } from './board_claims.js';
 import { makeCtx } from './composite_registry.js';
 import { getSkill } from './composite_registry.js';
@@ -308,6 +312,15 @@ export const CLAIM_BACKOFF_MS = 5000;
 /** 跑单期间的心跳间隔（06 §6：每 10 秒续租）。 */
 export const HEARTBEAT_MS = 10000;
 
+/**
+ * 读"这张单为什么暂停"。
+ *
+ * ★ T31 第6条③：老写法把它当**顶层字段** `job.pausedReason`（但 `jobs` 表根本没有这一列，
+ *   所以它**永远是 undefined**）；T31 起 `planStop` 把它写进 `checkpoint`。
+ * 两处都读，才叫"同一个真相"。
+ */
+const pausedReasonOf = (j) => j?.pausedReason ?? j?.checkpoint?.pausedReason ?? null;
+
 export class BoardScheduler {
     /**
      * @param {object} deps
@@ -537,7 +550,10 @@ export class BoardScheduler {
         // 只捡"我自己的、且不是玩家按停的"（玩家停的要等他说继续）
         const candidate = mine.find((j) => j
             && (j.assignee == null || j.assignee === this.agent?.name)
-            && j.pausedReason !== 'player');
+            // ★★★ T31 第6条③：`pausedReason` 的**写**在 `checkpoint` 里
+            //   （control.planStop 的 PLAYER 分支），这里必须两处都读 ——
+            //   否则"写了也读不到"，玩家按停的单还是会被自动 resume。
+            && pausedReasonOf(j) !== 'player');
         if (!candidate) return false;
         try {
             const r = await board.setState?.(candidate.id, JOB_STATE.READY, 'resume');
@@ -612,9 +628,17 @@ export class BoardScheduler {
         //   `ctx.reserve()` 静默走了 no-board 分支（恒成功 no-op）→
         //   **预约从来没真正写过库**（真机实测：jobs 全 done、合计 85，但 claims 表 0 行）。
         //   修法：用一份"带板的 agent 视图"构造 ctx，不改调用方的对象。
-        const agentView = this.boardClient
-            ? { ...this.agent, board: this.boardClient, boardClient: this.boardClient }
-            : this.agent;
+        // ★★★ T31 第6条①：这个视图除了补板，**还必须补 `actions`**。
+        //   `control.runJobAction(agent, ...)` 读的是 `agent.actions`，
+        //   而调度器把 ActionManager 存在自己的 `this.actions` 上 ——
+        //   生产里两者是同一个对象（agent.js 构造后同时挂两处），
+        //   但离线用例里未必，一不一致的表现就是 `runAction` 不存在 → 每张单 run-failed。
+        //   这已经是本文件记录的**第三次**"两处各叫一个名字"（前两次：board、interrupted）。
+        const agentView = {
+            ...this.agent,
+            ...(this.boardClient ? { board: this.boardClient, boardClient: this.boardClient } : {}),
+            actions: this.actions ?? this.agent?.actions ?? null,
+        };
         const ctx = makeCtx(agentView, job, getSkill(job.skill)?.manifest ?? null);
 
         // step 3
@@ -652,7 +676,29 @@ export class BoardScheduler {
             //   否则 `runSkill` 里 `makeCtx(agent, null, ...)` → `ctx.jobId` 恒 null，
             //   `strat_obtain` 判不出"我正被哪张单执行" → 每次都多建一张壳 →
             //   外层那张永远 0 子单 → 被当叶子单重试到 blocked（真机第 8 跑的止损点）。
-            result = await runner(this.agent, job.skill, argsToString(job.args), job);
+            // ★★★ T31 第6条①：**必须走 `actions.runAction`（= control.runJobAction）。**
+            //
+            //   原来这里是直接 `await runner(...)` —— 于是 `actions.executing` **全程 false**，
+            //   而玩家 `!stop` 那条链路是 `action_manager.stop()`，第一步就是
+            //   `if (!this.executing) return;` → **一次 requestInterrupt() 都不发**。
+            //   现场症状正是本条标题：按 `!stop` 对板上的单**完全无效**。
+            //
+            //   `control.runJobAction` 是全仓**零调用方**的现成实现，它负责四件事：
+            //     label = `job:<skill>`（`resolveJob` 靠它把"被打断的是谁"认出来）、
+            //     把 `actions.currentJobId` 指向这张单、按 deadline 换算 timeout、
+            //     并且**经由 `actions.runAction` 驱动** → `executing` 真的置位 → 中断链路才通。
+            //
+            //   ★★ 一个必须绕开的陷阱：`runJobAction` 内部是
+            //      `runAction(label, async () => { await fn(); })` —— **它把 fn 的返回值扔了**，
+            //      只回传 ActionManager 的 `{success, message, interrupted, timedout}`。
+            //      而 `finish()` 要的是 `{ok, code, message, data}`。
+            //      所以用闭包把内层结果**捞出来**；否则 `result.ok` 恒 undefined
+            //      → 每张单都被判失败重试（那是比原 bug 更严重的新 bug）。
+            let inner = null;
+            await runJobAction(agentView, job, async () => {
+                inner = await runner(this.agent, job.skill, argsToString(job.args), job);
+            });
+            result = inner ?? { ok: false, code: 'INTERNAL', message: '流程没有返回结果' };
             return true;
         } catch (e) {
             result = { ok: false, code: 'INTERNAL', message: String(e?.message ?? e) };
@@ -668,8 +714,20 @@ export class BoardScheduler {
                 this.onEvent({ type: 'skip-finish-preempted', id: job.id });
             }
 
+            // ★★★ T31 第6条①的收尾：**玩家按停（paused）的单不许再被 finish 覆盖。**
+            //
+            //   `applyStop()` 已经把它写成权威状态：paused + result.INTERRUPTED +
+            //   checkpoint.pausedReason='player'。而 `finish(INTERRUPTED)` 按 store 的
+            //   规则②（INTERRUPTED 不计 attempts）会把状态**推回 ready** ——
+            //   玩家按停只生效一瞬间，然后单子又回到队列里。
+            //   这跟 `_preemptedJobId` 是同一个道理的第二次出现：**who 写的状态更权威**。
+            const pausedByPlayer = await this._jobPausedByPlayer(job.id);
+
             // step 5：finish（store 按规则决定 done/ready/blocked/failed）
-            if (!wasPreempted) try {
+            if (pausedByPlayer) {
+                this.onEvent({ type: 'skip-finish-paused', id: job.id, reason: STOP_REASONS.PLAYER });
+            }
+            if (!wasPreempted && !pausedByPlayer) try {
                 await board.finish?.(job.id, {
                     ok: result?.ok === true,
                     code: result?.code ?? 'OK',
@@ -700,6 +758,23 @@ export class BoardScheduler {
                 try { await ctx.release(key); } catch { /* ignore */ }
             }
         }
+    }
+
+    /**
+     * 这张单现在是不是"被玩家按停"的（**读服务端权威状态**，不看本地镜像 ——
+     * 镜像只会在自己发起操作或 board:changed 时更新，这里恰恰是"别人改的"）。
+     */
+    async _jobPausedByPlayer(id) {
+        if (id == null) return false;
+        // 快路：本地刚记下的停止原因（action_manager.stop 会写 stop_reason）
+        const lastStop = this.actions?.stop_reason ?? this.actions?.stopReason ?? null;
+        if (lastStop === STOP_REASONS.PLAYER) return true;
+        try {
+            const r = await this.boardClient?.getAsync?.(id);
+            const j = r?.data?.job ?? this.boardClient?.get?.(id) ?? null;
+            if (!j || j.state !== JOB_STATE.PAUSED) return false;
+            return pausedReasonOf(j) === 'player';
+        } catch { return false; }
     }
 
     /** 从最近一次流程结果里取进度（卡片口径：{count, want}）。 */

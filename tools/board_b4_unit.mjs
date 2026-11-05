@@ -170,7 +170,10 @@ const freshDb = () => {
         .join('\n');
     const writes = /writeFileSync|readFileSync|mkdirSync/.test(code);
     const buildsPath = /chests\.json/.test(code);
-    const usesBoard = /sharedPut|sharedGet/.test(code);
+    // ★ T31 第16条：箱子内容改成走 `sharedMerge`（服务端原子合并），
+    //   所以「走板」的指纹必须把它算进来 —— 否则「改用更好的接口」会被这条守卫
+    //   判成「不再走板」（守卫盯的是**行为**，不是某个具体方法名）。
+    const usesBoard = /sharedPut|sharedGet|sharedMerge/.test(code);
     if (!writes && !buildsPath && usesBoard) {
         okCase('★ 单一真相：flow_store 代码里没有 fs 读写 / 没有 chests.json 路径，且确实走板', 'ok');
     } else {
