@@ -197,8 +197,20 @@ Write-Step '3/4' '等她进游戏'
 if (-not (Wait-BotSpawned 120)) { exit 1 }
 
 # ---------- 4) 打开面板 ----------
+# F-SEC-205（2026-11-06）：token 不再打印进日志，改从 mindcraft/.mindserver-token 读。
+# 顺带修一个既有缺口：原来打开的是干净的 /console（无 ?token=），socket 握手会被
+# io.use(makeHandshakeGate) 拒掉 ⇒ 面板连不上。现在带上 token，浏览器会拿到 HttpOnly cookie。
+$tokenFile = Join-Path $root 'mindcraft/.mindserver-token'
+$panelUrl  = $panel
+if (Test-Path $tokenFile) {
+    $tok = (Get-Content $tokenFile -Raw).Trim()
+    if ($tok) { $panelUrl = "$panel?token=$tok" }
+} else {
+    Write-Host '  [WARN] 未找到 mindcraft/.mindserver-token；若面板提示需要握手 token，' -ForegroundColor Yellow
+    Write-Host '         请以 MINDSERVER_PRINT_TOKEN=1 重启 mindserver，或从该文件获取。' -ForegroundColor Yellow
+}
 Write-Step '4/4' "打开面板 $panel"
-Start-Process $panel | Out-Null
+Start-Process $panelUrl | Out-Null
 
 Write-Host ''
 Write-Host '------------------------------------------------------------' -ForegroundColor DarkGray
