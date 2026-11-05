@@ -41,7 +41,11 @@ const opt = (name, dflt) => {
 const ROOT = path.resolve(opt('--root', path.join(__dirname, '..')));
 const PATCH_DIR = path.join(ROOT, 'patches');
 const SUMS = path.join(PATCH_DIR, 'SHA256SUMS');
-const WRITE = flag('--write');
+// ★ D2（review-patch-integrity.md）：`--write` 必须显式解锁，否则就是"篡改完顺手重建基线"的洗白通道。
+// 解锁方式只有环境变量（不给命令行开关，避免有人把 --write 习惯性塞进脚本/门禁）：
+//   PATCH_INTEGRITY_ALLOW_WRITE=1 node tools/patch_integrity.mjs --write
+const WRITE_REQUESTED = flag('--write');
+const WRITE = WRITE_REQUESTED && process.env.PATCH_INTEGRITY_ALLOW_WRITE === '1';
 const CHECK_VERSIONS = !flag('--no-version-check');
 
 let failed = 0;
@@ -63,9 +67,26 @@ function parsePatchName(file) {
     return { pkg, version };
 }
 
+if (WRITE_REQUESTED && !WRITE) {
+    console.log('✗ 拒绝 --write：需要先设 PATCH_INTEGRITY_ALLOW_WRITE=1 才允许重建基线。');
+    console.log('  为什么：否则"篡改补丁 → 顺手 --write 重建基线"就能把闸变成橡皮图章（review-patch-integrity.md D2）。');
+    console.log('  合法用法：改完补丁后单独一次 `PATCH_INTEGRITY_ALLOW_WRITE=1 node tools/patch_integrity.mjs --write`，');
+    console.log('           并把 patches/ 与 SHA256SUMS 放进**同一个 commit**（评审才看得见基线为什么变）。');
+    process.exit(1);
+}
+
+// ★ D3（review-patch-integrity.md）：`patches/` 缺失**不能静默放行**。
+// 最省力的攻击不是"植入补丁"，而是"把 patches/ 整个删掉"——那样闸不报错、postinstall 空跑、
+// 5 个安全/兼容补丁全部消失而没人发现。所以：缺目录 = FAIL（确实想没有补丁的仓库请显式 --allow-no-patches）。
 if (!existsSync(PATCH_DIR)) {
-    console.log('patches/ 不存在 —— 本仓没有补丁集，跳过。');
-    process.exit(0);
+    if (flag('--allow-no-patches')) {
+        console.log('  ~ patches/ 不存在，且已显式 --allow-no-patches ⇒ 跳过');
+        process.exit(0);
+    }
+    console.log('✗ patches/ 目录不存在，但本仓的 postinstall 依赖它（patch-package）。');
+    console.log('  这可能是"有人把补丁集整个删了"——那会让 5 个补丁静默消失（见 review-patch-integrity.md D3）。');
+    console.log('  若这个仓库确实不需要补丁，请显式传 --allow-no-patches。');
+    process.exit(1);
 }
 
 const allEntries = readdirSync(PATCH_DIR).sort();
