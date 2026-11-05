@@ -67,6 +67,24 @@ if not exist "%ROOT%mindcraft\main.js" (
     pause
     exit /b 1
 )
+REM ---------- F-DEP-004 D1（review-patch-integrity.md）：先验补丁内容，再安装 ----------
+REM 为什么必须先验：npm ci 会触发 postinstall -> patch-package 把 patches/ 套进 node_modules。
+REM 如果被投毒的补丁已经套进去再检查，等于"先执行、后审计"。这里只验内容（--no-version-check，
+REM 因为此刻可能还没有 node_modules），验不过就直接不装、不启动。
+REM 这段**不在** if not exist node_modules 里 —— 每次启动都验，防止被投毒的 node_modules 直接复用。
+pushd "%ROOT%mindcraft"
+if exist tools\patch_integrity.mjs (
+    node tools\patch_integrity.mjs --no-version-check
+    if errorlevel 1 (
+        echo [ERROR] patch integrity FAILED - patches/ may be tampered or missing. Aborting BEFORE install.
+        echo [ERROR] Inspect patches/ and patches/SHA256SUMS; do not just rebuild the baseline.
+        popd
+        pause
+        exit /b 1
+    )
+)
+popd
+
 if not exist "%ROOT%mindcraft\node_modules" (
     echo [WARN] mindcraft\node_modules missing. Running npm ci first (strict, per lock) ...
     pushd "%ROOT%mindcraft"
@@ -81,7 +99,7 @@ if not exist "%ROOT%mindcraft\node_modules" (
     if exist tools\patch_integrity.mjs (
         node tools\patch_integrity.mjs
         if errorlevel 1 (
-            echo [ERROR] patch integrity check failed - patches/ tampered or drifted. Aborting.
+            echo [ERROR] patch integrity check failed AFTER install - patches/ drifted or not applied. Aborting.
             popd
             pause
             exit /b 1
@@ -102,6 +120,11 @@ start "Mindcraft" /D "%ROOT%mindcraft" "%NODE%" main.js
 
 echo.
 echo Started. Web console: http://localhost:8080
+REM F-REG-001（2026-11-06）：token 已不再打印到本窗口/日志（F-SEC-205 起只打指纹），
+REM 浏览器需要 ?token= 才能建立 socket 握手。指到实际取用位置，否则用 start.bat 的人无路可走。
+echo   Panel needs a token. Read it from: mindcraft\.mindserver-token
+echo   Then open: http://localhost:8080/?token=^<the value in that file^>
+echo   (Or set MINDSERVER_PRINT_TOKEN=1 before starting to print it once.)
 echo Close both windows to stop.
 echo.
 pause
