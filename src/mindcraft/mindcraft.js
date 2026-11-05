@@ -1,4 +1,4 @@
-import { createMindServer, registerAgent, numStateListeners } from './mindserver.js';
+import { createMindServer, registerAgent, numStateListeners, getHandshakeToken } from './mindserver.js';
 import { AgentProcess } from '../process/agent_process.js';
 import { getServer } from './mcserver.js';
 import open from 'open';
@@ -21,7 +21,9 @@ export async function init(host_public=false, port=8080, auto_open_ui=true) {
         setTimeout(() => {
             // check if browser listener is already open
             if (numStateListeners() === 0) {
-                open('http://localhost:'+port);
+                // 第1条 ①：带 token 打开，否则控制台自己会被握手门挡住
+                const token = getHandshakeToken();
+                open('http://localhost:' + port + (token ? `/?token=${encodeURIComponent(token)}` : ''));
             }
         }, 3000);
     }

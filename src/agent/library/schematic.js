@@ -24,6 +24,53 @@ function bitsPerBlock(paletteSize) {
 }
 
 /**
+ * 蓝图根目录（第一轮审查 第1条 ⑥）。
+ *
+ * 缺陷原貌：`readLitematic(filePath)` 直接 `path.resolve(filePath)` 就 `readFileSync`，
+ * `listSchematics(dir)` 直接 `readdirSync(path.resolve(dir))` —— 都没有任何前缀校验。
+ * 于是 `describeSchematic(bot, '../../settings.js')` 能读盘上任意一个「长得像蓝图」的文件
+ * （能解析成 NBT 且含 Regions 的那种），把 size/材料清单读回模型；
+ * 就算不是蓝图，`existsSync` + 两种不同错误消息也构成**任意路径存在性探测**；
+ * 而 `listBlueprints(dir)` 是**任意目录枚举**。这条路**不需要** `allow_insecure_coding`。
+ *
+ * 边界就是「蓝图根目录」：默认 `process.cwd()/schematics`，可用 `SCHEM_ROOT` 覆盖
+ * （单测要用临时目录）。
+ * @returns {string} 绝对路径
+ */
+export function schemRoot() {
+    return path.resolve(process.env.SCHEM_ROOT || path.join(process.cwd(), 'schematics'));
+}
+
+/**
+ * 把一个蓝图路径解析成绝对路径，**并断言它落在蓝图根目录里**，否则抛。
+ *
+ * 便民保留：只给一个裸文件名（`house.litematic`）时按 `SCHEM_ROOT` 解析 ——
+ * 裸名不可能逃逸，所以这条不放松任何边界；`../..`、绝对路径一律按 cwd 解析后断言。
+ * @param {string} filePath
+ * @returns {string}
+ */
+export function resolveSchemPath(filePath) {
+    const root = schemRoot();
+    const raw = String(filePath ?? '');
+    let abs = path.resolve(raw);
+    if (!isUnder(abs, root)) {
+        const asBare = path.resolve(root, raw);
+        if (isUnder(asBare, root)) abs = asBare;
+    }
+    if (!isUnder(abs, root)) {
+        throw new Error(`蓝图路径越界（只允许 ${root} 之内）: ${raw}`);
+    }
+    return abs;
+}
+
+/** `p` 是否就是 `root` 或在 `root` 之下（区分大小写按键处理，Windows 盘符大小写不敏感）。 */
+export function isUnder(p, root) {
+    const norm = (s) => process.platform === 'win32' ? path.resolve(s).toLowerCase() : path.resolve(s);
+    const a = norm(p), b = norm(root);
+    return a === b || a.startsWith(b + path.sep);
+}
+
+/**
  * 从 long 数组里按位取出第 i 个值。
  * 注意：索引可能跨 long 边界，必须处理拼接。
  */
@@ -49,7 +96,8 @@ function readPackedValue(longArray, index, bits) {
  * @returns {Object} { name, size:{x,y,z}, totalBlocks, blockCount, palette, regions, getBlock(x,y,z) }
  */
 export function readLitematic(filePath) {
-    const abs = path.resolve(filePath);
+    // 第1条 ⑥：解析之后必须断言落在蓝图根目录里（原来这里没有任何校验）
+    const abs = resolveSchemPath(filePath);
     if (!fs.existsSync(abs)) {
         throw new Error(`Schematic file not found: ${abs}`);
     }
@@ -162,7 +210,8 @@ export function readLitematic(filePath) {
  * 列出 schematics 目录里所有可用的蓝图。
  */
 export function listSchematics(dir) {
-    const d = path.resolve(dir);
+    // 第1条 ⑥：同样是「先解析再断言」（原来 readdirSync(path.resolve(dir)) 可枚举任意目录）
+    const d = resolveSchemPath(dir ?? schemRoot());
     if (!fs.existsSync(d)) return [];
     return fs.readdirSync(d)
         .filter(f => /\.(litematic|schem|schematic)$/i.test(f))

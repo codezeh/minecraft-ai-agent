@@ -13,6 +13,36 @@ import { selectAPI, createModel } from './_model_map.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * 把 agent 名字解析成 `bots/` 下的目录，**并断言没跑出 botsRoot**（第一轮审查 第2条）。
+ *
+ * 为什么这条不能省：名字来自客户端。虽然 mindserver 的 create-agent 与 agent.js:205
+ * 现在都会先用 validateNameFormat 拒掉 `../../pwn`，但直到这次修复之前，
+ * `new Prompter()`（agent.js:147）比那句校验早 58 行就已经 mkdir + writeFile 了 ——
+ * 名字一旦漏过去，写入就已经发生，事后校验撤销不了已经写出去的文件。
+ * 所以这里做最后一道事实校验：解析后的路径必须以 `bots/` 开头。
+ *
+ * @param {string} name agent 名
+ * @param {string} [sub] `bots/<name>/` 之下的相对子路径（如 'logs'）
+ * @param {string} [botsRoot] `bots/` 根目录（默认 `process.cwd()/bots`；日志那处原本以模块位置为基准，
+ *        保留原基准以免改变运行期的日志落点）
+ * @returns {string} 绝对路径
+ */
+export function botDirOf(name, sub = '', botsRoot = path.resolve(process.cwd(), 'bots')) {
+    // 空白名与空名同等对待（`path.resolve(root,'   ')` 会得到一个"看起来合法"的目录名）
+    if (!String(name ?? '').trim()) {
+        throw new Error(`非法 agent 名（为空）: ${JSON.stringify(String(name ?? ''))}`);
+    }
+    const dir = path.resolve(botsRoot, String(name), sub);
+    if (dir !== botsRoot && !dir.startsWith(botsRoot + path.sep)) {
+        throw new Error(`非法 agent 名（路径逃逸已拦截）: ${JSON.stringify(String(name))}`);
+    }
+    if (dir === botsRoot) {
+        throw new Error(`非法 agent 名（为空）: ${JSON.stringify(String(name))}`);
+    }
+    return dir;
+}
+
 // Build the object selectAPI() needs from a profile, carrying over the
 // optional api/url/params overrides so relays can be configured in profiles.
 function pickModelConfig(src) {
@@ -107,8 +137,10 @@ export class Prompter {
         }
 
         this.skill_libary = new SkillLibrary(agent, this.embedding_model);
-        mkdirSync(`./bots/${name}`, { recursive: true });
-        writeFileSync(`./bots/${name}/last_profile.json`, JSON.stringify(this.profile, null, 4), (err) => {
+        // 第2条：路径先解析再断言（botDirOf），不写 `./bots/${name}` 裸拼
+        const botDir = botDirOf(name);
+        mkdirSync(botDir, { recursive: true });
+        writeFileSync(path.join(botDir, 'last_profile.json'), JSON.stringify(this.profile, null, 4), (err) => {
             if (err) {
                 throw new Error('Failed to save profile:', err);
             }
@@ -368,12 +400,11 @@ export class Prompter {
 
     async _saveToFile(logFile, logEntry) {
         let task_id = this.agent.task.task_id;
-        let logDir;
-        if (task_id == null) {
-            logDir = path.join(__dirname, `../../bots/${this.agent.name}/logs`);
-        } else {
-            logDir = path.join(__dirname, `../../bots/${this.agent.name}/logs/${task_id}`);
-        }
+        // 同一根因的第二个写入点（原来是 `path.join(__dirname, '../../bots/${name}/logs')`）：
+        // 走 botDirOf 断言，越界的名字在这里同样拦下。
+        const logDir = task_id == null
+            ? botDirOf(this.agent.name, 'logs', path.resolve(__dirname, '../../bots'))
+            : botDirOf(this.agent.name, path.join('logs', String(task_id)), path.resolve(__dirname, '../../bots'));
 
         await fs.mkdir(logDir, { recursive: true });
 

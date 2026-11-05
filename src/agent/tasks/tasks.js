@@ -402,9 +402,12 @@ export class Task {
             agentGoal += "You have to collaborate with other agents/bots, namely " + this.available_agents.filter(n => n !== this.name).join(', ') + " to complete the task as soon as possible by dividing the work among yourselves.";
             console.log(`Setting goal for agent ${this.agent.count_id}: ${agentGoal}`);
         }
+        if (!agentGoal) return;
         // internal: 代码自己设的目标（不是玩家发言）—— 按 M1 的发言人分级（08 §5）走主人级，
         // 否则「!goal 是主人级命令、这里没有 author」会被自己的权限闸门拦掉。
-        await executeCommand(this.agent, `!goal("${agentGoal}")`, { internal: true });
+        // 第1条 ⑤：agentGoal 是**任务 JSON 里的数据**，走参数通道而不是拼进命令串 ——
+        // 原来 `` `!goal("${agentGoal}")` `` + internal:true 等于「改 JSON 就能以主人身份执行任意命令」。
+        await executeCommand(this.agent, { command: '!goal', args: [String(agentGoal)] }, { internal: true });
     }
 
     async initBotTask() {
@@ -506,7 +509,12 @@ export class Task {
                 this.agent.killAll();
             }
             // internal: 同上 —— 由代码发起，不是玩家发言（08 §5）
-            await executeCommand(this.agent, `!startConversation("${other_name}", "${this.data.conversation}")`, { internal: true });
+            // 第1条 ⑤：conversation 是任务 JSON 里的数据，走参数通道（原来拼进命令串 = 注入面）
+            await executeCommand(
+                this.agent,
+                { command: '!startConversation', args: [String(other_name ?? ''), String(this.data.conversation ?? '')] },
+                { internal: true },
+            );
         }
         await this.setAgentGoal();
     }

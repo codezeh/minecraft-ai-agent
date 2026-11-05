@@ -30,9 +30,12 @@ const settings = {
     "language": "en", // translate to/from this language
     "render_bot_view": false, // DISABLED: requires the native `canvas` addon to be built locally
 
-    "allow_insecure_coding": true, // allows newAction command and model can write/run code on your computer. enable at own risk
-                                   // 已开启：代码跑在 SES Compartment 沙箱里，只能访问 skills/world/Vec3/log，
-                                   // 没有 fs / net / process。盖房子这类复杂操作必须靠它，否则一次只能放一个方块。
+    // 第一轮审查 第1条 ③：**默认关**。打开它等于「本机 root」——不是「受限沙箱」：
+    // SES Compartment 挡不住宿主 realm（第1条第三层已实测：注入进去的宿主函数
+    // `.constructor('return process')()` 直接拿到宿主 process），而且这条路上还有
+    // 蓝图路径越权（第1条第六层）与任务 JSON 注入（第五层）两条**不需要**它的入口。
+    // 打开方式：改这里为 true，或 `INSECURE_CODING=1 node main.js`（启动会打印醒目告警）。
+    "allow_insecure_coding": false, // allows newAction command and model can write/run code on your computer (= local root). enable at own risk
     "allow_vision": false, // DISABLED: requires the native `canvas` addon to be built locally
     "blocked_actions" : [], // commands to disable and remove from docs
     "code_timeout_mins": 20, // minutes code is allowed to run. -1 for no timeout -- 给个上限，防止代码死循环；大工程平地需要更长时间

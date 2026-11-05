@@ -253,6 +253,37 @@ function numParams(command) {
 }
 
 /**
+ * 参数通道：`{ command, args }` 直接当**数据**用，不再拼命令串（第一轮审查 第1条 ⑤）。
+ *
+ * 缺陷原貌：`tasks.js:407` 把任务 JSON 里的 `agentGoal` 插进
+ * `` `!goal("${agentGoal}")` ``、`:509` 把 `this.data.conversation` 插进
+ * `` `!startConversation("${other_name}", "${…}")` ``，两处都带 `internal: true`
+ * ——而 `internal: true` 的设计意图正是**跳过发言人权限闸门**。于是「改一个任务 JSON」
+ * 就等于「以主人身份执行任意 owner 级命令」：`agentGoal` 里塞一个 `")` 就能闭合字符串，
+ * 后面接什么就是什么。不需要 socket、不需要认证、不需要写代码。
+ *
+ * 修法：命令名 + 参数数组分开传，参数不经过 `parseCommandMessage` 的正则，
+ * 插值逃逸这条路径就不存在了（不是靠转义，而是根本没有拼接）。
+ * @param {{command: string, args?: Array<string|number|boolean>}} spec
+ * @returns {string | {commandName: string, args: Array}}
+ */
+export function normalizeArgsCommand(spec) {
+    const rawName = String(spec?.command ?? '');
+    const commandName = rawName.startsWith('!') ? rawName : '!' + rawName;
+    if (!/^!\w+$/.test(commandName)) return `命令名不合法: ${JSON.stringify(rawName)}`;
+    if (!getCommand(commandName)) return `${commandName} is not a command.`;
+    const args = Array.isArray(spec.args) ? spec.args.slice() : [];
+    for (const v of args) {
+        const t = typeof v;
+        // 只收标量：对象/数组进来基本就是调用方写错了，放进去只会让 perform 里炸得更远
+        if (t !== 'string' && t !== 'number' && t !== 'boolean') {
+            return `命令 ${commandName} 的参数只能是 string/number/boolean，收到 ${t}`;
+        }
+    }
+    return { commandName, args };
+}
+
+/**
  * 执行一条命令。
  *
  * ★ 2026-11-01 M1 安全改造（08 §5）：加了 `{ author }`。
@@ -266,13 +297,20 @@ function numParams(command) {
  * 等级只由 author 名字 + profile 的 permissions 算出，**模型输出的文字不参与**，
  * 所以提示词注入改不了等级。
  *
+ * 参数有两种形态（第一轮审查 第1条 ⑤）：
+ *   - 字符串 `!goToPlayer("Zeh", 3)`：玩家聊天 / 模型输出那条路，走 parseCommandMessage；
+ *   - `{ command:'!goal', args:[agentGoal] }`：**代码发起**那条路，参数不拼进命令串 ⇒ 无从注入。
+ *
  * @param {object} agent
- * @param {string} message 形如 `!goToPlayer("Zeh", 3)`
+ * @param {string|{command: string, args?: Array<string|number|boolean>}} message
  * @param {{author?:string|null, isOtherBot?:boolean, internal?:boolean}} [perm]
  */
 export async function executeCommand(agent, message, perm = {}) {
     const { author = null, isOtherBot = false, internal = false } = perm;
-    let parsed = parseCommandMessage(message);
+    // `{ command, args }` 走参数通道（不拼串）；字符串走原来的解析器（玩家/模型那条路）
+    const parsed = (message && typeof message === 'object' && typeof message.command === 'string')
+        ? normalizeArgsCommand(message)
+        : parseCommandMessage(message);
     if (typeof parsed === 'string')
         return parsed; //The command was incorrectly formatted or an invalid input was given.
     else {

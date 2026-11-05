@@ -6,6 +6,13 @@ import { fileURLToPath } from 'url';
 import * as mindcraft from './mindcraft.js';
 import * as procCtrl from './proc_control.js';
 import { allowLocalOnly } from './local_only.js';
+// 第一轮审查 第1条 ①②：握手 token 门 + set-agent-settings 字段白名单（见 auth_gate.js 顶部说明）
+import {
+    makeToken, makeHandshakeGate, authCookieHeader, hasAuthCookie,
+    sanitizeAgentSettings,
+} from './auth_gate.js';
+// 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
+import { validateNameFormat } from '../agent/connection_handler.js';
 import { readFileSync, existsSync, readdirSync } from 'fs';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
 // 板放 agent 里别的 bot 看不见；放这里就只有一个写者，省掉多进程锁）。
@@ -22,8 +29,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let io;
 let server;
+// 第一轮审查 第1条 ①：本次启动的握手 token（io.use 校验；agent 子进程从 env 拿到同一份）
+let handshakeToken = null;
 const agent_connections = {};
 const agent_listeners = [];
+
+/** 本次启动的握手 token；`init()` 之外的调用方（自动开浏览器）靠它拼 `?token=`。 */
+export function getHandshakeToken() {
+    return handshakeToken;
+}
 
 const settings_spec = JSON.parse(readFileSync(path.join(__dirname, 'public/settings_spec.json'), 'utf8'));
 
@@ -56,6 +70,26 @@ export function logoutAgent(agentName) {
 export function createMindServer(host_public = false, port = 8080) {
     const app = express();
     server = http.createServer(app);
+
+    // ── 握手 token（第一轮审查 第1条 ①）────────────────────────────────
+    // 为什么需要它：只绑 localhost 挡不住「本机任意进程」，local_only.js 的 Origin 判据挡不住
+    // 「不带 Origin 的脚本」。这里生成一个每次启动都不同的 token，io.use 校验；
+    // 所有特权事件都在 io.on('connection') 里，所以全部落在这道门后。
+    // 同用户进程仍能读到它（启动日志/env）—— 那不是这道门能解决的，见 auth_gate.js 顶部说明。
+    handshakeToken = process.env.MINDSERVER_TOKEN || makeToken();
+    // agent 子进程（AgentProcess 默认继承 process.env）靠这个连回来
+    process.env.MINDSERVER_TOKEN = handshakeToken;
+
+    // 浏览器控制台：把 ?token=… 换成 HttpOnly + SameSite=Strict 的 cookie，之后同源握手自动带上。
+    // 不这么做的话，面板（web/dist 已构建，改前端源码要重打包）会直接连不上。
+    app.use((req, res, next) => {
+        const fromQuery = typeof req.query?.token === 'string' ? req.query.token : null;
+        if (fromQuery && fromQuery === handshakeToken && !hasAuthCookie(req.headers.cookie, handshakeToken)) {
+            res.setHeader('Set-Cookie', authCookieHeader(handshakeToken));
+        }
+        next();
+    });
+
     // 心跳参数放宽：默认 pingInterval 25s / pingTimeout 20s 对本地回环太紧 ——
     // agent 进程在等模型 API 或跑大段同步代码时，一次 20s 的停顿就会被判掉线，
     // 进而触发断连->重连->超时->杀进程的连锁（实测踩过）。
@@ -65,6 +99,8 @@ export function createMindServer(host_public = false, port = 8080) {
         // 只放本机连接（第一轮审查）：只绑 localhost 挡不住浏览器网页直连 WebSocket，见 local_only.js
         allowRequest: allowLocalOnly,
     });
+    // 第一道门：握手 token（第二道是上面的 allowRequest；第三道是事件本身住在 connection 里）
+    io.use(makeHandshakeGate(handshakeToken));
 
     // ── 任务板（M8 B1）─────────────────────────────────────────────────
     //
@@ -270,6 +306,16 @@ export function createMindServer(host_public = false, port = 8080) {
                 }
             }
             if (settings.profile?.name) {
+                // 第2条：名字**先用同一份规则校验**，再往下走。
+                // 原来这里只查重不查格式，名字一路拼到 prompter.js 的 `./bots/<name>` 上，
+                // 而 agent 侧的 validateNameFormat 要晚 58 行才跑 —— 文件早写出去了。
+                // 复用 agent 侧那一份（connection_handler.js:87），规则只能有一个真相。
+                const nameCheck = validateNameFormat(settings.profile.name);
+                if (!nameCheck.success) {
+                    console.warn(`[mindserver] create-agent 拒绝非法 profile.name: ${JSON.stringify(settings.profile.name)}`);
+                    callback({ success: false, error: nameCheck.msg });
+                    return;
+                }
                 if (settings.profile.name in agent_connections) {
                     callback({ success: false, error: 'Agent already exists' });
                     return;
@@ -338,13 +384,21 @@ export function createMindServer(host_public = false, port = 8080) {
             agent_connections[agentName].socket.emit('chat-message', curAgentName, json);
         });
 
+        // 第1条 ②：运行期设置只走白名单。allow_insecure_coding（= 远程开代码执行 = 本机 root）、
+        // blocked_actions（清空即可放出 !newAction 等被封命令）、profile（里面是 owner 名单）
+        // 一律丢弃并告警，不再「照存 + 重启生效」。
         socket.on('set-agent-settings', (agentName, settings) => {
             const agent = agent_connections[agentName];
-            if (agent) {
-                agent.setSettings(settings);
-                // 停着的 agent 没有 socket：设置照存，下次启动生效（同 D25）
-                agent.socket?.emit('restart-agent');
+            if (!agent) return;
+            const { settings: safe, dropped } = sanitizeAgentSettings(settings);
+            if (dropped.length) {
+                console.warn(`[mindserver] set-agent-settings 丢弃非白名单字段（${agentName}）: ${dropped.join(', ')}`);
             }
+            if (Object.keys(safe).length === 0) return;
+            // 保留已有字段，只覆盖白名单里给到的键（原来整份替换会把没发的字段抹成 undefined）
+            agent.setSettings({ ...agent.settings, ...safe });
+            // 停着的 agent 没有 socket：设置照存，下次启动生效（同 D25）
+            agent.socket?.emit('restart-agent');
         });
 
         socket.on('restart-agent', (agentName) => {
@@ -399,6 +453,14 @@ export function createMindServer(host_public = false, port = 8080) {
 				console.warn(`Agent ${agentName} not in game, cannot send message via MindServer.`);
                 return;
 			}
+			// 第1条 ①：这条通路决定了「谁在说话」→ 权限等级，所以它必须落在握手门后。
+			// 门在 io.use(makeHandshakeGate)（见 createMindServer 顶部）：没 token 的连接
+			// 根本进不到 io.on('connection')，也就没有这个处理器。
+			// 另外补一条形状校验：from 必须是短字符串，别让对象/超长串进到 agent 侧的等级计算。
+			if (!data || typeof data.from !== 'string' || !data.from || data.from.length > 32) {
+				console.warn(`[mindserver] 拒绝 send-message：from 非法（${JSON.stringify(data?.from ?? null)}）`);
+				return;
+			}
 			try {
                 agent_connections[agentName].socket.emit('send-message', data);
 			} catch (error) {
@@ -426,6 +488,11 @@ export function createMindServer(host_public = false, port = 8080) {
     const host = 'localhost';
     server.listen(port, host, () => {
         console.log(`MindServer running on port ${port} on host ${host}`);
+        // 第1条 ①：token 必须让人看得到 —— 否则正常用户会被自己的门挡在外面。
+        // 控制台用这条带 token 的地址打开（cookie 由上面的 express 中间件换成 HttpOnly cookie）。
+        console.log(`[mindserver] 握手 token: ${handshakeToken}`);
+        console.log(`[mindserver] 控制台地址: http://${host}:${port}/?token=${handshakeToken}`);
+        console.log(`[mindserver] 本机脚本对接: 设 MINDSERVER_TOKEN=${handshakeToken}`);
     });
 
     return server;

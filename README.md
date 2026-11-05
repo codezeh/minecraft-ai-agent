@@ -175,5 +175,37 @@ node tools/test_tunnel.mjs      # 单项测试
 ## 安全提示
 
 > **不要将本 bot 连接到启用了代码执行的公开服务器。**
-> 本项目允许 LLM 在本机编写与执行代码。代码运行于沙箱中，但仍存在提示注入风险。
-> 代码执行默认关闭，如需开启请在 `settings.js` 中将 `allow_insecure_coding` 设为 `true`。
+> 本项目允许 LLM 在本机编写与执行代码。代码运行在 SES Compartment 里，**但那不是完整沙箱**，
+> 提示注入风险始终存在。
+> **代码执行默认关闭**（`settings.js` 里 `allow_insecure_coding: false`）；
+> 如需开启，改该值为 `true`，或用 `INSECURE_CODING=1 node main.js`（启动会打印醒目告警）。
+> 开启 = **给模型本机 root 权限**，只在本机、可信输入、临时调试时用。
+
+### 代码执行的边界到底在哪（第一轮审查 第 1 条 ③④）
+
+- **总闸是 `allow_insecure_coding`，不是 SES。** 默认 `false`；`INSECURE_CODING` 环境变量只认
+  `1/true/yes/on`（原来是「非空就开」，连 `=0` 都算开，已收紧），且启动时打印
+  「代码执行已开启 = 本机 root 权限」。
+- **SES 只是隔离层，而且它此前根本没生效过**：`src/agent/library/lockdown.js` 里
+  `export function lockdown()` 与 SES 的全局 `lockdown()` 同名，函数体里的调用解析到了它自己
+  ⇒ SES lockdown 从未执行 ⇒ 注入给模型的宿主对象，其 `.constructor` 就是宿主 `Function`：
+  `skills.log.constructor('return process.version')()` → `v24.16.0`，即本机任意代码执行。
+  现已改为显式调用全局 lockdown（`sesLockdown` 别名）。修好后同一表达式抛
+  `TypeError: Function.prototype.constructor is not a valid constructor`，
+  常见六个 `.constructor` 向量全部打不通（回归护栏：`tools/ses_escape_unit.mjs`；证据：`docs/audit/probes/t10-ses-escape-ab.mjs`（real/off 两种模式））。
+- **`evalTaming` 仍是 `unsafeEval`，这是硬依赖不是疏忽**：`protodef` 的编译器是
+  `eval(code)()` 且依赖模块局部变量，换成 `safeEval` 会直接 `TypeError: ... reading 'i8'`，
+  compiled 协议编不出来 ⇒ bot 连不上服务器（`docs/audit/probes/t10-safeeval-protodef.mjs` 两种模式可复现）。
+  在真 lockdown 下它不再是逃逸通道。
+- **不依赖代码执行的三条越权路也一并补了**（第 ⑤⑥ 条与第 2 条）：任务 JSON 里的
+  `agentGoal`/`conversation` 改走参数通道（不再拼命令串，`internal: true` 也就没得注入）；
+  蓝图路径加 `SCHEM_ROOT` 前缀断言（`describeSchematic('../../settings.js')` 这类被拒）；
+  `create-agent` 的 profile 名先用 `validateNameFormat` 校验，`Prompter` 内再做路径断言。
+- **控制面**：mindserver 启动时生成握手 token，`io.use` 校验，
+  `send-message` / `set-agent-settings` / `server-stop` / `shutdown` 全部落在这道门后；
+  `set-agent-settings` 还有字段白名单（`allow_insecure_coding` / `blocked_actions` / `profile` 直接丢弃）。
+  浏览器控制台用启动日志打印的 `http://localhost:<端口>/?token=…` 打开；
+  本机脚本对接设 `MINDSERVER_TOKEN=<token>`。
+- **残余风险（照实说）**：同一操作系统用户下的其它进程仍能读到 token
+  —— 那是同用户权限模型的问题，认证层解决不了。SES 逃逸对抗目前只覆盖已测向量，
+  专项复核是另案。

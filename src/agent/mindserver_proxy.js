@@ -40,12 +40,22 @@ class MindServerProxy {
             reconnectionAttempts: Infinity,
             reconnectionDelay: 500,
             reconnectionDelayMax: 3000,
+            // 第一轮审查 第1条 ①：mindserver 现在要握手 token。
+            // 用函数形式：每次（重）连都重新读 env，这样父进程换过 token 也能跟上。
+            // token 由 mindserver spawn 子进程时写进 process.env.MINDSERVER_TOKEN 继承下来。
+            auth: (cb) => cb({ token: process.env.MINDSERVER_TOKEN || '' }),
         });
 
         let settled = false;
         await new Promise((resolve, reject) => {
             this.socket.on('connect', () => { if (!settled) { settled = true; resolve(); } });
             this.socket.on('connect_error', (err) => {
+                // 第1条 ①：握手 token 不对时 socket.io 会把中间件的 err 送到这里，
+                // 提示要能让人看懂该干什么（否则表现成"连不上，一直重连"）
+                if (err?.data?.code === 'AUTH_REQUIRED') {
+                    console.error('MindServer 拒绝握手：缺少/错误的 token（MINDSERVER_TOKEN）。' +
+                        '这个 agent 进程不是由 mindserver 拉起的，请用 mindserver 启动它，或设 MINDSERVER_TOKEN=<启动日志里的 token>。');
+                }
                 console.error('Connection failed:', err.message);
                 // 首连失败才算致命；连上之后的偶发 connect_error 交给自动重连，
                 // 不能在这里 reject（那个 Promise 早就 settle 了，reject 是无效操作且误导日志）

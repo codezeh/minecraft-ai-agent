@@ -186,6 +186,14 @@ export class Coder {
         // This is where we determine the environment the agent's code should be exposed to.
         // It will only have access to these things, (in addition to basic javascript objects like Array, Object, etc.)
         // Note that the code may be able to modify the exposed objects.
+        //
+        // ⚠️ 第一轮审查 第 1 条 ④：边界不是这几行，是 `lockdown()`（lockdown.js）真的跑了没有。
+        // 注入的是**宿主对象**，所以它们的 `.constructor` 曾经是宿主 `Function`：
+        //   `skills.log.constructor('return process.version')()` → `v24.16.0`（= 本机 RCE）
+        // 那条路成立的**真原因**是 `lockdown.js` 里有个自引用遮蔽 bug，SES 的 lockdown 其实没执行；
+        // 修好之后同样的表达式抛 `TypeError: Function.prototype.constructor is not a valid constructor`。
+        // 换句话说：**改这几行注入面没用**（换任何宿主函数都是同一个漏洞），要改的是 lockdown 是否真生效。
+        // 仍然别把这里当沙箱：逃逸对抗是持续的活，而 `allow_insecure_coding` 默认 `false` 才是那道总闸。
         const compartment = makeCompartment({
             skills,
             log: skills.log,
