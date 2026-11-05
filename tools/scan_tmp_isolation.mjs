@@ -299,6 +299,7 @@ function reportLeftovers(argv) {
         console.log(`  --purge：已删除 ${n}/${items.length} 个`);
     } else {
         console.log('  （加 --purge 可尝试现在删除）');
+        console.log('  ⚠ --purge **只在没有测试在跑时用**：它不区分"正在被并发运行的测试所用"的目录。');
     }
 }
 
