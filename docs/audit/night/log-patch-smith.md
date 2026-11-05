@@ -227,3 +227,26 @@ node 不能 spawn ⇒ `gate:full`/`unit_all`/`lint_hard` 跑不了，一切"通�
 
 **承认的教训（第三条同类）**：F-SEC-205 消费方 → patch_integrity 没接 gate → fenceUntrusted 死代码。
 规则已落地：**新增安全函数必须同时交出"调用点 + 单测（含接线断言）"**。R6 是第一次真正做到。
+
+## R7 2026-11-06 02:52 | 任务 A（F-WEB-202/203 精修）+ 任务 B（F-RT-001/003/005）| 落地 4 / blocked 1 | 阻塞：真机压测与 icacls 归 captain/用户
+
+**A-202（按复核席裁决重做）**：采纳"缓存 import() 解决的是不存在的问题"。真正做：把 handler 拆成
+`fetchTextureBuffer`（干活，不碰 res）+ `getTexture`（调度）——**同 key 合并**（Map<key,Promise>）+
+**并发上限 4** + **8 秒硬超时**（504，不缓存）+ **finally 清理**（`TEX_INFLIGHT.delete`，漏了就是永久 503+泄漏）
++ 结果缓存 300 条 + `Cache-Control: max-age=86400`。
+
+**A-203（扩面 + 抽共用实现）**：新增模块级 `takeToken(socket,label,cap,window)`，按**远端地址+事件label**分桶
+（挂 socket.data 断开即清零可绕过）；四个事件统一走它：send-message 30/10s、**restart-agent 3/60s**、
+**create-agent 5/60s**、listen-to-agents 10/60s。原来 send-message 的内联块已删除（消除重复——今晚多次因重复逻辑出事）。
+**明确不解决**：`max_commands=-1` 的单次放大（captain 已定另行处理）。
+
+**B-003**：① 种完 cookie 后 GET **302 去掉 ?token=**（不进历史/书签同步）；② 退出/SIGINT/SIGTERM 时 **unlink token 文件**。
+
+**B-005**：`tool_prep.js` 把 `if (!placed.ok) throw` **挪到读回之后** —— 因为 patches 把 place_block 等待压到 500ms，
+`placeAgainst` 可能 ok=false 但方块已放上；先 throw 会误判"没有工作台"白扔台子。
+
+**B-001**：**blocked**，手册 `manual-F-RT-001-token-acl.md` 已写（icacls 三步 + 两个可持续方案 A/B）。
+关键坑：token 每次启动重建 ⇒ ACL 退回继承值 ⇒ 必须收紧父目录或每次重设，否则"改完就回退"。
+
+**自检**：`node --check`（mindserver/tool_prep）OK；`mindserver_gate_unit` 49/0；`text_fence_unit` 22/0；`permissions_unit` 68/0。
+**未做**：202 的并发压测与 8s 超时真机实测、icacls 执行、F-RT-004（未指派）。

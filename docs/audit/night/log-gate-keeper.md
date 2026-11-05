@@ -487,3 +487,47 @@ Start-Process $panelUrl                # ← token 缺失时照样打开裸 /con
 - `docs/audit/night/review-captain-fixes.md`（三处补修的逐条裁决）
 - `docs/audit/night/NIGHT-REPORT.md` 追加「03:4x 复核席终章」（不覆盖 captain 的滚动报告）
 - D5 七条已归档 verified/（201/202/203/204/205/101/RT-002），各含 `## review`
+
+---
+
+## R8 2026-11-06 03:5x–04:1x | 复验 D4 三条重做 + captain 必改项 | **通过 3 / 新发现 1 条 high**
+
+### 复验结果（按 captain 要求：读本体，不信单测的源码断言）
+1. **`6f46182` 接线 → 通过（不是死代码）**：我自己 grep 到四处真实调用点 ——
+   `prompter.js:219` `$MEMORY→fenceUntrusted`、`:221` `$TO_SUMMARIZE→fenced:true`、`:223` `$CONVO→fenced:true`、
+   `history.js:70` `sanitizeExternalText(memory,1500)`；`examples.js:79` **正确地不 fence**。
+   另查了一条 captain 没提的旁路：`prompter.js:407` 另有一处 `$CONVO` 走同一 `replaceStrings` ⇒ 同样 fenced，**无漏网**。
+2. **`permissions_unit 68/0` → 真绿且加强**：3 条断言改写成新语义（非删除）、**新增**"执行侧判据真的生效（走/停都不可用）"、
+   **新增**"配了 owner 后信任级仍能用 !endGoal 急停"（双向守门）。实跑 `commandLevel` 确认 `!endGoal` 仍 trusted（未被顺手升权）。
+3. **`08e0f65` → 通过（部分解决，如实标注）**：`tasks.js:526 await this.teleportBots()` **无条件在路径上**；
+   日志逐条列"✗跳过了什么 / ✓什么照常 / ⇒ 场景没搭起来（部分解决）"；并主动写明"闸在调用方不在 sink，彻底修法已立单"。
+4. **`bfdaca8` globalThis → 通过，2 建议**：单进程单 profile 下没问题（我核了三点：只在没 owner 分支置位、
+   internal/otherBot 提前 return 不会误触发、每 agent 独立子进程各有一份）。建议 ①改 `Set`（按 profile 记，防未来多 Agent 串味）
+   ②别挂 `globalThis`，用模块级变量（否则单测无法隔离）。
+5. **我上轮必改项 → 已修到位**：`$t.Length -eq 36`、`exit 1` 前两行警告、`port` 归一、`req.path` 去控制字符、`RATE_BUCKETS` 注释对齐。
+
+### 🔴 新发现 `F-AI-205`（high）：一个"无人能停的 2 秒烧钱循环"
+**不是任何单个提交的错，是两个各自合理的改动组合出的新故障。** 五跳链条（全部实读）：
+```
+history.js:144-149  goal 跨重启存活（含 self_prompt_author）
+  → 自提示回合按该 author 定级
+  → permissions.js:154 fail-closed：没配 owner ⇒ LEVEL.OTHER ⇒ 所有命令（含 !endGoal）被拒
+  → agent.js:674 executeCmd 被拒后 used_command 仍被**无条件置 true**
+  → self_prompter.js:78-91 no_command_count 归零 ⇒ 循环永不自停（cooldown 2s）
+```
+叠加 `max_commands=-1` + 自提示提示词要求"必须含命令" + 按量计费 ⇒ **每 2 秒一次 LLM，玩家叫不停，只能改 memory.json**。
+触发很现实：用过 my-local 设过 goal → 切到 deepseek/defaults（owner 实测 null）；或 owner 打成空串/错字。
+**requiredFix（推荐①）**：权限拒绝时 `used_command = false`（1 行），让"被拒"等价于"没命令"⇒ 连续 3 轮 STOPPED；
+或 ②加 `max_turns`（即 F-AI-202 ③）；或 ③恢复 goal 时校验作者等级，低于 TRUSTED 就不恢复。
+已开单 `inbox/F-AI-205.md`，带五跳证据 + 4 条 verify。
+
+### 队列纪律（这次先验证再动）
+发现 `claimed/` 与 `verified/` 同名重复（我上轮又造成一次），且 **`verified` 那份只有 review、丢了原始单正文**（1774 vs 12454 字节）。
+已按"claimed 全文 + 我 t17 复验段"合并成一份 → `verified/`，现在三份各含**原始单 + t16 review + t17 复验**（14.2KB / 8.6KB / 13.6KB），claimed 无残留。
+
+### 关于 captain 问的第 ④ 条（commit 粒度）我的判断
+**不认为"宁可拆成红门禁的中间态"是对的。** commit 的价值有两个：可回滚单元（要"内聚"）+ 归属可查（要"可查"）。
+同文件交织改动天然是一个回滚单元，拆开会得到两个"单独 revert 都会坏"的 commit —— 降低价值一，而价值二有更便宜的办法：
+**加一份 `docs/audit/night/COMMIT-MAP.md`（finding → sha）**。建议把规则从"一个 finding 一个 commit"改成
+"**一个 commit 一个可独立回滚单元**"，body 按 finding 分节（captain 已在这么做且做得很好），
+只在**跨文件/跨子系统**时坚持拆开（那种情况拆开才便宜）。一句话：**归属清晰 = COMMIT-MAP + body 分节，不是一个 finding 一个 commit。**

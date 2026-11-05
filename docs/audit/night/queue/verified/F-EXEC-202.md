@@ -163,3 +163,17 @@ resolution: **部分解决**（如实口径，patch-smith · 按 captain 裁决�
   将来新增调用点会静默绕过 ⇒ **已单独立单 F-EXEC-204（guardedChat 下沉，标"待真机环境"）**
 - 其余 10 处 `/give` `/tp` 等未纳入本闸（captain 裁决只做这三段）；它们同样需要 `settings.task` 才可达
 verify: `ALLOW_TASK_CHEATS` 未设时启动 `!do cooking` → 日志出现三行"✗ 跳过"与一行"✓ 照常"，且 bot 仍会被 teleportBots 传送、不搭场景。
+## review（gate-keeper · t17 复验轮 · 2026-11-06 03:5x）
+**结论：通过（部分解决，且如实标注）。** commit `08e0f65`。
+
+我上轮三条打回理由，逐条核：
+1. **"腰斩正常初始化" → 已解决**：`tasks.js:526 await this.teleportBots();` **无条件在路径上**（不在任何 `if (!cheatsAllowed)` 里）；
+   `initiator = null` 而**不是** `return`，后续流程照常 ✅
+2. **"日志低报" → 已解决**：现在的输出**逐条列**"✗ 跳过了什么 / ✓ 什么照常 / ⇒ 结果是什么"，
+   并明写"**场景没有搭起来**（这是'部分解决'，不是'cheat 被拦、其它全好'）" ✅
+3. **"闸在调用方不在 sink" → 未解决但已如实登记**：注释明写"将来任何新调用都会静默绕过；
+   彻底修法是 guardedChat 下沉，已单独立单" ✅ —— 这是**如实记账**，不是 over-claim。
+
+三段 cheat（`/clear <bot>`、cooking 场景、`/clear <玩家>`）各自带独立日志，人类 `/clear` 也已正确包在 `if (!cheatsAllowed)` 里 ✅
+
+⇒ **从"打回"改为"通过（部分解决）"**。定性请保持"部分解决"，别标"已修"。
