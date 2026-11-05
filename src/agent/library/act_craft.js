@@ -349,8 +349,20 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         await bot.craft(recipe, limit, tableBlock ?? undefined);
     } catch (e) {
         const msg = String(e?.message ?? e);
-        if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item: itemName });
-        return fail('INTERNAL', msg, diag({ error: msg, limit }));
+        // ★★★ 第15条（R1 收尾）：**合成抛错也要如实报"这一次真做出来几个"。**
+        //
+        //   `bot.craft(recipe, limit)` 内部是按次数循环的：被中断时**可能已经合出若干件**
+        //   （材料已经真扣了）。原来这两条 `fail` 只带 `{item}` —— 产出是 0 还是 N
+        //   没人知道，于是 `board_store` 的产出账（`checkpoint.producedTotal`）记成 0，
+        //   下一轮重试**再从零做一遍** → 材料被扣第二次（第15条的病灶）。
+        //   → 报出真实差值；拿不准（读不到背包）就报 0，不猜。
+        const madeInCatch = Math.max(0, (() => { try { return countItem(bot, itemName) - before; } catch { return 0; } })());
+        if (/interrupt/i.test(msg)) {
+            return fail('INTERRUPTED', '被取消了', {
+                item: itemName, want, produced: madeInCatch, producedTotal: madeInCatch, invAfter: snapInv(),
+            });
+        }
+        return fail('INTERNAL', msg, diag({ error: msg, limit, produced: madeInCatch, producedTotal: madeInCatch }));
     }
 
     // ★★ 2026-11-04（t89）：**合成后立刻读背包会读到旧值 —— 要等一下再判。**
@@ -368,7 +380,15 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     let after = countItem(bot, itemName);
     const tWait = Date.now();
     while (after - before <= 0 && Date.now() - tWait < 1500) {
-        if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了', { item: itemName });
+        if (bot?.interrupt_code) {
+            // ★★★ 第15条：**中断也要把已经产出的数量报出去**（原来只报 `{item}`）。
+            //   这一支最容易被漏：`bot.craft` 已经 resolve（材料真扣了、产物可能已经进背包），
+            //   紧接着收到中断 → 报 produced=0 → 产出账记 0 → 重试再做一遍 → 扣第二次料。
+            const madeNow = Math.max(0, (() => { try { return countItem(bot, itemName) - before; } catch { return 0; } })());
+            return fail('INTERRUPTED', '被取消了', {
+                item: itemName, want, produced: madeNow, producedTotal: madeNow, invAfter: snapInv(),
+            });
+        }
         await new Promise((r) => setTimeout(r, 120));
         after = countItem(bot, itemName);
     }
@@ -415,6 +435,15 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
         want,
         got: limit,
         produced,
+        // ★★★ 第15条（R1 收尾）：产出账的口径统一在这里说明白。
+        //   · `produced`       = **本次调用**的真实产出（`after - before`，单位"件"）
+        //   · `producedTotal`  = 与它同值；`board_store.finish` 认这个名字，用来把
+        //                        "这张单已经产出过多少"累进 `checkpoint.producedTotal`。
+        //     **跨尝试的累计不在这里做**：`act_craft` 拿不到 jobId（`composite_registry:109`
+        //     的 `runCraft` 没把 `ctx` 传下来，见 deep-executor E6），也就没有"哪张单"的概念。
+        //     硬在这里攒一个 bot 级计数器 = 把"别的单/上半场"的产出算到这张单头上
+        //     （账报大 → 单子提前 done → 少做活），比不记更危险。
+        producedTotal: produced,
         usedTable: !!tableBlock,
         costMs: Date.now() - t0,
         // ★★★ 2026-11-05（t128）：**成功也要留背包快照。**

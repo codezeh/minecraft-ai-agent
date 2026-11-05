@@ -521,6 +521,9 @@ export function listJobs(db, filter = {}) {
  *   不是同一批重复计，是**已达标的单被重新派了一遍**。
  *
  * 判据：`want > 0 且 progress.count >= want`。
+ * ★ 例外（第15条）：`craft` 单的判据是 `want > 0 且 checkpoint.producedTotal >= want`
+ *   —— 它的 `progress.count` 历史语义是"背包总量"，不能当进度用（见函数体 t120 注释）。
+ *   没有 `producedTotal` 的老 row 不收敛。
  *
  * ★ **绝不截断 count**（不做 `Math.min(count, want)`）：`24/8` 里的 24 是真实发生过的事实
  *   （背包确实多了 24 个），截成 8 就是篡改记录；超额本身也是有用信息（want 定小了）。
@@ -532,8 +535,6 @@ function convergeIfSatisfied(db, id, now, reason = 'satisfied') {
     const job = getJob(db, id);
     if (!job) return null;
     const want = Number(job.progress?.want ?? job.want ?? 0);
-    const count = Number(job.progress?.count ?? 0);
-    if (!(want > 0) || count < want) return null;            // 没达标 → 不收敛
 
     // ★★★ 2026-11-04（t120）：**`craft` 单不能用"背包总数"收敛。**
     //
@@ -551,7 +552,25 @@ function convergeIfSatisfied(db, id, now, reason = 'satisfied') {
     //   修法：**`craft` 单必须真的跑一次**（它才是产出动作），不做"按库存收敛"。
     //   `mine`/`collect`/`obtain` 这些"弄到 N 个"的语义用库存收敛是对的（库存真有就够了），
     //   所以只对 `craft` 关掉 —— 改动面最小。
-    if (String(job.skill) === 'craft') return null;
+    //
+    // ★★★ 第15条（R1 收尾）：**craft 的收敛改成看"产出账"，不是关掉。**
+    //
+    //   t120 关掉它是对的 —— 因为当时的 `count` 是"背包总量"，拿它当进度必然误判。
+    //   现在 `finish` 会给每张 craft 单记 `checkpoint.producedTotal`（**本单累计产出**），
+    //   这才是"这张单真的做够数了"的判据。于是：
+    //     · 有账且 ≥ want → 可以收敛（**这就是"重试不再扣第二次料"的关键**：
+    //       被打断后回 ready 的单，下一轮 claim 时在这里直接收敛成 done，不再跑一遍流程）
+    //     · **没有账的老行（producedTotal 缺失）→ 仍然不收敛**（保持 t120 的行为，不猜）
+    const isCraft = String(job.skill) === 'craft';
+    let count;
+    if (isCraft) {
+        count = Number(job.checkpoint?.producedTotal);
+        if (!Number.isFinite(count)) return null;             // 老行没有产出账 → 不收敛
+    } else {
+        count = Number(job.progress?.count ?? 0);
+    }
+    if (!(want > 0) || count < want) return null;            // 没达标 → 不收敛
+
     if (isTerminal(job.state)) return job;                    // 已是终态
     if (!canTransition(job.state, JOB_STATE.DONE)) return null;
 
@@ -559,7 +578,14 @@ function convergeIfSatisfied(db, id, now, reason = 'satisfied') {
         SET state=?, lease_owner=NULL, lease_until=NULL, result=?, updatedAt=?
         WHERE id=? AND state=?`).run(
         JOB_STATE.DONE,
-        j({ ok: true, code: 'OK', message: `进度已达标（${count}/${want}），直接收敛为 done`, reason, at: now }),
+        j({
+            ok: true, code: 'OK',
+            message: isCraft
+                ? `产出账已达标（本单已产出 ${count}/${want}），直接收敛为 done —— 不再重跑（不重复扣料）`
+                : `进度已达标（${count}/${want}），直接收敛为 done`,
+            reason, at: now,
+            ...(isCraft ? { craftLedger: { producedTotal: count } } : {}),
+        }),
         now, id, job.state,
     );
     return getJob(db, id);
@@ -605,10 +631,21 @@ export function claimFor(db, bot, opts = {}) {
         if (!meetsRequires(candJob, who)) continue;
         // ★ dependsOn：前置没 done → 这张还不能领（06 §9.1 按工序拆单）
         if (!dependsSatisfied(db, candJob)) continue;
+        // ★★★ 第15条（R1 收尾）：**每次领单 = 新的一次尝试**，在这里打一个只增的序号。
+        //
+        //   为什么需要它：`attempts` 不足以区分"**同一次尝试被重复 finish**"和"**下一次尝试**"
+        //   —— 因为 `attempts` 只在 finish 计数的**那一刻**才 +1，两次 finish 之间它是不动的。
+        //   而产出账必须分清这两件事：重复 finish 不许多记账，换了一次尝试必须累加。
+        //   领单是**唯一**能开始新尝试的入口，所以序号打在这里。（老 row 没有 `attemptSeq`
+        //   → `settleCraftLedger` 按"不同尝试"处理，即**只会少记、不会虚记**。）
+        const cpForClaim = j({
+            ...(candJob.checkpoint && typeof candJob.checkpoint === 'object' ? candJob.checkpoint : {}),
+            attemptSeq: (Number(candJob.checkpoint?.attemptSeq) || 0) + 1,
+        });
         // 原子抢：**这一条**就是全部关键。changes===1 → 我抢到了；0 → 别人先抢走了，试下一个
         const r = db.prepare(`
-            UPDATE jobs SET state='claimed', assignee=?, lease_owner=?, lease_until=?, updatedAt=?
-            WHERE id = ? AND state = 'ready'`).run(bot, bot, now + leaseMs, now, c.id);
+            UPDATE jobs SET state='claimed', assignee=?, lease_owner=?, lease_until=?, checkpoint=?, updatedAt=?
+            WHERE id = ? AND state = 'ready'`).run(bot, bot, now + leaseMs, cpForClaim, now, c.id);
         if (r.changes === 1) return getJob(db, c.id);
         // 没抢到（被别人抢先/状态已变）→ 继续试下一个候选
     }
@@ -651,6 +688,79 @@ export function heartbeat(db, id, bot, opts = {}) {
         };
     }
     return { ok: true, job: getJob(db, id), progressClamped: merged.clamped, reported: merged.reported };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// craft 单的「产出账」（R1 终审 §9 第 1 项 / 报告第 15 条）
+// ───────────────────────────────────────────────────────────────────────────
+/**
+ * 从流程结果里取「本次尝试到目前为止产出了几个」（单位：**件**，不是合成次数）。
+ *
+ * 取值优先级（**宁可少记，绝不虚记**）：
+ *   ① `data.producedTotal` —— 动作层自报的累计（`act_craft` 的 `after - before`）；
+ *   ② `data.produced`      —— 动作层自报的单次真实产出（同一口径）；
+ *   ③ `progress.count`     —— **只在流程报 `ok` 时**采信（那时它就是 `flow_craft` 的产出增量）；
+ *   ④ 都没有 → **0**（不猜）。
+ *
+ * ★ 为什么不用 `data.count`、也不在失败分支采信 `progress.count`：
+ *   `flow_craft` 的失败分支写的是 `base = { count: r.data?.got ?? got }`，而 `got` 在
+ *   `act_craft` 里是 `limit`（**合成次数**）。perCraft=1 的配方下"要 3 次只做出 1 件"是常态
+ *   → 拿次数当件数会**虚记**。**虚记比不记危险得多**：账报大了，单子会被判"已达标"
+ *   而提前 done（该做的活没做）。宁可少记：失败分支只认动作层明确报出的 `produced*`。
+ */
+export function craftProducedOf(result) {
+    const d = result?.data ?? null;
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
+    const explicit = num(d?.producedTotal);
+    if (explicit != null) return explicit;
+    const perCall = num(d?.produced);
+    if (perCall != null) return perCall;
+    if (result?.ok === true) {
+        const fromProgress = num(result?.progress?.count);
+        if (fromProgress != null) return fromProgress;
+    }
+    return 0;
+}
+
+/**
+ * 结算一张 craft 单的产出账 —— **按增量**累加，写进 `checkpoint.producedTotal`。
+ *
+ * 病灶（报告第 15 条）：库里**没有任何"这张单已经产出过多少"的账**。
+ * `act_craft` 的 `produced` 只活在返回值里，`finish` 之后连痕迹都没有
+ * （`progress.count` 对 craft 是"背包里该物品总数"，被 `mergeProgress` 取 max，
+ * 看不出"重试扣了几次料"）。于是「做出东西 → 被打断/失败 → 重跑」每重跑一次
+ * 就**真扣一次材料**，而账面看不出来 —— 玩家看到的是"材料莫名少了，单子还在跑"。
+ *
+ * 现在：`producedTotal` = 本单**跨尝试累计**产出（单调不减）。
+ * 增量口径 = **本次产 − 上次已计**（同一个 attempt 里用 `checkpoint.producedAttempt`
+ * 当"上次已计"），所以同一次尝试被重复 finish（收敛后再收尾 / 崩溃重放）不会重复记账。
+ *
+ * ★ 边界（如实说明，别夸大）：checkpoint 只在 **finish**（或显式塞断点）时落库。
+ *   进程被 SIGKILL 时这次尝试**根本没走到 finish** → 这次产出记不进库 → 重试仍会重做一份。
+ *   它能覆盖的是"**走到了 finish 的那一类**"：INTERRUPTED / TIMEOUT / 部分产出后失败 /
+ *   后续步骤失败 / 被抢占后收尾 —— 这一类正是"重试重复扣料"的原发场景。
+ *
+ * @returns {{producedTotal:number, attemptProduced:number, countedSeq:number|null, delta:number, prevProducedTotal:number}}
+ */
+export function settleCraftLedger(job, result) {
+    const cp = (job?.checkpoint && typeof job.checkpoint === 'object') ? job.checkpoint : {};
+    const prevTotal = Math.max(0, Number(cp.producedTotal) || 0);
+    const reported = craftProducedOf(result);
+    // 「是不是同一次尝试」用 `claimFor` 打上的只增序号（`attemptSeq`）判，
+    // **不能用 `attempts`** —— attempts 只在 finish 计数时才 +1，区分不开
+    // "同一次尝试重复 finish" 与 "下一次尝试"（见 claimFor 里的注释）。
+    const seq = Number(cp.attemptSeq);
+    const countedSeq = Number(cp.countedSeq);
+    const sameAttempt = Number.isFinite(seq) && Number.isFinite(countedSeq) && countedSeq === seq;
+    const alreadyCounted = sameAttempt ? Math.max(0, Number(cp.producedAttempt) || 0) : 0;
+    const delta = Math.max(0, reported - alreadyCounted);        // 本次产 − 上次已计 = 本次应记
+    return {
+        producedTotal: prevTotal + delta,
+        attemptProduced: Math.max(alreadyCounted, reported),
+        countedSeq: Number.isFinite(seq) ? seq : null,
+        delta,
+        prevProducedTotal: prevTotal,
+    };
 }
 
 /**
@@ -698,7 +808,16 @@ export function finish(db, id, result = {}, opts = {}) {
     //   因为 `act_craft` 在 `produced <= 0` 时**必然返回 fail**，
     //   所以"ok=true"就意味着"真的产出够了"，不需要再用库存数二次判断。
     const isCraftJob = String(job.skill) === 'craft';
-    const completed = okFlag && (isCraftJob || want <= 0 || count >= want);
+    // ★★★ 第15条（R1 收尾）：**craft 单的产出账**。
+    //   账本落在 `checkpoint.producedTotal`（本单跨尝试累计产出），按增量累加。
+    //   见 `settleCraftLedger` 的注释（含它覆盖不到的那种崩溃）。
+    const ledger = isCraftJob ? settleCraftLedger(job, result) : null;
+    // ★★★ 第15条：craft 单的**第二个**完成判据 —— **账上已经够了就别再跑一遍**。
+    //   「做出 N 个 → 被打断 / 后续步骤失败 → 单子回 ready → 重新领 → 再做 N 个」
+    //   每重跑一次就**真扣一次材料**（这正是第15条的病灶，t125 只修了"零产出也 done"）。
+    //   现在账够了就直接 done：第二次扣料根本不会发生。
+    const ledgerSatisfied = isCraftJob && want > 0 && ledger.producedTotal >= want;
+    const completed = ledgerSatisfied || (okFlag && (isCraftJob || want <= 0 || count >= want));
 
     let next;
     let counted = false;
@@ -801,13 +920,35 @@ export function finish(db, id, result = {}, opts = {}) {
         }
     }
     const leaseGuard = bot == null ? '' : ' AND (lease_owner IS NULL OR lease_owner = ?)';
+
+    // ★★★ 第15条：把产出账落盘（唯一持久的地方）。
+    //   · `checkpoint.producedTotal`   —— 本单**累计**产出（单调不减，跨尝试累加）
+    //   · `checkpoint.producedAttempt` —— 本次尝试已计多少（增量对账用）
+    //   · `checkpoint.countedSeq`      —— 上面那个数属于第几次尝试（领单时打的 `attemptSeq`）
+    //   · `progress.count` 对 craft 改成"**本单累计产出**"（原来它是背包总量，
+    //     看不出重试扣了几次料 —— 复审 §3.2 点的就是这个）。**只许涨**：
+    //     老行上可能已有更大的"背包总量"，不在这里回退（回退是另一种篡改记录）。
+    const progressForWrite = (() => {
+        if (!ledger) return progress ?? job.progress;
+        if (!progress) return { count: ledger.producedTotal, want: want > 0 ? want : null };
+        return { ...progress, count: Math.max(Number(progress.count ?? 0) || 0, ledger.producedTotal) };
+    })();
+    const checkpointForWrite = ledger
+        ? {
+            ...(result.checkpoint ?? job.checkpoint ?? {}),
+            producedTotal: ledger.producedTotal,
+            producedAttempt: ledger.attemptProduced,
+            countedSeq: ledger.countedSeq,
+        }
+        : (result.checkpoint ?? job.checkpoint);
+
     const r = db.prepare(`UPDATE jobs
         SET state=?, attempts=?, lease_owner=NULL, lease_until=NULL,
             progress=?, checkpoint=?, result=?, interrupted=?, updatedAt=?
         WHERE id=?${leaseGuard}`).run(
         next, attempts,
-        j(progress ?? job.progress),
-        j(result.checkpoint ?? job.checkpoint),
+        j(progressForWrite),
+        j(checkpointForWrite),
         // ★★★ 2026-11-04（t105）：**必须存 `result.data` —— 这是 diag() 加了 4 次还看不见的真因。**
         //
         //   verify 报了 **4 次**「`craft` 失败时 `data={}`」，我改了 3 处转发：
@@ -818,7 +959,13 @@ export function finish(db, id, result = {}, opts = {}) {
         //   → 前面每一层都传对了，**最后一层不存**。这和今晚那些"中间层丢字段"是同一族的**终点版本**：
         //     **一路传到底，最后一步扔了。**
         //   → 也说明我前三次修的都是"看起来最像"的那一层，而没从"数据最终落在哪"往下查。
-        j({ ok: okFlag, code, message: result.message ?? '', at: now, data: result.data ?? null }),
+        j({
+            ok: okFlag, code, message: result.message ?? '', at: now, data: result.data ?? null,
+            // ★ 第15条：产出账也留一份在 `result` 里（`checkpoint` 是账本，`result` 是这次的快照）。
+            //   这样"这张单总共扣了几次料"不用 join 也能一眼读出来：
+            //   `producedTotal` = 累计产出，`producedDelta` = 这一次新记了多少。
+            ...(ledger ? { craftLedger: { producedTotal: ledger.producedTotal, delta: ledger.delta, attemptSeq: ledger.countedSeq } } : {}),
+        }),
         // 回到 ready 时清掉 interrupted（与 control.js 的 requeue 语义一致）；
         // 其它状态保留（paused 时要留着"被打断的原因/时刻"）
         next === JOB_STATE.READY ? null : j(result.interrupted ?? job.interrupted),
