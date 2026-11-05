@@ -163,6 +163,16 @@ export function resolveLevel({ author, permissions, isOtherBot = false, internal
     //
     // 运维要求：profile 里必须写 `permissions.owner`。本仓 `deepseek` / `defaults/*` 实测 owner
     //   为 null ⇒ 用这些 profile 会"什么命令都没反应"，这是**有意的 fail-closed**，不是 bug。
+    // ★ 一次性警告（captain 补）：这条 fail-closed 会让"没配 owner 的 profile"里
+    //   所有聊天命令静默失效 —— 用户只会看到"她不听我说话了"，无从判断原因。
+    //   实测 profiles/defaults/*、deepseek.json、claude.json 等 owner 全为 null。
+    //   把静默故障变成有解释的故障：第一次命中时打印一次修法。
+    if (!globalThis.__noOwnerWarned) {
+        globalThis.__noOwnerWarned = true;
+        console.warn('[permissions] 这个 profile 没有配置 permissions.owner ⇒ 所有玩家聊天命令都不响应（F-AI-201 fail-closed）。');
+        console.warn('[permissions] 修法：在该 profile 里加 "permissions": { "owner": "<你的游戏名>" }。');
+    }
+
     return LEVEL.OTHER;
 }
 
