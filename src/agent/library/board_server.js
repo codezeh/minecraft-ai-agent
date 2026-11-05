@@ -27,6 +27,8 @@ import {
     // ★ t140：兜底收敛（子单全终态但父单还挂着）
     convergeOrphanParents,
     reopenOrphanBlocked,
+    // ★ T30：第5条（依赖已死 → DEP_DEAD）、第17条（幽灵父单 → ORPHAN_PARENT）
+    sweepDeadDepJobs, blockOrphanParents,
     // B4：共享数据（06 §9.3）
     putShared, getShared, listShared, delShared, findItemInSharedChests,
 } from './board_store.js';
@@ -174,10 +176,15 @@ export function attachBoardServer(deps = {}) {
                     return ack(cb, { ok: false, reason: `未知 scope「${scope}」（只能是 mine / claimable / all）` });
                 }
 
+                // ★★★ T30 第14条：**`openOnly` 必须在 SQL 里过滤**。
+                //   `scope='claimable'` 的用途是"抢占判定 / 残局回收"，它绝不能
+                //   被 200 张已完成的历史单挤出窗口（`jobs` 表从不删除，
+                //   `LIMIT 200` + "同级取最老" ⇒ 新单永远进不了视野，且不报错）。
                 const jobs = listJobs(db, {
                     states,
                     ...listFilter,
                     skill: f.skill ?? null,
+                    openOnly: f.openOnly === true || scope === 'claimable',
                     limit: f.limit,
                 });
                 ack(cb, { ok: true, jobs, scope });
@@ -249,7 +256,12 @@ export function attachBoardServer(deps = {}) {
         // ── finish：按结果决定去哪（规则②③在 store 里）──────────────────
         socket.on('board:finish', (payload, cb) => {
             try {
-                const r = finish(db, String(payload?.id ?? ''), payload?.result ?? {}, { now: now() });
+                // ★★★ T30 第4条：**必须把 bot 传下去** —— `finish()` 要用它做租约归属校验。
+                //   不传就等于"谁都能改任何单的状态"：租约过期的旧持有者能把别人
+                //   正在跑的单写回 ready（两个 bot 抢同一张单）。
+                const r = finish(db, String(payload?.id ?? ''), payload?.result ?? {}, {
+                    now: now(), bot: payload?.bot ?? null,
+                });
                 if (!r.ok) return ack(cb, { ok: false, reason: r.message ?? r.code });
                 changed(r.job, `finish:${r.next}`);
                 // ★ B3：单结束了就放掉它的预约（失败/完成都不该再占着资源）
@@ -409,6 +421,23 @@ export function attachBoardServer(deps = {}) {
             try {
                 for (const j of reopenOrphanBlocked(db, { now: now() })) {
                     changed(j, 'reopen:sweep-orphan-blocked');
+                }
+            } catch { /* 兜底失败不该让进程崩 */ }
+            // ★★★ T30 第5条：**依赖已死** → blocked + DEP_DEAD。
+            //   现场：依赖死掉的单永久 ready、父单永久 running（最长卡 166 分钟）。
+            //   `dependsSatisfied` 只认 done，"永远好不了"和"还没好"在库里长得一样，
+            //   所以必须有这条主动扫描，否则没有任何路径会再碰它。
+            try {
+                for (const j of sweepDeadDepJobs(db, { now: now() })) {
+                    changed(j, 'blocked:dep-dead');
+                }
+            } catch { /* 兜底失败不该让进程崩 */ }
+            // ★★★ T30 第17条：**幽灵父单**（拆单中途崩溃 → 永久 running 且无子单）。
+            //   `convergeOrphanParents` 明确跳过无子单的父单，所以这种壳单没人管；
+            //   落成 blocked + ORPHAN_PARENT 让它在面板上"显形"，而不是永远"正在跑"。
+            try {
+                for (const j of blockOrphanParents(db, { now: now() })) {
+                    changed(j, 'blocked:orphan-parent');
                 }
             } catch { /* 兜底失败不该让进程崩 */ }
         } catch { /* 扫描失败不该让进程崩 */ }

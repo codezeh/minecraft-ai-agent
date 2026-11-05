@@ -306,6 +306,10 @@ export class BoardClient {
             return fail('INTERNAL', `未知 scope「${scope}」（只能是 mine / claimable / all）`, { scope });
         }
         const payload = { scope, mine: this.name, states: filter.states ?? null };
+        // ★★★ T30 第14条：`scope='claimable'` **一律带 openOnly**（服务端放进 SQL）。
+        //   否则 200 张已完成的历史单把 LIMIT 窗口占满 → 新单进不了镜像 →
+        //   抢占/残局回收静默失效（`jobs` 表从不删除，只是"暂时"没满）。
+        if (scope === 'claimable') payload.openOnly = true;
         if (Number.isFinite(filter.limit)) payload.limit = filter.limit;
         const r = await this._call('board:list', payload);
         if (!r.ok) return r;
@@ -354,7 +358,10 @@ export class BoardClient {
 
     /** 回报结果（完成与否由 store 判）。 */
     async finish(id, result) {
-        const r = await this._call('board:finish', { id: String(id), result });
+        // ★★★ T30 第4条：**带上自己的名字**。服务端要用它校验租约归属：
+        //   不传 → 服务端无法判断"你还是不是这张单的主人" → 租约过期的旧持有者
+        //   能把别人正在跑的单写回 ready。`LEASE_STALE` = 立刻停手（与 LEASE_LOST 同义）。
+        const r = await this._call('board:finish', { id: String(id), result, bot: this.name });
         if (r.ok && r.data?.job) this._byId.set(r.data.job.id, r.data.job);
         return r;
     }

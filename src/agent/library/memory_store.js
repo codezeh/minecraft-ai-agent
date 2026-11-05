@@ -69,6 +69,27 @@ export function storeFileFor(bot, namespace) {
 }
 
 /**
+ * 把读不出来的记忆文件改名留证（`.corrupt-<时间戳>`）。
+ *
+ * ★ T30 第25条：读失败**不等于**"这份数据不存在"。不备份就直接用默认值，
+ *   下一次 `updateStore()` 的整份重写会把原文件**永久覆盖**。
+ *   改名成功 ⇒ 原样保留可事后人工抢救；改名失败 ⇒ 至少别让文件被静默覆盖（下面会 warn）。
+ *
+ * @returns {string|null} 备份文件路径；没文件/改名失败返回 null
+ */
+function backupCorruptStore(bot, namespace) {
+    try {
+        const p = storeFileFor(bot, namespace);
+        if (!fs.existsSync(p)) return null;
+        const backup = `${p}.corrupt-${Date.now()}`;
+        fs.renameSync(p, backup);
+        return backup;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * 读一份领域数据。文件不存在或损坏时返回默认值（不会抛）。
  */
 export function readStore(bot, namespace) {
@@ -85,7 +106,15 @@ export function readStore(bot, namespace) {
         }
         return parsed ?? fallback;
     } catch (err) {
-        console.warn(`[memory] 读取 ${namespace} 失败，使用默认值:`, err.message);
+        // ★★★ T30 第25条：**损坏必须留证，不能静默**。
+        //
+        //   原来这里只 warn 一句就返回默认值 —— 后果是"**下次写永久覆盖**"：
+        //   `updateStore()` 拿到的 `current` 是空默认值，回调往上加一条，
+        //   `writeStore` 整份重写 ⇒ **坏文件里还剩的旧数据全没了**，且只有一行 warn。
+        //   （`board_store` 早就用了 `.corrupt-<时间戳>` 的做法，这里对齐。）
+        const backup = backupCorruptStore(bot, namespace);
+        console.warn(`[memory] 读取 ${namespace} 失败，使用默认值`
+            + (backup ? `（原文件已留证：${backup}）` : '（原文件留证失败）') + ':', err.message);
         return fallback;
     }
 }

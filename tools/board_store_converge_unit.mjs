@@ -17,7 +17,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-    openBoard, addJob, getJob, claimFor, JOB_STATE,
+    openBoard, addJob, getJob, claimFor, JOB_STATE, sweepDeadDepJobs,
 } from '../src/agent/library/board_store.js';
 
 let pass = 0, fail = 0;
@@ -184,46 +184,66 @@ function makeDepChain(depState, { depId = null } = {}) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ★★ ②-6 「静默阻塞」缺口（**已知缺陷，未修**，按 captain 要求记账不修）
+// ★★ ②-6 【T30 第5条 已修 → 硬断言】「静默阻塞」
 //
-//   "应当"有的东西：后继被前置卡住时，至少留下**一条可观测痕迹**
-//   （captain 拟的方向：`dependsSatisfied` 返回 false 时发 `job-waiting-on-dep` 事件）。
-//   现在**什么都没有**（result/interrupted 全空，事件流也没有）→ 只能人肉 join dependsOn。
+//   修之前（XFAIL 记账）：前置 blocked 时后继永远 ready，库里**一丝痕迹都没有**，
+//   只能人肉 join dependsOn 才知道它在等谁。现场后果：
+//     后继单永久 ready（既不终态、又永远领不到）、父单永久 running —— 最长卡 166 分钟。
 //
-//   所以这条按**应有契约**断言（"要有痕迹"），当前必然不成立；
-//   用带指纹的 XFAIL 记录：指纹 = 「后继仍 ready 且 result/interrupted 全空」。
-//     · 指纹在 → XFAIL（已知缺口，不判红，但打印出来）
-//     · 指纹不在（说明开始留痕了）→ XPASS，提醒把本用例改成硬断言
-//     · 既不留痕、状态又怪 → 真 FAIL（新问题，不许吞）
+//   修之后：`depDead()` 判「任一依赖 ∈ failed/blocked/cancelled」，
+//   由 `sweepDeadDepJobs()`（挂 scanTimer，周期性兜底）把后继落成
+//   `blocked` + `result.code='DEP_DEAD'`，并把 `deps` 写进 result（直接能看出在等谁）。
+//   ★ 本用例**不再是 XFAIL**：形态不对就判红。
 // ══════════════════════════════════════════════════════════════════════════
 {
     const { db, dep, child } = makeDepChain(JOB_STATE.BLOCKED);
-    claimFor(db, BOT);
+    const got = claimFor(db, BOT);              // 依赖没满足 → 仍然领不到（这条语义不变）
+    const before = getJob(db, child.id);
+    const swept = sweepDeadDepJobs(db, {});     // 兜底扫（scanTimer 每轮做的同一件事）
     const after = getJob(db, child.id);
 
-    // "有痕迹"的判据：库里能直接看出"它在等前置"，且不是靠人肉 join
-    const hasTraceField = after.result != null || after.interrupted != null
-        || String(after.pausedReason ?? '') !== ''
-        || String(after.blockedReason ?? '') !== '';
-    const trace = { result: after.result, interrupted: after.interrupted, pausedReason: after.pausedReason ?? null };
-
-    // 已知缺口的指纹：状态还是 ready 且三处痕迹全空
-    const fingerprint = after.state === JOB_STATE.READY
-        && after.result == null && after.interrupted == null && !after.pausedReason;
-
-    if (hasTraceField) {
-        console.log(`XPASS ②-6 前置 blocked 时后继已留下痕迹 —— 缺口修好了！请把这条改成硬断言  ${JSON.stringify(trace)}`);
-        pass++;
-    } else if (fingerprint) {
-        console.log(`XFAIL(已知缺口) ②-6 前置 blocked 时后继被卡住却**无任何留痕**（result/interrupted/pausedReason 全空）`
-            + ` —— 已报 captain 记账，待定是否加 job-waiting-on-dep 事件  child=${after.state}`);
+    const good = got === null
+        && before.state === JOB_STATE.READY
+        && swept.length === 1 && swept[0].id === child.id
+        && after.state === JOB_STATE.BLOCKED
+        && after.result?.code === 'DEP_DEAD'
+        && Array.isArray(after.result?.deps) && after.result.deps.includes(dep.id);
+    if (good) {
+        okCase('★ ②-6 依赖已死 → 兜底扫落 blocked + result.code=DEP_DEAD（留痕，不再静默）',
+            `child=${after.state} code=${after.result?.code} deps=${JSON.stringify(after.result?.deps)}`);
     } else {
-        badCase('②-6 既不留痕、状态也不是 ready（形态变了，须重判）', { state: after.state, ...trace });
+        badCase('②-6 依赖已死的后继没有被落地（第5条回归）', {
+            claimed: got?.id ?? got, before: before.state, swept: swept.length,
+            child: after.state, result: after.result,
+        });
+    }
+
+    // ②-6-b 幂等：scanTimer 每 5 秒扫一次，已记账的不许重复写库
+    const swept2 = sweepDeadDepJobs(db, {});
+    const after2 = getJob(db, child.id);
+    if (swept2.length === 0 && after2.state === JOB_STATE.BLOCKED && after2.result?.code === 'DEP_DEAD') {
+        okCase('②-6-b 幂等：再扫一次不重复写（已记账的不再动）', 'swept2=0');
+    } else {
+        badCase('②-6-b 重复扫描不该重复写', { swept2: swept2.length, state: after2.state });
+    }
+}
+
+// ②-6-c 正向对照：依赖**还活着**（running）→ 绝不能判死
+//   （否则"工序还在做"会被提前废掉 —— 判据宽一格就是这个后果）
+{
+    const { db, child } = makeDepChain(JOB_STATE.RUNNING);
+    const swept = sweepDeadDepJobs(db, {});
+    const after = getJob(db, child.id);
+    if (swept.length === 0 && after.state === JOB_STATE.READY && after.result == null) {
+        okCase('②-6-c 正向对照：依赖 running（还活着）→ 不判死，后继仍 ready 且无痕',
+            `state=${after.state}`);
+    } else {
+        badCase('②-6-c 依赖还活着却被判死', { swept: swept.length, state: after.state, result: after.result });
     }
 }
 
 
 console.log('============================================');
-console.log(`${pass}/${pass + fail} 个用例通过（另有 1 条 XFAIL(已知缺口)：②-6 静默阻塞无留痕，已报 captain 记账）`);
+console.log(`${pass}/${pass + fail} 个用例通过（②-6 已于 T30 第5条修好：XFAIL → 硬断言）`);
 console.log('============================================');
 process.exit(fail === 0 ? 0 : 1);

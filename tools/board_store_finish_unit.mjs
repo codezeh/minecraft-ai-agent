@@ -36,6 +36,7 @@ import { join } from 'node:path';
 import {
     openBoard, addJob, getJob, finish, JOB_STATE,
     listJobs, setState, reopenBlockedWithSatisfiedDeps,
+    claimFor, expireLeases, updateJob, LEASE_MS,
 } from '../src/agent/library/board_store.js';
 
 let pass = 0, fail = 0;
@@ -245,7 +246,101 @@ function runFinish({ state = JOB_STATE.RUNNING, maxAttempts = 3, attempts = 0, r
     } else badCase('t83 依赖未满足却重开了', { n: reopened.length, state: after.state });
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ★★ ④ 【T30 第4条】"这张单现在是别人的" —— 旧持有者调用 finish **必须失败**
+//    （LEASE_STALE）且**一个字段都不写**。
+//
+//    改之前的病根：UPDATE 只有 `WHERE id=?`，**只认单号不认人**。于是
+//      「A 的租约过期/被抢占 → 单子已经交给 B → A 的 finally 里那个 finish 晚到一步」
+//    会把 **B 正在跑的单**写回 ready/done（B 的进度、租约被一并清空）。
+//    改之后：`WHERE id=? AND (lease_owner IS NULL OR lease_owner=?)`，
+//    `changes===0` → LEASE_STALE，一行不合。
+//
+//    ★ 注：`claimFor()` 同时会写 `assignee`，所以"另一个 bot 再领一次"这条路
+//      在这里走不通（那是 assignee 与过期回收的另一条独立问题，不属本条）。
+//      这里直接把租约转给 B（= 被抢占/人工改派后的库内形态），只测 finish 的归属判据。
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const { db } = freshDb();
+    const t0 = 1000000;
+    const job = addJob(db, { title: '被接手', skill: 'mine', priority: 5, progress: { count: 1, want: 4 } });
+
+    const a = claimFor(db, 'A', { now: t0 });                                  // A 领到
+    updateJob(db, job.id, { lease: { owner: 'B', until: t0 + 60000 } }, { now: t0 + 5 });  // 转手给 B
+    const before = getJob(db, job.id);
+
+    // A 迟到的 finish（自称做完 4/4）
+    const r = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 4, want: 4 } },
+        { now: t0 + 10, bot: 'A' });
+    const after = getJob(db, job.id);
+
+    const untouched = after.state === before.state
+        && after.attempts === before.attempts
+        && after.lease?.owner === before.lease?.owner
+        && after.lease?.until === before.lease?.until
+        && String(after.progress?.count) === String(before.progress?.count)
+        && JSON.stringify(after.result) === JSON.stringify(before.result);
+
+    if (a?.id === job.id && before.lease?.owner === 'B'
+        && r.ok === false && r.code === 'LEASE_STALE' && untouched) {
+        okCase('★ ④ 单子已转给 B 后，A 的 finish 必须失败且一个字都不改',
+            `code=${r.code} state=${after.state} attempts=${after.attempts} lease_owner=${after.lease?.owner}`);
+    } else {
+        badCase('④ 旧持有者的 finish 竟然写进去了（第4条回归）', {
+            ok: r.ok, code: r.code,
+            before: { st: before.state, at: before.attempts, owner: before.lease?.owner, count: before.progress?.count },
+            after: { st: after.state, at: after.attempts, owner: after.lease?.owner, count: after.progress?.count },
+        });
+    }
+
+    // ④-b 正向对照：租约属于 B → B 的 finish 正常生效（守卫没把正常路径一起关掉）
+    const rb = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 4, want: 4 } },
+        { now: t0 + 11, bot: 'B' });
+    const afterB = getJob(db, job.id);
+    if (rb.ok === true && afterB.state === JOB_STATE.DONE) {
+        okCase('④-b 正向对照：租约持有者本人的 finish 照常生效', `state=${afterB.state} next=${rb.next}`);
+    } else {
+        badCase('④-b 持有者自己的 finish 被误拒', { ok: rb.ok, code: rb.code, state: afterB.state });
+    }
+}
+
+// ④-c 兼容：不传 bot（老调用方）→ 不做归属校验，旧行为不变（不误杀现有调用方）
+{
+    const { db } = freshDb();
+    const t0 = 2000000;
+    const job = addJob(db, { title: '老调用方', skill: 'mine', priority: 5, progress: { count: 0, want: 2 } });
+    claimFor(db, 'A', { now: t0 });
+    const r = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 2, want: 2 } }, { now: t0 + 10 });
+    const after = getJob(db, job.id);
+    if (r.ok === true && after.state === JOB_STATE.DONE) {
+        okCase('④-c 不传 bot（老调用方）→ 不做归属校验，照常写入', `state=${after.state}`);
+    } else {
+        badCase('④-c 不传 bot 时不该被拒', { ok: r.ok, code: r.code, state: after.state });
+    }
+}
+
+// ④-d 语义边界：**无租约**（过期后没人接手）→ 允许补写收尾。
+//   这是有意的：判据是「没人持有 ⇒ 谁都可能是合法的收尾者」；与 heartbeat 的
+//   LEASE_LOST（必须持有）不同 —— finish 是**收尾**，不该因为"刚过期"就丢掉结果。
+{
+    const { db } = freshDb();
+    const t0 = 3000000;
+    const job = addJob(db, { title: '过期无人接手', skill: 'mine', priority: 5, progress: { count: 0, want: 2 } });
+    claimFor(db, 'A', { now: t0 });
+    expireLeases(db, t0 + LEASE_MS + 1);                    // 过期回收 → lease_owner=NULL
+    const r = finish(db, job.id, { ok: true, code: 'OK', progress: { count: 2, want: 2 } },
+        { now: t0 + LEASE_MS + 2, bot: 'A' });
+    const after = getJob(db, job.id);
+    if (r.ok === true && after.state === JOB_STATE.DONE && after.attempts === 1) {
+        okCase('④-d 无租约（过期后无人接手）→ 允许收尾（LEASE_STALE 只管"别人持有"）',
+            `state=${after.state} attempts=${after.attempts}`);
+    } else {
+        badCase('④-d 无租约时不该被拒', { ok: r.ok, code: r.code, state: after.state, attempts: after.attempts });
+    }
+}
+
 console.log('============================================');
 console.log(`${pass}/${pass + fail} 个用例通过  （第 15 层 bug 已由 faed233 修好，原 3 条 XFAIL 已转硬断言）`);
+
 console.log('============================================');
 process.exit(fail === 0 ? 0 : 1);

@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
     openBoard, addJob, getJob, convergeOrphanParents, rollupParent, JOB_STATE,
+    blockOrphanParents, ORPHAN_PARENT_MS, updateJob,
 } from '../src/agent/library/board_store.js';
 
 let pass = 0, fail = 0;
@@ -247,6 +248,107 @@ const statesOf = (db, ids) => ids.map((id) => getJob(db, id)?.state);
     const broken = SRV.replace(/convergeOrphanParents\s*\(/g, 'noSuchFn(');
     check('⑩-b 反向验证：内存里摘掉该调用 → 守卫报红（⑩ 会红）',
         /convergeOrphanParents\s*\(/.test(broken) === false, `mutantFound=${/convergeOrphanParents\s*\(/.test(broken)}`);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ★★★ 第17条（T30）：**幽灵父单** —— 拆单中途崩溃留下的"壳单无子单"
+//
+//   形态：`splitByCount` / `splitByArea` 先建父单（state:'running'、skill:null）
+//         再建子单，**两步之间崩了** → 父单永久 running 且 0 子单。
+//   为什么以前没人管：`convergeOrphanParents` 明确 `if (!kids.length) continue`。
+//   现在：`blockOrphanParents` 落成 blocked + `result.code=ORPHAN_PARENT`。
+//
+//   ★ 两处**收窄**（报告字面写的是「running/ready 且无子单」）必须先钉死，
+//     否则这条"修复"本身会变成灾难：
+//       ① 只认 `skill` 为空的壳单 —— "ready 且无子单"正是**队列里每一张正常待办单**！
+//       ② 只认租约已过期/无租约 —— 租约活着就是有人正在跑，判它幽灵等于杀活单。
+// ══════════════════════════════════════════════════════════════════════
+{
+    const { db } = freshDb();
+    const t0 = 1000000;
+    // 壳单：skill 为空、running、无子单、创建于很久以前
+    const ghost = addJob(db, { kind: 'shared', title: '拆单壳', skill: null, args: {}, state: JOB_STATE.RUNNING }, { now: t0 - ORPHAN_PARENT_MS - 1000 });
+    const out = blockOrphanParents(db, { now: t0 });
+    const after = getJob(db, ghost.id);
+    check('⑪ 幽灵父单（壳单无子单+无人持有）→ blocked + result.code=ORPHAN_PARENT',
+        out.length === 1 && out[0].id === ghost.id && after.state === JOB_STATE.BLOCKED
+        && after.result?.code === 'ORPHAN_PARENT',
+        `out=${out.length} state=${after.state} code=${after.result?.code}`);
+}
+
+// ⑫ 有子单的壳单 → 不碰（那是正常的"等子单"父单，归 convergeOrphanParents 管）
+{
+    const { db } = freshDb();
+    const t0 = 1000000;
+    const p = addJob(db, { kind: 'shared', title: '有子单', skill: null, args: {}, state: JOB_STATE.RUNNING }, { now: t0 - ORPHAN_PARENT_MS - 1000 });
+    mkKid(db, p.id, JOB_STATE.RUNNING);
+    const out = blockOrphanParents(db, { now: t0 });
+    const after = getJob(db, p.id);
+    check('⑫ 壳单**有子单** → 不碰（正常等子单的父单，归 convergeOrphanParents）',
+        out.length === 0 && after.state === JOB_STATE.RUNNING && after.result == null,
+        `out=${out.length} state=${after.state}`);
+}
+
+// ⑬ ★误伤防线：ready + **有 skill** 的普通待办单（老）→ 绝不能被 block
+//    （报告字面写法「ready 且无子单」会把这整条队列一起废掉 —— 这条就是防它的）
+{
+    const { db } = freshDb();
+    const t0 = 1000000;
+    const normal = addJob(db, { kind: 'personal', title: '待办', skill: 'mine', args: { count: 4 }, state: JOB_STATE.READY }, { now: t0 - ORPHAN_PARENT_MS - 1000 });
+    const out = blockOrphanParents(db, { now: t0 });
+    const after = getJob(db, normal.id);
+    check('⑬ ★误伤防线：ready+有 skill 的老待办单 → 不动（照字面实现会把整条队列废掉）',
+        out.length === 0 && after.state === JOB_STATE.READY && after.result == null,
+        `out=${out.length} state=${after.state}`);
+}
+
+// ⑭ ★误伤防线：壳单但**租约还活着**（有人正在跑）→ 不动
+{
+    const { db } = freshDb();
+    const t0 = 1000000;
+    const live = addJob(db, { kind: 'shared', title: '在跑', skill: null, args: {}, state: JOB_STATE.RUNNING },
+        { now: t0 - ORPHAN_PARENT_MS - 1000 });
+    // ★ `addJob` 不认 spec 里的 lease（只认扁平的 lease_owner/lease_until），
+    //   所以"有人正持有租约"必须用 updateJob 显式写出来。
+    updateJob(db, live.id, { lease: { owner: 'A', until: t0 + 30000 } }, { now: t0 - 900 });
+    const out = blockOrphanParents(db, { now: t0 });
+    const after = getJob(db, live.id);
+    check('⑭ ★误伤防线：壳单但租约活着（有人正在跑）→ 不动',
+        out.length === 0 && after.state === JOB_STATE.RUNNING,
+        `out=${out.length} state=${after.state} lease=${JSON.stringify(after.lease)}`);
+}
+
+// ⑮ 时间阈值：创建还不到 2 分钟的壳单 → 不动（给"正在建子单"的窗口）
+{
+    const { db } = freshDb();
+    const t0 = 1000000;
+    const fresh = addJob(db, { kind: 'shared', title: '刚建', skill: null, args: {}, state: JOB_STATE.RUNNING }, { now: t0 - 1000 });
+    const out = blockOrphanParents(db, { now: t0 });
+    const after = getJob(db, fresh.id);
+    check('⑮ 未过 2 分钟阈值 → 不动（在建子单的窗口）',
+        out.length === 0 && after.state === JOB_STATE.RUNNING, `out=${out.length} state=${after.state}`);
+}
+
+// ⑯ 幂等：再扫一次不重复写
+{
+    const { db } = freshDb();
+    const t0 = 1000000;
+    const ghost = addJob(db, { kind: 'shared', title: '壳', skill: null, args: {}, state: JOB_STATE.RUNNING }, { now: t0 - ORPHAN_PARENT_MS - 1000 });
+    blockOrphanParents(db, { now: t0 });
+    const out2 = blockOrphanParents(db, { now: t0 + 1000 });
+    check('⑯ 幂等：第二轮不再重复写', out2.length === 0 && getJob(db, ghost.id).state === JOB_STATE.BLOCKED,
+        `out2=${out2.length}`);
+}
+
+// ⑰ 接线守卫：`blockOrphanParents` 必须仍在 board_server 的 scanTimer 里
+//    （否则"没人管"的病根原样回来 —— 与 ⑩ 同一个理由）
+{
+    const SRV = readFileSync('src/agent/library/board_server.js', 'utf8');
+    const wired = /blockOrphanParents\s*\(/.test(SRV);
+    check('⑰ board_server 仍在调用 blockOrphanParents（第17条兜底没被摘掉）', wired, `found=${wired}`);
+    const broken = SRV.replace(/blockOrphanParents\s*\(/g, 'noSuchFn(');
+    check('⑰-b 反向验证：内存里摘掉该调用 → 守卫报红（⑰ 会红）',
+        /blockOrphanParents\s*\(/.test(broken) === false, `mutantFound=${/blockOrphanParents\s*\(/.test(broken)}`);
 }
 
 // 清理临时库（不留垃圾）

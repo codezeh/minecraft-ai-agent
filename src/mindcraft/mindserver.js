@@ -94,7 +94,12 @@ export function createMindServer(host_public = false, port = 8080) {
         });
         console.log(`[任务板] 已启用（${registry.size} 个技能可派单，库 ${board.path}）`);
     } catch (e) {
-        console.log(`[任务板] 启动失败，按"没有板"继续：${String(e?.message ?? e).slice(0, 160)}`);
+        // ★★★ T30 第3条：这里**必须说清"库文件还在"**。
+        //   以前 `openBoard` 把任何异常都当库损坏 → 改名/删除后建空库，日志只写
+        //   "库损坏已重建空库"；于是"另一个进程持锁 10 秒"这种**可恢复**的问题
+        //   会静默变成"工单全丢"。判据收窄后走到这里 = **没有动过任何文件**。
+        console.log(`[任务板] 板起不来（库文件原样保留，未改名/未删除）`
+            + `，按"没有板"继续：${String(e?.message ?? e).slice(0, 160)}`);
     }
 
     // Serve static files

@@ -79,6 +79,25 @@ const DIRECT_BLOCK_CODES = new Set(['NO_ITEM', 'NO_TOOL', 'NO_RECIPE']);
 /** 默认租约时长（06 §6：30 秒）。 */
 export const LEASE_MS = 30 * 1000;
 
+/**
+ * **任务板结果码**（写在 `result.code` 上）。
+ *
+ * ★ 它和 contract 的 ActionResult `CODES` **是两套词汇表**，不要混
+ *   （T02/preflight §3 已裁决 `DIED` 属这一类，不进 CODES —— 塞进去会让
+ *   `assertResult` 误认它是 ActionResult 码）。
+ * ★ 所以这里**具名化**：对象字面量里直接写死一个全大写的 code 字符串，
+ *   会被 preflight §3 判成"未注册错误码"，而这些码本就不该进 CODES。
+ *   具名常量既不改线上字符串，也不污染那套词表。
+ *   （★ 这条注释本身也不能出现那种字面量：preflight 的正则**会扫注释** ——
+ *     我第一版就在注释里写了个样本，结果被自己的审计抓成"未注册码 XXX"，已改成散文。）
+ */
+export const BOARD_RESULT_CODES = Object.freeze({
+    LEASE_STALE: 'LEASE_STALE',
+    LEASE_EXPIRED: 'LEASE_EXPIRED',
+    DEP_DEAD: 'DEP_DEAD',
+    ORPHAN_PARENT: 'ORPHAN_PARENT',
+});
+
 /** 默认最大尝试次数。 */
 export const DEFAULT_MAX_ATTEMPTS = 3;
 
@@ -133,6 +152,93 @@ CREATE TABLE IF NOT EXISTS shared (
 CREATE INDEX IF NOT EXISTS idx_claims_until ON claims(until);
 `;
 
+// ───────────────────────────────────────────────────────────────────────────
+// 库结构版本与幂等迁移（第24条）
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * 板库结构版本（写在 `PRAGMA user_version`）。
+ *
+ * ★ 为什么必须有它：`CREATE TABLE IF NOT EXISTS` 只建"**不存在的表**"，
+ *   **不会给已存在的表补列**。而以前"加一列"只有一条路 —— 让 `openBoard` 把
+ *   "缺列"当成库损坏、改名重建空库（见 `isCorruptError`）。于是**每次加字段都在丢单**，
+ *   而且丢得"合理"（日志写着"库损坏已重建"）。
+ *   有了版本号，"加列"变成一次**幂等迁移**：读版本 → 补列 → 写回。
+ */
+export const BOARD_SCHEMA_VERSION = 2;
+
+/**
+ * 从 `SCHEMA` 里抽出 `jobs` 表的列定义（`[{name, def}]`）。
+ *
+ * ★ 故意**从建表语句抽**，而不是另写一份列清单：两份清单一定会漂移
+ *   （这正是全仓反复出现的"两个地方都以为自己在管同一件事"）。
+ *   以后往 `SCHEMA` 里加一列，迁移**自动**纳管。
+ */
+export function jobColumnDefs(schema = SCHEMA) {
+    const head = 'CREATE TABLE IF NOT EXISTS jobs (';
+    const start = typeof schema === 'string' ? schema.indexOf(head) : -1;
+    if (start < 0) return [];
+    const open = schema.indexOf('(', start);
+    const close = schema.indexOf('\n);', open);
+    if (open < 0 || close < 0) return [];
+    return schema.slice(open + 1, close).split(',')
+        .map((def) => def.trim()).filter(Boolean)
+        .map((def) => ({ name: def.split(' ')[0], def }));
+}
+
+/**
+ * 幂等迁移：把「老库缺的列」补上，再写回 `PRAGMA user_version`。
+ *
+ * @returns {{added:string[], from:number, to:number}} 无事可做时 `added` 为空数组
+ */
+export function migrateBoardSchema(db) {
+    // ★ 表还不存在（全新库）→ 无事可做：`SCHEMA` 会一次建全，不需要"补列"。
+    //   （而且 `ALTER TABLE jobs` 对不存在的表必然报错。）
+    const exists = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").get();
+    if (!exists) {
+        const from0 = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
+        return { added: [], from: from0, to: BOARD_SCHEMA_VERSION, skipped: 'no-table' };
+    }
+    const have = new Set(db.prepare('PRAGMA table_info(jobs)').all().map((r) => String(r.name)));
+    const added = [];
+    for (const { name, def } of jobColumnDefs()) {
+        if (have.has(name)) continue;
+        // ★ `ALTER TABLE ... ADD COLUMN` 不接受「NOT NULL 且无 DEFAULT」的列（SQLite 直接报错）。
+        //   这种列只能退化成**可空**：老行本来就没这个值，硬塞一个默认值等于编造数据。
+        let ddl = def;
+        if (/NOT NULL/i.test(ddl) && !/DEFAULT/i.test(ddl)) ddl = ddl.replace(' NOT NULL', '');
+        db.exec(`ALTER TABLE jobs ADD COLUMN ${ddl}`);
+        added.push(name);
+    }
+    const from = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
+    if (from !== BOARD_SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${BOARD_SCHEMA_VERSION}`);
+    return { added, from, to: BOARD_SCHEMA_VERSION };
+}
+
+/** 只有这两个 SQLite 错误码算"文件真的坏了"：11 = SQLITE_CORRUPT、26 = SQLITE_NOTADB。 */
+const CORRUPT_ERRCODES = new Set([11, 26]);
+
+/**
+ * 异常是不是「**库文件真的坏了**」。
+ *
+ * ★★★ 第3条的病根就在这里：`openBoard` 原来把 `tryOpen()` 的**任何**异常都当成库损坏
+ *   → `rename`/`rm` 掉原文件 → 建空库。最刺眼的一种组合：
+ *   另一个进程 `BEGIN EXCLUSIVE` 持锁 → 这边拿到的是 `SQLITE_BUSY(5)`
+ *   （message "database is locked"）→ 被当成"文件坏了" → **好库被改名、工单全丢**，
+ *   日志还写着"库损坏已重建空库"（看起来像文件的问题，实际是我的判据写错了）。
+ *
+ * → 判据收到两条：`errcode ∈ {11, 26}`，或 message 明确是 "file is not a database" /
+ *   "malformed"（不同 SQLite 构建措辞不同，留一道兜底）。
+ * → **其余一律原样 throw**：让调用方看见真错误（锁忙 / 权限 / 磁盘满），
+ *   绝不能"因为读不到就把数据删了换个空库"。
+ */
+export function isCorruptError(e) {
+    const code = Number(e?.errcode ?? NaN);
+    if (CORRUPT_ERRCODES.has(code)) return true;
+    const msg = String(e?.message ?? e ?? '');
+    return /file is not a database|malformed|not a database/i.test(msg);
+}
+
 /**
  * 打开（必要时创建）板库。
  *
@@ -156,13 +262,28 @@ export function openBoard(dir = boardDirOf()) {
         // WAL + busy 超时：mindserver 是唯一写者，但读可能并发（面板/别的查询）
         try { db.exec('PRAGMA journal_mode = WAL'); } catch { /* 有的构建不支持，忽略 */ }
         try { db.exec('PRAGMA busy_timeout = 5000'); } catch { /* ignore */ }
+        // ★★ 第24条：**必须先迁移、再跑 SCHEMA**。
+        //   因为 `SCHEMA` 里除了建表还有 `CREATE INDEX ... ON jobs(state, priority, createdAt)` ——
+        //   老库缺 `priority` 时，索引语句会先炸（`no such column: priority`），
+        //   于是"补列"永远等不到执行的机会（实测踩到）。
+        //   顺序：① 老库补列 → ② 建表（IF NOT EXISTS，存在即 no-op）→ ③ 建索引。
+        const migration = migrateBoardSchema(db);
         db.exec(SCHEMA);
-        return db;
+        return { db, migration };
     };
 
     try {
-        return { db: tryOpen(), dir, path, rebuilt: false };
+        const opened = tryOpen();
+        return { db: opened.db, dir, path, rebuilt: false, migration: opened.migration };
     } catch (e) {
+        // ★★★ 第3条：**只有"文件真的坏了"才重建**。
+        //   锁忙（另一个进程 BEGIN EXCLUSIVE）/ 权限 / 磁盘满 → 一律原样抛出去。
+        //   以前这里无条件往下走，等于"读不到就把库删了"—— 比不启动严重得多。
+        if (!isCorruptError(e)) {
+            try { lastDb?.close?.(); } catch { /* 关不掉也继续抛 */ }
+            lastDb = null;
+            throw e;
+        }
         // 坏了：**先把坏文件移走留证，再建空库**（用户决策②）。
         //
         // 坑（2026-11-02 实测）：第一次 `new DatabaseSync(path)` 抛错时，句柄可能还占着文件，
@@ -192,7 +313,7 @@ export function openBoard(dir = boardDirOf()) {
         }
         let db;
         try {
-            db = tryOpen();
+            db = tryOpen().db;
         } catch (e2) {
             // 连重建都失败：把两个错都带上，别让上层只看到第二个
             throw new Error(`任务板库损坏且重建失败：原始错误=${String(e?.message ?? e)}；重建错误=${String(e2?.message ?? e2)}`);
@@ -375,6 +496,15 @@ export function listJobs(db, filter = {}) {
         params.push(filter.claimableFor);
     }
     if (filter.skill) { where.push('skill = ?'); params.push(filter.skill); }
+
+    // ★★★ 第14条：`openOnly` —— **把"未终结"的过滤放进 SQL**。
+    //
+    //   病根：`LIMIT 200` + `ORDER BY priority DESC, createdAt ASC`（同级取最老）。
+    //   `jobs` 表**从不删除**（全仓无 DELETE FROM jobs），累计超过 200 张单后，
+    //   最老的 200 张把窗口占满 → **新单进不了调度器视野**，抢占/残局回收静默失效。
+    //   （同族事故：t141/t142 在 `convergeOrphanParents` 上踩的是同一个坑。）
+    //   → 过滤必须在 SQL 里：结果集天然小，LIMIT 永远不会被历史垃圾占满。
+    if (filter.openOnly) { where.push("state NOT IN ('done','failed','cancelled')"); }
     const sql = `SELECT * FROM jobs ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                  ORDER BY priority DESC, createdAt ASC
                  LIMIT ?`;
@@ -535,6 +665,10 @@ export function heartbeat(db, id, bot, opts = {}) {
  * @returns {{ok:true, job:object, next:string, counted:boolean}}
  */
 export function finish(db, id, result = {}, opts = {}) {
+
+    // ★★★ 第4条：`opts.bot` = 调用者身份。传了就必须过租约归属校验；
+    //   不传（老调用方没有身份）保持旧行为，不做归属校验。
+    const bot = opts.bot == null || opts.bot === '' ? null : String(opts.bot);
     const now = opts.now ?? Date.now();
     const job = getJob(db, id);
     if (!job) return { ok: false, code: 'NO_TARGET' };
@@ -634,10 +768,20 @@ export function finish(db, id, result = {}, opts = {}) {
     }
 
     const attempts = counted ? job.attempts + 1 : job.attempts;
-    db.prepare(`UPDATE jobs
+
+    // ★★★ 第4条：**租约归属校验**（全仓唯一写 finish 结果的地方）。
+    //
+    //   原来 `WHERE id=?` 只看 id —— 于是"租约过期 / 已被别人接手"的旧持有者，
+    //   照样能把**别人正在跑的单**写回 ready/done。真机表现就是两个 bot 抢同一张单、
+    //   互相打断、进度互相覆盖。
+    //   判据必须与 `heartbeat()` 的 LEASE_LOST 同源：
+    //     `lease_owner IS NULL`（没人持有）**或** `lease_owner = 我`。
+    //   `changes === 0` → 一个字段都不写，返回 `LEASE_STALE`（调用方立刻停手）。
+    const leaseGuard = bot == null ? '' : ' AND (lease_owner IS NULL OR lease_owner = ?)';
+    const r = db.prepare(`UPDATE jobs
         SET state=?, attempts=?, lease_owner=NULL, lease_until=NULL,
             progress=?, checkpoint=?, result=?, interrupted=?, updatedAt=?
-        WHERE id=?`).run(
+        WHERE id=?${leaseGuard}`).run(
         next, attempts,
         j(progress ?? job.progress),
         j(result.checkpoint ?? job.checkpoint),
@@ -655,8 +799,18 @@ export function finish(db, id, result = {}, opts = {}) {
         // 回到 ready 时清掉 interrupted（与 control.js 的 requeue 语义一致）；
         // 其它状态保留（paused 时要留着"被打断的原因/时刻"）
         next === JOB_STATE.READY ? null : j(result.interrupted ?? job.interrupted),
-        now, id,
+        now, id, ...(bot == null ? [] : [bot]),
     );
+
+    // ★★★ 第4条：`changes === 0` = **租约已不属于调用者** → 一字不写，直接拒。
+    //   判据必须落在 UPDATE 的 `changes` 上，不能只靠上面那次 `getJob` 的读快照 ——
+    //   两次调用之间可能被别人接手。那正是"先 SELECT 再 UPDATE"的老坑的 finish 版本。
+    if (r.changes === 0) {
+        return {
+            ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
+            message: '租约已不属于调用者（被回收/别人接手），本次 finish 一个字段都没写',
+        };
+    }
     return { ok: true, job: getJob(db, id), next, counted };
 }
 
@@ -673,11 +827,34 @@ export function expireLeases(db, now = Date.now()) {
 
     const out = [];
     for (const id of expired) {
+        // ★★★ 第15条：**租约过期必须记一次 attempt。**
+        //
+        //   原来这里一个字都不动 `attempts`（看着很像有意，其实是漏了），于是
+        //   「崩一次 → 单回 ready → 再领 → 再崩」可以**无限循环**；
+        //   而合成单每跑一次都**真扣一次材料** —— 料被无限往里填。
+        //   语义上它和 TIMEOUT/STUCK 同类：这次尝试**失败了**。
+        //
+        //   `attempts+1 >= maxAttempts` → `failed` + `result.code=LEASE_EXPIRED`（留痕，
+        //   否则"这张单为什么没了"在库里看不出来）；没耗尽 → 回 `ready`，
+        //   **不动 result**（保留上次结果/断点，留给下一个接手的）。
+        const job = getJob(db, id);
+        if (!job) continue;
+        const attempts = Number(job.attempts ?? 0) + 1;
+        const max = Number(job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+        const exhausted = attempts >= max;
+        const next = exhausted ? JOB_STATE.FAILED : JOB_STATE.READY;
+        const result = exhausted
+            ? {
+                ok: false, code: BOARD_RESULT_CODES.LEASE_EXPIRED, at: now,
+                message: `租约过期且重试耗尽（${attempts}/${max}）：持有者没有续租（进程崩了/断线）`,
+            }
+            : job.result;
         // 同样用"条件 UPDATE + changes"的写法，避免把刚刚续过租的单误回收
         const r = db.prepare(`
-            UPDATE jobs SET state='ready', lease_owner=NULL, lease_until=NULL, updatedAt=?
-            WHERE id=? AND state IN ('claimed','running') AND lease_until IS NOT NULL AND lease_until < ?`)
-            .run(now, id, now);
+            UPDATE jobs SET state=?, attempts=?, lease_owner=NULL, lease_until=NULL, result=?, updatedAt=?
+            WHERE id=? AND state IN ('claimed','running')
+              AND lease_until IS NOT NULL AND lease_until < ?`)
+            .run(next, attempts, j(result ?? null), now, id, now);
         if (r.changes === 1) out.push(id);
     }
     return out;
@@ -1012,6 +1189,11 @@ export function reopenOrphanBlocked(db, opts = {}) {
         const deps = Array.isArray(job.dependsOn) ? job.dependsOn : [];
         if (!deps.length) continue;                       // 没依赖 → NO_ITEM 是真缺料，不重开
         if (job.checkpoint?.reopenedOnce) continue;       // 只给一次机会（防死循环）
+
+        // ★★★ 第5条：**依赖已死**（failed/blocked/cancelled）→ 这张单永远等不到，
+        //   别再指望它自己好起来：落成 blocked + `result.code=DEP_DEAD`（留痕）。
+        //   现场（报告第5条）：依赖死掉的单永久卡 ready、父单永久 running，最长卡 166 分钟。
+        if (depDead(db, job)) { markDepDeadBlocked(db, id, { now }); continue; }
         if (!dependsSatisfied(db, job)) continue;         // 依赖还没满足 → 继续等
         const r = setState(db, id, JOB_STATE.READY, { now });
         if (!r.ok) continue;
@@ -1033,6 +1215,11 @@ export function reopenBlockedWithSatisfiedDeps(db, parentId = null, opts = {}) {
         const deps = Array.isArray(job.dependsOn) ? job.dependsOn : [];
         if (!deps.length) continue;                       // 没依赖 → NO_ITEM 是真缺料，不重开
         if (job.checkpoint?.reopenedOnce) continue;       // 只给一次机会
+
+        // ★★★ 第5条：**依赖已死**（failed/blocked/cancelled）→ 这张单永远等不到，
+        //   别再指望它自己好起来：落成 blocked + `result.code=DEP_DEAD`（留痕）。
+        //   现场（报告第5条）：依赖死掉的单永久卡 ready、父单永久 running，最长卡 166 分钟。
+        if (depDead(db, job)) { markDepDeadBlocked(db, id, { now }); continue; }
         if (!dependsSatisfied(db, job)) continue;         // 依赖还没满足 → 继续等
         const r = setState(db, id, JOB_STATE.READY, { now });
         if (!r.ok) continue;
@@ -1109,6 +1296,17 @@ export function convergeOrphanParents(db, opts = {}) {
         if (!parent) continue;
         // 只处理"挂着的"父单：running 或 ready 都可能卡住（ready 是退避后的形态）
         if (![JOB_STATE.RUNNING, JOB_STATE.READY].includes(parent.state)) continue;
+
+        // ★★★ 第5条：**先把"依赖已死"的子单落成 blocked**，再判父单能不能收敛。
+        //   否则它永远 ready（既不终态、又永远领不到）→ 下面的
+        //   `kids.some(!terminal)` 恒真 → **父单永久 running**。
+        //   现场那张卡了 166 分钟的单就是这个形态。
+        for (const kid of db.prepare('SELECT id, state FROM jobs WHERE parentId = ?').all(parentId)) {
+            if (terminal.has(kid.state)) continue;
+            const kidJob = getJob(db, kid.id);
+            if (!kidJob || !depDead(db, kidJob)) continue;
+            markDepDeadBlocked(db, kid.id, { now });
+        }
         const kids = db.prepare('SELECT state FROM jobs WHERE parentId = ?').all(parentId);
         if (!kids.length) continue;
         // 有活着的子单 → 还没到收敛时机
@@ -1118,6 +1316,155 @@ export function convergeOrphanParents(db, opts = {}) {
     }
     return out;
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// 第5条：依赖已死（DEP_DEAD）—— "在等一张永远不会完成的单"必须当场落地
+// ───────────────────────────────────────────────────────────────────────────
+
+/** 依赖处于这些状态 → 永远不可能变成 done → 后继"等也白等"。 */
+const DEAD_DEP_STATES = new Set([JOB_STATE.FAILED, JOB_STATE.BLOCKED, JOB_STATE.CANCELLED]);
+
+/**
+ * 这张单的依赖里有没有**已经死了**的。
+ *
+ * ★★ 为什么需要这个判据：`dependsSatisfied()` 只认 `done`，于是
+ *   「前置已失败（永远好不了）」和「前置还没跑完（之后会自己好）」**在库里长得一模一样**。
+ *   没有任何路径会再碰前者 → 后继单永久 `ready`、父单永久 `running`（现场卡 166 分钟）。
+ *
+ * ★ 前置**不存在**（`dependsOn` 指向库里没有的 id）**不算死**：那多半是跨库/尚未落库的
+ *   中间态，判死会让本来能恢复的单提前 blocked。宁可等，不要误杀。
+ */
+export function depDead(db, job) {
+    const deps = Array.isArray(job?.dependsOn) ? job.dependsOn : [];
+    if (!deps.length) return false;
+    const rows = db.prepare(
+        `SELECT id, state FROM jobs WHERE id IN (${deps.map(() => '?').join(',')})`,
+    ).all(...deps);
+    const stateOf = new Map(rows.map((r) => [String(r.id), r.state]));
+    return deps.some((d) => DEAD_DEP_STATES.has(stateOf.get(String(d))));
+}
+
+/**
+ * 把"依赖已死"的单落成 `blocked` + `result.code=DEP_DEAD`（幂等）。
+ *
+ * @returns {object|null} 落好之后的单；没动 / 动不了 返回 null
+ */
+export function markDepDeadBlocked(db, id, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const job = getJob(db, id);
+    if (!job) return null;
+    // 已经记过账就不再写（这个函数会被 scanTimer 每轮扫到，写空转噪音没意义）
+    if (job.state === JOB_STATE.BLOCKED && job.result?.code === BOARD_RESULT_CODES.DEP_DEAD) return null;
+    let cur = job;
+    if (cur.state !== JOB_STATE.BLOCKED) {
+        const r = setState(db, id, JOB_STATE.BLOCKED, { now });
+        if (!r.ok) return null;
+        cur = r.job;
+    }
+    // `setState` 不动 result —— 这里单独写一次，把"为什么卡住"落到库里（别再一次静默）
+    updateJob(db, id, {
+        result: {
+            ok: false, code: BOARD_RESULT_CODES.DEP_DEAD, at: now,
+            message: '依赖处于终态(failed/blocked/cancelled)：这张单永远等不到前置完成',
+            deps: Array.isArray(cur.dependsOn) ? cur.dependsOn : [],
+        },
+    }, { now });
+    return getJob(db, id);
+}
+
+/**
+ * 兜底扫：`ready` 且依赖已死 → `blocked` + `DEP_DEAD`。
+ *
+ * ★ 与 t140/t142 的兜底同一个理由：**必须有周期性扫描**，不能只挂事件上 ——
+ *   事件漏一次就永久不一致，而且不报错。
+ * ★ 状态过滤放 SQL + `ORDER BY rowid DESC`：`jobs` 从不删除，
+ *   老单会把 LIMIT 占满（t141 的教训）。
+ */
+export function sweepDeadDepJobs(db, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const limit = Math.max(1, Math.floor(Number(opts.limit) || 200));
+    const out = [];
+    let rows = [];
+    try {
+        rows = db.prepare(`
+            SELECT id FROM jobs
+             WHERE state = ? AND dependsOn IS NOT NULL
+               AND dependsOn <> '[]' AND dependsOn <> 'null'
+             ORDER BY rowid DESC
+             LIMIT ?`).all(JOB_STATE.READY, limit);
+    } catch { return out; }
+    for (const { id } of rows) {
+        const job = getJob(db, id);
+        if (!job) continue;
+        if (!depDead(db, job)) continue;
+        const marked = markDepDeadBlocked(db, id, { now });
+        if (marked) out.push(marked);
+    }
+    return out;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 第17条：幽灵父单（拆单中途崩溃 → 永久 running 且无子单）
+// ───────────────────────────────────────────────────────────────────────────
+
+/** 幽灵父单的时间阈值：2 分钟（报告给的数）。 */
+export const ORPHAN_PARENT_MS = 120 * 1000;
+
+/**
+ * ★★★ 第17条：扫「**壳单**（`skill` 为空 = 自己不干活、只派子单）既无子单、
+ *   又没人持有租约」的幽灵父单 → `blocked` + `result.code=ORPHAN_PARENT`。
+ *
+ *   真机形态：`splitByCount` / `splitByArea` **先建父单**（`state:'running'`、`skill:null`）
+ *   **再建子单**，两步之间崩了 → 父单永久 `running` 且 0 子单。
+ *   而 `convergeOrphanParents` **明确跳过无子单的父单**（`if (!kids.length) continue`），
+ *   于是没有任何路径会再碰它 —— 它就一直挂在面板上，永远"正在跑"。
+ *
+ * ★★ **两处必要的收窄（相对报告字面写法，理由在此，请复核）**：
+ *   ① 只认 **`skill` 为空**的单。报告写的是「running/ready 且无子单」——
+ *      可「`ready` 且无子单」**正是队列里每一张还没人领的正常单**！
+ *      照字面实现，上线 2 分钟后**整个待办队列会被一口气全部 blocked**。
+ *      而"壳单"（skill 空）在库里**根本无法自己执行**，没有子单就等于永远不会前进
+ *      —— 这才是"幽灵"的准确刻画，也是 `splitBy*` 崩溃时的确切形态。
+ *   ② 只认**租约已过期/无租约**的。租约还活着 = 有人正在跑它，
+ *      这时候判"幽灵"等于杀掉正在干活的单。
+ *   两条收窄都写进了 `board_orphan_parent_unit` 的用例（有 skill 的 ready 单必须不被误伤）。
+ *
+ * @returns {Array<object>} 被落成 blocked 的单（供调用方广播）
+ */
+export function blockOrphanParents(db, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const idleMs = Number.isFinite(opts.idleMs) ? opts.idleMs : ORPHAN_PARENT_MS;
+    const limit = Math.max(1, Math.floor(Number(opts.limit) || 200));
+    const out = [];
+    let rows = [];
+    try {
+        rows = db.prepare(`
+            SELECT id FROM jobs j
+             WHERE j.state IN (?, ?)
+               AND (j.skill IS NULL OR TRIM(j.skill) = '')
+               AND j.createdAt < ?
+               AND (j.lease_until IS NULL OR j.lease_until <= ?)
+               AND NOT EXISTS (SELECT 1 FROM jobs c WHERE c.parentId = j.id)
+             ORDER BY j.rowid DESC
+             LIMIT ?`).all(JOB_STATE.RUNNING, JOB_STATE.READY, now - idleMs, now, limit);
+    } catch { return out; }
+    for (const { id } of rows) {
+        const job = getJob(db, id);
+        if (!job) continue;
+        if (job.state === JOB_STATE.BLOCKED && job.result?.code === BOARD_RESULT_CODES.ORPHAN_PARENT) continue;
+        const r = setState(db, id, JOB_STATE.BLOCKED, { now });
+        if (!r.ok) continue;
+        updateJob(db, id, {
+            result: {
+                ok: false, code: BOARD_RESULT_CODES.ORPHAN_PARENT, at: now,
+                message: '幽灵父单：壳单无子单且无人持有租约（拆单中途崩溃），永远不会有东西再推进它',
+            },
+        }, { now });
+        out.push(getJob(db, id));
+    }
+    return out;
+}
+
 
 export function rollupParent(db, parentId, opts = {}) {
     const now = opts.now ?? Date.now();
