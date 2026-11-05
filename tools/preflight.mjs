@@ -15,6 +15,9 @@ const ROOT = fileURLToPath(new URL('../src/agent/', import.meta.url));
 
 let failed = 0;
 let loaded = 0;
+// ★ 第34条：导入阶段被「其他错误」静默跳过的模块。以前不记，
+//   于是 loaded < files.length 也照样打「✓ 所有模块导入成功」。
+const skippedByOther = [];
 
 /**
  * ★★ 2026-11-04（t99）：「**扫到 0 个样本 = 通过**」的通用护栏。
@@ -37,6 +40,35 @@ function requireScanned(section, n, what, hint = '') {
     if (hint) console.log(`     ${hint}`);
     return false;
 }
+
+/**
+ * ★★★ 2026-11-05（T02 / 报告第 26 条）：**审计用的正则集中定义在这里，且必须可自检**。
+ *
+ * 教训：本节两个正则曾各带一个 0x08（退格）字节前缀 —— 正则要求"字面退格"才匹配，
+ * 于是**永不命中** → used2 恒空 → 恒打印「✓ 错误码审计通过」。这道门从上线起没检过任何东西，
+ * 而"0 处命中"和"检查过、没有"在报告里长得一模一样。
+ *
+ * 防回归：`tools/preflight_regex_unit.mjs` 会**从本文件源码里抽出这两块常量**，
+ * 断言 ①整个文件没有控制字符 ②对已知样本能命中 ③对已知反例不命中。
+ * 所以：**不要改成动态拼接**（拼了就抽不出来，自检会红）。
+ */
+const CODE_AUDIT_REGEXES = [
+    // ① fail('XXX') —— 唯一会在运行期直接 throw 的路径（contract.fail 会校验 CODES）
+    /\bfail\(\s*'([A-Z_]+)'/g,
+    // ② ActionResult 字面量 { ok: false, code: 'XXX', … } —— 走 assertResult 也会 throw「未知 code」
+    //
+    // 为什么不用宽口径的 `code: 'XXX'`：`code:` 这个键在三处被用，含义不同 ——
+    //   (a) ActionResult 错误码（本正则的目标，必须在 CODES 里）
+    //   (b) 任务板的**停止/结果码**（control.js：PREEMPTED / INTERRUPTED / TIMEOUT / DIED）
+    //   (c) 纯数据载荷回显（`result: { code, at }`、`failed.push({ pos, code })`）
+    // (b)(c) 是另一套词汇表。宽口径会把 (b) 的 DIED 报成"未注册错误码" —— 那是**判据错**，
+    // 不是源码错：`fail('DIED')` 全仓 0 次，把它塞进 CODES 反而让 assertResult 误认它是 ActionResult 码。
+    // 收紧到「对象里带 ok: 的 code 字面量」后：162 个源文件仍扫到 20 个不同码，0 漏报。
+    /\{\s*ok:\s*(?:true|false)[^{}]{0,300}?\bcode:\s*'([A-Z_]+)'/g,
+];
+
+// §6「工具到底跑没跑起来」的指纹正则。同样收进来，让自检能喂样本。
+const SAW_A_SECTION = /──\s*A·|\bA·策略|未发现"有早退分支但生产不提供"/;
 
 function walk(dir) {
     const out = [];
@@ -70,13 +102,38 @@ for (const f of files) {
             failed++;
             console.log(`  ✗ [缺少模块] ${rel}: ${msg.slice(0, 100)}`);
         } else {
-            // 其他错误（缺少 bot 实例之类）在导入阶段不致命
+            // 其他错误（缺少 bot 实例之类）在导入阶段不致命 —— 但**必须记账**。
+            // ★ 第34条：原来这里什么都不记，于是 `loaded < files.length` 时
+            //   下面照样打「✓ 所有模块导入成功（62/122）」并 exit 0。
+            //   "静默跳过"和"导入成功"在报告里长得一模一样 —— 判据见下面的 loaded === files.length。
+            skippedByOther.push({
+                rel,
+                name: String(e?.name ?? 'Error'),
+                msg: String(e?.message ?? e).slice(0, 120),
+            });
         }
     }
 }
 
-if (failed === 0) {
+// ★★★ 第34条（T02）：判据从 `failed === 0` 收紧为 `loaded === files.length`。
+//   旧判据只看"有没有报致命错"，**不看"到底导入了几个"** —— 被静默跳过的模块
+//   既不计 failed 也不计 loaded，于是 62/122 也能打 ✓ 并 exit 0。
+//   现在：少导一个就是失败，并把少的那几个点名。
+if (!gotModules) {
+    // 0 个模块已在上面由 requireScanned 记失败，"0/0 全部成功"是假绿，这里不重复报
+} else if (loaded === files.length) {
     console.log(`  ✓ 所有模块导入成功（${loaded}/${files.length}），没有未定义引用`);
+} else {
+    failed++;
+    const short = files.length - loaded;
+    console.log(`  ✗ 只导入了 ${loaded}/${files.length} 个模块，差 ${short} 个 —— 不能算"导入成功"`);
+    console.log('     "静默跳过"不等于"导入成功"：这些模块报了非致命错，根本没加载进来。');
+    for (const it of skippedByOther.slice(0, 10)) {
+        console.log(`     · ${it.rel} [${it.name}] ${it.msg}`);
+    }
+    if (skippedByOther.length > 10) {
+        console.log(`     · …另有 ${skippedByOther.length - 10} 个被静默跳过`);
+    }
 }
 
 // ---- 第二层：跑一遍关键函数，抓「函数体内的未定义引用」 ----
@@ -180,7 +237,7 @@ try {
     const used2 = new Map();
     for (const f of files2) {
         const t = fs2.readFileSync(f, 'utf8');
-        for (const re of [/fail\(\s*'([A-Z_]+)'/g, /code:\s*'([A-Z_]+)'/g]) {
+        for (const re of CODE_AUDIT_REGEXES) {
             for (const mm of t.matchAll(re)) {
                 if (!used2.has(mm[1])) used2.set(mm[1], new Set());
                 used2.get(mm[1]).add(path2.relative(projectRoot2, f));
@@ -192,8 +249,13 @@ try {
     // ★ t99 护栏：0 个源文件 → missing2 必然为空 → 会打「✓ 错误码审计通过」，那是假绿
     const gotSrcFiles = requireScanned('3 错误码审计', files2.length, 'src 源文件',
         '检查 projectRoot2/src 是否指对；扫不到源码时"没有未注册的码"毫无意义');
-    if (!gotSrcFiles) {
-        // 不判"通过"，也不重复报 missing
+    // ★ T02 护栏（第26条真正的教训）：「扫到 0 个码」和「扫了一堆、都合法」必须能分开。
+    //   files2 非空 **不代表** 正则有效 —— 0x08 那一次就是 files2=162、used2=0、照样打 ✓。
+    const gotCodes = gotSrcFiles
+        && requireScanned('3 错误码审计', used2.size, '错误码用法（正则可能又坏了）',
+            'CODE_AUDIT_REGEXES 一条都没命中 —— 扫描器坏了，不等于"没有未注册的码"');
+    if (!gotSrcFiles || !gotCodes) {
+        // 不判"通过"，也不重复报 missing（已在 requireScanned 里记过失败）
     } else if (missing2.length) {
         failed++;
         console.log(`  ✗ 有 ${missing2.length} 个错误码没注册：${missing2.join(', ')}`);
@@ -202,7 +264,8 @@ try {
         failed++;
         console.log(`  ✗ CODES 有重复项：${[...new Set(dup2)].join(', ')}`);
     } else {
-        console.log(`  ✓ 错误码审计通过（${CODES.length} 个已注册，全部合法）`);
+        // 把「扫到几个」印出来：绿字自证扫过东西，而不是"0 命中也是绿"。
+        console.log(`  ✓ 错误码审计通过（扫到 ${used2.size} 个码，均已注册；CODES 共 ${CODES.length} 个）`);
     }
 } catch (e) {
     failed++;
@@ -930,7 +993,7 @@ console.log("");console.log("[6/6] 依赖注入审计（A 档 = 单测能测到�
         //
         //   所以：**必须看到工具确实跑完的指纹**（A· 或 C· 段标记 + 合计行），
         //   看不到就判失败（"审计没跑起来"），而不是给绿灯。
-        const sawASection = /──\s*A·|A·策略|未发现"有早退分支但生产不提供"/.test(out);
+        const sawASection = SAW_A_SECTION.test(out);
         const sawCSection = /──\s*C·/.test(out);
         const ranOk = sawASection || sawCSection;
 
