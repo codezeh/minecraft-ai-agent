@@ -145,9 +145,14 @@ export function createMindServer(host_public = false, port = 8080) {
         const viaCookie = hasAuthCookie(req.headers.cookie, handshakeToken);
         const viaQuery = typeof req.query?.token === 'string' && req.query.token === handshakeToken;
         if (viaCookie || viaQuery) return next();
-        console.warn(`[mindserver] 拒绝无 token 的 HTTP 请求 ${req.method} ${req.path}`);
+        // req.path 是解码后的，%0A 会变成真换行 ⇒ 可伪造日志行。去控制字符后再打。
+        const safePath = String(req.path).replace(/[\r\n\t]/g, ' ');
+        console.warn(`[mindserver] 拒绝无 token 的 HTTP 请求 ${req.method} ${safePath}`);
         // F-WEB-201 P0（captain 补修）：浏览器访问时返回**可读的 HTML**，而不是一行纯文本。
         // 一行 "unauthorized" 看起来像服务器坏了；给一段人能照做的说明，差一个数量级。
+        // 复核席建议：port 来自环境变量（非 HTTP 参数，网络不可达）；但既然 CSP 已放宽，
+        // 就不该再靠"不可达"当防御 —— 一行归一把它变成纯数字。
+        const safePort = String(Number.parseInt(port, 10) || 8080);
         const wantsHtml = String(req.headers.accept || '').includes('text/html');
         if (wantsHtml) {
             res.status(401).type('html; charset=utf-8').send(
@@ -156,7 +161,7 @@ export function createMindServer(host_public = false, port = 8080) {
                 '<h2>面板需要握手 token</h2>' +
                 '<p>这不是故障。MindServer 每次启动生成一个新 token，必须带上它才能打开面板。</p>' +
                 '<ol><li>打开文件 <code>mindcraft\.mindserver-token</code>，复制里面的值</li>' +
-                '<li>访问 <code>http://localhost:' + port + '/?token=&lt;那个值&gt;</code></li>' +
+                '<li>访问 <code>http://localhost:' + safePort + '/?token=&lt;那个值&gt;</code></li>' +
                 '<li>之后浏览器会把它换成 cookie，整站不再需要带 token</li></ol>' +
                 '<p style="color:#666">也可以直接双击 <code>启动面板.bat</code>，它会自动读该文件。</p>' +
                 '</body>');
@@ -576,6 +581,9 @@ export function createMindServer(host_public = false, port = 8080) {
 				// 可以无限绕过。改为按远端地址计数（跨连接共享），并做容量上限防 Map 无限增长。
 				const now = Date.now();
 				const rlKey = String(socket.handshake?.address || socket.conn?.remoteAddress || 'unknown');
+				// 注意（复核席 review-captain-fixes）：本仓只绑 localhost，handshake.address 只可能是
+				// 127.0.0.1 或 ::1 ⇒ key 最多 2 个，永远到不了这个阈值。此分支实际防的是
+				// **将来放开绑定后的长期累积**，不是"无限增长"。注释如实写清，别让人以为这里挡着什么。
 				if (RATE_BUCKETS.size > 512) {
 					for (const [k, v] of RATE_BUCKETS) { if (now - v.ts > 60000) RATE_BUCKETS.delete(k); }
 				}
