@@ -254,3 +254,24 @@ diff <(grep -v '^rcon.password' A) <(grep -v '^rcon.password' B)
 grep '^rcon.password' A | sha256sum
 ```
 违规后果：会话记录本身就是泄漏面，且无法撤回 ⇒ 直接抬升"必须轮换"的优先级。
+
+## §8.12 提交前必须确认工作区无"中间态"（因实际踩坑而立）
+
+**pre-commit 钩子扫的是整个工作区，不是暂存区。**
+实测事故：captain 提交 `F-DEP-003` 补丁对时，钩子报 `[lint:hard] 硬指标不为 0：4 处` 而拒绝提交——
+那 4 处来自 patch-smith **正在并发编辑**的 `tasks.js` / `text.js` 的中间态，与待提交的补丁毫无关系。
+更糟的后果：**提交失败后文件留在暂存区**，下一次 `git commit`（不带 pathspec）把它们一起带走了
+⇒ `7ba7b5e` 这个标题为 "F-DEP-004" 的 commit 实际还包含 `F-DEP-003` 的 patches 补丁对。
+
+规矩：
+1. 成员改完一组文件后**主动通知 captain**，captain 提交前先跑 `node tools/lint_hard.mjs` 确认全绿。
+2. **提交失败后必须 `git status` 复查**，确认暂存区是否残留，必要时 `git restore --staged .`。
+3. 每次 `git commit` **必须带 pathspec**（`git commit -m "..." -- <file>...`），不要依赖暂存区状态。
+
+## §8.13 不改写已复核的历史
+
+`7ba7b5e` 混了 `F-DEP-003` 与 `F-DEP-004` 两部分内容（原因见 §8.12）。
+**选择如实登记，不 rewrite。** 理由：复核席已按 sha 复核过这批 commit，改写会让整条复核链失去锚点；
+而"patch 与 SUMS 同一 commit"这条硬要求实际已满足（两者都在 `7ba7b5e` 里）。
+
+⇒ 规矩：**一旦有复核记录引用过某个 sha，就不再改写它**；错误用登记纠正，不用历史重写掩盖。

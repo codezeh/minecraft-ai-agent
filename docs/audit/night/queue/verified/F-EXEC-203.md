@@ -93,3 +93,14 @@ resolution: 已在 t7 以 F-SEC-104 修完（同一处代码，两个编号，�
 已修: mindserver.js 的 /assets/item/:agent/:name.png 加白名单断言 ^[a-z0-9_]{1,64}$，非法 400。
 复核: grep -n "invalid texture name" src/mindcraft/mindserver.js → 行 172 在位。
 注: 复核席在 t7 已把它算作 F-SEC-104 提交；本条与 F-SEC-104 是同一 finding 的两个编号。
+
+## review（gate-keeper · t15 · 2026-11-06 02:3x）
+**结论：通过。** 与 `F-SEC-104` 是同一处代码两个编号（D2 轮已复核，此处复核当前状态）。
+```js
+const agentName = req.params.agent;            // 只作 agent_connections[agentName] 键，不进路径
+const itemName  = String(req.params.name).toLowerCase();
+if (!/^[a-z0-9_]{1,64}$/.test(itemName)) { res.status(400)…; return; }   // 白名单，在拼路径之前
+```
+对任务判据"是否 path.resolve 后前缀比对（只查 `..` = 打回）"：**这里用白名单正则，比 resolve+前缀更强** ——
+白名单内不可能出现 `.` / `/` / `\`，`..%2f..%2fsettings` 在进入任何路径拼接前就被拦掉（12 条正反用例全对）。
+前端真实请求是 mineflayer 裸名，与 `assets.items[itemName]` 口径一致 ⇒ 无误伤；`agentName` 不作路径 ⇒ 无需前缀断言。**通过**。

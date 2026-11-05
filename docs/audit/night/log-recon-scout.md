@@ -378,3 +378,75 @@ F-REG-004（面板链补依赖预检，可与 003 同一窗口）。
    （`/tmp` 在沙箱里时灵时不灵，我因此退到 `.tmp_probe`，反而把 token 写进了仓库目录树 —— 虽然被 gitignore）。
    后续同类取证我会把 token 分支用 `MINDSERVER_PRINT_TOKEN` 固定值、或直接把日志 `/dev/null`。
 4. 本轮没起任何长驻实例（只跑了 `patch_integrity.mjs` 与 `server-net.mjs show` 两个只读命令），无端口占用。
+
+## R7 2026-11-06 02:05–02:45 | 红队复测（攻击者视角回打已入库修复）| 5 条 finding（2 medium / 3 low）+ 1 项「打不进去」的硬结论 | 无阻塞
+
+**做了什么**
+- 以攻击者身份逐条回打，**不读结论只读状态**：能用真实例的就起真实例（临时端口 18090–18094，
+  全部 taskkill，已复验无 LISTENING 残留），能算的就穷举（Unicode 全平面扫描）。
+- **本轮没有让任何 token 落盘**：全程用固定 `MINDSERVER_TOKEN`，验证 `MINDSERVER_PRINT_TOKEN` 时
+  把 stdout **管道给 grep 当场脱敏**（不写文件），符合 captain 的要求。
+
+**结论（写入 queue/inbox/）**
+
+| id | sev | 一句话 |
+|---|---|---|
+| F-RT-001 | medium | `.mindserver-token` 的实测评测：`mode 0600` 在 Windows 无效（落地 **666**），ACL 是继承来的 `Authenticated Users:(M)` + `Users:(RX)` ⇒ **同机其他本地账户可读、可改、可删**；0600 caveat 已由 76ee07b 写对，但**无任何缓解** |
+| F-RT-002 | medium | `MINDSERVER_PRINT_TOKEN=1`（start.bat:127 **主动推荐**）实测会把完整 token 打回 stdout，而 `start-panel.ps1:189` 把 stdout 重定向进 `logs/` ⇒ 用户按提示设一次就**原样复活 F-SEC-205** |
+| F-RT-003 | low | token 两处残留：文件从不清理（无 unlink）；设完 cookie **不 302 抹掉 `?token=`** ⇒ 浏览器历史/同步里留完整 token |
+| F-RT-004 | low | F-SEC-206 能力边界实测：`.ENV` 只在 Windows（`core.ignorecase=true`）被罩住、**大小写敏感平台不忽略**；`git add -f` 直接穿透（git 自己还 hint `-f`）；`server.crt`/`keystore.jks`/`config.local.ts`/`env` 未覆盖 |
+| F-RT-005 | low | `timeout: 5000→500` 的对抗分析：主建造路径**有安全网不会误判**（`act_place` 的 waitUntil + lateUpdate），但 3 个直连 `placeAgainst` 调用点没有，`tool_prep` 最脆（throw 在读回之前 ⇒ 误判成"没有工作台"）。hunk 3 尚未入库，属入库前分析 |
+
+**★ 打通失败（这是本轮最重要的结论）：F-SEC-104 白名单 —— 已复测，打不进去**
+用了 18 类手法，**全部拦住**，而且给了结构性证明而不是"我试了几个":
+```
+原始 socket 直发（绕过 curl/客户端归一化），14 个用例全部 400：
+① ..%2F..%2Fsecret.png          400   ⑨ 65 字符（越界 1）        400
+② %2e%2e%2f%2e%2e%2f…          400   ⑪ 土耳其 İ U+0130          400
+③ 双重编码 ..%252F..%252F      400   ⑬ 全角 ａ U+FF41           400
+④ %00 截断 oak%00.png           400   ⑲ 中文名                    400
+⑤ 反斜杠 ..%5C..%5C（Windows） 400   ⑳ 空格 oak%20plank          400
+⑧ 盘符 C:%5Csecret.png          400   ㉑ 连字符 oak-plank          400
+                                      ㉒ 斜杠 %2F.png             400
+                                      ㉓ 问号 oak%3F.png          400
+另：⑥⑦ 裸 ../、../../ → 404（路由根本没匹配，不是绕过）；⑱ 空 name .png → 400
+```
+三条**结构性**证据（比用例更重要）：
+1. **校验的是同一个变量**：`const itemName = String(rawName).toLowerCase();`
+   → `if (!/^[a-z0-9_]{1,64}$/.test(itemName))` → 后面 `path.join(base,'items',`${itemName}.png`)`
+   **用的是同一个 `itemName`**，不存在"校验 A 用 B"的经典绕过。
+2. **折叠数学穷举**：扫 U+0020–U+2FFFF **全平面**，找 toLowerCase 后含 `.` `/` `\` 的字符 →
+   **0 个**（不可能用 Unicode 折叠造出路径分隔符）。唯一能折叠进白名单字符集的非 ASCII 字符是
+   **开尔文 U+212A → `k`**（无害，拼出 `items/k.png`）。
+3. **通过者的字符集就是安全的**：任何通过正则的串只含 `[a-z0-9_]`，拼成 `<ascii>.png`，
+   `path.join` 数学上无法逃出 `items/`。附带测了 `__proto__`（能过正则，因 `_` 在集合内）：
+   进 handler 后正常走到"找不到贴图"分支，**没有 500、没有原型污染**。
+⇒ **F-SEC-104 修复成立，可以结案。** 唯一遗留是它通过白名单后仍会做重活（那是已报的 F-WEB-202 DoS，与穿越无关）。
+
+**其余"查完没问题"的复测记录（没报的也要能证明查过）**
+- **`5e2694b` start-panel.ps1 读 token**：路径 `Join-Path $root 'mindcraft/.mindserver-token'` 与
+  mindserver 的 `path.join(process.cwd(),…)`（cwd = mindcraft，因 `-WorkingDirectory mindcraft`）**正好对上** ✓；
+  `Test-Path` 有 else 分支给 WARN ✓。**但它打开的是带 token 的 URL 且不重定向** → 见 F-RT-003。
+- **`58d2fb1` / `49a9cfd` F-SEC-206**：见 F-RT-004（覆盖矩阵 + 平台差异 + `-f` 穿透）。
+- **`8c983c4` / `d80caeb` F-SEC-208**：纯注释。实测 `node -e "JSON.parse(network.json)"` 通过、
+  `server-net.mjs show` **exit 0**；`_剩余风险` 不被当配置读（loadCfg 只读 bind/nic/whiteList/onlineMode/players）。
+  ⇒ **零影响，复测通过**。
+- **`76ee07b` F-SEC-206 config.local.js**：`git check-ignore -v config.local.js` 两仓均命中 ✓；
+  但 `config.local.ts` 不命中（F-RT-004）。
+- **`7a5e5d0` F-DEP-003 补丁**：`patch_integrity.mjs` 实跑 **exit 0**、"5 个补丁内容与基线一致"、
+  5 个包版本一一对应 ✓。hunk 3 的 `500ms` 对抗分析见 F-RT-005。
+- **附带发现（正面）**：`start.bat:120-127` 已经**修好了我报的 F-REG-001**（指到
+  `mindcraft\.mindserver-token` 并给出 URL 模板），只是在工作区未提交。
+
+**给修补席的优先级**：F-RT-002（那个开关会被重定向进日志 —— 与 F-SEC-205 同一根因，5 行保险最划算）
+→ F-RT-001（icacls 收紧，若用户接受一次性 ACL 命令）→ F-RT-003（302 抹 token，3 行）
+→ F-RT-005（先把 `tool_prep` 的 throw 挪到读回之后，3 行）→ F-RT-004（补 3 条规则 + 钩子兜底）。
+
+**阻塞 / 需 captain 知道**
+1. 本轮**只落 docs，零业务代码改动** ⇒ 无 `manifest-RT.md`。
+2. **F-SEC-104 可以正式结案为"已复测、打不进去"**，且我给的是结构性证明（同一变量 + 折叠穷举 + 字符集闭包），
+   不是"试了几个用例都 400"。建议早报直接用这个措辞。
+3. **hunk 3 仍在工作区未提交**（`M patches/mineflayer+4.39.0.patch`），F-RT-005 是入库前分析；
+   若 patch-smith 决定按 F-RT-005 的建议先补安全网，**要在提交 hunk 3 之前做**，否则又变成"先入库后审计"。
+4. 本轮临时端口 18090–18094 全部 taskkill，复验无 LISTENING；`.tmp_probe` 只剩 `npmcache/`
+   （我造的 `acl-probe.txt` 已删），**未再产生任何 token 落盘**。

@@ -324,3 +324,67 @@ finding 建议把 `!goal` 与 `!endGoal` 一并升 OWNER_ONLY。**我认为 `!en
 
 ### 产出
 `docs/audit/night/review-prestage-2.md`
+
+---
+
+## R4 2026-11-06 02:1x–02:3x | t15 · D3 执行体部复核 | **通过 2 / 打回 1** | 两条自查纠正
+
+### 判决
+- **F-EXEC-201（speak RCE）通过**：`exec` 已彻底移除、argv 全字面量、文本只走 stdin、全仓无 `shell:true`
+  ⇒ **命令行内不存在可变文本**，是结构性堵死而非黑名单。
+- **F-EXEC-202（38 处裸斜杠）打回**：闸**确实挡住了**（我一开始怀疑错了，见下），但
+  ①靠"腰斩整个 initBotTask 后半段"实现 ⇒ teleportBots/对话/killAll 一起被跳，而日志只报 cheat ⇒ **低报**；
+  ②闸在**调用方**不在 sink，`teleportBots()`/`initiator.init()` 自身无判据 ⇒ **换调用方即静默绕过**（任务判据明列的形态）。
+  建议 `guardedChat()` 下沉治本。
+- **F-EXEC-203（贴图路径）通过**：白名单 `^[a-z0-9_]{1,64}$` **强于** resolve+前缀（连点与斜杠都不允许）。
+- **F-AI-202 ①②（D4，本轮一并）代码通过**：`!goal` 升 OWNER_ONLY、**`!endGoal` 正确保留在 TRUSTED**、
+  转义顺序正确（`\` 先于 `"`）、超限**可见截断**。**但 permissions_unit 仍红（exit 1，59 passed）⇒ 断言未同步**。
+  （F-AI-202 属 D4，留在 claimed/ 等 D4 复核，我不越部门归档。）
+
+### D3 整体不能 PASS 的两个硬前提
+1. **`gate:full` 未绿**（captain 实测 95/97；`permissions_unit` 4 红 = 我预审预告的断言）。
+   按任务判据"gate 必须真绿" ⇒ 不通过。
+2. **11 个文件全未提交**（`git status` M）⇒ 无 sha 可引用、无法单条回滚，违背 PLAYBOOK §3「一条修复一个 commit」。
+
+### 两处自查纠正（主动记录）
+1. **"D1 那 5 条 finding 被清空"是我错了**：它们在 `claimed/`，我 t13/t14 只查了 `inbox/` 与 `done/`。
+   已把因此误造的 4 份重建记录（F-SEC-104/205/206/208）与**原件合并成一份**（review 并入原件，claimed→verified/inbox），
+   现每份含 1 个 `## review`，无重复。**教训：判"文件在不在"必须 `find queue -name "*.md"` 全目录扫。**
+2. **我一开始怀疑 `ALLOW_TASK_CHEATS` 没盖住 `/fill`** —— 走完调用链发现**盖住了**（`initiator` 在闸后才创建、
+   `teleportBots` 在闸后才调用，且二者全仓唯一调用点）。我把纠正过程写进 review，不用"结论恰好对上"掩盖"论证曾经错"。
+
+### 现场
+未修改任何仓库源码；未删除任何 finding（只 `mv` + 追加 review）；D3 三条已归档（201/203→verified，202→inbox）。
+
+---
+
+## R5 2026-11-06 02:3x–02:5x | t16 · D4 AI部复核 | **通过 1 / 打回 3**
+
+### 判决
+- **F-AI-202 通过**：`!goal`→OWNER_ONLY、`!endGoal` 正确保留；`$SELF_PROMPT` 编码式转义（`\` 先于 `"`）+ 500 可见截断。
+  **测试是加强不是删弱**：`!goal` 从 trustedCan 移入 trustedCannot（7→8）、`!endGoal` 加进 trustedCan、
+  8g 改写为 owner 用例、**8g2 新增**、8h 反向改写+新增急停断言，**一条没删没 skip**；66 passed/0 failed。
+  无空 catch / 无换模型 / 无新增重试。
+- **F-AI-201 打回（未完成）**：围栏函数写好了**但是死代码** —— `stringifyTurns()` 三个调用点(prompter 221/223、examples 79)
+  **全不传 opts ⇒ `fenced` 恒 false ⇒ 围栏分支永不执行**；`sanitizeExternalText` **零调用点**。
+  **这条 high 级注入面当前实际防护=0。** 且即便接上线，按任务判据（"防线在提示层、执行侧无校验 = 打回"）也不够：
+  围栏属任务允许的"边界标记/硬上限"，但它作用在 system 提示上、可被绕过；执行侧只挡 10 条主人级、
+  不挡 48 条信任级，且没配 owner 时 `return TRUSTED`。
+- **F-AI-203 打回（未完成）**：四条修法（落盘净化/$MEMORY 围栏/硬规则/!forgetMemory）一条没落地。
+  记忆是数据不是命令 ⇒ 没有执行侧判据可依赖，围栏+净化是唯一手段 ⇒ "写了不调用"等于零防护。
+- **F-AI-204 打回（未完成）**：`settings_spec.json` 仍未声明 `companion_mode`；`if (!settings.companion_mode) return true`
+  的**默认放行方向没反转**。仍挂在 settings_check 的 KNOWN_UNDECLARED 已登记例外（每次打印、未静默变绿 —— 这点诚实）。
+
+### 门禁/流程
+- 相关单测我全跑：`permissions_unit` 66/0、`mindserver_gate_unit` 49/0、`step_runner_unit` exit 0、`atom_classify_unit` 6/6
+  ⇒ D4 改动没打坏它们；`permissions_unit` 由红转绿是因为断言被**正确改写**（我逐条核过是加强）。
+- `gate:full` 本会话不能 spawn，由 captain 跑。
+- **13 个文件全部未提交**（第三次提同一问题：D1/D3/D4 都这样）⇒ 无 sha、无法单条回滚。
+- `text.js` 三个新函数**零测试引用** —— 又一个"没人守"的新代码。
+
+### 一句话给 captain
+**D4 只有 1 条真正交付。另 3 条仍在 inbox，其中 201/203 的"实现"是未被引用的死代码 ——
+别因为 git diff 里看得见围栏函数就以为修好了。**
+
+### 现场
+未修改任何仓库源码；未删除任何 finding（只 mv + 追加 review）；F-AI-202 → verified，201/203/204 留 inbox 并附打回意见。

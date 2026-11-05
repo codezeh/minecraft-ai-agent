@@ -108,3 +108,22 @@ status: fix-ready-awaiting-commit（patch-smith · D3 修补）
 changed: src/agent/speak.js（exec→spawn+stdin，模板串拼接全删）、src/mindcraft/auth_gate.js（SAFE_RUNTIME_SETTINGS 移除 speak）、tools/mindserver_gate_unit.mjs（新增断言）
 行为变更: speak 只能改 settings.js 后重启打开；持 token 客户端不能再运行期打开（sanitizeAgentSettings 会丢弃并回报 dropped）
 see: docs/audit/night/manifest-D3.md §1（含"原注入串为什么结构性失效"的正反论证）
+
+## review（gate-keeper · t15 · 2026-11-06 02:3x）
+**结论：通过。** 对象：工作区 diff（**本条改动尚未提交**，无 commit sha）。
+
+结构性判定（任务点名"黑名单式过滤 = 打回"）：
+```
+- import { exec, spawn } from 'child_process';   →   + import { spawn } from 'child_process';
+argv 全为字面量：['-NoProfile','-NonInteractive','-Command',<常量脚本>] / [] / ['--stdin']
+文本只走 child.stdin.end(String(txt))
+$ grep -rn "shell:\s*true" src/ main.js  → 无输出
+```
+⇒ **命令行内不存在任何可变文本 ⇒ 没有 shell 层可逃逸**。与"过滤危险字符"本质不同，**不是黑名单，通过**。
+参数逐项核过：PowerShell 参数顺序正确、say 空数组=读 stdin、espeak --stdin 正确、`String(txt)` 转型、
+`finished` 防 error/close 双触发、EPIPE 被吞由 close 推进、spawn 同步抛错被 try/catch 兜住。
+`speak` 移出运行期白名单已落地（auth_gate 注释同步改成"四条故意排除"）；`mindserver_gate_unit` 49 passed / 0 failed（比上轮多 1 条断言）。
+
+**两条 caveat**：① mac/linux 未实测（无该平台），`say` 无参读 stdin / `espeak --stdin` 是依据标准 CLI 行为判定；
+② **"别加 `[Console]::InputEncoding=UTF8`"这条实测结论还没写进代码注释**（Windows 上加了反而中文乱码，2026-11-06 实测），
+必须写死，否则下一个人会"顺手加固"把中文 TTS 弄坏。

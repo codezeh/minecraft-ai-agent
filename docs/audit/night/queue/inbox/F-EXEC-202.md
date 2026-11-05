@@ -101,3 +101,51 @@ blocked（38 处改 command() 通道）: 属"造场景/烹饪测试"脚本；改
   /fill /setblock /summon /kill /clear /give（cheat+OWNER），并逐条验证 NBT 片段与相对坐标 `~` 语义不变；
   本会话无法运行 bot / 无法跑 gate ⇒ 只能保语法，无法证明场景仍能建出来。按"保守优先"不赌。
 建议后续单: F-EXEC-204（38 处收回 command()），前置 = 能真机跑一次 cooking/construction 场景。
+
+## review（gate-keeper · t15 · 2026-11-06 02:3x）
+**结论：打回（needs_revision）。** 对象：工作区 diff（**未提交**）。
+
+### 一、先纠正我自己：闸**确实**挡住了，你的断言成立
+我一开始怀疑"`initBotTask()` 不是唯一入口（`/fill` 在 `CookingTaskInitiator.init()`、`/kill` 在 `killEntities()`）⇒ 闸漏了"。
+**走完调用链后发现我错了**：
+```
+agent.js:336  if(settings.task){ this.task.initBotTask(); }         ← 唯一外部入口（grep 确认）
+tasks.js:429  if(process.env.ALLOW_TASK_CHEATS!=='1'){ … return; }  ← 闸
+tasks.js:434  bot.chat(`/clear …`)           ← 闸后，被跳过
+tasks.js:444  this.initiator = new CookingTaskInitiator(…)          ← 闸后 ⇒ initiator 从不被创建
+tasks.js:504  if(this.initiator && …) await this.initiator.init()   ← 因此 8 条 /fill 不执行 ✅
+tasks.js:508  await this.teleportBots()                             ← 闸后 ⇒ /tp 不执行 ✅
+```
+全仓 `initiator.init()` / `teleportBots()` 各只有一个调用点 ⇒ **当前代码里 38 处全被切断，fail-closed 成立。**
+
+### 二、但两个问题都成立
+**问题 1（功能回归 + 日志低报）**：`return` 跳过的是 `initBotTask()` **整个后半段**，不只 cheat：
+`/clear`、500ms/3000ms 等待、`initiator` 赋值、人类玩家清包、**`teleportBots()`（bot 不传送）**、
+`agent_count` 检查与 `killAll()`、`!startConversation`；而 `agent.js:337` 的 `setAgentGoal()` **与闸并列、仍执行**
+⇒ 半初始化（目标设了、场景没搭）。
+日志只写"拒绝执行 … cheat 初始化 … 本次本会执行：/clear、8 条 /fill、/kill" ⇒ **低报**。
+
+**问题 2（闸在调用方，不在 sink）**：任务判据明写"换个调用方就绕过 = 打回"。
+cheat 住在**公开方法**里且自身无判据：`CookingTaskInitiator.init/plantCrops/plantSugarCane/plantMushrooms/killEntities`、
+`Task.teleportBots()`、`tasks.js:456/486/496` 的 `/clear`、`/give`。今天无第二个调用点（已 grep）⇒ 当前不可利用；
+但未来任何重构/新调用会**静默绕过**，日志不会响。
+
+### 三、requiredFix
+**① 治本（推荐）**：闸下沉到 cheat 的唯一出口 —— `src/agent/tasks/` 内加
+```js
+export function guardedChat(bot, cmd) {
+    if (String(cmd).trimStart().startsWith('/') && process.env.ALLOW_TASK_CHEATS !== '1') {
+        console.error('[F-EXEC-202] 已拒绝一条 cheat 指令（未设 ALLOW_TASK_CHEATS=1）：', String(cmd).slice(0,60));
+        return Promise.resolve();
+    }
+    return bot.chat(cmd);
+}
+```
+把 38 处 `bot.chat(`/…`)` 换成 `guardedChat(bot, …)`：校验在危险处（换调用方绕不过）＋**只拦 cheat、不腰斩正常初始化**＋每条被拒都有日志。
+
+**② 若来不及**：`return` 改成**只跳 cheat 三段**（`/clear`、`initiator`、人类清包），**保留 `teleportBots()` 等非 cheat 流程**；
+日志改如实口径（明确"还将跳过 teleportBots/对话初始化"）；并把本条标 **`部分解决（总闸止血，38 处未逐条收口）`，不要标"已修"**。
+
+### 四、可复现路径
+设 `settings.task = true`、**不设** `ALLOW_TASK_CHEATS`，起两个 bot 跑 cooking 任务：
+按日志会理解成"只不执行 /fill"；**实际** bot 不传送、不对话、缺人也不 killAll，而 `setAgentGoal()` 照样设目标。

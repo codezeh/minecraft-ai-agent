@@ -125,3 +125,8 @@ verify: |
   npm run gate:full
 discovered_by: recon-scout
 dept: D5-WEB
+
+---
+status: fix-ready-awaiting-commit（patch-smith · D5 修补）
+changed: mindcraft/src/mindcraft/mindserver.js（详见 docs/audit/night/manifest-D5.md 的对应节）
+自检: node --check OK；mindserver_gate_unit 49/0；permissions_unit 66/0；F-WEB-201 判定真值表 6/6
