@@ -1740,8 +1740,13 @@ async function _gotoWithTimeoutInner(bot, goal, timeoutMs) {
  *     （pathfinder 的 countScaffoldingItems() 从不被 A* 调用，
  *      所以库本身不会因为材料不够而放弃搭桥 —— 必须我们自己判）
  *   - 安全：不许挖玻璃，也不许挖玩家建筑（她自己的房子）
+ *
+ * ★ 2026-11-05（t8）：**导出**（原来模块私有）。理由只有一个：垫脚清单的 id 错配
+ *   是"静默失效"型缺陷，光读返回数组证明不了什么 —— 必须能用真 A*（pathfinder 的
+ *   `AStar`）把 movements 跑起来，看它到底会不会规划"放方块垫过去"。
+ *   用例：tools/scaffold_ids_unit.mjs。
  */
-function buildMovements(bot, opts = {}) {
+export function buildMovements(bot, opts = {}) {
     const m = new pf.Movements(bot);
 
     // ---- 挖 ----
@@ -1770,15 +1775,25 @@ function buildMovements(bot, opts = {}) {
     const had = bot.inventory ? bot.inventory.items() : [];
     // 背包里真实存在、且适合当脚手架的实心方块
     const goodScaffold = /^(dirt|grass_block|cobblestone|stone|andesite|diorite|granite|deepslate|sand|gravel|netherrack|_planks|_log|_slab)$|(_planks|_log)$/;
+    // ★★ 2026-11-05（t8，活 bug）：`scafoldingBlocks` 要的是 **item id**，不是 block id。
+    //   pathfinder 的计数判据是 `if (item.type === id) count += item.count`
+    //   （movements.js:159）—— `item.type` 是 `itemsByName` 的 id。
+    //   这里原来用 `mc.getBlockId()`（查 blocksByName）；1.21.8 下 oak_planks 是 13→36、
+    //   cobblestone 12→35、dirt 9→28，只有 stone/andesite/diorite/granite 两种 id 恰好相同。
+    //   后果不是报错而是**静默数不到**：countScaffoldingItems()=0 → A* 的 remainingBlocks=0
+    //   → 所有"放方块走过去"的分支直接 return → 背包里明明有木板，遇到沟坎却绕远路/NO_PATH。
+    //   取不到 item id（只有方块没有物品）就**跳过**，绝不退回 block id —— 那只会把
+    //   "没这个物品"伪装成"清单写了却没生效"。
+    const itemIdOf = (name) => bot.registry?.itemsByName?.[name]?.id ?? null;
     for (const it of had) {
         if (goodScaffold.test(it.name)) {
-            const id = mc.getBlockId(it.name);
+            const id = itemIdOf(it.name);
             if (id != null && !scaffoldIds.includes(id)) scaffoldIds.push(id);
         }
     }
     // 库默认的泥土/圆石也留着（万一名字没匹配上）
     for (const name of ['dirt', 'cobblestone']) {
-        const id = mc.getBlockId(name);
+        const id = itemIdOf(name);
         if (id != null && !scaffoldIds.includes(id)) scaffoldIds.push(id);
     }
     // 关键：背包一个可放方块都没有时，必须把搭桥关掉 ——

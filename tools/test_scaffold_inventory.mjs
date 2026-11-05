@@ -31,7 +31,12 @@ function fakeBot(items) {
     };
 }
 
-const idOf = (name) => mcData.blocksByName[name]?.id;
+// 期望值必须是 **item id**：pathfinder 的计数判据是 `item.type === id`
+// （movements.js:159），而 item.type 是 itemsByName 的 id。
+// ★ 2026-11-05：本文件原写作 `blocksByName[name].id` —— 那等于**把 bug 当成期望值**
+//   （除了 stone/andesite/diorite/granite 两种 id 巧合相同，其余全都不等），
+//   真实现一修好它反而变红。见 tools/scaffold_ids_unit.mjs。
+const idOf = (name) => mcData.itemsByName[name]?.id;
 
 // ---------- 1) 只有木板 ----------
 {

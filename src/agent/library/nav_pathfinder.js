@@ -9,7 +9,7 @@
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import { ok, fail, normalizeTarget } from './contract.js';
-import { scaffoldBlockIds } from './scaffold_blocks.js';
+import { scaffoldItemIds } from './scaffold_blocks.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -69,12 +69,18 @@ export function makeMovements(bot, { canDig = false, scaffold = false, allowVine
     // 之前的 bug：这里从不设置 scafoldingBlocks，于是用 pathfinder 默认的
     // [dirt, cobblestone]。而她背包里常见的是木板/原木 —— 不在清单里就等于"没材料"。
     // pathfinder 拿 countScaffoldingItems() 当 A* 的 remainingBlocks 上限
-    // （movements.js:346/352/403，remainingBlocks===0 就不许搭），
+    // （movements.js:346/352/404/567，remainingBlocks===0 就不许搭），
     // 所以「明明带着木板却搭不了」会让她白白绕开本可以搭过去的地形。
     // skills.js 的 buildMovements 早就按背包实际方块建清单了，这套（path_short/hopTo 走的）
     // 一直漏着 —— 又是「同一件事两个真相」。
+    //
+    // ★★ 2026-11-05（活 bug）：清单里的 id **必须是 item id**。
+    //   pathfinder 是按 `item.type === id`（itemsByName 的 id）比对的；这里过去给的是
+    //   block id，于是除 stone/andesite/diorite/granite（两者 id 巧合相同）以外全部数不到
+    //   —— 清单看着有、`countScaffoldingItems()` 却是 0，垫脚**静默失效**。
+    //   现在统一由 scaffoldItemIds() 产出（它内部只查 itemsByName，取不到就跳过并记录）。
     if (scaffold) {
-        const ids = scaffoldBlockIds(bot);
+        const ids = scaffoldItemIds(bot);
         if (ids.length) {
             m.scafoldingBlocks = ids;
         } else {

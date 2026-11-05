@@ -69,16 +69,64 @@ export function countScaffold(bot) {
 }
 
 /**
- * 背包里所有可垫脚方块的 **block id 列表**（给 pathfinder 的 scafoldingBlocks 用）。
+ * 背包里可垫脚方块的 id 清单 + 被跳过的名字（诊断用）。
+ *
+ * ★★ 2026-11-05：这里给的必须是 **item id**，不是 block id。
+ *
+ * 依据（pathfinder 自己的源码，两处都是 itemsByName）：
+ *   node_modules/mineflayer-pathfinder/lib/movements.js:86-88
+ *       this.scafoldingBlocks.push(registry.itemsByName.dirt.id)
+ *       this.scafoldingBlocks.push(registry.itemsByName.cobblestone.id)
+ *   node_modules/mineflayer-pathfinder/lib/movements.js:159   ← 计数判据
+ *       if (item.type === id) count += item.count      // item.type 是 item id
+ *
+ * 喂 block id 的后果不是报错，是**静默数不到**：
+ *   `countScaffoldingItems()` 返回 0 → A* 的 `remainingBlocks === 0`
+ *   （movements.js:346 / :352 / :404 / :567）→ 所有"放方块走过去"的分支直接 return
+ *   → 她明明带着木板，遇到沟坎却绕远路 / NO_PATH，而且**不打任何日志**。
+ *
+ * `stone` 是当年没被发现的原因：1.21.8 里 stone 的 block id 与 item id 巧合都是 1
+ * （andesite/diorite/granite 同样巧合相同），于是"有时候能用"。
+ *
+ * @param {object} bot mineflayer bot
+ * @returns {{ids:number[], skipped:string[]}} skipped = 是垫脚料但**没有对应 item** 的名字
+ */
+export function scaffoldIdReport(bot) {
+    const ids = [];
+    const skipped = [];
+    for (const it of bot.inventory?.items?.() ?? []) {
+        if (!it || !(it.count > 0) || !isScaffoldBlock(it.name)) continue;
+        const id = bot.registry?.itemsByName?.[it.name]?.id;
+        if (id == null) {
+            // 只有方块、没有对应物品（例如某些技术方块）→ 她**永远垫不了**，
+            // 跳过并记录。绝不退回 block id：那样只会让 pathfinder 静默数到 0，
+            // 把"没有这个物品"伪装成"清单里写了却没生效"。
+            if (!skipped.includes(it.name)) skipped.push(it.name);
+            continue;
+        }
+        if (!ids.includes(id)) ids.push(id);
+    }
+    return { ids, skipped };
+}
+
+/**
+ * 背包里所有可垫脚方块的 **item id 列表**（直接赋给 pathfinder 的 `scafoldingBlocks`）。
+ * @param {object} bot mineflayer bot
+ * @returns {number[]}
+ */
+export function scaffoldItemIds(bot) {
+    return scaffoldIdReport(bot).ids;
+}
+
+/**
+ * 旧名字（保留：别再新增调用方）。
+ *
+ * ★ 它**现在返回的是 item id** —— 2026-11-05 修的正是"名字叫 block、喂的也是 block id"
+ *   这件事（pathfinder 按 item.type 比对，block id 只会静默数到 0）。
+ *   新代码用 `scaffoldItemIds`；要诊断"哪些垫脚料被跳过"用 `scaffoldIdReport`。
  * @param {object} bot mineflayer bot
  * @returns {number[]}
  */
 export function scaffoldBlockIds(bot) {
-    const ids = [];
-    for (const it of bot.inventory?.items?.() ?? []) {
-        if (!it || !(it.count > 0) || !isScaffoldBlock(it.name)) continue;
-        const id = bot.registry?.blocksByName?.[it.name]?.id;
-        if (id != null && !ids.includes(id)) ids.push(id);
-    }
-    return ids;
+    return scaffoldItemIds(bot);
 }
