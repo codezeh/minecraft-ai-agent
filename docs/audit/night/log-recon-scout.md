@@ -160,3 +160,124 @@ F-SEC-204 **需要用户拍板**，patch-smith 只做"配置里标注剩余风�
 2. 我无法提交（会话限制），三份 finding + log 都在外层仓 `docs/audit/night/`，等 captain 代提交。
 3. F-EXEC-201 与 D2 的 F-SEC-201 构成**同一条攻击链**（聊天 → 本机 RCE → 读明文 key），
    建议早报把这两条挨着写。
+
+## R4 2026-11-06 01:40–02:20 | D4 AI/Agent 安全部 · 侦察 | 4 条 finding（2 high / 2 medium） | 无阻塞
+
+**做了什么**
+- 沿着"提示怎么拼出来"这条主线读完了 `prompter.js`（`replaceStrings` 的 11 个占位符）、
+  `utils/text.js` 的渲染、`permissions.js` 的分级、`commands/index.js` 的可见性、`history.js` 的记忆，
+  每一处都追到"外部文本从哪个字段进来、最后落在哪个字符串里"。
+- 关键数字全部**用真实导入实测**，不靠读代码推断：写了个 `node -e` 直接 import
+  `src/agent/settings.js` + `commands/index.js`，分别灌"根 settings"与"settings_spec 默认值"两套配置，
+  数 `isVisibleToModel` 的结果（8 vs 70）。这一步把 captain 给的 F-GATE-001 从"配置不一致"
+  变成了"工具面放大 8.75 倍"的可复现事实。
+- 沿用前几轮的习惯：能证伪的自己证伪（见文末"已排除"）。
+
+**结论（写入 queue/inbox/）**
+
+| id | sev | 一句话 |
+|---|---|---|
+| F-AI-201 | high | 外部内容（玩家聊天/别的 bot/命令回显）以同一行 `User input:` 进系统提示，**无不可信围栏**；模型回合按 TRUSTED 执行 ⇒ 注入可驱动 48 条信任级命令；**无 owner 配置时人人都是 TRUSTED** |
+| F-AI-202 | high | `!goal` 是信任级 → 文本原样进 `$SELF_PROMPT`（引号不转义、无限长）→ 每 2 秒重复注入系统提示、无次数上限（`MAX_NO_COMMAND` 被"每轮都用命令"绕过 + `update()` 自动重启）、写进 memory.json 跨重启存活 ⇒ 持久注入 + 持续烧 token |
+| F-AI-203 | medium | 记忆闭环：聊天 → LLM 摘要 → `memory.json` → 每轮 `$MEMORY` 注入，**只限长度不过滤内容**，跨重启存活（仅 codeVersion 变更才丢） |
+| F-AI-204 | medium | `companion_mode` 不在 settings_spec ⇒ 面板创建的 agent `isVisibleToModel` 永远 `return true`：实测**模型可见命令 8 → 70**（设计意图的 8.75 倍），放大 F-AI-201/202 |
+
+**几条支撑性事实（都已实证）**
+- `permissions.js:131-134` 的注释自己承认"历史里可能已混进玩家诱导出来的内容"，所以模型回合只给 TRUSTED
+  —— 这个设计是对的，我据此把"能拿到什么"精确到 48 条信任级命令，而**不是**笼统说 RCE。
+- `permissions.js:146-147`：没配 owner 时 `return LEVEL.TRUSTED`（人人信任级）；
+  仓库默认 profiles 大多没有 `permissions` 段 ⇒ **新装即处于"任一玩家可驱动"状态**。
+- `agent.js:549` + `settings.js:49 "max_commands": -1` ⇒ 单轮命令数 `Infinity`。
+- `self_prompter.js:15 cooldown=2000`、`:74 MAX_NO_COMMAND=3`、`update()` 里"automatically restarts loop"。
+
+**已排除（核实过但**不报**）**
+- 权限模型本身（`canRunCommand`/`commandLevel`/`resolveLevel`）：10 条主人级命令的口子是真的挡住了，
+  注入抬不到主人级 —— 我没有把它写成"提权"。
+- 模型输出 → 命令的映射走 `containsCommand` 的正则 + `commandExists` 白名单 + `canRunCommand` 等级判定
+  （`agent.js:567-580`），**不是**自由形式的工具调用 ⇒ 我没有报"模型可指定任意工具"这种虚警；
+  真正的缺陷在"文本与指令不可区分"（F-AI-201）与"可见面漂移"（F-AI-204）。
+- `prompter.promptGoalSetting` 里 `res.split('```')[1].replace('json','')` + `JSON.parse`：
+  有 try/catch 且只取 `{name, quantity}`，`goal_setting` 已标 deprecated、默认流程不走它 ⇒ 不报。
+- `_saveLog`（`log_all_prompts`）：默认 false，且文件名是时间戳（无穿越）⇒ 不报。
+- `promptShouldRespondToBot`、`promptVision`：同样走 `replaceStrings` 裸插值，但它们是
+  "要不要接话"/"看图"这两条低后果路径，已并入 F-AI-201 的同一根因，不单独占 id。
+- `memory_bank`（`!rememberHere`）只作为数据回流，D3 已核实无文件路径穿越 ⇒ 不报。
+
+**给修补席的优先级**：F-AI-202（`!goal` 升主人级 = 1 行 + `$SELF_PROMPT` 转义限长 + 循环上限，
+一次改完就把"持久注入 + 烧 token"两条一起收）→ F-AI-204（`isVisibleToModel` 改"默认拒绝"方向，
+1 个函数，立刻让工具面回到 8）→ F-AI-201（围栏 + 系统提示硬规则，改 `text.js` 与 profiles）→
+F-AI-203（记忆过滤，可与 201 的围栏一次做完）。
+
+**阻塞 / 需 captain 知道**
+1. 本轮同样**只落 docs，零业务代码改动** ⇒ 无 `manifest-D4.md`；四条 `suggested_fix` 均为可直接照做的函数级描述。
+2. **F-AI-202 与 F-EXEC-201 会互相放大**：`!goal` 注入（D4）可以诱导模型输出含引号的文本，
+   而 `speak` 打开时那段文本进 shell（D3）。两条建议同一个 commit 窗口修。
+3. **F-AI-204 的修法会改变行为**（工具面 70→8），用户可能立刻感觉"她变笨了"——
+   建议在早报里明确写"这是恢复到设计意图"，并给一条显式开关（`companion_mode: false`）留给想全开的人。
+4. 我实测用的是真实 import（不跑 bot、不连服务器），命令是 `node -e` 一次性脚本，未落任何文件。
+
+## R5 2026-11-06 01:48–02:25 | D5 面板与 API 部 · 侦察 | 5 条 finding（1 high / 3 medium / 1 low） | 无阻塞（1 条已中途预警 captain）
+
+**做了什么**
+- **起了 6 次真实例做运行时实证**（临时端口 18080–18089，`createMindServer(false, port)`，
+  不用改配置、不连 Minecraft、跑完 taskkill 清场；已确认 18080–18089 无 LISTENING 残留）：
+  用 curl 打 HTTP 三出口、抓响应头、用真实 `socket.io-client` 打握手门。
+  这是本轮最有效的手法 —— 三条结论（HTTP 零鉴权、门真的有效、stop-all 必然失败）全部来自实测而非读码。
+- 前端注入面：`web/src` 全量 grep `v-html/innerHTML/eval/new Function` → 0 命中；
+  `dist/assets/*.js` 里的 7 处 `innerHTML` 逐个看上下文，确认是 **Vue 运行时内部**
+  （`_i.innerHTML=hl(...)`、`t==="innerHTML"` patchProp 等），不是应用代码。
+- 脚本面：`scripts/*.ps1` 与根 `*.mjs` 查破坏性默认值（`rm -rf`/`Remove-Item -Recurse`）与硬编码凭据 → 均无。
+- 沿途发现 patch-smith 已在我取证期间改过 `mindserver.js`（F-SEC-205 修复），我**没有回退它**，
+  而是把"改动后的真实行为"当作基线重新取证（见 F-WEB-205 与下面的即时预警）。
+
+**结论（写入 queue/inbox/）**
+
+| id | sev | 一句话 |
+|---|---|---|
+| F-WEB-201 | high | HTTP 三出口零鉴权（实测无 token 全 200）：`/` 58752B、`/settings_spec.json` 5226B（28 项配置 schema，含 `allow_insecure_coding`/`task`）、`/console/` 398B；握手门只管 socket.io；且零安全响应头 + `X-Powered-By` |
+| F-WEB-202 | medium | 无鉴权贴图代理每请求都做重活（`import('minecraft-assets')` + 资源索引），实测 **10s 打满不返回**（合法名与穿越名都一样）⇒ 未授权资源占用/轻量 DoS；同族 `:param` 已排查，只有 1 处（F-EXEC-203） |
+| F-WEB-203 | medium | socket.io 事件无速率限制；`send-message` 只校验 `from`（≤32）**不限制 message 长度**，叠加 `max_commands=-1` + 按量计费 ⇒ 单连接可刷爆 token |
+| F-WEB-204 | low | token 门内事件回传**本机绝对路径**（`path: full`）与整份 settings；配合 F-SEC-204（冒名）与 F-EXEC-201（找目标）是前置侦察件；另缺 CSP/X-Frame-Options/nosniff |
+| F-WEB-205 | medium | **`停止面板.bat` 必然失败**：`web/scripts/stop-all.mjs:8` 连接不带任何 token ⇒ 实测 `AUTH_REQUIRED`；而 F-SEC-205 修完后 token 不再打印、脚本又不读 `.mindserver-token` ⇒ 优雅关服失效，用户会硬关窗口（存档未刷盘风险），且报错误导成"mindserver 没在跑" |
+
+**实测证据（关键几条，已进各 finding）**
+```
+无 token：
+  /                    → 200  58752 B      /settings_spec.json → 200  5226 B
+  /console/            → 200  398 B        /console/           → 301
+  HTTP 头：X-Powered-By: Express + CSP/X-Frame/nosniff/Referrer 一个都没有
+握手门（真实 socket.io-client）：
+  不带 token → connect_error: unauthorized: mindserver 需要握手 token | code=AUTH_REQUIRED   ← 门有效
+  stop-all.mjs 的连接参数完全等同于上一行 ⇒ 脚本拿不到连接
+贴图代理：合法名 10.011s 未返回 / 穿越名 10.017s 未返回（服务端 CLOSE_WAIT 堆积）
+```
+
+**已排除（核实过但**不报**）**
+- **"消息体无大小上限"不成立**：`engine.io` 默认 `maxHttpBufferSize: 1e6`（1 MB），
+  `grep -rn "maxHttpBufferSize" src/` → 空（本仓没覆盖它）⇒ 我没有按这条报，只在 F-WEB-203 里
+  写成"1 MB 帧内但足以撑爆上下文窗口"。（**这是今晚第三次自我证伪**）
+- 前端注入面：`web/src` 零 `v-html`/`innerHTML`/`eval`；`dist` 里 7 处 `innerHTML` 全是 Vue 运行时内部。
+- `scripts/*.ps1`、根 `*.mjs`：无破坏性默认值、无硬编码凭据（D2 也核过一遍）。
+- `get-profile`（`:262`）已用 `path.basename` 防穿越 ✓；`request-map`/`request-terrain`
+  通过 `registerMapRelay(listener_socket)`（`:521`）在 `io.on('connection')` **内部**注册 ⇒ 在门后 ✓
+  （我特意查了这两条的缩进，确认不是"注册在 io 上绕过中间件"那种经典错误）。
+- `.mindserver-token`（patch-smith 新引入的 token 通道）**已被 gitignore**（`mindcraft/.gitignore:89`）
+  ⇒ 修 F-SEC-205 没有引入新的泄漏面，这点是**正面结论**。
+- `shutdown`/`stop-all-agents`/`destroy-agent` 无角色区分 = 本机单用户模型下的设计使然，
+  我**没有**把它报成越权（只在 F-WEB-203 里标注"token 即完全管理员"）。
+
+**给修补席的优先级**：F-WEB-201（把 token 门提到 HTTP 层 + 补安全头，一处中间件；
+**注意同步改 `start-panel.ps1:15` 的 `$panel` URL 带上 token，否则用户点面板会 401**）→
+F-WEB-205（与 F-SEC-205 同一 commit 窗口，改 `stop-all.mjs` 取 token + `stop-panel.ps1` 的 cwd）→
+F-WEB-203（限流 20 行 + message 长度上限）→ F-WEB-202（缓存 + 并发上限 + 路由级超时）→ F-WEB-204（去绝对路径 + 安全头）。
+
+**阻塞 / 需 captain 知道**
+1. 本轮**只落 docs，零业务代码改动** ⇒ 无 `manifest-D5.md`。
+2. **我取证期间 patch-smith 正在改 `mindserver.js`**（`git status` 显示 `.gitignore`/`mindserver.js`/`tools/server-net.mjs` 已修改）。
+   我没有回退或覆盖它的改动，F-WEB-201 里引用的行号（`:85-92` `:143` `:146` `:207`）是**改动后**的现状；
+   如果 patch-smith 继续改这个文件，请让它以 F-WEB-201 的 `suggested_fix` 为准做增量，别重排整段。
+3. 我起过 6 个临时 mindserver 实例，其中一个在 `mindcraft/bots/_board/board.sqlite` 上做了一次
+   `openBoard()`（日志原文 `[任务板] 已启用（18 个技能可派单，库 bots\_board\board.sqlite）`）。
+   该文件本就在 `.gitignore` 里（`bots/_board/`），且 `openBoard` 是既有启动路径、无副作用；
+   但**如实登记**：这是我今晚唯一写到的运行时状态，除此之外零写入。
+4. 临时端口探针全部已 taskkill（18080–18089 无 LISTENING 残留，只有 TIME_WAIT 客户端套接字）。

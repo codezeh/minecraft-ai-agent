@@ -177,3 +177,101 @@
 - `queue/inbox/F-GATE-001.md`（`companion_mode` 未声明 → 8 条白名单从未生效，64 条命令全可见）
 - `queue/inbox/F-GATE-002.md`（`EXCLUDE` 里两个死测试 import 已删除模块 → 永久必红被藏起来）
 - `queue/inbox/F-GATE-003.md`（`curly`/`no-unused-vars`/`no-unreachable` 自始 off → lint 覆盖面留白）
+
+---
+
+## R1 2026-11-06 02:1x–02:3x | t13 · D1 依赖部复核 | **通过 12 / 打回 1** | 一条流程缺陷需 captain 定规矩
+
+### 做了什么
+- 读 `queue/done/` 全部 8 张 D1 单 + 4 个 commit 的 diff + `git diff package.json`
+- **独立重跑**（不采信任何转述）：`npm audit ×2`、`patch -p1 --dry-run + 实跑`（独立夹具）、
+  `git apply --check`、`node --check`（抽出 `clean:modules` 的 payload）、括号配平统计、`grep ×4`
+- 逐条跑各单的 `verify`，把 8 张移入 `verified/` 并追加 `## review` 段
+- 重建 `F-DEP-003` 复核单（原文件已被修补者清空）放进 `inbox/`，附 requiredFix
+- 写 `review-D1.md`（13 项全量裁决 + 任务点名的四个专项检查）
+
+### 结论
+- **通过 12 / 打回 1**。打回：`F-DEP-003`。
+- 带 caveat 的 3 条：`F-DEP-004`（部分解决/未接线）、`F-DEP-006`（改了但入不了库）、
+  `F-DEP-012`（`npm ci` 仍执行 lifecycle scripts ⇒ 安装期执行面**未消除**）。
+
+### 四个专项检查的结果
+1. **CVE 一条都没消除**，且是设计如此：`mindcraft {15M/13H/1C/29}` 与 `web {3M}` 与基线**逐项相同**；
+   原因是**四个 commit 里没有任何依赖版本变化**（`package.json` diff 只有 2 行 scripts，无 `overrides`）。
+   ⇒ 早报不能写"依赖漏洞已修复"，只能写"首次建立可复现基线，CVE 面本轮未缩小"。
+2. **没有偷升主版本**：`dependencies`/`devDependencies`/`overrides` 零变化。
+3. **没有 `npm audit fix --force`**：语义上无痕迹；结构上 lock 未入库 ⇒ 以后真有人 force 我们也查不出来（`F-DEP-103` 的危害又一例）。
+4. **patch-package 没被放宽**：`postinstall=patch-package` 未变、无 `--ignore-scripts`、新增 `.patch.disabled` = 0、闸本体未被改。
+
+### 四项内容正确性验证（captain 点名）
+- **补丁**：`patch -p1 --dry-run` = 0、实跑 = 0、结果 = 原件 **+恰好 6 行**插入（`246a247,252`），其余零改动 ⇒
+  **比"diff -q 逐字节相同"更强的证明**（我没他的 pristine 副本，但证明了无夹带）。
+  hunk 2 丢弃**正确**（4.39.0 已用 `toNotchianYaw`，与手算数学等价）；hunk 3 丢弃**理由错误**（见打回）。
+- **start.bat**：括号 **20/20** 配平；三个分支 `popd` 全在 `pause/exit` **之前**或末尾 ✅。
+- **clean:modules**：`node --check` = SYNTAX_OK；打桩实测**只删 `node_modules`**，lock 不再被删 ✅；
+  小瑕疵：`lstatSync().isDirectory()` 分支已成死代码（无害）。
+- **4 commit 无夹带**：名字逐个核过，每条只动声称的文件 ✅。
+
+### 阻塞 / 需 captain 定
+1. **流程硬伤**：`F-DEP-003/004/005/006/012` 五条的 finding 文件在修补收尾时被**清空**，
+   `inbox`/`done` 都没有 ⇒ 我只能对 commit 复核。建议立规矩：**修补者不得清空 `inbox`，
+   归档只走 `verified/`**。
+2. **`F-DEP-103` 应排 D1 收口第一位**：它让 005/006/010 三条"修了但不算修好"。
+3. **`npm view` 在我的会话里坏了**（npm cache `_logs` 写入 EPERM），但 `npm audit` 能通网。
+   故凡"某版本是否存在"的结论，我改用 **advisory 的 `range=` 反推**（`zod <4.6.6`、`tar <=7.5.20` ⇒
+   对端必然无修复版）。这条口径以后可复用。
+4. **`F-DEP-003` 的修复尚未生效**：`node_modules` 里 `incorrect_for_wooden_tool` 仍 0 命中，
+   补丁能套但没套 ⇒ 需 captain `npm ci`，其后跑 `grep -c incorrect_for_wooden_tool`（期望 1）。
+
+### 现场
+我未修改 `mindcraft/` 任何文件（`git status` 里的 `.gitignore`/`mindserver.js`/`server-net.mjs`
+是 D2/D3 队友的在途改动，不是我的）。夹具 `tmp-rv` 已删。所有产出已 grep 自检无密钥。
+
+---
+
+## R2 2026-11-06 02:3x–02:5x | t14 · D2 密钥部复核 | **通过 12 / 打回 2** | 三条红线全部干净
+
+### 结论
+- 打回 **F-SEC-209**（修在磁盘、git 里等于没改；被跟踪的 example 仍指向危险值）
+- 打回 **F-SEC-206**（漏 `config.local.js`；验收"16/16"实测 8/9×2）
+- 其余 12 通过（201/202/203/204/207/101/102/103/105 + 205/208/104）
+
+### 三条红线（本节最重要）
+1. **未动真实密钥值**：`keys.json` 的 key sha256 前16 = `7396a9cbdd8e0227` **与 finding 记录逐字符一致**，
+   mtime 2026-10-18（早于今晚全部工作）。→ 靠 finding 当初留的**指纹**闭环，不靠"我说没改"。
+2. **未动 RCON 口令**：与 11-02 备份该行 **逐字节相同**（`281687d797644ed3`）。
+3. **未改写 git 历史**：`7a5e5d0/4c006bc/7331ba5/119f45f` sha 与 t13 时完全一致；无 `refs/original`；
+   reflog 仅 01:32 两次 `reset: moving to HEAD`（captain 重建 index），无 amend/rebase/filter-branch。
+
+### 五项专项检查
+- ① 动没动真值 → **没有**（两条指纹精确比对）
+- ② 外部化后能否启动 → **能**：`settings_check` exit 0；`mindserver_gate_unit` 48/0、
+  `mindserver_local_only_unit` 16/16、`permissions_unit` 63、`ses_escape_unit` 16 —— 全绿无回归
+- ③ gitignore 加了但文件已跟踪 → **本轮无此情况**（两仓 `git ls-files` 敏感命中 0，无需 rm --cached）；
+  但**反向**同类问题落在 209（文件从未被跟踪 ⇒ 改动永远进不了 git）
+- ④ 历史泄漏是否标"需用户轮换" → **两处都标了**：201「清理代码不等于密钥安全——请用户轮换」、
+  203「轮换的意义在于让旧值作废……属用户动作」
+- ⑤ 有无 filter-branch/改写历史 → **没有**
+
+### 打回细节
+- **209**：`server.properties` 被 `.gitignore:74` 排除 ⇒ 修复只在磁盘；而**被跟踪的
+  `server.properties.example:7` 仍是 `broadcast-rcon-to-ops=true`** ⇒ 仓库唯一可见参照指向危险值。
+  requiredFix：改 example 一行并提交（1 行）。
+- **206**：`config.local.js` 两仓都未忽略（它是 finding 原始清单里点名的项）；
+  验收表写"两仓 16/16"，我实算 **8/9 × 2**。requiredFix：各加 1 行 + 验收改用实测数字。
+
+### 亮点（要固化）
+`F-SEC-203` 用"只算指纹不抄口令"记录副本、`F-SEC-201` 记录了 key 的 sha256 前16 ——
+**正因为有这两个指纹，本轮红线才能闭环证明**。建议写进 PLAYBOOK：secret 类 finding 必须留指纹。
+
+### 我自己的失误（第二次，主动记录）
+对比 `server.properties` 与其备份时**选错对照文件**（用了 Oct-19 旧备份），diff 把
+**当前 rcon.password 明文再次打进会话输出**。改用 11-02 备份 + `grep -v 'rcon.password'` +
+只输出哈希前缀后重做。结论不变，但再次坐实 F-SEC-203 的"尽早轮换"。
+
+### 流程（第二次出现，建议立规矩）
+`F-SEC-205/206/208/104` 四条的 finding 文件在收尾时被清空，inbox/done 都没有 ⇒ 只能对 commit 复核。
+**建议：修补者不得清空 inbox，归档只走 verified/。**（D1 已出现过一次同一问题）
+
+### 现场
+未修改 `mindcraft/` 任何文件；`done/` 已清空（D2 全部归档）；产出已 grep 自检无密钥。

@@ -72,3 +72,70 @@ S33~S45、I6/I14 全部**真的在位**（复核方式逐条写在 `queue/HISTOR
 **风险提示给 captain**：`F-EXEC-101` 是**唯一一条会立刻把门禁打红**的（加了判据后 preflight 会报 10+ 条
 `tasks.js` 违规）。这是"门禁恢复视力"，不是回归 —— 但它会让 pre-commit 拦住所有提交，
 所以必须排在一个专门的窗口里做（先改 `tasks.js` 的 10 处再收紧判据，或反之，二选一，别半截）。
+
+## R1 2026-11-06 01:47 | D1 依赖部修补（t6）| 落地 4 条（+1 新发现），blocked 4 条，accepted-risk 4 条，提交数 0（归 captain） | 阻塞：本会话不能 git 提交/删文件/spawn
+
+**入口条件核实（先做的三件事，都跟"能不能落盘"有关）**
+- `bash`/`node`/`git` 对 `mindcraft/` 仍然只读（`echo x > mindcraft/.p` → Permission denied；`node fs.writeFileSync` → EPERM；
+  `git add` → `Unable to create .git/index.lock: Permission denied`），**但 DSH 的 write/edit 文件工具可以写**。
+  ⇒ 全程用 write/edit 改内容，git 与删除一律交 captain（已与其确认为 A 方案）。
+- `node spawnSync(process.execPath,...)` → **status=null EPERM** ⇒ `gate:full` / `unit_all` / `lint_hard` 在我这里恒红（环境红）。
+  captain 那边 exit 0（96/97），所以 **gate 由 captain 跑，我不以"跑不了"降级判据**。
+- 用 `npm view ... --cache E:/我的世界ai/.tmp_probe/npmcache` 打通了 registry 元数据（recon 当时 `npm view` 被 EPERM 挡住）。
+
+**落地（4 条，全部门禁中性，详见 `manifest-D1.md`）**
+1. `F-DEP-003`：新建 `patches/mineflayer+4.39.0.patch`（只重建 hunk 1：`incorrect_for_wooden_tool → mineable/pickaxe`）。
+   关键发现：**patch-package 对"文件名版本≠实装版本"只警告不失败**（`createVersionMismatchWarning`），
+   真正的失败是**上下文对不上**。所以修法是"让内容对上 4.39.0"，而不是改文件名。
+   hunk 2/3 不重建：上游 4.39.0 已用 `_getBlockAtEyeLevel()` / `toNotchianYaw()` 覆盖。
+   验证：`patch -p1` 套到 **pristine 4.39.0 副本** → 结果与我构造的目标文件 `diff -q` **IDENTICAL**。
+   **旧补丁删除归 captain**（我删不掉）⇒ 状态 `fix-ready-awaiting-commit`。
+2. `F-DEP-004`：新增 `tools/patch_integrity.mjs`（零依赖）+ `patches/SHA256SUMS`。
+   **故意不接进 gate**：旧补丁未删时会立刻报 2 条 FAIL，`.githooks/pre-commit` 会把全队提交拦死。
+   五组对抗性实测：干净=绿；篡改一字节/漏登记/删文件/版本漂移=红（逐条记录在 manifest §2）。
+   已主动声明局限：**"补丁与 SHA256SUMS 一起改"挡不住**（仓库内哈希基线的固有上限），建议 gate-keeper 就测这条。
+3. `F-DEP-005`：`reinstall` → `npm ci` **且** `clean:modules` 不再删 `package-lock.json`（两条一起改才成立）。
+4. `F-DEP-006`：`gl@8.1.6` 补 `resolved`+`integrity`。**integrity 是实测的**：下载 tarball（5,913,101 B）算 sha512 → 与 registry 一致 MATCH=true。
+   全树缺 integrity 条目 **1 → 0**。
+5. `F-DEP-012`：`start.bat` 的 `npm install` → `npm ci` + 失败 `exit /b 1` 不继续启动 + 补丁完整性前置闸；括号 6/6 配平。
+
+**新发现（我的，已立单）**：`F-DEP-103` —— **`mindcraft/package-lock.json` 被 `.gitignore:4` 排除**（而 `web/` 的被追踪）。
+后果：生产依赖树无 git 历史；**`F-DEP-005/006/010` 三条修的都是 lock，未入库就没落脚点**（我改完 `git status` 里根本不出现）。
+这条是我在落地 F-DEP-006 时"改完发现 git 看不到"反查出来的，历史 06 分册/00-REPORT 都没提。
+
+**两条把 recon 的"未核实"补成硬事实**
+- `F-DEP-008`：`npm view tar versions` → **6.x 最大就是 6.2.1**，无 6.2.2+ ⇒ overrides `^6.2.2` 会指向不存在的版本，**不能写**。
+- `F-DEP-007`：`npm view zod versions` → 3.x 末尾只有 3.25.76 + 3.26.0-canary ⇒ **3.x 无稳定回补版**，确实只能跨主版本。
+
+**未落地**：`F-DEP-007/009/011` accepted-risk（已 mv done/）、`F-DEP-008/010/101/102/103` blocked/partial（已 mv done/）。
+`inbox/` 的 DEP 条目已清空；`claimed/` 留 5 条 `fix-ready-awaiting-commit` 等 captain 提交后进 done/。
+
+**D1 报表**：提交数 **0**（全部交 captain 代提交）/ blocked **5**（003 差删除、008、010、101、103）/ accepted-risk **4**（007、009、011、011 同族）/ 落地 4（004、005、006、012）+ 003 的补丁文件。
+
+## R2 2026-11-06 02:05 | D2 密钥部修补（t7）| 落地 5 条 / blocked 5 条 / deferred 3 条 / superseded 1 条 | 阻塞：server.properties 与 backups/ 对我会话只读（server.properties 另被 gitignore）
+
+**铁律自查**：**没有修改任何真实密钥/口令**（`rcon.password`、`keys.json`、API key 全未动）。
+
+**落地 5 条（等 captain 提交，详见 manifest-D2.md）**
+1. `F-SEC-206` 两仓 .gitignore 通用凭据兜底（含 `!.env.example`）。实测两仓 16/16 命中、例外可用、**已跟踪文件命中 0**。
+2. `F-SEC-208` 删掉 `tools/server-net.mjs` 头部"白名单=安全边界"的错误论断（**纯注释**：非注释改动 0 行；`server-net.mjs show` 输出逐字不变）+ `config/network.json:5` 文案更正。
+3. `F-SEC-205` 握手 token 不再无条件打印：默认只打指纹，完整值落 `.mindserver-token`（0600，已 gitignore），
+   `MINDSERVER_PRINT_TOKEN=1` 才打完整值；`start-panel.ps1` 改为读该文件拼 `?token=` —— **顺带修了"面板打开时不带 token 所以连不上"的既有缺口**。
+4. `F-SEC-209` `server.properties:7` `broadcast-rcon-to-ops` true→false（**手改，未跑 apply**，避免 CRLF 归一；改动 +1 字节，行尾符未变，其余键逐条核对未动）。
+5. `F-SEC-104` 贴图代理加白名单断言（`^[a-z0-9_]{1,64}$`，非法 400）：5 非法全拒 / 4 合法全放行。
+
+**blocked 5 条**：201（需用户 setx+轮换，手册已写，含"清理≠安全"的轮换提醒）、202（需管理员防火墙，引用 gate-keeper 手册）、
+203（backups/ 只读 + 彻底清理是破坏性）、204（需用户三选一；我已加 `_剩余风险` 字段）、207（server/ 只读 + 需选 A/B）。
+
+**deferred 3 条（诚实顺延，不是已修）**：102（19 适配器 `console.log(err)`，修法已备好在单子里）、
+103（get-profile 脱敏会改面板契约，需 web build 回归，本会话跑不了）、105（settings_spec 契约变更）。
+**superseded 1 条**：101 = 202 同一件事，以 202 为准。
+
+**两条必须进早报的事实**
+- **`server/server.properties` 被 `.gitignore:74` 排除** ⇒ `F-SEC-209` 的修复**进不了 git**，无历史、不可回滚，
+  重建服务器会回退成 `true`。与 D1 的 `F-DEP-103`（lock 被忽略）同一类。建议把安全取值同步进**可入库的** `server.properties.example`。
+- `start-panel.ps1` 原本打开的是**无 token 的 /console** ⇒ 面板 socket 握手应当一直被拒（`AUTH_REQUIRED`），
+  即"面板连不上"这个既有现象可能一直存在，只是被"用户手动复制日志里的 token 地址"绕过了。本轮一并修好。
+
+**我犯过并已纠正的一个错（如实记录）**：改 `config/network.json` 时把英文双引号写进 JSON 字符串 → 文件非法，
+`JSON.parse` 立刻报错；改用全角引号后复验 `JSON_OK`。教训：改 JSON 文案只用全角引号或转义。

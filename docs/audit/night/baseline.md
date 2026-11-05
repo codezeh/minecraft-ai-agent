@@ -297,3 +297,95 @@ no-prototype-builtins 2 | no-ex-assign 1 | no-fallthrough 1 | no-useless-escape 
 ---
 
 _附：原始证据 —— `docs/audit/night/logs/unit-baseline-raw.txt`（97 个脚本逐条输出）、`docs/audit/probes/r2/npm_gate.log`（00:28 全绿对照）、`docs/audit/probes/r2/eslint_summary.txt`（lint 存量 197）。_
+
+---
+
+# ⚠️ 更正（R0.6，2026-11-06 01:5x）—— 本文 §4、§5、§7 已作废，以本节为准
+
+> 保留上面全文是为了留痕：**不许事后篡改基线**。但环境变了，结论必须跟着变。
+> 以下每一条都注明"谁改的、我实测到了什么、哪条旧结论失效"。
+
+## 变更 1：CRLF 根因已除 ⇒ §1.1 的两个 FAIL 不再是基线
+
+captain 执行 `git config --local core.autocrlf false` + `core.eol lf`，并把 421 个被转坏的文件
+重新按 LF 落盘。**我独立复测（不是转述）**：
+
+```
+core.autocrlf = false / core.eol = lf                        ✅
+tools/preflight.mjs 的 CR 字节数：1332 → 0                    ✅
+node tools/preflight_regex_unit.mjs → ✓ 全绿：37 通过，0 失败，exit 0   ✅（原 2 FAIL 消失）
+```
+
+⇒ **§1.1 的"2 FAIL"作废。** 那两条从来不是代码缺陷（这点原判断正确），
+现在连"环境红"也不是了。captain 对机制的解释比我准：**blob 一直是纯 LF，
+是本地 `autocrlf=true` 每次检出时把磁盘转成 CRLF** —— 我原 §3.5 写的"01:05 合并把工作区
+重启 checkout 成 CRLF"是**现象描述正确、根因归因不完整**（真正的病根是 autocrlf 配置）。
+
+## 变更 2：captain 会话的门禁真值（我无法复现，故**引用而非主张**）
+
+captain 实测并交由我裁决的基线：
+
+```
+cd mindcraft && npm run gate:full → exit 0
+  settings_check ✅ / preflight_regex_unit ✅ 37通过0失败 / preflight ✅（含 §6）
+  lint_hard ✅ no-undef=0 no-floating-promise=0（扫 167 文件）/ unit_all ✅ 96/97，4 个真跳过
+cd web && npm run typecheck → exit 0
+```
+
+**证据等级说明（必须诚实）**：这些数字**我这边跑不出来**——我的会话
+`spawnSync(node,-v)` 仍返回 `EPERM`，故 `lint_hard`/`unit_all`/`preflight §6` 在我这边
+一律起不来。我**没有**独立复现 96/97 或 lint_hard 绿。
+裁决依据 = captain 提供的原始输出 + 与我实测不冲突的部分（`preflight_regex_unit` 37绿我已自证）。
+**若之后有人发现 gate:full 与上表不符，以上表为"待复核"而非"已确证"。**
+
+## 变更 3：`gate:full` 恢复为有效判据 ⇒ §5.3 那套"等价基线"**作废**
+
+- ❌ 作废：§5.1 的 **89/97**（含我那 8 条红项清单）——那是**我的会话**的产物，前提是
+  "本机起不了子进程"，该前提在 captain 会话不成立。**我的 0/97/89/97 全部作废，以 96/97 为准。**
+- ❌ 作废：§5.3 的四条替代判据（不必再执行）。
+- ✅ 恢复原版判据（PLAYBOOK §4）：**`gate:full` 绿 + `web typecheck` 绿 + `lint 197 存量不新增`**。
+- ✅ 仍然有效的观察：`web build` 在我会话 `spawn EPERM`，`dist/` 停在 Oct 30 ⇒
+  **build 是否绿需 captain 侧给出结论**，别引用我这条当"build 已知坏"。
+
+## 变更 4：§4「mindcraft 只读」已解除 —— 但**我的会话仍只读**（分工已改）
+
+- 用户 01:17 把策略改为 `danger-full-access`；captain 会话实测可写。
+- **我的会话仍 `READ-ONLY mindcraft / src / tools / server`**（我复测过），原因是
+  **我的权限在 01:14 派生时固定，会话内不可放宽**（本会话审批被禁用）。
+- ⇒ captain 已裁决（2026-11-06）：**不重启我**，改为
+  **captain = 唯一执行者（跑 gate / commit / 删文件）；gate-keeper = 唯一判决者
+  （读 diff、读代码、跑不依赖子进程的检查、给通过或打回）**。
+- ⇒ **§4 的"全队阻断"结论作废**（那是针对"没人能写"的时点）；现为"只有 captain 能写"。
+
+## 变更 5：审计链已补建（§2 的仓库边界问题已解）
+
+captain 在 **mindcraft 仓内**建了同名分支 `audit/night-20261106`（我从仓内
+`git rev-parse --abbrev-ref HEAD` 复测确认 ✅）。新规范：**任何"已修复"必须双仓 commit**，
+`## review` 段写明两个仓的 sha。⇒ **§2 的"审计链断在仓库边界"已修，作为历史记录保留。**
+
+## 不变的部分（仍然有效，继续用）
+
+| 结论 | 状态 |
+|---|---|
+| `npm run lint` = **197 errors 是存量**（与 00:28 探针一致），非今晚引入 | ✅ 有效 |
+| `no-undef = 0`、`no-floating-promise = 0` | ✅ 有效，可作判据 |
+| lint 规则**无放宽先例**（3 次提交、7 条规则一致、两次改动均为收紧） | ✅ 有效 |
+| `curly`/`no-unused-vars`/`no-unreachable` **自始 off** ⇒ lint 覆盖面薄 | ✅ 有效（已开单 `F-GATE-003`） |
+| `.githooks` 装了、真会拦；但**门禁红时只能 `SKIP_GATE=1`** ⇒ 实质被绕过 | ✅ 机制有效；**门禁已修好，现在应能真拦**（需 captain 侧复验 `sh .githooks/pre-commit` 是否 exit 0；我这边因 preflight §6 起不来仍 exit 1） |
+| `settings.companion_mode` 62→实测 **8 条白名单 vs 64 条注册**、白名单从未生效 | ✅ 有效（已开单 `F-GATE-001`，captain 已批准） |
+| `unit_all` 的 `EXCLUDE` 藏了 2 个死测试（import 已删模块） | ✅ 有效（已开单 `F-GATE-002`） |
+| 外层审计仓**没有钩子**，且不追踪 `mindcraft/` | ✅ 有效（现由"双仓 commit"规范兜住） |
+
+## 新增提醒（本轮实测，供全队）
+
+`git -C mindcraft status` 仍报 **421 个 `M`**（captain 说已 `git reset` 清掉，我这边**复测仍在**）。
+`git diff` 为空、porcelain v2 两侧 **blob sha 相同** ⇒ 纯 stat 缓存，**内容零变化**。
+⇒ 提交一律**逐文件显式 `git add <file>`**（禁 `-A`）；要判"树干净"请用
+`git diff --quiet && git diff --cached --quiet`（内容判据），**不要信 `git status` 的 stat 结果**。
+
+---
+
+**一句话总结更正后的基线**：
+**门禁已修好、判据回到原版（gate:full 绿 + typecheck 绿 + lint 197 不新增）；
+我这边跑不了子进程类检查，故由 captain 出原始输出、我据此裁决；
+我的 0/97 与 89/97 全部作废，不得再被引用。**

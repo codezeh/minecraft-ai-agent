@@ -68,10 +68,172 @@ npm run lint                       → 197 errors（存量基线，不可新增�
 
 ---
 
+## 02:20 复核席推翻了三条修法（这是今晚最重要的质量控制）
+
+复核席独立重跑，把侦察兵和我的修法各推翻了两条。**我逐条核证后确认它对。** 记录在此，因为"差点误改"比"改对了"更有教育意义。
+
+**① 一个会让整套修复当场崩的顺序错误（`F-SEC-201`）**
+侦察兵说"把密钥搬到 `.env`"。我核了 `src/utils/keys.js`：第 5 行 `keys.json` **优先**、第 14 行才回落环境变量、**第 17 行取不到就 `throw`**。
+⇒ 若先清空 `keys.json` 而用户还没 `setx`（且 `setx` 只对**新进程**生效、只能用户本人执行），**所有模型调用当场抛异常全崩**，不是"暂时不可用"。
+**最终做法**：今晚不清空。只写三步手册，标 blocked 等用户。
+```
+1. 用户本人：setx OPENAI_API_KEY "<真值>"
+2. 新开进程验证：getKey('OPENAI_API_KEY').length === 67
+3. 验证通过后，才允许把 keys.json 清成 CHANGE_ME
+```
+实测现状：`keys.json` 里只有 `OPENAI_API_KEY` 有真值（67 位），其余 15 个键全空。
+
+**② `F-SEC-202` 首选修法是错的（会砍掉手机联机）**
+侦察兵建议 `server-ip=127.0.0.1`。复核席指出：`server.properties` **没有独立的 rcon 绑定项**，RCON 只能跟 `server-ip` 走 ⇒ 收了 loopback **25565 也一起收**，而手机能连正是 `config/network.json` 存在的唯一理由。
+更关键的是**会复发**：`network.json` 仍 `bind: all`，下次谁跑 `server-net.mjs apply` 就把 `server-ip` 改回空 —— 修完当天有效、下次切配置即还原。
+**最终做法**：Windows 防火墙拦 25575 入站，`server.properties` 一个字节不改。防火墙不检查 loopback ⇒ bot 走 `127.0.0.1:25575` 照常、手机照玩。
+代价：**规则不入库、换机失效、无法用 `git diff` 证明**，只能实测；且判据不能用 `netstat`（拦包不拦监听），必须从另一台机器 `Test-NetConnection <本机LAN IP> -Port 25575` 应失败。
+
+**③ `F-SEC-204` 升 high，且项目自己的安全论断是错的**
+`server-net.mjs` 头部写"开白名单之后冒用名字就没用了"——**在"白名单只有一个名字"时这句是错的**：白名单只拦"不在名单上的名字"，而攻击者冒用的恰恰是名单上那唯一一个。
+升 high 的依据：`profiles/my-local.json:6 owner=HEAVENZEH` + `settings.js:19` 激活该 profile ⇒ 冒名 = **OWNER 级**，`OWNER_ONLY_COMMANDS` 含 `!newAction`（执行代码）、`!restart`、`!attackPlayer`。
+**减轻因素（如实记录，不夸大）**：HEAVENZEH 本人**不是 op**，所以单看 204 是"控制 bot + 主人身份"；拿服务器管理权要走 RCON（那是 202 的链）。**两条链合起来才是完全接管。**
+
+## 02:50 第一批修复落地 + 一个新闸被自己人打穿
+
+### 已入库 4 条（mindcraft 仓 `audit/night-20261106`）
+
+```
+119f45f  fix(deps): start.bat 改用 npm ci 并在失败时中止 — F-DEP-012
+7331ba5  fix(deps): reinstall 改用 npm ci，clean:modules 不再删 lock — F-DEP-005
+4c006bc  feat(deps): 新增补丁完整性闸与 SHA256 基线 — F-DEP-004（部分解决）
+7a5e5d0  fix(deps): 用 4.39.0 补丁替换零生效的 4.33.0 补丁 — F-DEP-003
+```
+
+**里程碑：4 次提交每一次都真的过了 `pre-commit` 钩子**（输出 `✓ 门禁通过`）。
+这就是今晚修 CRLF 的兑现——门禁从"恒红只能 `SKIP_GATE=1` 绕过"变成真在拦。提交后 `gate:full` 仍 **96/97 通过，无回归**。
+
+**一条被纠正的事实**（patch-smith 读 patch-package 源码得出）：`文件名版本 ≠ 实装版本` **只触发警告、不导致失败**；真正失败是补丁上下文对不上。所以 `F-DEP-003` 的正确修法是让补丁内容对上 4.39.0，不是改文件名。
+
+### 🔴 新闸被复核席打穿：`F-DEP-004` 只做到"事后能发现"
+
+复核席写了 16 个对抗性用例（夹具隔离，`mindcraft/` 零改动）。**判决原文**：
+
+> 作为"漂移探测器"**可信**，作为"防篡改防线"**不可信**——现在接进 gate 只会制造假安全感。
+
+**该报的都报了（11 条）**：改 1 字节、删 SUMS、植入后门 patch、版本漂移、基线张冠李戴……并且确认**闸不 eval 补丁内容**（塞 `$(touch /tmp/PWNED)` 没触发）。它还真抓到过本仓那个陈旧补丁（`F-DEP-003` 的形状）——**不是恒绿闸**。
+
+**挡不住的三个结构性缺陷 + 一个接线问题**：
+
+| 序 | 缺陷 | 为什么严重 |
+|---|---|---|
+| **D1** | **检查跑在载荷落盘之后** | `start.bat:73` 先 `npm ci`（触发 postinstall→patch-package 套补丁），`:82` 才检查；**且整块在 `if not exist node_modules` 内 ⇒ 只有首次安装检查、之后永不复查** ⇒ 被投毒的 node_modules 直接用 |
+| D2 | `--write` 可洗白 | 篡改补丁后重建基线 → exit 0 |
+| D3 | 删掉整个 `patches/` 静默放行 | 最省力的攻击：不植入后门，只**删掉安全补丁**，闸不报 |
+| D4 | 根本没接线 | `npm run gate` 4 步不含它 |
+
+已下令按最小改造顺序修：① 检查移到 `npm ci` **之前**（`--no-version-check`）并移出 `if not exist node_modules` 块 ② gate 路径拒收 `--write` ③ SUMS 在但 `patches/` 缺失 ⇒ FAIL ④ 最后接线。
+**`F-DEP-004` 定性为"部分解决（仅事后可发现，未阻止注入）"，不标已修。**
+
+> 这是今晚最有教育意义的一段：**我们写了个安全闸，然后自己人把它打穿了。** 如果没人做这一步，早报上会写着"补丁完整性已加固"，而实际上一次 `--write` 就洗白了。诚实边界也记下：D1 那条是**读执行顺序推出**的，不是端到端实跑 `npm ci`。
+
+### D4（AI/Agent）侦察 4 条
+
+| id | 级 | 一句话 |
+|---|---|---|
+| `F-AI-201` | high | 外部内容与系统指令在提示里**不可区分**：`text.js:9` 把所有非 assistant 轮渲染成同一行 `User input: ${content}`（无发言人、无不可信围栏），经 `$CONVO`/`$MEMORY`/`$SELF_PROMPT` **裸插值进 system 提示**。后果精确到"可驱动 48 条 TRUSTED_COMMANDS，拿不到 10 条主人级"——**没有**虚报成提权 |
+| `F-AI-202` | high | `!goal` 是**信任级** → 文本原样进 `YOUR CURRENT ASSIGNED GOAL: "${prompt}"`（引号不转义、无长度上限）→ 每 2 秒重复注入系统提示；循环停不下来的三种绕法都实测过；goal 还写进 `memory.json` **跨重启** ⇒ 持久注入 + 持续烧 token |
+| `F-AI-203` | medium | 记忆闭环污染：聊天 → 摘要 → `memory.json` → 每轮 `$MEMORY`，只限长度不过滤内容。**注入记忆不需要任何命令权限，会聊天就行** |
+| `F-AI-204` | medium | `companion_mode` 未声明 ⇒ 面板创建的 agent 模型可见命令 **8 → 70**（实测真实 import，不是我转述的 64） |
+
+**`F-AI-201` 里最要命的默认值**：`permissions.js:146-147` 没配 owner 时 `return LEVEL.TRUSTED` ⇒ **新装即"任一玩家可驱动"**（仓库默认 profiles 大多没有 permissions 段）。
+
+**`F-AI-204` 的修法方向**（侦察兵提出，已批准）：改成 `companion_mode === false` 才全开、键缺失按**收敛**处理。理由——将来再漏一个键，后果是"功能不灵"而不是"安全失效"。**同一个仓库里两种默认方向（`permissions.js:100` 默认拒绝 vs 这里默认放行），本身就是缺陷。**
+⚠️ 修完是 **70 → 8**，用户可能立刻觉得"她变笨了"——**这是恢复到设计意图**，并保留 `companion_mode: false` 作显式全开开关。
+
+### 侦察席三次主动"不报"，比多报十条更值钱
+- 否掉 `rcon_client.js:153` 命令注入：回溯到上游 `bot.players?.[name]` 精确键查挡住
+- 不把 `F-AI-201` 写成"提权"：权限模型真挡住了 10 条主人级
+- 不报"模型可指定任意工具"：模型输出走 `containsCommand` 正则 + 白名单 + 等级判定，**不是**自由 tool-call
+
+### 又一条"改完才发现没落脚点"
+`F-DEP-103`（新，blocked）：**`mindcraft/package-lock.json` 被 `mindcraft/.gitignore:4` 排除**，而 `web/` 的被追踪 ⇒ 生产依赖树（547 条、13 个 high 全在这）**没有任何 git 历史**，`F-DEP-005/006/010` 三条 lock 修复**没有落脚点**。历史 06 分册和 00-REPORT 都没提这条。需用户决定是否删 `.gitignore:4` 并首次入库 lock（6409 行 / 286KB）。
+
+## 03:00 D2 密钥部 5 条入库 + 三条定性纠正
+
+### 已入库 6 个 commit（跨两仓，每次过钩子）
+
+| 仓 | sha | finding |
+|---|---|---|
+| 外层 | `49a9cfd` | F-SEC-206 `.gitignore` 凭据兜底 |
+| 外层 | `d80caeb` | F-SEC-208 更正"白名单=安全边界"错误论断 |
+| 外层 | `5e2694b` | F-SEC-205 面板从 token 文件取地址 |
+| mindcraft | `58d2fb1` | F-SEC-206 同批兜底规则 |
+| mindcraft | `8c983c4` | F-SEC-208 注释更正 |
+| mindcraft | `62a93a5` | F-SEC-104 贴图路由白名单 + F-SEC-205 token 脱敏 |
+
+累计已入库 **10 个修复 commit**。
+
+### 🔴 三条必须纠正的定性（复核席实测，早报以此为准）
+
+**1. 依赖 CVE 一条都没消除，别写"依赖漏洞已修复"**
+实测 `mindcraft {moderate:15, high:13, critical:1, total:29}`、`web {moderate:3, high:0, critical:0}`，与侦察基线**逐项相同**。根因：4 个 commit 里**零依赖版本变化**（`package.json` 只改了 2 行 scripts，无 overrides）。
+准确说法：**"依赖审计首次建立可复现基线（本仓 29 条 / 面板 3 条），CVE 面本轮未缩小；4 条需升版本的按风险分级登记为 blocked / accepted-risk。"**
+
+**2. `F-DEP-012` 是"部分解决"，不是"已修"**
+`npm ci` **仍然执行 lifecycle scripts**（`postinstall=patch-package` + canvas / gl / protobufjs / @google/genai）。修复让"安装期脚本执行"从**不确定变成确定**，风险**没消除**。真正消除要靠脚本白名单或 `--ignore-scripts` + 显式 rebuild，另开单。
+
+**3. `F-DEP-003` 被打回：补丁本体对，但理由错、且尚未生效**
+复核席没采信修补者的 `diff -q`，自己复制 pristine `digging.js` 套了一遍：`267→273` 行、`diff` 仅 `246a247,252` 六行插入、其余零改动 ⇒ **补丁内容正确、无夹带**（这比"逐字节相同"更强）。
+但 **hunk 3 的丢弃理由错了**：`_getBlockAtEyeLevel` 只存在于 `digging.js:251/258`，与 `place_block` 无关，而 `place_block.js:29` 的 `timeout: 5000` 仍在。旧 hunk 客观上套不上（4.39.0 重构了那段），但**"套不上" ≠ "意图不重要"**——它要把放置失败从 5s 压到 0.5s，丢掉意味着每次失败多等 4.5 秒。**这个行为变化无人记录、无人决策，被夹在"依赖补丁重建"里静默发生了。**
+**另：修复尚未生效** —— `grep -c incorrect_for_wooden_tool node_modules/.../digging.js` = 0，说明补丁能套但没套，需跑一次 `npm ci` 才真正生效。
+
+### 🔴 我们自己的修复打瘸了一个功能（连带后果）
+`F-SEC-205` 改完后，**"停止面板"按钮 100% 失败**。链路：`停止面板.bat` → `stop-panel.ps1` → `web/scripts/stop-all.mjs`，而 `stop-all.mjs` 的连接参数里**没有任何 token 来源**（`auth_gate.js` 只认 auth payload / 自定义头 / query / cookie 四种）。
+这条链**本来就坏**，但改完后从"还能手抄日志里的 token 救一下"变成"完全没救"——因为只印指纹了，而新通道 `.mindserver-token` 脚本又不读。
+**严重性不在"按钮不灵"，在于**：`stop-panel.ps1` 注释写明"走 RCON stop 会自己刷盘关闭，不是强杀"。链断之后用户看到的是 **20 秒超时 + "mindserver 可能没开"（把人往错方向带）**，实际是鉴权失败；用户自然反应是直接关窗口 ⇒ **非优雅关停 ⇒ 世界存档未刷盘风险**。
+已立 `F-WEB-205`，要求与 F-SEC-205 同窗口修。
+
+### 一条被工具吞掉的东西
+`scripts/start-panel.ps1` 的 **UTF-8 BOM 在编辑过程中被删了**（HEAD `ef bb bf` → 改后 `23 20 4d`）。这文件头注释写明"所有中文都在这里（UTF-8+BOM）"——**PowerShell 5.1 无 BOM 会把中文读成 ANSI 乱码**。我在提交前发现并恢复，已把检查写进 PLAYBOOK §8.8。
+
+### 一条流程违规，已立规矩
+D1 收尾时 `F-DEP-003/004/005/006/012` 五条的 finding 文件被**清空** ⇒ 复核席只能对着 commit 和摘要复核，**无法按"读原始单"的规程独立判断**。已立 PLAYBOOK §8.7：修补者只 `mv`，不得删除或清空 finding。
+
+## 03:20 五部门侦察全部收官 · 总账
+
+| 状态 | 数量 |
+|---|---|
+| 已复核通过 `verified/` | 8 |
+| 待复核 `done/` | 10 |
+| 修复中 `claimed/` | 9 |
+| 待认领 `inbox/` | 33 |
+| **活跃 finding 合计** | **52**（13 high / 24 medium / 15 low） |
+
+按来源：`F-EXEC` 15 ｜ `F-SEC` 14 ｜ `F-WEB` 7 ｜ `F-AI` 7 ｜ `F-DEP` 6 ｜ `F-GATE` 3
+按表现：**已入库修复 10 个 commit**（mindcraft 7 + 外层 3），每次提交都真的过了 pre-commit 钩子。
+
+### D5（面板与 API）5 条——全部用"起真实例 + curl + 真实 socket.io-client"取证
+
+| id | 级 | 一句话 |
+|---|---|---|
+| `F-WEB-201` | **high** | HTTP 三个出口**零鉴权**（实测无 token 全 200）：`/` 58752B、`/settings_spec.json` 5226B、`/console/` 398B；**零安全响应头**（只有 `X-Powered-By`）。high 的理由不是"能读到东西"，而是**认证边界摆错位置**（同一次会话里 socket 要 token、HTTP 不要）+ `settings_spec.json` 把 `allow_insecure_coding`、`task` 这两个隐藏开关**直接列成清单** |
+| `F-WEB-205` | medium | **停止面板.bat 必然失败** → 优雅关服失效 → 用户硬关窗口 → **存档未刷盘风险**（详见上一节） |
+| `F-WEB-202` | medium | 无鉴权贴图代理每请求做重活，实测**合法名与穿越名都 10 秒打满不返回**（CLOSE_WAIT 堆积）⇒ 任意网页一个 `<img>` 就能打 |
+| `F-WEB-203` | medium | socket 事件**零速率限制**；`send-message` 只校验 `from`（≤32），**不限 message 长度与频率**；叠加 `max_commands=-1` + 按量计费 ⇒ 刷爆 token |
+| `F-WEB-204` | low | token 门内事件回传**本机绝对路径** + 整份 settings ⇒ 是 `F-SEC-204`（冒名）与 `F-EXEC-201`（RCE 后找目标）的前置侦察件 |
+
+### 正面结论（同样重要：证明"没报的也都查过"）
+- **握手门真的有效**：用真实 socket.io-client 复刻 `stop-all.mjs` 的参数打真实例 → `AUTH_REQUIRED`。27 个 `socket.on` 全在 `io.on('connection')` 内；`request-map`/`request-terrain` 经 `registerMapRelay` 注册也确认在门内（**特意查了缩进**，排除"注册在 io 上绕过中间件"那个经典错误）。
+- **前端注入面干净**：`web/src` 零 `v-html`/`innerHTML`/`eval`/`new Function`；`dist` 里 7 处 `innerHTML` 逐个看上下文，全是 Vue 运行时内部。
+- **同族 `:param` 只有 1 处**（即 `F-EXEC-203`）——据此确认它维持 low 是对的。
+- `.mindserver-token` 已被 gitignore ⇒ `F-SEC-205` 的修复**没有引入新泄漏面**。
+
+### 侦察席三次"自我证伪"，比多报十条更值钱
+1. 否掉 `rcon_client.js:153` 命令注入（上游 `bot.players?.[name]` 精确键查挡住）
+2. 不把 `F-AI-201` 写成"提权"（10 条主人级真挡住了）
+3. **否掉我转述的"消息体无大小上限"** —— engine.io 默认 `maxHttpBufferSize=1e6`，本仓未覆盖。**是我错了，它纠正对了。**
+
 ## 待用户决定（promise：攒着一次性说，不半夜弹）
 
-1. **`F-SEC-204` 冒名登录风险**：离线模式 + 白名单只有 `HEAVENZEH` + `bind: all` ⇒ 把客户端用户名改成 `HEAVENZEH` 就能以主人身份进服。另外 `ops.json` 有 **341 个 lvl4 op bot**（测试刷的）且被 git 跟踪，一旦关白名单就是 341 个可用 op 账号。
-   **这是你自己在 `config/network.json` 里权衡过的取舍**（文件里有写）。三条真修法——加登录插件 / `online-mode=true` / 收窄 bind——**都会影响"手机能不能连"**，所以没替你决定。
+0. **⚠️ 今晚就换 RCON 口令**（最高优先）：复核席核证时把口令明文 grep 进了会话输出（**已主动上报，未写入任何文件**）。虽然只落在会话记录里，但按"已暴露即视为泄漏"处理。这也是 `F-SEC-203` 从"建议"升为"今晚必须换"的原因。
+1. **`F-SEC-204` 冒名登录（已升 high）**：离线模式 + 白名单只有 `HEAVENZEH` + `bind: all` ⇒ 把客户端用户名改成 `HEAVENZEH` 就能以主人身份进服，拿到 OWNER 级权限含 `!newAction`（执行代码）。另外 `ops.json` 有 **341 个 lvl4 op bot**（测试刷的）且被 git 跟踪。
+   **这是你自己在 `config/network.json` 里权衡过的取舍**（三处书面证据）。三条真修法——①不玩时停服 ②收回本机（牺牲手机联机）③装登录插件（今晚红线不允许）——我们不替你选。**先做零代价的一件**：把 `ops.json` / `whitelist.json` 从 git 移除（`git rm --cached`，不删文件）。
 2. **`F-SEC-202` RCON 收 bind 到 `127.0.0.1`**：会连带收窄游戏端口可达性。若手机是走局域网直连，这条要你确认。
 3. **`F-DEP-007` zod 3.x → 4.x**：修复需要跨主版本，今晚只做缓解（响应体尺寸上限 + 超时），不升级。
 4. **需要你手动轮换的密钥**：`keys.json` 里那把（修代码不等于密钥安全）；RCON 口令的旧 8 位弱口令残留 3 份备份（已清成 `CHANGE_ME`，不删文件）。
