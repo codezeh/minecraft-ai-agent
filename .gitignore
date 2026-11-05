@@ -86,4 +86,5 @@ id_rsa*
 id_ed25519*
 *credentials*.json
 *secrets*.json
+config.local.js
 .mindserver-token

@@ -85,7 +85,9 @@ export function createMindServer(host_public = false, port = 8080) {
     // `logs/mindcraft-console.log` ⇒ 原来那三行 `token=…` 会**落盘**，而日志正是
     // "出问题时发给别人看"的东西（拿到它 = 能指挥 bot / 改设置 / 停服）。
     // 新通道：写到 cwd 下的 `.mindserver-token`（已进 .gitignore，F-SEC-206），
-    // 只有本机用户可读；start-panel.ps1 从它读 token 拼出可点的面板地址。
+    // 注意：mode 0600 只在 POSIX 生效，**Windows/NTFS 上不保证只有本机用户可读**
+    // （那边由 NTFS ACL 决定）。所以这层不是权限边界，它的目的是"别再进日志"。
+    // start-panel.ps1 从它读 token 拼出可点的面板地址。
     // 仍然需要"在终端里看见完整值"时，显式设 MINDSERVER_PRINT_TOKEN=1（调试用）。
     const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token');
     try {
