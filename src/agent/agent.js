@@ -673,7 +673,22 @@ export class Agent {
                 let execute_res = await executeCommand(this, res, perm);
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
-                used_command = true;
+                // ★ F-AI-205（2026-11-06，复核席跨部门巡检发现）：
+                // 原来这里**无条件** used_command = true，于是"命令被权限拒绝"也计作"用了命令"。
+                // 组合起来会形成一个无人能停的循环：
+                //   history 让 goal 跨重启存活 -> 自提示回合按该 author 定级
+                //   -> 没配 owner 时 fail-closed（连 !endGoal 也被拒）
+                //   -> 每轮都被拒但 used_command 仍为 true -> self_prompter 的 no_command_count 归零
+                //   -> 循环永不自停（每 2 秒一次 LLM 调用，按量计费下持续烧钱，玩家叫不停）。
+                // 修法：**被拒等价于没命令** —— 权限拒绝的回复以 permissionDeniedReply 的
+                // '[权限] 没执行 ' 开头（src/agent/permissions.js:227），据此判。
+                // 这样连续 max_no_command 轮后 self_prompter 会自己 STOPPED。
+                const __permDenied = typeof execute_res === 'string' && execute_res.startsWith('[权限] 没执行 ');
+                if (__permDenied) {
+                    console.warn('[权限] 本轮命令被拒，不计入"用过命令"（避免自提示循环无法停止）');
+                } else {
+                    used_command = true;
+                }
 
                 if (execute_res)
                     this.history.add('system', execute_res);
