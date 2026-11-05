@@ -54,7 +54,11 @@ function requireScanned(section, n, what, hint = '') {
  */
 const CODE_AUDIT_REGEXES = [
     // ① fail('XXX') —— 唯一会在运行期直接 throw 的路径（contract.fail 会校验 CODES）
-    /\bfail\(\s*'([A-Z_]+)'/g,
+    // 终审 R1-b：原来有两处词法盲区 —— 只认单引号、且 [A-Z_] 不含数字。
+    // 实测：注入 fail("T23_UNREGISTERED_CODE") 或 fail('CODE2') 都不会被抓（§3 照样打 ✓）。
+    // 今天不咬人（CODES 38 个码全部匹配 [A-Z_]+，src/ 里双引号写法 0 处），
+    // 但那是"恰好"，不是"守住了"。所以补上 ["'] 与 [A-Z0-9_]。
+    /\bfail\(\s*["']([A-Z0-9_]+)["']/g,
     // ② ActionResult 字面量 { ok: false, code: 'XXX', … } —— 走 assertResult 也会 throw「未知 code」
     //
     // 为什么不用宽口径的 `code: 'XXX'`：`code:` 这个键在三处被用，含义不同 ——
@@ -64,7 +68,7 @@ const CODE_AUDIT_REGEXES = [
     // (b)(c) 是另一套词汇表。宽口径会把 (b) 的 DIED 报成"未注册错误码" —— 那是**判据错**，
     // 不是源码错：`fail('DIED')` 全仓 0 次，把它塞进 CODES 反而让 assertResult 误认它是 ActionResult 码。
     // 收紧到「对象里带 ok: 的 code 字面量」后：162 个源文件仍扫到 20 个不同码，0 漏报。
-    /\{\s*ok:\s*(?:true|false)[^{}]{0,300}?\bcode:\s*'([A-Z_]+)'/g,
+    /\{\s*ok:\s*(?:true|false)[^{}]{0,300}?\bcode:\s*["']([A-Z0-9_]+)["']/g,
 ];
 
 // §6「工具到底跑没跑起来」的指纹正则。同样收进来，让自检能喂样本。
@@ -827,14 +831,25 @@ const PREFIX_IMPORT_ALLOW = {
     infra: ['atom', 'query', 'act', 'nav', 'flow', 'infra'],
 };
 
-/**
- * 导航层唯一允许直接调的几个**单格动作**（02 §5 明列）。
- * 其余 act_* 一律不许：要动地形就走动作本身，别在导航里编排。
+/*
+ * ★ S35（R1 收尾）：这里原来有一个 `NAV_ALLOWED_ACT_FUNCS` 白名单，已删除。
+ *
+ * 它是**死配置**，不是"待接线的守卫"：
+ *   1. 全仓 0 处使用（grep 只有它自己的定义；§5 的判定只读 PREFIX_IMPORT_ALLOW）；
+ *   2. 名单里 10 个名字有 3 个**根本不存在**（climb / pillarUp / sinkInWater 在 src 里
+ *      没有任何 export）—— 说明它从写下那天起就没被验证过；
+ *   3. 真正的原因是它和现行规矩**方向相反**：PREFIX_IMPORT_ALLOW.nav 只有
+ *      ['atom','query','infra']，**nav 一律不许 import act**。也就是说这个白名单
+ *      若真接线，效果是"允许 nav 从 act 层挑 9 个函数调" —— 那是把现行更严的规则**放宽**，
+ *      而不是补上一道守卫。为了让死配置"看起来有用"去放宽守卫，是本末倒置。
+ *
+ * 实测现状：nav_core / nav_hop / nav_pathfinder 三个文件的 import 里，act 层符号 0 个。
+ * 所以删除不改变任何判定结果（§5 仍是 0 违规）。
+ *
+ * 如果将来真要允许"导航层调单格动作"：先去 02 §5 改规范，
+ * 再把白名单**接线到 §5 的判定里并补一条反证**（未列出的 act 符号必须被判违规），
+ * 不要只写一个 Set 放在旁边当装饰。
  */
-const NAV_ALLOWED_ACT_FUNCS = new Set([
-    'stepInto', 'climb', 'pillarUp', 'sinkInWater', 'swimStep', 'digBlock', 'placeBlockAt',
-    'climbUp', 'climbDown', 'pillarUpOnce',       // 现名（改造中的等价物）
-]);
 
 /** 从一行 import 里取被 import 的本地文件路径（相对路径才管，第三方不管）。 */
 function importedLocalPaths(line) {

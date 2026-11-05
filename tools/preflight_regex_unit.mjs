@@ -166,6 +166,14 @@ if (codeRegexes) {
             '[fail] 反例不命中：参数是变量 fail( code )');
         assert(hits(reFail, `// 注释里提到 fail('GHOST') 不该被当代码`).includes('GHOST'),
             '[fail] 已知局限：注释里的写法也会被算作使用', '（宁左勿右：报出来好过人看漏）');
+
+        // --- 终审 R1-b：词法盲区回归（含数字 / 双引号）---
+        // 修复前 `[A-Z_]+` 不含数字、且只认单引号 ⇒ 下面两条都会漏，§3 照样打 ✓。
+        // 这两条断言就是防"有人把正则改回窄口径"。
+        assert(hits(reFail, `return fail('CODE2', '带数字的码')`).includes('CODE2'),
+            '[fail] R1-b 正例：码含数字必须命中（旧判据 [A-Z_]+ 会漏）');
+        assert(hits(reFail, `return fail("T23_UNREGISTERED_CODE")`).includes('T23_UNREGISTERED_CODE'),
+            '[fail] R1-b 正例：双引号写法必须命中（旧判据只认单引号）');
     }
 
     // --- 3.2 ActionResult 字面量 { ok: …, code: 'XXX' } ---
@@ -183,6 +191,12 @@ if (codeRegexes) {
             '[字面量] 反例不命中：数据载荷 failed.push({ pos, code })');
         assert(hits(reOkObj, `const x = { ok: true, code: 'OK' };`).includes('OK'),
             '[字面量] 正例命中：ok: true 的码也算（OK 本身由 §3 的 dup 检查管）');
+
+        // --- 终审 R1-b：词法盲区回归（含数字 / 双引号）---
+        assert(hits(reOkObj, `return { ok: false, code: 'CODE2', message: '带数字' };`).includes('CODE2'),
+            '[字面量] R1-b 正例：码含数字必须命中（旧判据 [A-Z_]+ 会漏）');
+        assert(hits(reOkObj, `return { ok: false, code: "DOUBLE_Q1" };`).includes('DOUBLE_Q1'),
+            '[字面量] R1-b 正例：双引号写法必须命中（旧判据只认单引号）');
     }
 }
 

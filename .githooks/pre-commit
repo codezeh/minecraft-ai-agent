@@ -32,32 +32,24 @@ fi
 echo ""
 echo "  [gate] 提交前门禁（SKIP_GATE=1 可跳过）"
 
-# ---- 1) 扫描器自检：门禁自己坏了，后面所有"通过"都不可信 ----
-if ! node tools/preflight_regex_unit.mjs > /tmp/gate_regex.$$ 2>&1; then
-    echo "  ✗ 门禁自检失败（审计正则看不见东西了）"
-    sed -n '1,80p' /tmp/gate_regex.$$ | sed 's/^/     /'
-    rm -f /tmp/gate_regex.$$
+# 终审 R1-第11条：这里原来只跑 preflight 与正则自检，**lint 没接线**（2/3）。
+# 现在统一走 `npm run gate`（单一真相源，避免钩子里抄一份脚本内容又漂移）。
+# 实测耗时：正则自检 ≈0.1s + preflight 3s + lint 3s ≈ 6s。
+# unit_all（≈177s）**不挂 commit**：每次提交等 3 分钟只会把人逼去 SKIP_GATE，
+# 那比没门禁更糟。它挂在 pre-push（低频动作，见 .githooks/pre-push）。
+if ! npm run --silent gate > /tmp/gate_main.$$ 2>&1; then
+    echo "  ✗ 门禁失败（正则自检 / preflight / lint 三者之一）"
+    grep -E '✗|启动自检失败|error  |problems' /tmp/gate_main.$$ | head -25 | sed 's/^/     /'
+    rm -f /tmp/gate_main.$$
     echo ""
     echo "  这是**有意**的拦截。若你在改到一半的中间态，用 SKIP_GATE=1 git commit …"
+    echo "  最终提交前必须补跑：npm run gate"
     echo ""
     exit 1
 fi
-rm -f /tmp/gate_regex.$$
+rm -f /tmp/gate_main.$$
 
-# ---- 2) preflight：模块导入 + 规则/错误码/API 审计 ----
-if ! node tools/preflight.mjs > /tmp/gate_preflight.$$ 2>&1; then
-    echo "  ✗ preflight 失败"
-    grep -E '✗|启动自检失败' /tmp/gate_preflight.$$ | head -20 | sed 's/^/     /'
-    rm -f /tmp/gate_preflight.$$
-    echo ""
-    echo "  这是**有意**的拦截：本仓库要求提交前 preflight 通过。"
-    echo "  若你在改到一半的中间态，用 SKIP_GATE=1 git commit …，最终提交前补跑 npm run gate。"
-    echo ""
-    exit 1
-fi
-rm -f /tmp/gate_preflight.$$
-
-echo "  ✓ 门禁通过（preflight + 审计正则自检）"
-echo "    （完整测试请跑：npm test —— preflight + unit_all）"
+echo "  ✓ 门禁通过（审计正则自检 + preflight + lint）"
+echo "    （全量测试在 push 时自动跑；也可手动 npm run gate:full）"
 echo ""
 exit 0

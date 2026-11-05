@@ -1,0 +1,45 @@
+#!/bin/sh
+# ============================================================================
+# 门禁 pre-push（终审 R1-第 11 条：把 unit_all 接进自动化）
+#
+# 为什么 unit_all 挂在这里而不是 pre-commit：
+#   实测 unit_all ≈177s（93 个脚本 / 1411 用例）。挂在每次 commit 上，
+#   人就会习惯性用 SKIP_GATE=1 —— 那等于没有门禁。push 是低频动作，
+#   177s 可以接受，而且它是"代码要离开本机"的那一刻，本来就该是最严的关口。
+#
+# commit 级（≈6s）：审计正则自检 + preflight + lint —— 见 .githooks/pre-commit
+# push 级（≈183s）：上面全部 + unit_all
+#
+# 装法（每次 clone 执行一次）：npm run gate:install
+# 临时跳过：SKIP_GATE=1 git push
+# ============================================================================
+
+set -u
+
+if [ "${SKIP_GATE:-}" = "1" ]; then
+    echo ""
+    echo "  ⚠ SKIP_GATE=1 —— 本次 push **跳过了全量测试**。"
+    echo "    请尽快补跑：npm run gate:full"
+    echo ""
+    exit 0
+fi
+
+echo ""
+echo "  [gate] push 前全量门禁（SKIP_GATE=1 可跳过）"
+echo "    包含 commit 级三项 + unit_all（≈177s），请稍候…"
+
+if ! npm run --silent gate:full > /tmp/gate_push.$$ 2>&1; then
+    echo "  ✗ 全量门禁失败"
+    grep -E '✗|❌|启动自检失败|error  |problems|个脚本通过' /tmp/gate_push.$$ | head -30 | sed 's/^/     /'
+    rm -f /tmp/gate_push.$$
+    echo ""
+    echo "  这是**有意**的拦截：push 前要求全量测试通过。"
+    echo "  紧急情况用 SKIP_GATE=1 git push，但请补跑 npm run gate:full。"
+    echo ""
+    exit 1
+fi
+rm -f /tmp/gate_push.$$
+
+echo "  ✓ 全量门禁通过（正则自检 + preflight + lint + unit_all）"
+echo ""
+exit 0

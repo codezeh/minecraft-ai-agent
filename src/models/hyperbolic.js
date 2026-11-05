@@ -44,7 +44,10 @@ export class Hyperbolic {
         while (attempt < maxAttempts) {
             attempt++;
             console.log(`Awaiting Hyperbolic API response... (attempt: ${attempt})`);
-            console.log('Messages:', messages);
+            // 终审 R1-a：这行原来没有注释（同目录 deepseek/grok/mercury/qwen/vllm 五处都已注释）。
+            // 后果：选 hyperbolic 时每轮对话把完整 messages（含玩家私聊原文、memory、人设）
+            // 无条件写进 stdout / logs/mindcraft-console.log。要看提示词请显式开 LOG_PROMPTS=1。
+            if (process.env.LOG_PROMPTS === '1') console.log('Messages:', messages);
 
             let completionContent = null;
 
