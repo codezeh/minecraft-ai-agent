@@ -2,6 +2,8 @@ import Replicate from 'replicate';
 import { toSinglePrompt } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs } from './_shared.js';
+
 // llama, mistral, gemini
 export class ReplicateAPI {
 	static prefix = 'replicate';
@@ -46,6 +48,8 @@ export class ReplicateAPI {
 		}
 
 		let res = null;
+		const maxAttempts = 4;
+		for (let attempt = 1; ; attempt++) {
 		try {
 			console.log('Awaiting Replicate API response...');
 
@@ -79,9 +83,21 @@ export class ReplicateAPI {
 				res = res.slice(0, res.indexOf(stop_seq));
 			}
 		} catch (err) {
+			// Replicate 没有 OpenAI 那种 SDK 默认重试：429 必须自己退避重试，
+			// 否则限流会被当成「模型说了句话」返回（第31条 第3点）
+			if (isRateLimit(err) && attempt < maxAttempts) {
+				const wait = rateLimitDelayMs(attempt);
+				console.warn(`Replicate 被限流（429），${wait}ms 后重试（第 ${attempt}/${maxAttempts} 次）`);
+				await new Promise((r) => setTimeout(r, wait));
+				continue;
+			}
 			console.log(err);
-			res = 'My brain disconnected, try again.';
+			res = failedReply(`replicate request failed: ${err?.message ?? err}`);
 		}
+			break;
+		}
+		// Replicate 的 run()/stream() 不带 usage 形状 → 明确记成 missing，别假装是 0
+		recordUsage(null, model_name, 'replicate');
 		console.log('Received.');
 		return res;
 	}

@@ -2,6 +2,8 @@ import CerebrasSDK from '@cerebras/cerebras_cloud_sdk';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class Cerebras {
     static prefix = 'cerebras';
     constructor(model_name, url, params) {
@@ -28,16 +30,17 @@ export class Cerebras {
         let res;
         try {
             const completion = await this.client.chat.completions.create(pack);
+            recordUsage(completion?.usage, this.model_name);
             // OpenAI-compatible shape
             res = completion.choices?.[0]?.message?.content || '';
         } catch (err) {
             console.error('Cerebras API error:', err);
-            res = 'My brain disconnected, try again.';
+            res = failedReply(`cerebras request failed: ${err?.message ?? err}`);
         }
         return res;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",
@@ -55,7 +58,9 @@ export class Cerebras {
         return this.sendRequest(imageMessages, systemMessage);
     }
     
-    async embed(text) {
-        throw new Error('Embeddings are not supported by Cerebras.');
+    embed(_text) {
+        // 保持「返回被拒绝的 Promise」的语义（原来 async+throw 就是这个效果）：
+        // examples.js:32 用 .then() 接，同步 throw 会逃出 map，那是行为变化。
+        return Promise.reject(new Error('Embeddings are not supported by Cerebras.'));
     }
 }

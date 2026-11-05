@@ -1,5 +1,7 @@
 import { strictFormat } from '../utils/text.js';
 
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs } from './_shared.js';
+
 export class Ollama {
     static prefix = 'ollama';
     constructor(model_name, url, params) {
@@ -29,18 +31,25 @@ export class Ollama {
                     stream: false,
                     ...(this.params || {})
                 });
-                if (apiResponse) {
+                // Ollama 把用量放在 prompt_eval_count / eval_count（_shared.recordUsage 认得）
+                recordUsage(apiResponse, model);
+                if (apiResponse?.['message']?.content !== undefined) {
                     res = apiResponse['message']['content'];
                 } else {
-                    res = 'No response data.';
+                    res = failedReply('ollama returned no message content');
                 }
             } catch (err) {
                 if (err.message.toLowerCase().includes('context length') && turns.length > 1) {
                     console.log('Context length exceeded, trying again with shorter context.');
                     return await this.sendRequest(turns.slice(1), systemMessage);
+                } else if (isRateLimit(err) && attempt < maxAttempts) {
+                    const wait = rateLimitDelayMs(attempt);
+                    console.warn(`Ollama 被限流（429），${wait}ms 后重试（第 ${attempt}/${maxAttempts} 次）`);
+                    await new Promise((r) => setTimeout(r, wait));
+                    continue;
                 } else {
                     console.log(err);
-                    res = 'My brain disconnected, try again.';
+                    res = failedReply(`ollama request failed: ${err?.message ?? err}`);
                 }
             }
 
@@ -63,7 +72,7 @@ export class Ollama {
 
         if (finalRes == null) {
             console.warn("Could not get a valid response after max attempts.");
-            finalRes = 'I thought too hard, sorry, try again.';
+            finalRes = failedReply('ollama gave no usable response after max attempts');
         }
         return finalRes;
     }
@@ -89,13 +98,16 @@ export class Ollama {
                 throw new Error(`Ollama Status: ${res.status}`);
             }
         } catch (err) {
+            // 第31条 第3点：**不许吞成 null**。吞掉之后上层只看到"没有数据"，永远不知道发生过网络错误，
+            // 也永远不会重试。这里原样抛出，让 sendRequest 的 catch 去判 429 / 记失败标记。
             console.error('Failed to send Ollama request.');
             console.error(err);
+            throw err;
         }
         return data;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",

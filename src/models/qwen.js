@@ -2,6 +2,8 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class Qwen {
     static prefix = 'qwen';
     constructor(model_name, url, params) {
@@ -32,6 +34,7 @@ export class Qwen {
             console.log('Awaiting Qwen api response...');
             // console.log('Messages:', messages);
             let completion = await this.openai.chat.completions.create(pack);
+            recordUsage(completion?.usage, this.model_name);
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded');
             console.log('Received.');
@@ -43,7 +46,7 @@ export class Qwen {
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = failedReply(`qwen request failed: ${err?.message ?? err}`);
             }
         }
         return res;

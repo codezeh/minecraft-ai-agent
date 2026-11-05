@@ -2,6 +2,8 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class GPT {
     static prefix = 'openai';
     constructor(model_name, url, params) {
@@ -48,6 +50,7 @@ export class GPT {
                     delete pack.stop;
                 }
                 let completion = await this.openai.chat.completions.create(pack);
+                recordUsage(completion?.usage, model);
                 if (completion.choices[0].finish_reason == 'length')
                     throw new Error('Context length exceeded'); 
                 console.log('Received.');
@@ -67,6 +70,7 @@ export class GPT {
                     ...(this.params || {})
                 });
                 console.log('Received.');
+                recordUsage(response?.usage, model);
                 res = response.output_text;
                 let stop_seq_index = res.indexOf(stop_seq);
                 res = stop_seq_index !== -1 ? res.slice(0, stop_seq_index) : res;
@@ -81,13 +85,13 @@ export class GPT {
                 res = 'Vision is only supported by certain models.';
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = failedReply(`openai request failed: ${err?.message ?? err}`);
             }
         }
         return res;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",
@@ -121,7 +125,7 @@ const sendAudioRequest = async (text, model, voice, url) => {
         model: model,
         voice: voice,
         input: text
-    }
+    };
 
     let config = {};
 
@@ -139,9 +143,9 @@ const sendAudioRequest = async (text, model, voice, url) => {
     const buffer = Buffer.from(await mp3.arrayBuffer());
     const base64 = buffer.toString("base64");
     return base64;
-}
+};
 
 export const TTSConfig = {
     sendAudioRequest: sendAudioRequest,
     baseUrl: 'https://api.openai.com/v1',
-}
+};

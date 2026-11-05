@@ -3,6 +3,8 @@ import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class Gemini {
     static prefix = 'google';
     constructor(model_name, url, params) {
@@ -46,20 +48,30 @@ export class Gemini {
             });
         }
 
-        const result = await this.genAI.models.generateContent({
-            model: this.model_name || "gemini-2.5-flash",
-            contents: contents,
-            safetySettings: this.safetySettings,
-            config: {
-                systemInstruction: systemMessage,
-                ...(this.params || {})
-            }
-        });
-        const response = await result.text;
+        try {
+            const result = await this.genAI.models.generateContent({
+                model: this.model_name || "gemini-2.5-flash",
+                contents: contents,
+                safetySettings: this.safetySettings,
+                config: {
+                    systemInstruction: systemMessage,
+                    ...(this.params || {})
+                }
+            });
+            recordUsage(result?.usageMetadata, this.model_name);
+            const response = await result.text;
 
-        console.log('Received.');
+            console.log('Received.');
 
-        return response;
+            return response;
+        } catch (err) {
+            // 第31条：这里原来是**裸的**（没有 try/catch）⇒ 模型层一失败就往上抛。
+            // 但 prompter 的 promptCoding / promptMemSaving / promptShouldRespondToBot **都没有**
+            // try/catch，抛出去就是真的崩（coder / history / conversation 三个调用方）。
+            // 统一契约：sendRequest **永不抛**，失败一律返回 FAILED_REPLY 标记。
+            console.log(err);
+            return failedReply(`google request failed: ${err?.message ?? err}`);
+        }
     }
 
     async sendVisionRequest(turns, systemMessage, imageBuffer) {
@@ -81,7 +93,7 @@ export class Gemini {
         contents.push({
             role: 'user',
             parts: [{ text: 'SYSTEM: Vision response' }, imagePart]
-        })
+        });
 
         let res = null;
         try {
@@ -95,6 +107,7 @@ export class Gemini {
                 },
                 systemInstruction: systemMessage
             });
+            recordUsage(result?.usageMetadata, this.model_name, 'vision');
             res = await result.text;
             console.log('Received.');
         } catch (err) {
@@ -102,7 +115,7 @@ export class Gemini {
             if (err.message.includes("Image input modality is not enabled for models/")) {
                 res = "Vision is only supported by certain models.";
             } else {
-                res = "An unexpected error occurred, please try again.";
+                res = failedReply(`google vision request failed: ${err?.message ?? err}`);
             }
         }
         return res;
@@ -112,7 +125,7 @@ export class Gemini {
         const result = await this.genAI.models.embedContent({
             model: this.model_name || "gemini-embedding-001",
             contents: text,
-        })
+        });
 
         return result.embeddings;
     }
@@ -132,7 +145,7 @@ const sendAudioRequest = async (text, model, voice, url) => {
                 },
             },
         },
-    })
+    });
 
     const pcmBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
     if (!pcmBase64) {
@@ -147,7 +160,7 @@ const sendAudioRequest = async (text, model, voice, url) => {
 
     const wavBase64 = wavBuffer.toString('base64');
     return wavBase64;
-}
+};
 
 // helper: create PCM WAV header
 function createWavHeader(dataLength, sampleRate, channels, bitsPerSample) {
@@ -173,4 +186,4 @@ function createWavHeader(dataLength, sampleRate, channels, bitsPerSample) {
 
 export const TTSConfig = {
     sendAudioRequest: sendAudioRequest,
-}
+};

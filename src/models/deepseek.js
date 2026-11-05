@@ -2,6 +2,8 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class DeepSeek {
     static prefix = 'deepseek';
     constructor(model_name, url, params) {
@@ -30,12 +32,13 @@ export class DeepSeek {
 
         let res = null;
         try {
-            console.log('Awaiting deepseek api response...')
+            console.log('Awaiting deepseek api response...');
             // console.log('Messages:', messages);
             let completion = await this.openai.chat.completions.create(pack);
+            recordUsage(completion?.usage, this.model_name);
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded'); 
-            console.log('Received.')
+            console.log('Received.');
             res = completion.choices[0].message.content;
         }
         catch (err) {
@@ -44,14 +47,16 @@ export class DeepSeek {
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = failedReply(`deepseek request failed: ${err?.message ?? err}`);
             }
         }
         return res;
     }
 
-    async embed(text) {
-        throw new Error('Embeddings are not supported by Deepseek.');
+    embed(_text) {
+        // 保持「返回被拒绝的 Promise」的语义（原来 async+throw 就是这个效果）：
+        // examples.js:32 用 .then() 接，同步 throw 会逃出 map，那是行为变化。
+        return Promise.reject(new Error('Embeddings are not supported by Deepseek.'));
     }
 }
 

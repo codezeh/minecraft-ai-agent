@@ -2,6 +2,8 @@ import { toSinglePrompt } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 import { HfInference } from "@huggingface/inference";
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class HuggingFace {
   static prefix = 'huggingface';
   constructor(model_name, url, params) {
@@ -46,7 +48,7 @@ export class HuggingFace {
         }
       } catch (err) {
         console.log(err);
-        res = 'My brain disconnected, try again.';
+        res = failedReply(`huggingface request failed: ${err?.message ?? err}`);
         // Break out immediately; we only retry when handling partial <think> tags.
         break;
       }
@@ -66,6 +68,9 @@ export class HuggingFace {
           res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         }
 
+      // 第31条：HuggingFace 的流式接口不回 usage ⇒ 明确记成 missing（tag=stream），
+      // 别假装是 0 —— 成本核算里「不知道」和「零消耗」必须分开。
+      recordUsage(null, model_name, 'stream');
       finalRes = res;
       break; // Exit loop if we got a valid response.
     }
@@ -73,14 +78,16 @@ export class HuggingFace {
     // If no valid response was obtained after max attempts, assign a fallback.
     if (finalRes == null) {
       console.warn("Could not get a valid <think> block or normal response after max attempts.");
-      finalRes = 'I thought too hard, sorry, try again.';
+      finalRes = failedReply('huggingface gave no usable response after max attempts');
     }
     console.log('Received.');
     console.log(finalRes);
     return finalRes;
   }
 
-  async embed(text) {
-    throw new Error('Embeddings are not supported by HuggingFace.');
+  embed(_text) {
+    // 保持「返回被拒绝的 Promise」的语义（原来 async+throw 就是这个效果）：
+    // examples.js:32 用 .then() 接，同步 throw 会逃出 map，那是行为变化。
+    return Promise.reject(new Error('Embeddings are not supported by HuggingFace.'));
   }
 }

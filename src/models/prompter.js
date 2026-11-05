@@ -9,6 +9,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { selectAPI, createModel } from './_model_map.js';
+// 第31条：模型层失败会以 `[LLM_ERROR] …` 回来，prompter 必须把它当"失败"而不是"回答"
+import { isFailedReply } from './_shared.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -228,9 +230,9 @@ export class Prompter {
             let goal_text = '';
             for (let goal in last_goals) {
                 if (last_goals[goal])
-                    goal_text += `You recently successfully completed the goal ${goal}.\n`
+                    goal_text += `You recently successfully completed the goal ${goal}.\n`;
                 else
-                    goal_text += `You recently failed to complete the goal ${goal}.\n`
+                    goal_text += `You recently failed to complete the goal ${goal}.\n`;
             }
             prompt = prompt.replaceAll('$LAST_GOALS', goal_text.trim());
         }
@@ -280,6 +282,17 @@ export class Prompter {
                     console.error('Error: Generated response is not a string', generation);
                     throw new Error('Generated response is not a string');
                 }
+                // 第31条：模型层失败会以 `[LLM_ERROR] …` 回来。**它不是模型说的话** ——
+                // 当正常回答处理会：写进 history、真的对玩家说出来、白消费一次 response 预算。
+                // 这里保留日志（便于统计失败率），但不把它当回答。
+                if (isFailedReply(generation)) {
+                    console.warn(`[llm] ${this.agent.name} 本轮模型调用失败，按无响应处理（不写 history、不发玩家）: ${generation}`);
+                    await this._saveLog(prompt, messages, generation, 'conversation-failed');
+                    // **直接返回空串、不再重试**：适配器内部已经把 429 / 上下文超长重试过了，
+                    // 走到这里的失败说明供应商这一轮就是不行；立刻再打三次只会把
+                    // 「一次请求超时」放大成「三次超时」，在游戏里就是几十秒的僵住。
+                    return '';
+                }
                 console.log("Generated response:", generation);
                 await this._saveLog(prompt, messages, generation, 'conversation');
 
@@ -300,8 +313,8 @@ export class Prompter {
             }
 
             if (generation?.includes('</think>')) {
-                const [_, afterThink] = generation.split('</think>')
-                generation = afterThink
+                const [_, afterThink] = generation.split('</think>');
+                generation = afterThink;
             }
 
             return generation;
@@ -322,7 +335,9 @@ export class Prompter {
 
         let resp = await this.code_model.sendRequest(messages, prompt);
         this.awaiting_coding = false;
-        await this._saveLog(prompt, messages, resp, 'coding');
+        await this._saveLog(prompt, messages, resp, isFailedReply(resp) ? 'coding-failed' : 'coding');
+        // 第31条：失败标记原样往上传（带 `[LLM_ERROR]` 前缀 ⇒ 不会被误当代码）。
+        // coder.js 那边 `res.indexOf('```') === -1` 会走既有的「没写代码→重试」分支，不会把它执行。
         return resp;
     }
 
@@ -331,9 +346,15 @@ export class Prompter {
         let prompt = this.profile.saving_memory;
         prompt = await this.replaceStrings(prompt, null, null, to_summarize);
         let resp = await this.chat_model.sendRequest([], prompt);
-        await this._saveLog(prompt, to_summarize, resp, 'memSaving');
+        await this._saveLog(prompt, to_summarize, resp, isFailedReply(resp) ? 'memSaving-failed' : 'memSaving');
+        // 第31条：失败**绝不能**当成"新记忆摘要"存进去 —— 那会把这条假台词写进 memory.json，
+        // 而且会覆盖掉上一轮真实摘要。失败时保留原记忆（history.js 会 `this.memory = 返回值`）。
+        if (isFailedReply(resp)) {
+            console.warn(`[llm] ${this.agent.name} 记忆摘要失败，保留原记忆不覆盖: ${resp}`);
+            return this.agent?.history?.memory ?? '';
+        }
         if (resp?.includes('</think>')) {
-            const [_, afterThink] = resp.split('</think>')
+            const [_, afterThink] = resp.split('</think>');
             resp = afterThink;
         }
         return resp;
@@ -346,6 +367,11 @@ export class Prompter {
         messages.push({role: 'user', content: new_message});
         prompt = await this.replaceStrings(prompt, null, null, messages);
         let res = await this.chat_model.sendRequest([], prompt);
+        // 第31条：失败标记不是 "respond" —— 显式判掉，别指望字符串比较碰巧为 false
+        if (isFailedReply(res)) {
+            console.warn(`[llm] ${this.agent.name} bot_responder 调用失败，按「不接话」处理: ${res}`);
+            return false;
+        }
         return res.trim().toLowerCase() === 'respond';
     }
 
@@ -362,11 +388,17 @@ export class Prompter {
         system_message = await this.replaceStrings(system_message, messages);
 
         let user_message = 'Use the below info to determine what goal to target next\n\n';
-        user_message += '$LAST_GOALS\n$STATS\n$INVENTORY\n$CONVO'
+        user_message += '$LAST_GOALS\n$STATS\n$INVENTORY\n$CONVO';
         user_message = await this.replaceStrings(user_message, messages, null, null, last_goals);
         let user_messages = [{role: 'user', content: user_message}];
 
         let res = await this.chat_model.sendRequest(user_messages, system_message);
+
+        // 第31条：失败标记不可能解析出 goal，直接返回 null（别在下面按 `res.split` 崩）
+        if (isFailedReply(res)) {
+            console.log(`[llm] ${this.agent.name} goal_setting 调用失败: ${res}`);
+            return null;
+        }
 
         let goal = null;
         try {

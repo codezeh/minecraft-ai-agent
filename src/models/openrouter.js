@@ -2,6 +2,8 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class OpenRouter {
     static prefix = 'openrouter';
     constructor(model_name, url) {
@@ -36,9 +38,10 @@ export class OpenRouter {
         try {
             console.log('Awaiting openrouter api response...');
             let completion = await this.openai.chat.completions.create(pack);
+            recordUsage(completion?.usage, this.model_name);
             if (!completion?.choices?.[0]) {
                 console.error('No completion or choices returned:', completion);
-                return 'No response received.';
+                return failedReply('openrouter returned no choices');
             }
             if (completion.choices[0].finish_reason === 'length') {
                 throw new Error('Context length exceeded');
@@ -48,12 +51,12 @@ export class OpenRouter {
         } catch (err) {
             console.error('Error while awaiting response:', err);
             // If the error indicates a context-length problem, we can slice the turns array, etc.
-            res = 'My brain disconnected, try again.';
+            res = failedReply(`openrouter request failed: ${err?.message ?? err}`);
         }
         return res;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",
@@ -71,7 +74,9 @@ export class OpenRouter {
         return this.sendRequest(imageMessages, systemMessage);
     }
 
-    async embed(text) {
-        throw new Error('Embeddings are not supported by Openrouter.');
+    embed(_text) {
+        // 保持「返回被拒绝的 Promise」的语义（原来 async+throw 就是这个效果）：
+        // examples.js:32 用 .then() 接，同步 throw 会逃出 map，那是行为变化。
+        return Promise.reject(new Error('Embeddings are not supported by Openrouter.'));
     }
 }

@@ -2,6 +2,8 @@ import { Mistral as MistralClient } from '@mistralai/mistralai';
 import { getKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class Mistral {
     static prefix = 'mistral';
     #client;
@@ -16,7 +18,7 @@ export class Mistral {
         }
 
         if (!getKey("MISTRAL_API_KEY")) {
-            throw new Error("Mistral API Key missing, make sure to set MISTRAL_API_KEY in settings.json")
+            throw new Error("Mistral API Key missing, make sure to set MISTRAL_API_KEY in settings.json");
         }
 
         this.#client = new MistralClient(
@@ -48,19 +50,20 @@ export class Mistral {
             ];
             messages.push(...strictFormat(turns));
 
-            console.log('Awaiting mistral api response...')
+            console.log('Awaiting mistral api response...');
             const response  = await this.#client.chat.complete({
                 model,
                 messages,
                 ...(this.params || {})
             });
 
+            recordUsage(response?.usage, model);
             result = response.choices[0].message.content;
         } catch (err) {
             if (err.message.includes("A request containing images has been given to a model which does not have the 'vision' capability.")) {
                 result = "Vision is only supported by certain models.";
             } else {
-                result = "My brain disconnected, try again.";
+                result = failedReply(`mistral request failed: ${err?.message ?? err}`);
             }
             console.log(err);
         }
@@ -68,7 +71,7 @@ export class Mistral {
         return result;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",

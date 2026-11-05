@@ -1,5 +1,7 @@
-import Groq from 'groq-sdk'
+import Groq from 'groq-sdk';
 import { getKey } from '../utils/keys.js';
+
+import { failedReply, recordUsage } from './_shared.js';
 
 // THIS API IS NOT TO BE CONFUSED WITH GROK!
 // Go to grok.js for that. :)
@@ -56,6 +58,7 @@ export class GroqCloudAPI {
                 ...(this.params || {})
             });
 
+            recordUsage(completion?.usage, this.model_name);
             res = completion.choices[0].message.content;
 
             res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
@@ -64,14 +67,14 @@ export class GroqCloudAPI {
             if (err.message.includes("content must be a string")) {
                 res = "Vision is only supported by certain models.";
             } else {
-                res = "My brain disconnected, try again.";
+                res = failedReply(`groq request failed: ${err?.message ?? err}`);
             }
             console.log(err);
         }
         return res;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = messages.filter(message => message.role !== 'system');
         imageMessages.push({
             role: "user",
@@ -89,7 +92,9 @@ export class GroqCloudAPI {
         return this.sendRequest(imageMessages);
     }
 
-    async embed(_) {
-        throw new Error('Embeddings are not supported by Groq.');
+    embed(_text) {
+        // 保持「返回被拒绝的 Promise」的语义（原来 async+throw 就是这个效果）：
+        // examples.js:32 用 .then() 接，同步 throw 会逃出 map，那是行为变化。
+        return Promise.reject(new Error('Embeddings are not supported by Groq.'));
     }
 }

@@ -2,6 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class Claude {
     static prefix = 'anthropic';
     constructor(model_name, url, params) {
@@ -21,7 +23,7 @@ export class Claude {
         const messages = strictFormat(turns);
         let res = null;
         try {
-            console.log(`Awaiting anthropic response from ${this.model_name}...`)
+            console.log(`Awaiting anthropic response from ${this.model_name}...`);
             if (!this.params.max_tokens) {
                 if (this.params.thinking?.budget_tokens) {
                     this.params.max_tokens = this.params.thinking.budget_tokens + 1000;
@@ -37,28 +39,29 @@ export class Claude {
                 ...(this.params || {})
             });
 
-            console.log('Received.')
+            console.log('Received.');
+            recordUsage(resp?.usage, this.model_name);
             // get first content of type text
             const textContent = resp.content.find(content => content.type === 'text');
             if (textContent) {
                 res = textContent.text;
             } else {
                 console.warn('No text content found in the response.');
-                res = 'No response from Claude.';
+                res = failedReply('claude returned no text content');
             }
         }
         catch (err) {
             if (err.message.includes("does not support image input")) {
                 res = "Vision is only supported by certain models.";
             } else {
-                res = "My brain disconnected, try again.";
+                res = failedReply(`claude request failed: ${err?.message ?? err}`);
             }
             console.log(err);
         }
         return res;
     }
 
-    async sendVisionRequest(turns, systemMessage, imageBuffer) {
+    sendVisionRequest(turns, systemMessage, imageBuffer) {
         const imageMessages = [...turns];
         imageMessages.push({
             role: "user",
@@ -81,7 +84,9 @@ export class Claude {
         return this.sendRequest(imageMessages, systemMessage);
     }
 
-    async embed(text) {
-        throw new Error('Embeddings are not supported by Claude.');
+    embed(_text) {
+        // 保持「返回被拒绝的 Promise」的语义（原来 async+throw 就是这个效果）：
+        // examples.js:32 用 .then() 接，同步 throw 会逃出 map，那是行为变化。
+        return Promise.reject(new Error('Embeddings are not supported by Claude.'));
     }
 }

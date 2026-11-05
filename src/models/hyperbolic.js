@@ -1,5 +1,7 @@
 import { getKey } from '../utils/keys.js';
 
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs } from './_shared.js';
+
 export class Hyperbolic {
     static prefix = 'hyperbolic';
     constructor(modelName, apiUrl) {
@@ -57,10 +59,15 @@ export class Hyperbolic {
                 });
 
                 if (!response.ok) {
+                    // 429 要重试而不是把失败当回答（第31条 第3点：三个裸 fetch 适配器都缺这条）
+                    if (response.status === 429) {
+                        throw Object.assign(new Error('HTTP 429 rate limited'), { status: 429 });
+                    }
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
 
                 const data = await response.json();
+                recordUsage(data?.usage, this.modelName);
                 if (data?.choices?.[0]?.finish_reason === 'length') {
                     throw new Error('Context length exceeded');
                 }
@@ -74,9 +81,14 @@ export class Hyperbolic {
                 ) {
                     console.log('Context length exceeded, trying again with a shorter context...');
                     return await this.sendRequest(turns.slice(1), systemMessage, stopSeq);
+                } else if (isRateLimit(err) && attempt < maxAttempts) {
+                    const wait = rateLimitDelayMs(attempt);
+                    console.warn(`Hyperbolic 被限流（429），${wait}ms 后重试（第 ${attempt}/${maxAttempts} 次）`);
+                    await new Promise((r) => setTimeout(r, wait));
+                    continue;
                 } else {
                     console.error(err);
-                    completionContent = 'My brain disconnected, try again.';
+                    completionContent = failedReply(`hyperbolic request failed: ${err?.message ?? err}`);
                 }
             }
 
@@ -103,12 +115,14 @@ export class Hyperbolic {
 
         if (finalRes == null) {
             console.warn("Could not get a valid <think> block or normal response after max attempts.");
-            finalRes = 'I thought too hard, sorry, try again.';
+            finalRes = failedReply('hyperbolic gave no usable response after max attempts');
         }
         return finalRes;
     }
 
-    async embed(text) {
-        throw new Error('Embeddings are not supported by Hyperbolic.');
+    embed(_text) {
+        // 保持「返回被拒绝的 Promise」的语义（原来 async+throw 就是这个效果）：
+        // examples.js:32 用 .then() 接，同步 throw 会逃出 map，那是行为变化。
+        return Promise.reject(new Error('Embeddings are not supported by Hyperbolic.'));
     }
 }

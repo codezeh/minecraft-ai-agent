@@ -1,6 +1,8 @@
 import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class LMStudio {
     static prefix = 'lmstudio';
     constructor(model_name, url, params) {
@@ -26,6 +28,7 @@ export class LMStudio {
                 ...(this.params || {})
             };
             const completion = await this.openai.chat.completions.create(pack);
+            recordUsage(completion?.usage, model);
             if (completion.choices[0].finish_reason === 'length')
                 throw new Error('Context length exceeded');
             console.log('Received.');
@@ -40,13 +43,13 @@ export class LMStudio {
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = failedReply(`lmstudio request failed: ${err?.message ?? err}`);
             }
         }
         return res;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: 'user',

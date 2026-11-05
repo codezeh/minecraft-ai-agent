@@ -2,6 +2,8 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
+import { failedReply, recordUsage } from './_shared.js';
+
 export class Mercury {
     static prefix = 'mercury';
     constructor(model_name, url, params) {
@@ -37,12 +39,13 @@ export class Mercury {
         let res = null;
 
         try {
-            console.log('Awaiting mercury api response from model', this.model_name)
+            console.log('Awaiting mercury api response from model', this.model_name);
             // console.log('Messages:', messages);
             let completion = await this.openai.chat.completions.create(pack);
+            recordUsage(completion?.usage, this.model_name);
             if (completion.choices[0].finish_reason == 'length')
                 throw new Error('Context length exceeded'); 
-            console.log('Received.')
+            console.log('Received.');
             res = completion.choices[0].message.content;
         }
         catch (err) {
@@ -54,13 +57,13 @@ export class Mercury {
                 res = 'Vision is only supported by certain models.';
             } else {
                 console.log(err);
-                res = 'My brain disconnected, try again.';
+                res = failedReply(`mercury request failed: ${err?.message ?? err}`);
             }
         }
         return res;
     }
 
-    async sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",
