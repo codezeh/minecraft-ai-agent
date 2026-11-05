@@ -13,8 +13,9 @@
  *
  * 输出：PASS / FAIL，全过退出码 0。临时库在 tmp/，跑完删除。
  */
-import { mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import os from 'node:os';
 import {
     openBoard, addJob, getJob, claimFor, expireLeases, JOB_STATE, LEASE_MS, BOARD_RESULT_CODES,
 } from '../src/agent/library/board_store.js';
@@ -23,9 +24,11 @@ let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };
 const badCase = (name, actual) => { fail++; console.log(`FAIL ${name} ${JSON.stringify(actual)}`); };
 
-const DIR = join('tmp', 'board-lease-test');
-rmSync(DIR, { recursive: true, force: true });
-mkdirSync(DIR, { recursive: true });
+// ★ T15（并发加固）：**每个进程一个独立目录**。
+//   原来用固定的 `tmp/<name>` 且开跑第一件事就是 rmSync 掉它 ——
+//   同机两路 unit_all（或两路并发跑测试）会互删对方的 fixture，
+//   表现为「整跑随机变红、单跑全绿」。mkdtempSync 让两路各拿各的目录。
+const DIR = mkdtempSync(join(os.tmpdir(), 'board-lease-test-'));
 let seq = 0;
 const freshDb = () => { const d = join(DIR, `db${++seq}`); rmSync(d, { recursive: true, force: true }); return openBoard(d); };
 

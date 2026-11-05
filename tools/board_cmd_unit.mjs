@@ -18,8 +18,13 @@ import { getSkill, parseSkillArgs } from '../src/agent/library/composite_registr
 import { makeNullBoard, BoardClient } from '../src/agent/library/board_client.js';
 import { openBoard, listJobs } from '../src/agent/library/board_store.js';
 import { attachBoardServer } from '../src/agent/library/board_server.js';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import os from 'node:os';
+
+// ★ T15（并发加固）：**每个进程一个独立根目录**（原来是固定的 tmp/board-cmd-test，
+//   且每个用例开头先 rmSync 整个父目录 → 并发时互删）。子目录（chain/cancel/count）的布局不变。
+const CMD_TMP_ROOT = mkdtempSync(join(os.tmpdir(), 'board-cmd-test-'));
 
 let pass = 0;
 let fails = 0;
@@ -108,8 +113,8 @@ const mkAgent = (board) => ({
 
 // ── 8. 全链路：!addJob 真的入库，!jobs 能列出来 ────────────────────
 {
-    const dir = join('tmp', 'board-cmd-test', 'chain');
-    rmSync(join('tmp', 'board-cmd-test'), { recursive: true, force: true });
+    const dir = join(CMD_TMP_ROOT, 'chain');
+    rmSync(CMD_TMP_ROOT, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     const { db } = openBoard(dir);
 
@@ -141,7 +146,7 @@ const mkAgent = (board) => ({
 
 // ── 9. !cancelJob 真的把单取消掉 ──────────────────────────────────
 {
-    const dir = join('tmp', 'board-cmd-test', 'cancel');
+    const dir = join(CMD_TMP_ROOT, 'cancel');
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
     const { db } = openBoard(dir);
@@ -187,4 +192,6 @@ const mkAgent = (board) => ({
 console.log('============================================');
 console.log(`${pass}/${pass + fails} 个用例通过`);
 console.log('============================================');
+// T15：并发安全后也不留垃圾；清理失败不许让测试变红
+try { rmSync(CMD_TMP_ROOT, { recursive: true, force: true }); } catch { /* ignore */ }
 process.exit(fails === 0 ? 0 : 1);

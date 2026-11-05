@@ -14,8 +14,9 @@
  *
  * 输出：PASS / FAIL，全过退出码 0。临时库在 `tmp/`，跑完删除。
  */
-import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
     openBoard, addJob, getJob, convergeOrphanParents, rollupParent, JOB_STATE,
@@ -28,9 +29,11 @@ const check = (name, ok, detail = '') => {
     else { fail++; console.log(`FAIL ${name} ${detail}`); }
 };
 
-const DIR = join('tmp', 'board-orphan-test');
-rmSync(DIR, { recursive: true, force: true });
-mkdirSync(DIR, { recursive: true });
+// ★ T15（并发加固）：**每个进程一个独立目录**。
+//   原来用固定的 `tmp/<name>` 且开跑第一件事就是 rmSync 掉它 ——
+//   同机两路 unit_all（或两路并发跑测试）会互删对方的 fixture，
+//   表现为「整跑随机变红、单跑全绿」。mkdtempSync 让两路各拿各的目录。
+const DIR = mkdtempSync(join(os.tmpdir(), 'board-orphan-test-'));
 let seq = 0;
 const freshDb = () => {
     const dir = join(DIR, `db${++seq}`);

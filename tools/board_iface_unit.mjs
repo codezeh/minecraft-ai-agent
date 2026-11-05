@@ -11,8 +11,9 @@
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import os from 'node:os';
 import { ok, isResult, CODES } from '../src/agent/library/contract.js';
 import { openBoard, addJob, getJob, listJobs, JOB_STATE } from '../src/agent/library/board_store.js';
 import { attachBoardServer, validateIncomingJob } from '../src/agent/library/board_server.js';
@@ -22,9 +23,11 @@ let pass = 0, fails = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };
 const badCase = (name, actual) => { fails++; console.log(`FAIL ${name} ${JSON.stringify(actual)}`); };
 
-const DIR = join('tmp', 'board-iface-test');
-rmSync(DIR, { recursive: true, force: true });
-mkdirSync(DIR, { recursive: true });
+// ★ T15（并发加固）：**每个进程一个独立目录**。
+//   原来用固定的 `tmp/<name>` 且开跑第一件事就是 rmSync 掉它 ——
+//   同机两路 unit_all（或两路并发跑测试）会互删对方的 fixture，
+//   表现为「整跑随机变红、单跑全绿」。mkdtempSync 让两路各拿各的目录。
+const DIR = mkdtempSync(join(os.tmpdir(), 'board-iface-test-'));
 
 /**
  * 假 socket：两端用同一个对象连通（client.emit → server 的 handler → ack 回到 client）。
@@ -333,4 +336,6 @@ function makeFakePair() {
 console.log('============================================');
 console.log(`${pass}/${pass + fails} 个用例通过`);
 console.log('============================================');
+// T15：并发安全后也**不留垃圾**；清理失败不许让测试变红
+try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
 process.exit(fails === 0 ? 0 : 1);
