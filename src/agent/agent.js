@@ -23,6 +23,11 @@ import { BoardClient } from './library/board_client.js';
 import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
+// ★ 第32条：心跳循环（一次异常不许停掉它）。抽成独立文件才能离线证明。
+import { runHeartbeatLoop, HEARTBEAT_INTERVAL_MS } from './library/heartbeat_loop.js';
+// ★ 第31条：模型层失败标记（T11 在 src/models/_shared.js 定义）——
+//   约定：sendRequest 返回以 FAILED_REPLY 开头的串 = **这次调用失败了**，不是模型说的话。
+import { isFailedReply } from '../models/_shared.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 // 控制层（M2，07 §4 / §7）：死亡对任务单的处理
 import { onDeath } from './library/control.js';
@@ -596,6 +601,23 @@ export class Agent {
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
 
+            // ★★★ 第31条（T32）：**模型层的失败不是"她说了一句话"。**
+            //
+            //   T11 把 17 处 `catch { res = 'My brain disconnected, try again.' }` 改成返回
+            //   `failedReply(...)` 标记（`src/models/_shared.js` 的 `FAILED_REPLY`）。
+            //   但那边只负责"打标记"——**消费端不认它，标记就等于没用**：
+            //   这条"回答"会照旧被写进 history、真的 routeResponse 给玩家说出来、
+            //   还吃掉一次 response 预算（max_responses）。模型层每一次故障都被记成
+            //   "模型说了句话"，history 里于是长出不该有的对话。
+            //
+            //   约定：认出来就当**空响应**处理 —— 等于这一轮没有产出，直接结束循环，
+            //   不写 history、不 routeResponse。（与上面 `res.trim().length === 0` 同一支语义。）
+            if (isFailedReply(res)) {
+                console.warn(`[llm] 本轮模型调用失败，按空响应处理（不写 history、不回复玩家）：`
+                    + `${String(res).slice(0, 120)}`);
+                break;
+            }
+
             if (res.trim().length === 0) {
                 console.warn('no response')
                 break; // empty response ends loop
@@ -807,19 +829,17 @@ export class Agent {
         this.npc.init();
 
         // This update loop ensures that each update() is called one at a time, even if it takes longer than the interval
-        const INTERVAL = 300;
-        let last = Date.now();
-        setTimeout(async () => {
-            while (true) {
-                let start = Date.now();
-                await this.update(start - last);
-                let remaining = INTERVAL - (Date.now() - start);
-                if (remaining > 0) {
-                    await new Promise((resolve) => setTimeout(resolve, remaining));
-                }
-                last = start;
-            }
-        }, INTERVAL);
+        //
+        // ★★★ 第32条（T32）：**循环本体搬到 `library/heartbeat_loop.js`，并在里面兜住异常。**
+        //   原来这里是 `while (true) { await this.update(...) }`，**整段没有 try/catch**：
+        //   update() 抛一次（modes.update 里一个 ReferenceError 就够）就把循环彻底打死，
+        //   而**没有任何人会重启它**；偏偏聊天走 handleMessage、**不依赖**这个循环
+        //   ⇒ bot 进入"只会聊天、不会做事"的半死状态：进程活着、面板在线、她再也不动。
+        setTimeout(() => {
+            runHeartbeatLoop({ update: (deltaMs) => this.update(deltaMs) })
+                // 只有"update 没传进去"这种编程错误才会走到这里（循环内部已自兜）
+                .catch((e) => console.error('[心跳] 循环意外结束（本该不可能）：', e));
+        }, HEARTBEAT_INTERVAL_MS);
 
         this.bot.emit('idle');
     }

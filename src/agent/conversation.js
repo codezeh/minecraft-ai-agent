@@ -191,7 +191,9 @@ class ConversationManager {
             await agent.self_prompter.pause();
         }
     
-        _scheduleProcessInMessage(sender, received, convo);
+        // ★ T32：本方法是 async 的、`_scheduleProcessInMessage` 也是 async 的 →
+        //   **真的该 await**（"排定什么时候回复"就是这一步的语义），不是 fire-and-forget。
+        await _scheduleProcessInMessage(sender, received, convo);
     }
 
     responseScheduledFor(sender) {
@@ -231,7 +233,13 @@ class ConversationManager {
                 this._stopMonitor();
                 this.activeConversation = null;
                 if (agent.self_prompter.isPaused() && !this.inConversation()) {
-                    _resumeSelfPrompter();
+                    // ★ T32：`_resumeSelfPrompter` 先 sleep 5000ms 再恢复自提示 ——
+                    //   设计上就是"晚点再说"，**不能 await**（会把 endConversation 卡 5 秒）。
+                    //   但必须显式接住 rejection：漏了就是 unhandled rejection，
+                    //   而且一旦发生自提示**再也恢复不了**（静默）。
+                    _resumeSelfPrompter().catch((e) => {
+                        console.warn(`[convo] 恢复自提示失败：${String(e?.message ?? e)}`);
+                    });
                 }
             }
         }
@@ -242,7 +250,10 @@ class ConversationManager {
             this.endConversation(sender);
         }
         if (agent.self_prompter.isPaused()) {
-            _resumeSelfPrompter();
+            // ★ 同上（T32）：不 await（会卡 5 秒），但必须接住 rejection
+            _resumeSelfPrompter().catch((e) => {
+                console.warn(`[convo] 恢复自提示失败：${String(e?.message ?? e)}`);
+            });
         }
     }
 

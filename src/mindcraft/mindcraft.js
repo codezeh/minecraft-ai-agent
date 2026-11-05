@@ -60,6 +60,11 @@ export async function createAgent(settings) {
         }
 
         const agentProcess = new AgentProcess(agent_name, mindserver_port);
+        // ★ 第19条：让 AgentProcess 在"该摘掉自己"时（退出码>1 / 连续起不来）
+        //   **只摘掉这个 agent**，而不是 process.exit 掉整个 mindserver。
+        //   用注入而不是让 agent_process.js 反向 import 本文件：那会形成
+        //   mindcraft → agent_process → mindcraft 的循环依赖。
+        agentProcess.unregister = () => destroyAgent(agent_name);
         agentProcess.start(load_memory, init_message, agentIndex);
         agent_processes[settings.profile.name] = agentProcess;
     } catch (error) {

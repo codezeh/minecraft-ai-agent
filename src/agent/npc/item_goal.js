@@ -160,7 +160,10 @@ class ItemNode {
             await skills.smeltItem(this.manager.agent.bot, to_smelt_name, to_smelt_quantity);
         } else if (this.type === 'hunt') {
             for (let i=0; i<quantity; i++) {
-                res = await skills.attackNearest(this.manager.agent.bot, this.source);
+                // ★ 第11条遗留（T32）：`res` 原来**从来没声明过**（`res = ...` 给未声明标识符赋值，
+                //   ESM 严格模式直接 ReferenceError）。而它在循环里、外面没有任何 try/catch
+                //   → 这一支**必抛**，hunt 类目标永远打不完（还伪装成"任务在做"）。
+                const res = await skills.attackNearest(this.manager.agent.bot, this.source);
                 if (!res || this.manager.agent.bot.interrupt_code)
                     break;
             }

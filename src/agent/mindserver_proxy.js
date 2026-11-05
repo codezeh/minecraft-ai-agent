@@ -150,7 +150,12 @@ class MindServerProxy {
                 } catch (err) {
                     callback({ ok: false, reason: String(err && err.message || err) });
                 }
-            })();
+            })().catch((e) => {
+                // ★ T32：这个 async IIFE 是"socket 回调里不能 await"的产物，
+                //   但它原来是**浮空**的 —— try 之外一抛（比如 callback 自己抛）
+                //   就是 unhandled rejection。补一道显式边界。
+                console.warn(`[map] 取图失败（已隔离）：${String(e?.message ?? e)}`);
+            });
         });
 
         // 3D 地形按需拉取（terrain3d.db）。与 request-map 同思路：不进 1 Hz 状态流。

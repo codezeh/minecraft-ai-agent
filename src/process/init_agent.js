@@ -59,4 +59,10 @@ const argv = yargs(args)
         console.error(error.stack);
         process.exit(1);
     }
-})();
+})().catch((e) => {
+    // ★ T32 顺手清掉（这条原文出现在 T04 的交接里，标的是 T20 的领地）：
+    //   这个 IIFE 内部已有完整 try/catch，只有 catch 块自身抛（或 process.exit 被 stub）
+    //   才会走到这里 —— 但"浮空"就意味着万一抛了是 unhandled rejection。
+    //   补一行显式边界，让 T90 的 no-floating-promise 硬指标归零。
+    console.error('[init_agent] 顶层异步启动异常（已兜住）：', e);
+});

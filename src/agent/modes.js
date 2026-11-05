@@ -64,10 +64,20 @@ export function holdSwimJump(bot) {
 }
 
 
-async function say(agent, message) {
+/**
+ * 行为播报（只是在日志/聊天里说一句）。
+ *
+ * ★ T32：**不写 `async`** —— 它体内没有 `await`，写成 async 只会让**每个调用点**
+ *   都产生一个没人管的 promise（`no-floating-promise` 一次报 12 条就是这个）。
+ *   但"不 async"不等于"不管"：`agent.openChat()` 本身是 async 的，
+ *   它的 rejection 必须在这里**显式接住**（否则就是 unhandled rejection，Node 会直接崩）。
+ */
+function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
     if (agent.shut_up || !settings.narrate_behavior) return;
-    agent.openChat(message);
+    agent.openChat(message)?.catch?.((e) => {
+        console.warn(`[mode] 播报失败（不影响行为本身）：${String(e?.message ?? e)}`);
+    });
 }
 
 // a mode is a function that is called every tick to respond immediately to the world
@@ -103,7 +113,7 @@ const modes_list = [
                 }
             }
             else if (this.fall_blocks.some(name => blockAbove.name.includes(name))) {
-                execute(this, agent, async () => {
+                fireModeAction(this, agent, async () => {
                     await skills.moveAway(bot, 2);
                 });
             }
@@ -113,24 +123,30 @@ const modes_list = [
                 // if you have a water bucket, use it
                 let waterBucket = bot.inventory.findInventoryItem('water_bucket');
                 if (waterBucket) {
-                    execute(this, agent, async () => {
+                    fireModeAction(this, agent, async () => {
                         const success = await skills.placeBlock(bot, 'water_bucket', block.position.x, block.position.y, block.position.z);
-                        if (placed) say(agent, 'Placed some water, ahhhh that\'s better!');
+                        // ★ 第11条遗留（T32）：这里原来写的是 `if (placed)` ——
+                        //   变量名叫 `success`，`placed` **从未声明** → ReferenceError。
+                        //   而它被 execute() 的 try/catch 吞成一行 console.warn，
+                        //   ⇒ **身上着火时水桶灭火永久静默失效**（最典型的"报错被吞掉"）。
+                        if (success) say(agent, 'Placed some water, ahhhh that\'s better!');
                     });
                 }
                 else {
-                    execute(this, agent, async () => {
+                    fireModeAction(this, agent, async () => {
                         let waterBucket = bot.inventory.findInventoryItem('water_bucket');
                         if (waterBucket) {
                             const success = await skills.placeBlock(bot, 'water_bucket', block.position.x, block.position.y, block.position.z);
-                            if (placed) say(agent, 'Placed some water, ahhhh that\'s better!');
+                            // ★ 同上：`placed` → `success`（第11条遗留）
+                            if (success) say(agent, 'Placed some water, ahhhh that\'s better!');
                             return;
                         }
                         let nearestWater = world.getNearestBlock(bot, 'water', 20);
                         if (nearestWater) {
                             const pos = nearestWater.position;
                             const success = await skills.goToPosition(bot, pos.x, pos.y, pos.z, 0.2);
-                            if (walked) say(agent, 'Found some water, ahhhh that\'s better!');
+                            // ★ 同上：`walked` → `success`（第11条遗留）
+                            if (success) say(agent, 'Found some water, ahhhh that\'s better!');
                             return;
                         }
                         await skills.moveAway(bot, 5);
@@ -139,7 +155,7 @@ const modes_list = [
             }
             else if (Date.now() - bot.lastDamageTime < 3000 && (bot.health < 5 || bot.lastDamageTaken >= bot.health)) {
                 say(agent, 'I\'m dying!');
-                execute(this, agent, async () => {
+                fireModeAction(this, agent, async () => {
                     await skills.moveAway(bot, 20);
                 });
             }
@@ -183,7 +199,7 @@ const modes_list = [
             if (this.stuck_time > max_stuck_time) {
                 say(agent, '呜呜，我卡住了，等我一下~');
                 this.stuck_time = 0;
-                execute(this, agent, async () => {
+                fireModeAction(this, agent, async () => {
                     // 原来这里 10 秒内脱困失败会 cleanKill 直接杀掉 bot 进程（历史日志里出现 17 次）。
                     // 改成软超时：超时就放弃这次脱困、继续玩，绝不退出进程。
                     await Promise.race([
@@ -211,7 +227,7 @@ const modes_list = [
             const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 16);
             if (enemy && await world.isClearPath(agent.bot, enemy)) {
                 say(agent, `Aaa! A ${enemy.name.replace("_", " ")}!`);
-                execute(this, agent, async () => {
+                fireModeAction(this, agent, async () => {
                     await skills.avoidEnemies(agent.bot, 24);
                 });
             }
@@ -227,7 +243,7 @@ const modes_list = [
             const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 8);
             if (enemy && await world.isClearPath(agent.bot, enemy)) {
                 say(agent, `Fighting ${enemy.name}!`);
-                execute(this, agent, async () => {
+                fireModeAction(this, agent, async () => {
                     await skills.defendSelf(agent.bot, 8);
                 });
             }
@@ -280,7 +296,7 @@ const modes_list = [
             if (!target) return;
 
             say(agent, `Protecting ${owner}! (${verdict.reason})`);
-            execute(this, agent, async () => {
+            fireModeAction(this, agent, async () => {
                 const t0 = Date.now();
                 try {
                     // 打断跟随（brief：打完接着跟，07 §4）
@@ -313,7 +329,7 @@ const modes_list = [
         update: async function (agent) {
             const huntable = world.getNearestEntityWhere(agent.bot, entity => mc.isHuntable(entity), 8);
             if (huntable && await world.isClearPath(agent.bot, huntable)) {
-                execute(this, agent, async () => {
+                fireModeAction(this, agent, async () => {
                     say(agent, `Hunting ${huntable.name}!`);
                     await skills.attackEntity(agent.bot, huntable);
                 });
@@ -345,7 +361,7 @@ const modes_list = [
                     // 而 update() 里有 `if (mode.active) break;`，
                     // 结果是后面所有 mode（脱困、自保、放火把…）被永久跳过。
                     // 3 分钟是上限，正常捡一轮几秒就结束。
-                    execute(this, agent, async () => {
+                    fireModeAction(this, agent, async () => {
                         await skills.pickupNearbyItems(agent.bot);
                     }, 3).catch(err => {
                         console.warn(`[item_collecting] pickup failed: ${err}`);
@@ -369,7 +385,7 @@ const modes_list = [
         update: function (agent) {
             if (world.shouldPlaceTorch(agent.bot)) {
                 if (Date.now() - this.last_place < this.cooldown * 1000) return;
-                execute(this, agent, async () => {
+                fireModeAction(this, agent, async () => {
                     const pos = agent.bot.entity.position;
                     await skills.placeBlock(agent.bot, 'torch', pos.x, pos.y, pos.z, 'bottom', true);
                 });
@@ -387,7 +403,7 @@ const modes_list = [
         update: async function (agent) {
             const player = world.getNearestEntityWhere(agent.bot, entity => entity.type === 'player', this.distance);
             if (player) {
-                execute(this, agent, async () => {
+                fireModeAction(this, agent, async () => {
                     // wait a random amount of time to avoid identical movements with other bots
                     const wait_time = Math.random() * 1000;
                     await new Promise(resolve => setTimeout(resolve, wait_time));
@@ -456,6 +472,29 @@ const modes_list = [
         update: function (agent) { /* do nothing */ }
     }
 ];
+
+/**
+ * 反射 mode 的入口：**故意不 await**，但**必须**接住 rejection。
+ *
+ * ★★ T32：`execute()` 是 async 的，而所有调用点都在 300ms 的 tick 里 ——
+ *   **不能 await**（一次挖掘能跑几十秒，await 会把 update 循环整个卡死，
+ *   那正是心跳停摆的另一条路）。可"不 await"以前等于"没人管"：
+ *   23 条 `execute(...)` 全在浮空，`execute` 内部**没有**兜住的异常（比如
+ *   `agent.self_prompter.isActive()` 抛）会变成 unhandled rejection 把进程带走。
+ *
+ * 所以这里做一件事：**统一接住**，并且让调用点返回 `undefined`（不是 promise）。
+ * 注意这**不是**把问题藏起来 —— 是给"fire-and-forget"这个设计一个显式的错误边界。
+ */
+function fireModeAction(mode, agent, func, timeout) {
+    try {
+        execute(mode, agent, func, timeout).catch((e) => {
+            console.warn(`[mode:${mode?.name ?? '?'}] 动作异常（已隔离，不影响 update 循环）：`
+                + `${String(e?.message ?? e)}`);
+        });
+    } catch (e) {
+        console.warn(`[mode:${mode?.name ?? '?'}] 动作启动即失败：${String(e?.message ?? e)}`);
+    }
+}
 
 /**
  * 跑一个 mode 的动作。
