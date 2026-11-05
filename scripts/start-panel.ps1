@@ -200,16 +200,30 @@ if (-not (Wait-BotSpawned 120)) { exit 1 }
 # F-SEC-205（2026-11-06）：token 不再打印进日志，改从 mindcraft/.mindserver-token 读。
 # 顺带修一个既有缺口：原来打开的是干净的 /console（无 ?token=），socket 握手会被
 # io.use(makeHandshakeGate) 拒掉 ⇒ 面板连不上。现在带上 token，浏览器会拿到 HttpOnly cookie。
+# ★ F-WEB-201 P0（复核席实测发现的确定白屏路径，captain 补修）：
+#   HTTP 层现在也要 token。若这里拿不到 token 却照样打开裸 /console，
+#   浏览器只会显示一行 "unauthorized…" 纯文本 —— 看起来像服务器坏了，比打不开更糟。
+#   另：token 文件由 mindserver 启动时写出，与这里是时序竞争，必须重试。
 $tokenFile = Join-Path $root 'mindcraft/.mindserver-token'
-$panelUrl  = $panel
-if (Test-Path $tokenFile) {
-    $tok = (Get-Content $tokenFile -Raw).Trim()
-    if ($tok) { $panelUrl = "$panel?token=$tok" }
-} else {
-    Write-Host '  [WARN] 未找到 mindcraft/.mindserver-token；若面板提示需要握手 token，' -ForegroundColor Yellow
-    Write-Host '         请以 MINDSERVER_PRINT_TOKEN=1 重启 mindserver，或从该文件获取。' -ForegroundColor Yellow
+$tok = $null
+for ($i = 0; $i -lt 20 -and -not $tok; $i++) {
+    if (Test-Path $tokenFile) {
+        $raw = (Get-Content $tokenFile -Raw)
+        if ($raw) { $tok = $raw.Trim() }
+    }
+    if (-not $tok) { Start-Sleep -Milliseconds 500 }
 }
-Write-Step '4/4' "打开面板 $panel"
+if (-not $tok) {
+    Write-Host ''
+    Write-Host '  [错误] 拿不到握手 token，因此**没有**打开面板（打开也只会看到 unauthorized）。' -ForegroundColor Red
+    Write-Host "         期望位置：$tokenFile" -ForegroundColor Yellow
+    Write-Host '         常见原因：mindserver 未能写出该文件（权限或工作目录不对），或它还没起来。' -ForegroundColor Yellow
+    Write-Host '         排查：看日志里有没有「写 .mindserver-token 失败」（F-RT-002 起该开关在重定向下会被忽略）。' -ForegroundColor Yellow
+    Read-Host '按回车退出'
+    exit 1
+}
+$panelUrl = "$panel?token=$tok"
+Write-Step '4/4' "打开面板"
 Start-Process $panelUrl | Out-Null
 
 Write-Host ''
