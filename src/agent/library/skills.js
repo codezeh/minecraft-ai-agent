@@ -2004,7 +2004,14 @@ export async function goToPosition(bot, x, y, z, min_distance = 2) {
         return false;
     }
     if (modesIsOn(bot, 'cheat')) {
-        await command(bot, 'tp', ['@s', x, y, z], { cheat: true });
+        // ★ S38（同族）：command() 会返回 ActionResult —— 不在白名单 / 被中断 / bot.chat 抛错
+        //   都可能失败。过去不看结果就说"传送了"，现在如实返回。
+        const tp = await command(bot, 'tp', ['@s', x, y, z], { cheat: true });
+        if (!tp.ok) {
+            log(bot, `传送失败（${tp.code}）：${tp.message ?? ''}`);
+            log(bot, `FAILED`);
+            return false;
+        }
         log(bot, `Teleported to ${x}, ${y}, ${z}.`);
         return true;
     }
@@ -2073,8 +2080,9 @@ export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64
         return false;
     }
     log(bot, `Found ${blockType} at ${block.position}. Navigating...`);
-    await goToPosition(bot, block.position.x, block.position.y, block.position.z, min_distance);
-    return true;
+    // ★ S38：过去忽略 goToPosition 返回值、恒 `return true` —— 走不到也报成功，
+    //   失败点被推给下一步（下一步只看到"上一步成功了"）。如实返回。
+    return await goToPosition(bot, block.position.x, block.position.y, block.position.z, min_distance);
 }
 
 export async function goToNearestEntity(bot, entityType, min_distance=2, range=64) {
@@ -2093,8 +2101,8 @@ export async function goToNearestEntity(bot, entityType, min_distance=2, range=6
     }
     let distance = bot.entity.position.distanceTo(entity.position);
     log(bot, `Found ${entityType} ${distance} blocks away.`);
-    await goToPosition(bot, entity.position.x, entity.position.y, entity.position.z, min_distance);
-    return true;
+    // ★ S38：同 goToNearestBlock —— 如实返回"有没有走到"。
+    return await goToPosition(bot, entity.position.x, entity.position.y, entity.position.z, min_distance);
 }
 
 export async function goToPlayer(bot, username, distance=3) {
@@ -2115,7 +2123,12 @@ export async function goToPlayer(bot, username, distance=3) {
         return true;
     }
     if (modesIsOn(bot, 'cheat')) {
-        await command(bot, 'tp', ['@s', username], { cheat: true });
+        const tp = await command(bot, 'tp', ['@s', username], { cheat: true });
+        if (!tp.ok) {
+            log(bot, `传送失败（${tp.code}）：${tp.message ?? ''}`);
+            log(bot, `FAILED`);
+            return false;
+        }
         log(bot, `Teleported to ${username}.`);
         return true;
     }
@@ -2237,8 +2250,15 @@ export async function moveAwayFromEntity(bot, entity, distance=16) {
     let goal = new pf.goals.GoalFollow(entity, distance);
     let inverted_goal = new pf.goals.GoalInvert(goal);
     bot.pathfinder.setMovements(new pf.Movements(bot));
-    await gotoWithTimeout(bot, inverted_goal, 15000);
-    return true;
+    // ★ S38：过去忽略 gotoWithTimeout 的布尔结果、恒 `return true`。
+    //   走不到（目标不可达 / 超时 / 导航被别的任务占用）也会报"我已经躲开了"，
+    //   上层于是以为安全距离已经拉开。如实返回。
+    const moved = await gotoWithTimeout(bot, inverted_goal, 15000);
+    if (!moved) {
+        log(bot, `没能远离 ${entity?.name ?? entity?.type ?? '那个实体'}（寻路失败/超时）。`);
+        log(bot, `FAILED`);
+    }
+    return moved;
 }
 
 export async function avoidEnemies(bot, distance=16) {
@@ -2433,10 +2453,16 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
     log(bot, `Planting ${seedType} at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}.`);
 
     if (modesIsOn(bot, 'cheat')) {
+        // ★ S39：`seedType` 默认就是 null（JSDoc 明写"Defaults to none, which will only
+        //   till the ground"），而这里过去无条件 `seedType.endsWith(...)` →
+        //   **按文档的默认用法调用必抛 TypeError: Cannot read properties of null**。
+        //   现在 null 就只耕地、不播种，与 JSDoc 承诺一致。
         let to_remove = ['_seed', '_seeds'];
-        for (let remove of to_remove) {
-            if (seedType.endsWith(remove)) {
-                seedType = seedType.replace(remove, '');
+        if (seedType) {
+            for (let remove of to_remove) {
+                if (seedType.endsWith(remove)) {
+                    seedType = seedType.replace(remove, '');
+                }
             }
         }
         // ★ 第10条附带的浮空 promise（报告点名的 39 条里属于本文件的 2 条）：
@@ -2447,6 +2473,11 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
             log(bot, `Failed to place farmland at ${x}, ${y}, ${z}.`);
             log(bot, `PLACE_FAILED`);
             return false;
+        }
+        if (!seedType) {
+            // 只耕地，不播种 —— 这就是 seedType 缺省时的语义
+            log(bot, `Tilled (cheat) at x:${x.toFixed(1)}, y:${y.toFixed(1)}, z:${z.toFixed(1)}, nothing planted.`);
+            return true;
         }
         if (!(await placeBlock(bot, seedType, x, y + 1, z))) {
             log(bot, `Failed to plant ${seedType} at ${x}, ${y + 1}, ${z}.`);
@@ -2767,14 +2798,30 @@ export async function digDown(bot, distance = 10) {
      * @example
      * await skills.digDown(bot, 10);
      **/
-    let start_block_pos = bot.blockAt(bot.entity.position).position;
+    // ★ S41：`bot.blockAt(...)` 在区块没加载时返回 **null**，原来的 `.position` 会直接
+    //   TypeError 抛出去。而且下一段把"读不到方块"当成"到世界尽头"并 `return true`——
+    //   那是最坏的一种假成功：她其实被困在未加载的区块里，上层却以为已经挖到底了。
+    const startBlock = bot.blockAt(bot.entity.position);
+    if (!startBlock || !startBlock.position) {
+        log(bot, `Cannot dig down: the block under my feet is not loaded (${bot.entity.position}).`);
+        log(bot, `FAILED`);
+        return false;
+    }
+    let start_block_pos = startBlock.position;
     for (let i = 1; i <= distance; i++) {
         const targetBlock = bot.blockAt(start_block_pos.offset(0, -i, 0));
         let belowBlock = bot.blockAt(start_block_pos.offset(0, -i - 1, 0));
 
         if (!targetBlock || !belowBlock) {
-            log(bot, `Dug down ${i - 1} blocks, but reached the end of the world.`);
-            return true;
+            // 区分两种原因：真的到世界底部（y<=最低层）还是仅仅"区块没加载"。
+            const wantY = start_block_pos.y - i;
+            const isWorldFloor = wantY < -64;
+            log(bot, isWorldFloor
+                ? `Dug down ${i - 1} blocks, reached the bottom of the world (y=${wantY}).`
+                : `Dug down ${i - 1} blocks, but the block at y=${wantY} is not loaded (chunk not available) — cannot continue.`);
+            log(bot, `FAILED`);
+            // 到世界底部算"已经挖到底"（原语义），未加载则如实失败。两者都不再统一报 true。
+            return isWorldFloor;
         }
 
         if (targetBlock.name === 'lava' || targetBlock.name === 'water' ||
@@ -3180,15 +3227,22 @@ async function stashUnneeded(bot, chestPos, keep, minFreeSlots) {
             if (keep.has(item.name)) continue;
             if (bot.inventory.emptySlotCount() >= minFreeSlots) break;
             try {
+                // ★ S40：过去**先** push 再 deposit，deposit 失败也照样记账
+                //   —— 这是"意图即成功"（第22条 giveToPlayer 那一族的第 4 处）。
+                //   现在按**背包实际少掉多少**记账，没真挪走就不算 stash。
+                const before = countInventoryItem(bot, item.name);
                 await container.deposit(item.type, null, item.count);
-                stashed.push(`${item.count} ${item.name}`);
+                const after = countInventoryItem(bot, item.name);
+                const moved = Math.max(0, before - after);
+                if (moved > 0) stashed.push(`${moved} ${item.name}`);
             } catch (err) { /* 单件失败不影响整体 */ }
         }
     } finally {
         try { await container.close(); } catch (err) { /* ignore */ }
     }
     landmarks.touchChest(bot, chestPos);
-    return { ok: true, stashed };
+    // ★ S40：`ok` 也要按实际结果。什么都没挪走（箱子满/开不了格）就不是成功。
+    return { ok: stashed.length > 0, stashed };
 }
 
 export async function prepareForBuilding(bot, required = {}, minFreeSlots = 3, near = null) {
@@ -4348,9 +4402,16 @@ export async function storeItem(bot, itemName, num = -1) {
             // 每个空格最多放一组(64)，保守按 free*64 算容量
             const capacity = free * 64;
             const put = Math.min(remaining, capacity);
+            // ★ S40：过去 `storedTotal += put` —— `put` 是**打算放多少**，不是**真的放进去多少**。
+            //   deposit 可能只成功一部分（箱子满、并发抢格、服务端拒收），
+            //   于是仓储链上的数字不可信（上游按它算"还差多少材料"就会算错）。
+            //   现在用**背包前后差值**当唯一口径：只有真的从背包里少掉了才算存进去。
+            const beforeHave = countInventoryItem(bot, itemName);
             await container.deposit(item.type, null, put);
-            remaining -= put;
-            storedTotal += put;
+            const afterHave = countInventoryItem(bot, itemName);
+            const actuallyMoved = Math.max(0, beforeHave - afterHave);
+            remaining -= actuallyMoved;
+            storedTotal += actuallyMoved;
             touched.push({ pos: { x: c.x, y: c.y, z: c.z }, contents: storage.summarizeContainer(container), category: cat });
         } catch (err) {
             log(bot, `Failed to deposit into chest at (${c.x},${c.y},${c.z}): ${err}`);
@@ -4365,8 +4426,12 @@ export async function storeItem(bot, itemName, num = -1) {
     }
 
     if (storedTotal === 0) {
-        log(bot, `All ${storage.categoryLabel(cat)} chests are full - nothing stored.`);
-        return { ok: false, reason: 'chests_full', category: cat };
+        // ★ S40：失败分支也要带 `stored: 0`。/ 一样，调用方拿到的数字必须**总是可读**——
+        //   否则上游 `r.stored ?? ...` 各自兜底，仓储链上的记账口径又分叉了。
+        //   另外把"一格都没放进去"和"箱子真的满了"分开说：前者可能是 deposit 静默不生效。
+        const why = candidates.length ? 'nothing_moved' : 'chests_full';
+        log(bot, `Nothing was actually stored (${why}) - ${itemName} is still in the inventory.`);
+        return { ok: false, stored: 0, remaining, reason: why, category: cat };
     }
     log(bot, `Stored ${storedTotal} ${itemName} in the ${storage.categoryLabel(cat)} chest.`);
     return {
@@ -5053,12 +5118,24 @@ export async function buildStorageRoom(bot, options = {}) {
     }
 
     landmarks.rememberStorageArea(bot, { x: center.x, y: CHEST_Y, z: center.z }, 'main_storage');
-    const ok = floorN > 0 && wallN > 0 && ceilN > 0;
-    log(bot, `Room ${ok ? 'OK' : 'INCOMPLETE'}: floor=${floorN} walls=${wallN} ceiling=${ceilN} torches=${torchN}. ` +
+    // ★ S42：原来的成功判据是 `floorN > 0 && wallN > 0 && ceilN > 0` ——
+    //   1 块地板 + 1 块墙 + 1 块天花板也算"房间建好了"，于是上层接着去摆箱子，
+    //   摆进一个根本没围起来的地方。现在按**期望面积/周长**判定：
+    //     地板/天花板：OUT×OUT 格；墙：周长 × innerHeight，扣掉门洞（2 宽 × 2 高）。
+    const expectFloor = OUT * OUT;
+    const expectCeil = OUT * OUT;
+    const expectWalls = (4 * OUT - 4) * WAREHOUSE.innerHeight - 4;   // 周长格数 × 层数 − 门洞 2×2
+    // 容差 10%：safePlace 偶尔把"已经是目标方块"记为 exists 不计入 placed，
+    // 用硬等号会把一次正常的重建判成失败。
+    const enough = (got, want) => want > 0 && got >= Math.ceil(want * 0.9);
+    const ok = enough(floorN, expectFloor) && enough(wallN, expectWalls) && enough(ceilN, expectCeil);
+    log(bot, `Room ${ok ? 'OK' : 'INCOMPLETE'}: floor=${floorN}/${expectFloor} ` +
+        `walls=${wallN}/${expectWalls} ceiling=${ceilN}/${expectCeil} torches=${torchN}. ` +
         `Now run skills.fillRoomWithChests(bot) to place the chests.`);
     return {
         ok, center, floorY: FLOOR_Y, chestY: CHEST_Y, ceilY: CEIL_Y,
         floor: floorN, walls: wallN, ceiling: ceilN, torches: torchN,
+        expected: { floor: expectFloor, walls: expectWalls, ceiling: expectCeil },
         door: { x: doorX, z: z0 }, wallBlock,
         reason: ok ? 'built' : 'incomplete',
     };
@@ -5087,8 +5164,12 @@ export async function fillRoomWithChests(bot, options = {}) {
         const b = bot.blockAt(new Vec3(x, y, z));
         return b ? b.name : 'unknown';
     };
-    const floorProbe = probe(x0 + 4, CHEST_Y - 1, z0 + 4);
-    const wallProbe = probe(x0, CHEST_Y, z0 + 4);
+    // ★ S42：这两个探针位置过去是**硬编码的 4**，把 innerSize=7（OUT=9）钉死在代码里。
+    //   改 innerSize 就会探到房间外面去（于是要么把空地说成"房间在"，要么把好房间说成"没房间"）。
+    //   现在按几何推导：房间中心格 = floor(OUT/2)（OUT=9 时正好是 4）。
+    const probeMid = Math.floor(OUT / 2);
+    const floorProbe = probe(x0 + probeMid, CHEST_Y - 1, z0 + probeMid);
+    const wallProbe = probe(x0, CHEST_Y, z0 + probeMid);
     const roomFound = floorProbe !== 'unknown' && floorProbe !== 'air'
         && wallProbe !== 'unknown' && wallProbe !== 'air';
     if (!roomFound) {
@@ -5104,6 +5185,8 @@ export async function fillRoomWithChests(bot, options = {}) {
         spots.push({ x: x0 + dx, y: CHEST_Y, z: z0 + 1, wall: 'north', facing: 'south' });
         spots.push({ x: x0 + dx, y: CHEST_Y, z: z0 + OUT - 2, wall: 'south', facing: 'north' });
     }
+    // 东西两侧的箱位：从 z0+3 起、到 OUT-3 结束（跳过南北两排箱位所占的 1..2 与 OUT-2..OUT-1）。
+    // 这个 3 是"相对两端的固定偏移"，不是绝对坐标，所以 innerSize 改了仍然正确。
     for (let dz = 3; dz < OUT - 3; dz += 2) {
         spots.push({ x: x0 + 1, y: CHEST_Y, z: z0 + dz, wall: 'west', facing: 'east' });
         spots.push({ x: x0 + OUT - 2, y: CHEST_Y, z: z0 + dz, wall: 'east', facing: 'west' });
@@ -5358,10 +5441,18 @@ export async function isSafeHere(bot, x = null, y = null, z = null) {
 
     let nearHazards = 0;
     try {
-        const scan = wmCollectHazards(bot, { radius: 8 });
-        nearHazards = scan.length;
+        // ★ S37：collectHazardsCached 过去是**死代码**（全树只有定义处 1 命中）——
+        //   于是缓存永不填、`resetHazardCache()` 空转（!forgetHazards 清了也不起作用），
+        //   而这里每次重枚举一次（半径 64 约 183ms）。现在改成走它：
+        //   缓存与记忆（store.hazards）真正生效，`!forgetHazards` 也终于有意义。
+        //
+        //   ★ 判据必须看 **blobs 里落在这 8 格范围内的块**，不能看"这次新扫到几个"：
+        //     命中缓存时 fresh=0，若按 fresh 计数就会把"记得的岩浆"报成"安全"。
+        const scan = collectHazardsCached(bot, { radius: 8 });
+        nearHazards = (scan.blobs || []).filter(b =>
+            b.x0 <= pos.x + 8 && b.x1 >= pos.x - 8 && b.z0 <= pos.z + 8 && b.z1 >= pos.z - 8).length;
         if (nearHazards > 0) {
-            reasons.push(`${nearHazards} lava/fire block(s) within 8 blocks (enumerated, not sampled)`);
+            reasons.push(`${nearHazards} lava/fire block(s) within 8 blocks (enumerated${scan.fromCache ? ', from memory cache' : ''})`);
         }
     } catch (err) { /* 枚举失败就只靠上面的采样 */ }
 

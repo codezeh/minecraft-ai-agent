@@ -25,7 +25,11 @@ export function getNearestFreeSpace(bot, size=1, distance=8) {
             for (let z = 0; z < size; z++) {
                 let top = bot.blockAt(empty_pos[i].offset(x, 0, z));
                 let bottom = bot.blockAt(empty_pos[i].offset(x, -1, z));
-                if (!top || !top.name == 'air' || !bottom || bottom.drops.length == 0 || !bottom.diggable) {
+                // ★ S45a：`!top.name == 'air'` 是 **恒 false** 的死检查 —— `!` 先算，
+                //   `(!top.name) == 'air'` 里布尔永远不等于字符串 'air'（与第28条 useToolOn
+                //   的 `!x === 'creative'` 是同一族坑）。于是这整个守卫从来没拦过任何东西：
+                //   第一个 air 位置就被当成"size×size 的空地"返回了。
+                if (!top || top.name !== 'air' || !bottom || bottom.drops.length == 0 || !bottom.diggable) {
                     empty = false;
                     break;
                 }
@@ -52,8 +56,23 @@ export function getBlockAtPosition(bot, x=0, y=0, z=0) {
      * let blockAbove = world.getBlockAtPosition(bot, 0, 2, 0); since minecraft position is at the feet
      **/
     let block = bot.blockAt(bot.entity.position.offset(x, y, z));
-    if (!block) block = {name: 'air'};
-       
+    if (!block) {
+        // ★ S45b：这个"假方块"过去只有 name —— 而调用方会读 `.diggable` / `.drops`
+        //   （例如上面的 findEmptyPosition 就是），拿到 undefined 再往下走就会在别处炸
+        //   （`bottom.drops.length` → TypeError: Cannot read properties of undefined）。
+        //   既然它是"空气"，就把空气该有的字段补齐，语义与真 Block 一致。
+        block = {
+            name: 'air',
+            displayName: 'Air',
+            type: 0,
+            boundingBox: 'empty',
+            diggable: false,
+            harvestTools: {},
+            drops: [],
+            position: bot.entity.position.offset(x, y, z),
+        };
+    }
+
     return block;
 }
 

@@ -182,17 +182,54 @@ export function readLitematic(filePath) {
     };
 
     // 统计非空气方块 —— 直接用 0-based 内部坐标遍历，和 getBlock 口径一致
+    //
+    // ★ S45c：这是**同步全盒遍历**，100×50×100 ≈ 50 万次 getBlock（每次还要线性扫
+    //   regions）。两个问题：
+    //     ① 没有上限 —— 一张超大的蓝图会把主线程按住好几秒（心跳一超时就断线）；
+    //     ② `getBlock` 在坐标落不进任何 region 时返回 null，这里当成"空气"跳过，
+    //        于是**结构读坏了/包围盒算错了**的结果是"静默变成一张空蓝图"，
+    //        上层只会看到 totalBlocks 很小甚至 0，却不知道是解析出了问题。
+    //   现在：超过 MAX_SCAN_VOXELS 直接报错（不猜）；并统计"读不到"的比例，
+    //   超过一半说明 region 数据根本对不上包围盒 —— 同样报错，不再静默给空蓝图。
+    const MAX_SCAN_VOXELS = 2_000_000;
+    const voxels = size.x * size.y * size.z;
+    if (voxels > MAX_SCAN_VOXELS) {
+        throw new Error(
+            `Schematic too large to inspect: ${size.x}x${size.y}x${size.z} = ${voxels} voxels ` +
+            `(limit ${MAX_SCAN_VOXELS}). Split the build into smaller schematics.`);
+    }
+
     const blockCount = {};
     let totalBlocks = 0;
+    let unreadable = 0;
     for (let x = 0; x < size.x; x++) {
         for (let y = 0; y < size.y; y++) {
             for (let z = 0; z < size.z; z++) {
                 const b = getBlock(x, y, z);
-                if (!b || b.name === 'minecraft:air' || b.name === 'minecraft:cave_air') continue;
+                if (!b) {
+                    // 落在所有 region 之外：可能是"该区域本来就没数据"，也可能是包围盒算错。
+                    // 只记账，最后按比例判定（见下）。
+                    unreadable++;
+                    continue;
+                }
+                if (b.name === 'minecraft:air' || b.name === 'minecraft:cave_air') continue;
                 blockCount[b.name] = (blockCount[b.name] || 0) + 1;
                 totalBlocks++;
             }
         }
+    }
+
+    // 越界过多 = region 数据与包围盒对不上（旧行为是静默变空蓝图）
+    if (unreadable > 0 && unreadable > voxels / 2) {
+        throw new Error(
+            `Schematic bounding box does not match its region data: ` +
+            `${unreadable}/${voxels} positions fall outside every region. ` +
+            `The file is probably corrupt or uses an unsupported layout.`);
+    }
+    if (totalBlocks === 0) {
+        throw new Error(
+            `Schematic contains no non-air blocks (${voxels} voxels inspected). ` +
+            `Refusing to treat an empty blueprint as a valid build plan.`);
     }
 
     return {
