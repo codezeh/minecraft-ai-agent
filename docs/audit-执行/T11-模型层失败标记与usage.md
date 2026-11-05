@@ -140,6 +140,18 @@
    结果：该文件 eslint **23 → 0**，棘轮回到 **278 ≤ 278**。
    教训值得写进流程：**"桩函数别写 async"** —— 这是三个人这轮同时踩的坑。
 
+0-b. **顺手查清一次 `unit_all` 假红（不是本任务的缺陷，但值得记）**：
+   收尾时 `unit_all` 出现过一次 `❌ board_open_migrate_unit (exit 1)` / `❌ board_orphan_parent_unit`，
+   而**单独跑它们都是全绿**（8/8、23/23），再跑整个 `unit_all` 又是 **90/90 通过**。
+   原因在 `tools/board_open_migrate_unit.mjs:30`：
+   ```js
+   const DIR = join('tmp', 'board-open-test');   // ← 固定路径
+   rmSync(DIR, { recursive: true, force: true }); // ← 开跑先删掉
+   ```
+   **固定目录 + 开跑先删** ⇒ 同一台机器上两路 `unit_all`（我并发跑了两条）会互相删对方的 fixture，
+   表现成"随机红"。这跟队长记的「门禁不支持并发写」是同一类问题，只是从 `preflight` 蔓延到了测试。
+   修法（留给 board 那一路，不在本任务范围）：`mkdtempSync` 或把 `process.pid` 拼进 `DIR`。
+
 1. **`agent.js` 侧的消费点**（`routeResponse`、response 预算）按分工归 T32 —— 我只保证 prompter 不再把失败当回答。
 2. **统一 `withRetry`**：本任务只给三个裸 fetch 加了最小退避，没有抽象重试框架（第三批）。
 3. **`vllm.saveToFile()` 死代码**：见 §6，删/接需要先确认无人计划调用。
