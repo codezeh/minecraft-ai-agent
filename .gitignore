@@ -87,3 +87,18 @@ logs/
 # 需要复现时照 probes/*.mjs 里的用法重跑即可，不要指望从这两个目录里"恢复"。
 /docs/audit/probes/r1/
 /docs/audit/probes/run/
+
+# ---------- git-rescue 归档：只留判据，其余刻意排除 ----------
+# docs/git-rescue-20261105/ 是 6 个已 drop 的 stash 的补丁导出（stash 对象已不存在，
+# 这批补丁是唯一副本）。归档裁决（2026-11-06，t9）：
+#
+#   入库：README.md（来历说明 + 处置记录）、stash-5.patch（"scafoldingBlocks 要 item id"
+#         这条判据唯一现存的原始文字，对应 bug 已于 ac477f3 修复）
+#   排除：stash-0..4.patch —— 内容是同一件事的 5 份近似重复（私有配置清理），
+#         效果早已落地（现行 .gitignore / docs/README.md 已有），且不含口令/密钥。
+#         价值低但**删了不可恢复**，故不删除、留工作区由用户决定。
+#
+# 排除是**故意的**，不是忘了提交（与 probes/r1|run 同一原则）。
+# 自检：git check-ignore -v docs/git-rescue-20261105/stash-0.patch
+# 若用户确认清理：可直接 rm 这 5 个文件；判据已随 stash-5.patch 入库，不会丢。
+/docs/git-rescue-20261105/stash-[0-4].patch

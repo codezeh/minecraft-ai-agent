@@ -108,7 +108,10 @@ t6 列出的混乱项，t7 已分类处置。**下表是最终状态，不再是
 | 探针源码（证据本体） | 8 个 t19/t20 探针 `.mjs` + 4 份 R1 终审报告 + 第20条文档 = **13 个** | ✅ **已入库**（`fa6f29d`） | `git ls-files docs/audit/probes/` 由 **17 → 25** |
 | 运行产物（非证据） | `probes/r1/`(11M，含嵌套 `.git`) + `probes/run/`(14M) = 25M | ✅ **已 gitignore**（见 §7） | `git check-ignore -v` 有命中 |
 | 规程/清单更新 | `REVIEW-PROTOCOL.md`、`verify-checklist.md` | ✅ **已提交**（`c29c5be`） | 工作区不再有这类未提交改动 |
-| stash 补丁归档 | `docs/git-rescue-20261105/` | ⏳ **保持未提交，待 captain 与用户定**（见 §8） | 已写清是什么 + 建议 |
+| stash 补丁归档 | `docs/git-rescue-20261105/` | ✅ **已裁决并执行**（见 §8） | 只入库 `README.md` + `stash-5.patch`；`stash-0..4` 明确 ignore |
+| t8 证据 | `R1-收尾-拐杖-id错配.md` + `t8-gap-probe.mjs` | ✅ **已入库**（`b6b7032`） | 入库前扫密钥命中 0 |
+
+**外层仓未提交条目：18 → 0**（t7 处置 18 条，t8 又产生 2 条证据 + 1 个 stash 目录，t9 归零）。
 
 ### 5.1 `mindcraft/tmp/` 里的探针会被静默丢弃（**仍未解决**）
 
@@ -164,7 +167,12 @@ git status --short --ignored | grep -E "probes/(r1|run)/"
 
 ---
 
-## 8. `docs/git-rescue-20261105/` 是什么（**待裁决：未提交、未删除**）
+## 8. `docs/git-rescue-20261105/` 是什么（**已裁决并执行，2026-11-06 t9**）
+
+> **处置规则（一句话）**：本目录**只入库 `README.md` + `stash-5.patch`**；
+> `stash-0..4.patch` 走 `.gitignore` 明确排除、不删除、留工作区由用户定。
+> 依据：`stash-5` 是"item id vs block id"判据唯一现存的文字，必须永久留档；
+> `0..4` 效果已落地、5 份近乎重复、误删不可恢复，故不代判。
 
 7 个文件、32K：`README.md` + `stash-0..5.patch`。
 **当前 `git stash list` 为空（0 条）** —— 这些 stash 对象**已被 drop，这 7 个补丁是现存的唯一副本**；
@@ -215,17 +223,23 @@ pathfinder 判定"没有垫脚材料"，**拒绝规划需要垫脚的路径**。
 **为什么值得单独立项**：这正是 captain 说的"几个月后才发现丢了"——
 修复写在 stash 里、stash 被 drop、补丁躺在文档目录没人看，而线上 bug 一直健在。
 
-### 8.3 建议处置（**最终由 captain 与用户定**）
+### 8.3 最终处置（**已执行，2026-11-06 t9**）
 
-| 对象 | 建议 | 理由 |
+| 对象 | 处置 | 理由 |
 |---|---|---|
-| `stash-0..4.patch` | 确认无用后删除（或只留 `stash-4` 作原始件） | 效果已落地、无密钥、5 份近乎重复 |
-| `stash-5.patch` | **不要删**。按 §8.2 单独立项修复；修好后可只作历史留档 | 它记录了**仍然存在**的真 bug 的原始诊断 |
-| 整个目录 | 若采纳"入库留档"：只提交 `README.md` + `stash-5.patch` 两个即可 | 32K 不大，但 5 个重复补丁是噪音 |
+| `README.md` | ✅ **已入库**（`b6b7032` 后的归档提交） | 没有它，`stash-5.patch` 就是"来历不明的 diff" |
+| `stash-5.patch` | ✅ **已入库** | 唯一记录"item id vs block id"判据的文字；对应 bug 已于 `ac477f3` 修复 |
+| `stash-0..4.patch` | ❌ **不入库（已 gitignore），也不删除** | 效果已落地（现行 `.gitignore`/`docs/README.md` 已有）、5 份近乎重复（`stash-1..4` md5 全同）、不含密钥；但**删了不可恢复**，故留工作区由用户拍板 |
 
-> ⚠️ 特别标注：`stash-5` 是**唯一**记录了"item id vs block id"判据的文字，而该判据今天仍在犯。
-> 丢掉它 = 下次还得从头再查一遍 blockId=9 / itemId=28 这种坑。
-> **属"价值不明但可能有用的代码改动"**，按 captain 要求特别标出。
+`.gitignore` 条目：`/docs/git-rescue-20261105/stash-[0-4].patch`（与 `probes/r1|run/` 同一原则：
+**排除必须有明确条目，不能靠"忘了提交"**）。
+自检：`git check-ignore -v docs/git-rescue-20261105/stash-0.patch` 应有命中，
+而 `stash-5.patch` / `README.md` 必须**不**被命中（已实测）。
+
+> ⚠️ 特别标注：`stash-5` 是**唯一**记录了"item id vs block id"判据的文字，而该判据当时仍在犯
+> （现已由 `ac477f3` 修复）。丢掉它 = 下次还得从头再查一遍 blockId=9 / itemId=28 这种坑。
+> 另：原 README 里 `git apply …/stash-5.patch` 的恢复命令**已失效**（`atom_move.js` 已被重构掉，
+> `makeMovements` 现住 `nav_pathfinder.js:28`），该补丁的价值是**判据的书面记录**，不是"可直接打上"。
 
 ---
 

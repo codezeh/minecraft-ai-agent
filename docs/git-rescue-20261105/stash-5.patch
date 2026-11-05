@@ -1,0 +1,58 @@
+diff --git a/src/agent/library/atom_move.js b/src/agent/library/atom_move.js
+index 3d9e621..81ea846 100644
+--- a/src/agent/library/atom_move.js
++++ b/src/agent/library/atom_move.js
+@@ -24,10 +24,52 @@ function isFinitePos(p) {
+     return !!p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z);
+ }
+ 
++/**
++ * 适合当脚手架的实心方块。
++ * 选材口径与 `skills.js:1663` 的 goodScaffold 对齐，但**这里用 item id**（原因见 makeMovements）。
++ */
++const SCAFFOLD_ITEM_RE = /^(dirt|grass_block|cobblestone|stone|andesite|diorite|granite|deepslate|sand|gravel|netherrack)$|(_planks|_log)$/;
++
++/**
++ * 背包里真实可用作垫脚的方块 id 列表。
++ *
++ * ★ 必须返回 **item id**，不是 block id。
++ *   `movements.js:156-159` 的判定是 `item.type === id`，而 item.type 是 item id。
++ *   1.21.8 里 dirt 的 blockId=9、itemId=28 —— 混用就永远匹配不上，
++ *   表现出来是「搭桥静默失效」，最难查的那种。
++ */
++function scaffoldItemIds(bot) {
++    const ids = new Set();
++    let inv = [];
++    try { inv = bot.inventory?.items?.() ?? []; } catch { inv = []; }
++    for (const it of inv) {
++        if (!(it?.count > 0)) continue;
++        if (!SCAFFOLD_ITEM_RE.test(String(it.name ?? ''))) continue;
++        ids.add(it.type);
++    }
++    return [...ids];
++}
++
+ export function makeMovements(bot, { canDig = false, scaffold = false, allowVineClimb = false } = {}) {
+     const m = new pf.Movements(bot);
+     m.canDig = canDig;                    // 不许为走路挖穿建筑
+-    m.allow1by1towers = scaffold;         // 允许向上叠柱子（跨沟/上坎）
++
++    // ---- 搭桥 / 垫脚 ----
++    //
++    // ★ 不能只写 `m.allow1by1towers = scaffold`：
++    //   pathfinder 的 `scafoldingBlocks` 默认是 `[dirt, cobblestone]`
++    //   （movements.js:86-88），而且它**不检查背包数量**。
++    //   所以背包里一块土都没有时，A* 仍会规划一条永远搭不出来的桥。
++    //   `skills.js:1675-1683` 那套已经做了这个检查，`atom_move` 这里漏了
++    //   —— 典型「同一件事两个真相」（见 world_model.js 文件头）。
++    if (scaffold) {
++        const ids = scaffoldItemIds(bot);
++        m.scafoldingBlocks = ids;
++        m.allow1by1towers = ids.length > 0;   // 没方块就关掉，别规划不存在的桥
++    } else {
++        m.scafoldingBlocks = [];
++        m.allow1by1towers = false;
++    }
+     m.maxDropDown = 3;                    // 超过 3 格就绕
+     m.canOpenDoors = true;
+     m.dontMineUnderFallingBlock = true;
