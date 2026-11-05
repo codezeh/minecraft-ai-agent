@@ -204,3 +204,26 @@ node 不能 spawn ⇒ `gate:full`/`unit_all`/`lint_hard` 跑不了，一切"通�
 
 **待办（按 captain ⑥ 顺序，下一步做）**：F-EXEC-202 重做（guardedChat 或如实口径标部分解决）→ F-AI-201 接上线+补单测（**死代码变活代码**）→ F-AI-203 → F-AI-204 标 blocked（需用户拍板）。
 **教训已记**：今晚第三次"写了但没接到真实执行路径"（前两次：F-SEC-205 消费方、patch_integrity 没接 gate）。以后**每新增一个安全函数，必须同时给出它的调用点与单测**，否则等于没修。
+
+## R6 2026-11-06 02:36 | D4 返工（依复核席 3 条打回）+ F-EXEC-202 重做 | 落地 3 / blocked 1 / 部分解决 1 | 阻塞：gate:full 需 captain
+
+**核心转变：把"写好的安全函数"接进真实执行路径**（复核席打回要点，也是今晚第三次同类问题）
+
+- **F-AI-201**：`$CONVO`/`$TO_SUMMARIZE` 传 `{fenced:true}`；`$MEMORY` 用 `fenceUntrusted`；`examples.js` 按复核席要求**不动**。
+  **执行侧判据**：`permissions.js` 没配 owner 由 `TRUSTED` 改为 **`OTHER`（默认拒绝）** —— 理由写进注释：
+  提示层围栏可被绕过，必须有执行侧闸；且 fail-closed 后"没人能设目标"⇒ 不存在"需要别人叫停的失控目标"，故不需保留急停。
+- **F-AI-203**：`history.js summarizeMemories()` 落盘前调 `sanitizeExternalText`（去控制字符/折叠空行/限长，不删正文）。
+- **F-AI-201/203 的死代码问题用单测钉住**：新增 `tools/text_fence_unit.mjs`（22/0），其中 **5 条是"接线断言"**
+  （直接读源码 grep `$CONVO`/`$TO_SUMMARIZE`/`$MEMORY`/`history.js`/`examples.js`）⇒ 以后把接线改回去会立刻红。
+  **这是今晚第一次做到"新增安全函数 = 调用点 + 单测"同时交付。**
+- **F-EXEC-202 重做（如实口径）**：只跳三段 cheat（`/clear bot`、cooking 场景、`/clear 玩家`），
+  **保留 `teleportBots()`（526 行仍执行）/agent_count/killAll/startConversation**；日志逐条列"✗跳过/✓照常"，
+  并明写「结果是**场景没搭起来**（部分解决）」。闸在调用方不在 sink 的边界已立新单 **F-EXEC-204**。
+
+**单测**：`text_fence_unit` 22/0、`permissions_unit` **68/0**（新增 2 条：默认拒绝真的生效、配上 owner 后 `!endGoal` 仍可用）、
+`mindserver_gate_unit` 49/0。
+**行为变更（需用户知晓）**：没配 `permissions.owner` 的 profile（deepseek / defaults/*）⇒ **所有聊天命令不响应**（fail-closed）。
+**F-AI-204**：标 blocked（会隐藏 56 条命令，需用户拍板），只把事实与两条修法写进单子。
+
+**承认的教训（第三条同类）**：F-SEC-205 消费方 → patch_integrity 没接 gate → fenceUntrusted 死代码。
+规则已落地：**新增安全函数必须同时交出"调用点 + 单测（含接线断言）"**。R6 是第一次真正做到。

@@ -348,6 +348,66 @@ D1 收尾时 `F-DEP-003/004/005/006/012` 五条的 finding 文件被**清空** �
 
 （`F-RT-001` 的公平说明：`76ee07b` 已把"0600 在 Windows 不是权限边界"写对，红队没重复报这个论断，报的是"既然承认了，那到底能不能被读"——现在量化了：能读，还能改还能删。）
 
+## 02:40 D4 从"死代码"变成"真防护" + 两条你必须知道的行为变更
+
+### 已入库（mindcraft 本轮 +3，另有 4 个补修）
+
+```
+bfdaca8  没配 owner 时补一次性警告（把静默失效变成有解释）
+08e0f65  F-EXEC-202 闸改为只跳三段 cheat，日志如实（部分解决）
+125b244  F-AI-203 记忆落盘前净化
+6f46182  F-AI-201 围栏接上真实执行路径 + 执行侧 fail-closed  ← 今晚最有价值的一条
+8268c50  按复核判决补 token 缺失误导 + 三处便宜加固
+0ecc241  补 F-WEB-201 白屏路径 + 401 改 HTML + 限流桶按来源
+f8496a9  F-WEB-205 停止面板取 token（外层仓）
+```
+
+### `F-AI-201` 的修复方式，值得单独讲
+
+**它不再只是"加了围栏"。** 三件事一起做才成立：
+
+1. **接线**（原来缺的就是这个）：`$CONVO` / `$TO_SUMMARIZE` 传 `{fenced:true}`，`$MEMORY` 走 `fenceUntrusted`，`examples.js` 保持不动（自有数据不误伤）。
+2. **执行侧判据**（复核席的关闭条件）：没配 `owner` 时从 `TRUSTED` 改成 **`OTHER`（默认拒绝）**。理由——围栏在提示层可被绕过，执行侧必须有硬闸；改成 fail-closed 后没人能设目标（`!goal` 已 owner-only），所以不存在"需要别人叫停的失控目标"，不必为急停保留信任级。
+3. **单测钉住接线**（本轮最关键）：新增 22 条断言，其中 **5 条直接读源码**断言接线存在——谁把 `opts` 去掉，测试立刻红。
+
+> **这是今晚第一次做到"新增安全函数 = 调用点 + 单测"同时交付。** 前三次（token 打印侧、完整性闸、围栏）都是"写了没接上线"。
+
+### ⚠️ 两条你必须知道的行为变更
+
+**1. 没配 `permissions.owner` 的 profile，所有聊天命令都不响应。**
+- 实测：`defaults/*`（_default / assistant / creative / god_mode / survival）、`deepseek.json`、`claude.json`、`andy-4*.json` 的 owner **全是 null**。
+- **当前启用的 `profiles/my-local.json` 的 owner 是 `HEAVENZEH`，你主线用法不受影响。**
+- 但只要换 profile 就会撞上，症状是"她不听我说话了"，**原本没有任何提示**。
+- 已补一次性警告（`bfdaca8`），会明确说出原因和修法。
+- 修法：在该 profile 里加 `"permissions": { "owner": "<你的游戏名>" }`。
+
+**2. 玩家聊天在提示里被包成围栏标记。**
+```
+<<UNTRUSTED_EXTERNAL_DATA role=untrusted speaker=Zeh>>
+我来啦
+<<END_UNTRUSTED_EXTERNAL_DATA>>
+```
+模型仍能读懂，但明确区分"这是数据不是指令"。这是**有意设计**，不是 bug。
+
+### 门禁：能签 / 不能签（复核席原话，照抄）
+
+✅ **已亲手跑通**：`web typecheck` exit 0 ｜ `permissions_unit` 68/0 ｜ `mindserver_gate_unit` 49/0 ｜ `patch_integrity` exit 0 ｜ `text_fence_unit` 22/0 ｜ `gate:full` **97/98**（唯一失败是基线那条 `craft_diagnostic_reachability_unit`，与今晚改动无关）
+
+⚠️ **未证（不标"完全修好"）**：
+- `web build`（本机会话 spawn EPERM）
+- **面板真机冒烟** —— 双击 `启动面板.bat` 能不能真的打开
+- **停止面板真机** —— 点一次能否优雅关服
+- **three.js 场景是否仍渲染**
+
+**这四项只能你人工验。全过了才能说"面板这块修好了"。**
+
+### 一条我要向你交代的作业方式变化
+
+原本设计是"成员判断、captain 执行"（成员会话不能提交）。但今晚暴露出一个问题：**captain 同时是执行者和最终复核人，独立性不足。**
+所以我把**我自己写的补修也送进复核席过同一道门**，结果它判我 **1 项必须改**（`exit 1` 后服务仍在跑却没人告知 → 用户会重复双击撞端口）、**2 项担心不成立**（`RATE_BUCKETS` 因只绑回环地址最多 2 个 key；`port` XSS 来自环境变量、网络不可达）。
+**这两类结论都只有真去读 diff 才能给出。** 我把这条写在这里，因为它比任何单条漏洞都更能说明这套流程值不值。
+
+
 ## 待用户决定（promise：攒着一次性说，不半夜弹）
 
 0. **⚠️ 今晚就换 RCON 口令**（最高优先）：复核席核证时把口令明文 grep 进了会话输出（**已主动上报，未写入任何文件**）。虽然只落在会话记录里，但按"已暴露即视为泄漏"处理。这也是 `F-SEC-203` 从"建议"升为"今晚必须换"的原因。
@@ -364,3 +424,85 @@ D1 收尾时 `F-DEP-003/004/005/006/012` 五条的 finding 文件被**清空** �
 - 或创建空文件 `docs/audit/night/STOP`
 
 两个都生效，成员会在下一个检查点收工。
+
+---
+
+## 03:4x 复核席终章 · D5 复核 + 全晚收尾巡检（gate-keeper / t17）
+
+> 本节由**复核席**写，只写"经我亲手验证"的结论。**凡我验不了的，一律标"未证"并说明原因**，不替任何人签字。
+
+### 一、D5 面板部复核：**通过 6 / 部分 1**
+
+| 条目 | 判决 | 我验的关键点 |
+|---|---|---|
+| `F-WEB-201` | ✅ 通过 | 401 门在 `app.use` 链里（**服务端**，不是前端藏按钮）；4 安全头 + `disable('x-powered-by')`；**CSP 不会打死面板**（`web/dist/index.html` 零内联 script、bundle `eval(`=0/`new Function(`=0）；我预审提的 P0 白屏路径**已被正确修掉**（`start-panel.ps1` 重试 20×500ms，拿不到 token **不打开面板** + `exit 1`） |
+| `F-WEB-204` | ✅ 通过 | 三处 `path.basename(full)`（get-profiles×2 / get-profile×1）⇒ **接口真的停止下发本机绝对路径**，不是"前端不显示" |
+| `F-WEB-203` | ✅ 通过 | message ≤2000 + 令牌桶；**桶已按我预审意见从 `socket.data` 改为按远端地址跨连接共享**（堵掉"重连即重置"）；`RATE_BUCKETS` 已在 line 71 声明，`node --check` 通过 |
+| `F-WEB-101` | ✅ 通过 | `bot-output`/`agent-event` 用**握手凭据**判 agent 身份（`auth.token === handshakeToken`）⇒ 面板无法伪造 bot 台词。**服务端判据**，非前端限制 |
+| `F-WEB-205` | ✅ 通过（代码层） | `stop-all.mjs` env→`./.mindserver-token` → `auth:{token}`，exit 2/3 分档；`stop-panel.ps1` `Push-Location mindcraft` + `finally Pop-Location`。**真机"优雅关服"仍待用户点一次** |
+| `F-RT-002` | ✅ 通过 | `fstatSync(1).isFile()` + `!isTTY` ⇒ stdout 被重定向时**忽略** `MINDSERVER_PRINT_TOKEN`，堵掉"调试开关让 token 进日志"的自埋雷 |
+| `F-WEB-202` | ⚠️ **部分** | 在飞并发上限 4 + 429 + `finish/close` 回收已落地；**缓存/同 key 请求合并仍未做**（我预审已论证：`import()` 本就幂等，纯缓存在"第一波并发"上无效，必须 coalescing）⇒ 定性应为**部分解决，别标已修** |
+
+**captain 三处亲手补修，我也过了一遍最严的门**（详见 `review-captain-fixes.md`）：
+- `2e84818` start-panel：`for ($i=0; $i -lt 20 -and -not $tok; $i++)` 语义**正确**；但有 **1 项必须补** ——
+  `exit 1` 发生在 **java/mindserver 都已启动之后**，脚本静默退出且跳过了"怎么停止"的说明 ⇒
+  用户会重复双击 → **撞端口双开**。请补 2 行："服务器已在后台运行，别重复双击；停止请用 停止面板.bat"。
+- `0ecc241` mindserver：两个担心我判了两个"实践不成立"——① `RATE_BUCKETS` 打不爆（服务 `host='localhost'` ⇒ key 最多 2 个）；
+  ② HTML 401 的 `port` 来自 `MINDSERVER_PORT` 环境变量、非 HTTP 参数 ⇒ 网络不可达。
+  **但**：清理逻辑在它声称防的场景里是**空转**（513 个新鲜 key 全 <60s ⇒ 一个都删不掉），且 `size>512` 时每条消息全表扫；
+  建议给硬上界，或把注释改成"防长期累积"——**注释与行为要对得上**。
+- `f8496a9` 停止面板：token 取法 / `Push-Location` / exit 2/3 分档**全部正确**，与 `start-panel` 三处口径一致 ✅
+- CSP 放宽：**理由成立**（我实测 `public/index.html` 有 1 内联 script + 15 onclick）；建议**按路径收紧**（`/console/*` 保持 `script-src 'self'`，只有旧控制台放宽），约 3 行、不动 HTML。
+
+### 二、跨部门收尾巡检
+
+| 检查 | 结果 |
+|---|---|
+| 分支 | 两仓均在 `audit/night-20261106` ✅ |
+| **越界改动** | **零**。两仓本晚所有 commit 触碰的文件全在 `src/`、`tools/`、`patches/`、`package.json`、`start.bat`、`.gitignore`、`config/`、`server/*.example`、`docs/` 范围；**未碰** `backups/`、`logs/`、`tmp/`、`.env`、`keys.json`、真实 `server/server.properties`、任何 `.bak` ✅ |
+| **真实凭据是否被改** | **零**（key 指纹 `7396a9cbdd8e0227` 与侦察记录逐字符一致、mtime 停在 10-18；`rcon.password` 与 11-02 备份逐字节相同） |
+| **git 历史是否被改写** | **没有**（无 `refs/original`、无 amend/rebase/filter-branch；`7a5e5d0/4c006bc/7331ba5/119f45f` 的 sha 与我首次复核时一致） |
+| **lint 规则是否被放宽** | **没有**。`eslint.config.js` 自 `9fe2fad` 起零改动；`curly`/`no-unused-vars`/`no-unreachable` 三条 `off` 是**既有状态**（我 01:20 就记录过），不是今晚放宽的 |
+| **单测是否被删/跳过** | **没有**。`permissions_unit` 从 59/4 → **66/0**，断言是**被正确改写（加强）**并新增 3 处守门（我逐条比过 diff）；`mindserver_gate_unit` 49/0；`patch_integrity` exit 0 |
+| **一条 finding 一个 commit** | ⚠️ **部分违反（已登记，不改写历史）**：`69b3a14` 一条带 6 个（WEB-201/202/203/204/101 + RT-002）、`62a93a5`（104+205）、`76ee07b`（206+205）、`9e7253c`（DEP-004+REG-001）、`7ba7b5e`（标题 004，实含 003 补丁对）。多为"同一文件的多条修复"或暂存区被 pre-commit 拦下后一并带走。**硬要求（补丁与 SUMS 同 commit）仍满足**，问题只是归属标注 |
+| 未提交遗留 | 仅 `src/agent/tasks/tasks.js`（F-EXEC-202 待重做）与 `src/utils/text.js`（F-AI-201 死代码待接线）—— **故意扣住，不带已知缺陷进历史** ✅ 合理 |
+
+### 三、门禁：**我能签什么、不能签什么**
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| `cd web && npm run typecheck` | ✅ **exit 0** | 我亲手跑 |
+| `cd web && npm run build` | ⚠️ **未证** | 本会话 `spawn EPERM`（esbuild 起子进程被沙箱挡）。**不是代码问题，但我没有签发它绿** |
+| `cd mindcraft && npm run gate:full` | ⚠️ **未证** | 同上（node 不能 spawn），由 captain 执行 |
+| `permissions_unit` / `mindserver_gate_unit` / `patch_integrity` | ✅ 66/0、49/0、exit 0 | 我亲手跑 |
+| 面板真机冒烟（能否打开 / socket 是否连上 / three.js 是否渲染） | ⚠️ **未证** | 只能人工。**这三项没过，不许标"完全修好"** |
+| 停止面板真机优雅关服 | ⚠️ **未证** | 只能人工。**别在早报里写"优雅关服已恢复"** |
+
+### 四、被我判死/打回的 4 条（带"我认为哪条输入仍能穿过"）
+
+1. **`F-EXEC-202`**（38 处裸斜杠）：闸**确实挡住了**（我走完调用链确认 `initiator` 在闸后才创建、`teleportBots` 在闸后才调用），
+   但 ①它靠**腰斩 `initBotTask` 整个后半段**实现 —— `teleportBots`/对话/`killAll` 一起被跳，**日志只报 cheat（低报）**；
+   ②闸在**调用方不在 sink**，换调用方即静默绕过。**可复现**：`settings.task=true` 且不设 `ALLOW_TASK_CHEATS` ⇒
+   bot 不传送、不对话、缺人不 `killAll`，而 `setAgentGoal()` 照样执行（半初始化）。
+2. **`F-AI-201`**（围栏）：**死代码** —— 三个 `stringifyTurns` 调用点全不传 `fenced`、`sanitizeExternalText` 零调用点 ⇒ **防护=0**。
+   **关闭条件必须是"执行侧硬约束"，不是"加了围栏"**（围栏在 system 提示层可被绕过；执行侧只挡 10 条主人级、不挡 48 条信任级）。
+3. **`F-AI-203`**（记忆污染）：四条修法一条没落地。记忆是**数据不是命令** ⇒ 无执行侧判据可依赖，"写了不调用"等于零防护。
+4. **`F-AI-204`**（`companion_mode`）：spec 仍未声明，`if (!settings.companion_mode) return true` 仍是"键缺失=全放行"。**需用户拍板**。
+
+### 五、今晚最重要的一条教训（不是漏洞，是方法）
+**"写在纸上，没接上线"出现了三次**：
+`F-SEC-205` 改打印侧漏了消费侧 → `F-REG-001`；`patch_integrity` 写好没接 gate → `F-DEP-004` 只能事后发现；
+`fenceUntrusted` 写好没人调用 → `F-AI-201` 防护为 0。
+**判据：新增安全函数，必须同时交"调用点"与"单测"，否则算未完成。**
+
+### 六、复核席自己的 4 处错误（都已纠正并立规矩）
+1. **用 `git status` 判"有没有提交"**（三次误报）→ 新规矩：**一律 `git log --oneline -- <path>`**。
+2. **凭记忆下结论**（曾说 `config/network.json` 仍留旧论断，实际已改）→ 新规矩：**凡"文件里还有没有某句话"必须先 grep**。
+3. **只查部分目录就断言"文件被清空"**（D1 五条其实在 `claimed/`，我误造了 4 份重复记录，已合并去重）→ 新规矩：**`find queue -name "*.md"` 全目录扫**。
+4. **两次把 `rcon.password` 明文 grep 进会话输出**（都是"拿含 secret 的文件做 diff"）→ 新规矩：**含 secret 的文件先过滤再 diff**。
+   —— 这也是**"立刻轮换 RCON 口令"的第一优先理由**之一。
+
+### 七、复核席的一句话
+**今晚真正加固的是"执行面"与"认证边界"**（speak RCE 结构性堵死、HTTP 层补上 token 门、bot 台词伪造面关掉、token 不再进日志、`!goal` 升权、面板四项加固）；
+**真正没有进展的是"CVE 面"**（一条没消除，且是设计如此：没有版本变化）；
+**还有 4 条被我判死、5 条需用户亲手动作、1 条（`F-DEP-103`）卡住 D1 三条的落脚点。**

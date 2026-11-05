@@ -149,3 +149,17 @@ export function guardedChat(bot, cmd) {
 ### 四、可复现路径
 设 `settings.task = true`、**不设** `ALLOW_TASK_CHEATS`，起两个 bot 跑 cooking 任务：
 按日志会理解成"只不执行 /fill"；**实际** bot 不传送、不对话、缺人也不 killAll，而 `setAgentGoal()` 照样设目标。
+
+---
+resolution: **部分解决**（如实口径，patch-smith · 按 captain 裁决重做）
+上一版打回原因（复核席，我采纳）：① 函数开头直接 `return` 会连带跳过 `teleportBots()`/`agent_count`/`killAll()`/
+`startConversation` 等**非 cheat** 段，而日志只说"拒绝 cheat" ⇒ 照日志排障会得出错误结论；② 闸在调用方不在 sink。
+本次改法：
+- 只跳过**三段 cheat**：`/clear <bot名>`、cooking 场景搭建（8 条 /fill + /kill @e）、`/clear <玩家名>`
+- **保留**：等待、`teleportBots()`（tasks.js:526 仍执行）、agent_count 检查、killAll()、startConversation
+- 日志**逐条列出"拦住什么 / 什么照常"**，并明确写"结果是**场景没有搭起来**（部分解决，不是 cheat 被拦其它全好）"
+已知边界（写进代码注释与下面）：
+- 闸在**调用方**（`initBotTask`）不在 sink：`CookingTaskInitiator.*` / `Task.teleportBots()` 等公开方法自身无判据，
+  将来新增调用点会静默绕过 ⇒ **已单独立单 F-EXEC-204（guardedChat 下沉，标"待真机环境"）**
+- 其余 10 处 `/give` `/tp` 等未纳入本闸（captain 裁决只做这三段）；它们同样需要 `settings.task` 才可达
+verify: `ALLOW_TASK_CHEATS` 未设时启动 `!do cooking` → 日志出现三行"✗ 跳过"与一行"✓ 照常"，且 bot 仍会被 teleportBots 传送、不搭场景。

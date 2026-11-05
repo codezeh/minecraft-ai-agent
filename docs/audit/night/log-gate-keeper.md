@@ -442,3 +442,48 @@ Start-Process $panelUrl                # ← token 缺失时照样打开裸 /con
 
 ### 产出
 `docs/audit/night/review-prestage-3.md`（含"改完必须验证的最小清单"8 项，其中第 3/4/5 项只能真机验）
+
+---
+
+## R7 2026-11-06 03:2x–03:4x | t17 · D5 复核 + 全晚收尾巡检 + 复核 captain 三处补修
+
+### D5 复核：**通过 6 / 部分 1**
+- **F-WEB-201 通过**：401 门在 `app.use` 链（服务端）；4 安全头 + disable x-powered-by；
+  **CSP 不会打死面板**（dist 零内联 script、bundle `eval(`=0/`new Function(`=0 实测）；
+  **我预审提的 P0 白屏路径已被正确修掉**（start-panel 重试 20×500ms，拿不到 token 不打开 + exit 1）。
+- **F-WEB-204 通过**：三处 `path.basename(full)` ⇒ 接口真的不下发绝对路径（非前端隐藏）。
+- **F-WEB-203 通过**：message ≤2000 + 令牌桶；**桶已按我预审改为按远端地址跨连接共享**（堵掉重连绕过）；
+  `RATE_BUCKETS` line 71 已声明、node --check OK。
+- **F-WEB-101 通过**：bot-output/agent-event 用握手凭据判 agent 身份（服务端判据）。
+- **F-WEB-205 通过（代码层）**：token 取法/pushd/exit 2-3 分档全对；真机优雅关服待用户。
+- **F-RT-002 通过**：`fstatSync(1).isFile()` + `!isTTY` ⇒ 重定向下忽略打印开关，堵掉自埋雷。
+- **F-WEB-202 部分**：在飞上限 4 + 429 + finish/close 回收已落地；**缓存/同 key 合并仍未做**（我预审已论证纯缓存对第一波并发无效）。
+
+### 复核 captain 三处补修（`review-captain-fixes.md`）：**不打回，1 项必须补**
+- `2e84818` start-panel：`for ($i=0; $i -lt 20 -and -not $tok; $i++)` **语义正确**（比较优先级高于 -and）；
+  半截读取风险真实但小 ⇒ 建议 `$t.Length -eq 36` 硬判据（UUID 定长）；
+  **必须补**：`exit 1` 发生在 java/mindserver 都已启动之后 ⇒ 服务在后台跑却不告知、且跳过"怎么停止"说明
+  ⇒ 用户会重复双击撞端口。补 2 行提示。
+- `0ecc241` mindserver：两个担心判"实践不成立"——① `RATE_BUCKETS` 打不爆（`host='localhost'` ⇒ key 最多 2 个）；
+  ② HTML 401 的 `port` 来自 `MINDSERVER_PORT` env、非 HTTP 参数 ⇒ 网络不可达。
+  **但**清理逻辑在它声称防的场景里**空转**（513 个新鲜 key 全 <60s ⇒ 一个删不掉），且超限时每条消息全表扫
+  ⇒ 建议给硬上界，或把注释改成"防长期累积"（**注释与行为要对得上**）。
+- `f8496a9` 停止面板：token 取法 / Push-Location / exit 2-3 分档**全部正确**，与 start-panel 口径一致 ✅
+- CSP 放宽：**理由成立**（实测 public/index.html 1 内联 script + 15 onclick）；建议按路径收紧（/console/* 保持 script-src 'self'），约 3 行。
+
+### 全晚收尾巡检
+- 分支 ✅ / **越界改动 0**（未碰 backups/logs/tmp/.env/keys.json/真实 server.properties/.bak）/
+  **真实凭据 0 改动**（key 指纹逐字符一致）/ **git 历史未改写** / **lint 规则零改动**（3 条 off 是既有）/
+  **单测无删无 skip**（permissions_unit 59/4→66/0 且断言加强）
+- **一条 finding 一个 commit：部分违反**（69b3a14 自带 6 条、62a93a5/76ee07b/9e7253c/7ba7b5e 各 2 条）—— 已登记不改写历史
+- 未提交仅 `tasks.js`（F-EXEC-202 待重做）与 `text.js`（F-AI-201 死代码），故意扣住 ✅
+
+### 门禁：我能签什么
+- ✅ 我亲手跑：`web typecheck` exit 0、`permissions_unit` 66/0、`mindserver_gate_unit` 49/0、`patch_integrity` exit 0
+- ⚠️ **未证**：`web build`（spawn EPERM）、`gate:full`（node 不能 spawn）、面板真机冒烟、停止面板真机
+  ⇒ **这三项没过，不许标"完全修好"**
+
+### 产出
+- `docs/audit/night/review-captain-fixes.md`（三处补修的逐条裁决）
+- `docs/audit/night/NIGHT-REPORT.md` 追加「03:4x 复核席终章」（不覆盖 captain 的滚动报告）
+- D5 七条已归档 verified/（201/202/203/204/205/101/RT-002），各含 `## review`
