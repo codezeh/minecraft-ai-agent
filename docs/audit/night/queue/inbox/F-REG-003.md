@@ -59,6 +59,14 @@ evidence: |
   - (b) **只是有人改了 patch 忘了更新 SUMS**（正常的开发中间态，重跑 `--write` 即可）。
   两者都表现为"机器起不来 + 说你可能被投毒"，最容易诱发的自救是**把这段检查注释掉**——
   那等于把 F-DEP-004 的整个价值扔掉。
+
+  ## 四、在途改动核对（2026-11-06 02:35，避免复核时看错状态）
+  patch-smith 正在改 `start.bat`，我看过 diff：它**新增了安装前预检**（`--no-version-check`），
+  文案里加了一句 `do not just rebuild the baseline`，并把安装后的失败文案改成
+  `patches/ drifted or not applied`。这**部分**回应了本节第三条（给了"别直接重建基线"的告诫），
+  但**没有**解决核心问题：仍然无法区分"基线过期（正常中间态，该跑 `--write`）"
+  与"真的被篡改（该停）"，两者依旧是同一句 `may be tampered or missing` + `exit /b 1`。
+  ⇒ 本条的第一条建议（接进 `npm run gate`）与第三条建议（错误分类 / 不同 error code）**仍然需要**。
 exploitability: |
   攻击者视角：无直接收益。
   开发/运维视角：这是一个**failure-mode 设计问题**——安全闸如果"误报一次就让人想关掉它"，

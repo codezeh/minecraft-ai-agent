@@ -281,3 +281,100 @@ F-WEB-203（限流 20 行 + message 长度上限）→ F-WEB-202（缓存 + 并�
    该文件本就在 `.gitignore` 里（`bots/_board/`），且 `openBoard` 是既有启动路径、无副作用；
    但**如实登记**：这是我今晚唯一写到的运行时状态，除此之外零写入。
 4. 临时端口探针全部已 taskkill（18080–18089 无 LISTENING 残留，只有 TIME_WAIT 客户端套接字）。
+
+## R6 2026-11-06 02:00–02:40 | 消费方审计（regression，防自己改坏自己）| 4 条 finding（1 high / 2 medium / 1 low）| 无阻塞
+
+**做了什么**
+- 逐个 commit 读 diff（mindcraft 7 个 + 外层 3 个），不看摘要；再对每个"改动点"做
+  "谁在消费它"的全仓搜索（排除 node_modules / .agent-teams / docs 噪音）。
+- 三处用了实测而不是读码：`patch_integrity.mjs` 真跑（exit 0）、`server-net.mjs show` 真跑（exit 0）、
+  贴图白名单拿 **minecraft-data 的真实名字集**（1416 items + 1105 blocks）做匹配测试。
+- 顺手清掉了我自己 D5 留下的污染：`.tmp_probe/d5srv.log` 与 `d5probe2.log` 里
+  **存着两枚完整 token 明文**（那是 F-SEC-205 修复**之前**的实例打的），已 `rm` 删除并复验目录只剩 `npmcache/`。
+  （d5probe3.log 是修复后实例，只有指纹——顺带证明修复生效。）
+
+**结论（写入 queue/inbox/）**
+
+| id | sev | 一句话 |
+|---|---|---|
+| F-REG-001 | medium | F-SEC-205 只改了打印侧，两处提示仍在教用户"从启动日志里拿 token"（`mindserver_proxy.js:57`、`start.bat:122`），而日志已无 complete token ⇒ `start.bat` 用户**面板无路可开** |
+| F-REG-002 | **high** | F-DEP-005/012 把安装改成 `npm ci`，但 `package-lock.json` **仍被 `.gitignore:4` 忽略且未入库**（`git ls-files` = 0）⇒ 新机器/新 clone 上 `npm ci` **必失败**，start.bat 失败即中止；同时使 D1 的"可复现+完整性"在新机器上归零 |
+| F-REG-003 | medium | 完整性闸**只拦启动不拦提交**（`patch_integrity` 不在 `npm run gate` 里），且要求 patch 与 SUMS 严格原子——漏一个就"整机起不来"，而报错文案是"可能被投毒"，最易诱发的自救是把它注释掉 |
+| F-REG-004 | low | `mindcraft/start.bat` **全仓无调用方**（面板走 `start-panel.ps1` 直起 main.js）；面板链在 `mindcraft/node_modules` 缺失时**没有任何安装兜底**，只会在 `Wait-Port 80` 上耗满 90 秒再退出 |
+
+**逐条落实 captain 的 7 个问题（含"查完没问题"的证明）**
+
+1. **F-SEC-205 消费方 —— 列全了，2 处有伤**
+   | 消费方 | 位置 | 结论 |
+   |---|---|---|
+   | agent 子进程 | `mindserver_proxy.js:46` env 继承 | ✓ 好（mindserver `:81` 先写 env 再 spawn） |
+   | 自动开浏览器 | `mindcraft.js:25 getHandshakeToken()` | ✓ 好（同进程） |
+   | 面板启动 | `start-panel.ps1:203-207` 读 `mindcraft/.mindserver-token` | ✓ 好，且**路径对得上**（mindcraft 以 `-WorkingDirectory mindcraft` 起，token 写 `process.cwd()`） |
+   | 停止面板 | `web/scripts/stop-all.mjs:8` | ✗ **已在 F-WEB-205 报过，不重复** |
+   | 单测 | `tools/mindserver_gate_unit.mjs:240` | ✓ 好（只断言源码含两个字符串） |
+   | 根 `*.mjs` / `*.bat` / `mindcraft/tools/**` | — | ✓ **零消费方** |
+   | **agent 侧错误提示** | `mindserver_proxy.js:57` | ✗ **F-REG-001** |
+   | **start.bat 收尾提示** | `start.bat:122` | ✗ **F-REG-001** |
+
+2. **F-SEC-104 白名单 —— 零误杀（实测，这是本轮最重要的"没问题"结论）**
+   ```
+   items   总数=1416  白名单拒绝=0
+   blocks  总数=1105  白名单拒绝=0
+   含非 [a-z0-9_] 字符的实际名字：共 0 个
+   大写名：0 个（且 itemName 在测试前已 toLowerCase，大写输入也安全）
+   ```
+   ⇒ `^[a-z0-9_]{1,64}$` **不会让任何真实物品/方块贴图变白**。
+   前端 `iconUrl()` 传的是 `encodeURIComponent(name)`，`name` 来自 minecraft-data 的 `item.name`（无命名空间），
+   所以不存在 `minecraft:xxx` 被误拒的问题。
+
+3. **F-SEC-206 `.gitignore` 兜底 —— 零误伤（实测）**
+   两仓分别用 `git ls-files` 对新规则做匹配：`\.env|\.pem$|\.key$|\.pfx$|\.p12$|id_rsa|id_ed25519|credentials.*\.json|secrets.*\.json`
+   → **根仓 0 命中、mindcraft 仓 0 命中**（已跟踪文件一个都没被新规则罩住）。
+
+4. **F-DEP-005 `clean:modules` 不删 lock —— 假设检查：找到一处文档级矛盾（并入 F-REG-002）**
+   `mindcraft/docs/architecture/09_crosscut.md:91,110` 至今写着
+   "`package-lock.json` 被忽略 | **提交它**（待做）"，而 `package.json:56` 已经 `reinstall: … && npm ci`。
+   **文档说"待做"、代码已经"必须做"** —— 且这条恰好是 F-REG-002 的根因。
+   `backups/` 与 `tmp/uplink/` 里的 `npm install` 是历史快照副本，不参与当前链路，不算。
+
+5. **F-DEP-012 `start.bat` 失败中止 —— 没有调用方依赖"失败也继续"**
+   `grep -rn "start.bat" --include=*.bat --include=*.ps1` → **无输出**；
+   `启动面板.bat` 走 `start-panel.ps1`，与 start.bat 完全独立 ⇒ 中止行为不会打断面板链。
+   （但也因此暴露 F-REG-004：修的那条路不是用户走的那条路。）
+
+6. **F-DEP-003 补丁替换 —— 没有第三个消费方（且 hunk 3 已在工作区重建）**
+   - hunk 1（`incorrect_for_wooden_tool`）→ 保留在 `mineflayer+4.39.0.patch` ✓；
+   - hunk 2（水算）→ 上游 `_getBlockAtEyeLevel` 确实覆盖；消费方只有 `block.digTime()`，
+     我们的代码 `act_dig.js`/`atom_read.js` 都只是**取 digTime 当预算**，没有依赖 `isInWater` 被强制 false 的语义 ✓；
+   - hunk 3（`place_block` 5s→0.5s）→ **复核席打回后 patch-smith 已按 (a) 重建**：
+     工作区 `patches/mineflayer+4.39.0.patch` 里能看到 `@@ -26,7 +26,7 @@` 与 `-      timeout: 5000, / +      timeout: 500,`
+     （HEAD 里还没有，属在途改动）。**第三消费方：无** —— 4 个 `placeAgainst` 调用点
+     （`act_pillar.js:103`/`act_place.js:159`/`skills.js:1335`/`tool_prep.js:317`）**都不传 `timeout`**，
+     所以新版 `placeAgainst` 的 `Promise.race` 分支根本没被用到，只受 mineflayer 内部超时支配
+     ⇒ 影响仅是"失败时多等 4.5 秒"，与复核单结论一致，**没有额外的功能断裂点**。
+
+7. **F-SEC-208 `_剩余风险` 字段 —— 零消费方影响（实测）**
+   ```
+   $ node tools/server-net.mjs show     → 正常输出两个服务器、✓ 已一致、exit=0
+   servers.main 键: _说明, _剩余风险, bind, nic, whiteList, enforceWhiteList, onlineMode, players
+   ```
+   `loadCfg()` 只读 `one.bind / one.nic / one.whiteList / one.onlineMode / one.players`，
+   不遍历字段名做校验（`Object.keys(want)` 里的 `want` 是 `desiredProps()` 现算的固定键集）
+   ⇒ `_剩余风险` 不会被当成配置项，也不会触发 unknown-key 报错。与已有的 `_说明` 同一模式。
+
+**给修补席的优先级**：**F-REG-002（删 `mindcraft/.gitignore:4` 那行 + 把 lock 入库，一次解决"新机器起不来"与"锁不稳定"）**
+→ F-REG-001（两处文案，10 分钟）→ F-REG-003（把 patch_integrity 接进 gate + 错误分类，防闸被注释掉）→
+F-REG-004（面板链补依赖预检，可与 003 同一窗口）。
+
+**阻塞 / 需 captain 知道**
+1. 本轮**只落 docs，零业务代码改动** ⇒ 无 `manifest-REG.md`。
+2. **提交提醒（最要紧的一条）**：patch-smith 现在工作区里有
+   `M patches/SHA256SUMS` + `M patches/mineflayer+4.39.0.patch` + `M tools/patch_integrity.mjs`。
+   前两个**必须同一个 commit**，否则 `start.bat:77` 的完整性闸会让机器起不来（F-REG-003）。
+   我已实测当前工作区这一对是自洽的（`patch_integrity` exit 0、"5 个补丁内容与基线一致"），
+   也核了 **HEAD 自身自洽**（`git show HEAD:...patch | sha256sum` = `f46c3e04…` = HEAD 的 SUMS 首行）。
+3. **我自己的一处污染已清除**（如实登记）：D5 遗留的 `.tmp_probe/d5srv.log`、`d5probe2.log` 内含**完整 token 明文**
+   （F-SEC-205 修复前的实例打的），已删除并复验。教训：**起真实例取 token 时，日志不要落在工作区**
+   （`/tmp` 在沙箱里时灵时不灵，我因此退到 `.tmp_probe`，反而把 token 写进了仓库目录树 —— 虽然被 gitignore）。
+   后续同类取证我会把 token 分支用 `MINDSERVER_PRINT_TOKEN` 固定值、或直接把日志 `/dev/null`。
+4. 本轮没起任何长驻实例（只跑了 `patch_integrity.mjs` 与 `server-net.mjs show` 两个只读命令），无端口占用。
