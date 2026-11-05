@@ -60,6 +60,9 @@
 
 ### 3.3 防误报硬规则
 
+0. **引用即回读**：凡在报告里写下"编号 / 行号 / 文件路径 / import 来源"的断言，必须**当场用 `grep`/`sed` 回读一次**再落笔。凭印象记得的一律不算证据。
+   - R1/R2 已踩三次同一个坑：①把 `S20` 记成 `S32`（没回读）②以为 `flow_eat` 用的是 skills 版 `waitUntil`（没查 import，实际是 `atom_wait.js`）③`reopenOrphanParent` 搜不到就判"回退了"（实际改名为 `blockOrphanParents`）。
+   - 判断"某调用点要不要改"时，**第一步永远是确认它 import 的是哪个模块的同名函数**。
 1. **死代码**：说"没人用了"之前必须 grep 全树（含 `tools/`、`tasks/`、`profiles/`、字符串与动态引用）。
    - 已知禁区（**不得判为死代码**）：`models/*.js` 由 `_model_map.js` 动态发现；`skills.js`/`world.js` 的导出是注入 SES 给模型的 API 面；`tasks/construction_tasks/*` 有离线生成器在用。
 2. **`shortcut:` 注释**：写明了限制的是已声明决策，不算发现——除非当前负载已经越过那个限制。
@@ -67,13 +70,29 @@
 4. **安全**：说密钥泄漏前用 `git ls-files` 核实是否真被跟踪；说面板暴露前先确认 bind 地址。
 5. **不加新层**：修法优先删代码。能一行改的不要写一个模块。
 
-### 3.5 探针本身可能给假绿（R1 实测踩到的坑，必看）
+### 3.5 探针本身可能给假绿（R1/R2 实测踩到的坑，必看）
 
-**锁冲突探针必须显式声明 `journal_mode`。** 用 WAL 模式 + `BEGIN EXCLUSIVE` 去测"另一个进程拿写锁"，读者**不会被阻塞**，`openBoard` 会 1 秒内返回 `rebuilt=false`，看上去"没问题"——实际是**根本没撞上锁**。
+**① 锁冲突探针必须显式声明 `journal_mode`。**
+用 WAL 模式 + `BEGIN EXCLUSIVE` 去测"另一个进程拿写锁"，读者**不会被阻塞**，`openBoard` 会 1 秒内返回 `rebuilt=false`，看上去"没问题"——实际是**根本没撞上锁**。
 
 正确做法：先 `PRAGMA journal_mode=DELETE` 再 `BEGIN EXCLUSIVE`，并**把耗时一起打出来**。真撞上锁的判据是「耗时 ≈ busy_timeout（本机 5000ms）」，只写 `rebuilt=false` 不算证据。
 
-同类风险适用于所有探针：**一个返回"没问题"的探针，必须先证明它确实能走到被测路径**。证明方法通常是——把修复回滚掉，同一个探针应该失败。
+**② 凡断言 exit 码，命令里不许有管道。**（R2 实测，能防一整类假 PASS/假 BLOCK）
+
+```bash
+node tools/lint_hard.mjs 2>&1 | tail -6 ; echo EXIT=$?     # ✗ EXIT=0 —— 取的是 tail 的码
+node tools/lint_hard.mjs > /tmp/g.txt 2>&1 ; echo EXIT=$?  # ✓ EXIT=1 —— 真值
+```
+
+同一个"跑不动就 fail-closed 的门禁"，带管道测出来是 **exit=0（假绿）**，去掉管道才是 **exit=1**。
+本团队 R2 险些因此把一个正确的门禁判成假绿。**测退出码时永远用重定向，不要用管道。**
+
+**③ `npx` 被 EPERM 时，可以直接跑包内 bin。**
+本环境 `npx` 起不来（npm 连 cache 都写不了），但
+`node mindcraft/node_modules/eslint/bin/eslint.js --config mindcraft/eslint.config.js <file>`
+**能跑**。所以"npx 不可用"不等于"没法做真注入"——不要因此退化成只给组件级证据。
+
+**④ 通用原则**：**一个返回"没问题"的探针，必须先证明它确实能走到被测路径**。证明方法通常是——把修复回滚掉，同一个探针应该失败。
 
 ### 3.4 不许出现的表述
 

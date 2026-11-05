@@ -102,3 +102,6 @@ logs/
 # 自检：git check-ignore -v docs/git-rescue-20261105/stash-0.patch
 # 若用户确认清理：可直接 rm 这 5 个文件；判据已随 stash-5.patch 入库，不会丢。
 /docs/git-rescue-20261105/stash-[0-4].patch
+
+# 终审用的嵌套测试仓（t26 测 pre-commit hook 的对照仓，本身是独立 git 仓）
+/docs/audit/probes/r2/hooktest/

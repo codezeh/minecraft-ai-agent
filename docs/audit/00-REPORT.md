@@ -618,7 +618,35 @@ skills.attackNearest(bot, '某个玩家名')   // → 真的用 op 账号打人
 
 # 三、小项（S1~S32 沿用 v1，S33~S45 为 v2 新增）
 
-> v1 的 S1~S32 原文全部保留（安全 S1~S3、任务板 S4~S13、导航 S14~S19、测试与门禁 S20~S24、运维 S25~S32）。**v2 新增如下**：
+> **⚠️ 更正（终审 R2 / t26，2026-11-06）：v1 的 S1~S32 原文并未保留 —— 一条都没有。**
+>
+> 本节此前写着「v1 的 S1~S32 **原文全部保留**（安全 S1~S3、任务板 S4~S13、导航 S14~S19、测试与门禁 S20~S24、运维 S25~S32）」，**这句话是假的**：
+>
+> ```bash
+> grep -cE '^\s*-\s*\*\*S[0-9]+\*\*' docs/audit/00-REPORT.md   # → 13（只有 S33~S45）
+> # S1~S32 范围内，定义为 0 处
+> ```
+>
+> **为什么会这样**：v1 的 552 行版本在 git 初始化之前就被 v2 覆盖，没有任何历史可回滚（最早快照 `22c41e8` 里的已是 1208 行的 v2.1）。原始文本**已不可恢复**。
+>
+> **所以本节实际只有 v2 新增的 S33~S45。** 正文有 10 处引用了不存在的 S 编号，逐个按"引用处上下文"还原如下（**从本报告自身用法反推的主题，不是原文**）：
+
+| 被引用的编号 | 正文引用处 | 从上下文能确认的主题 | 原文是否可恢复 |
+|---|---|---|---|
+| **S3** | `L785`「`maxJobLevel`/`levelForJobSource` **零调用方**（S3）」 | 等级判据两个函数零调用 → 权限模型实际不生效 | ❌ 遗失 |
+| **S4** | `L923`「任务板结构债（S4/S5/S6/S9/S10）」 | 任务板结构债之一 | ❌ 遗失 |
+| **S5** | `L923` 同上 | 任务板结构债之一 | ❌ 遗失 |
+| **S6** | `L786`「`migrateLocalToBoard` 零调用方（S6）」／`L923` | 板库迁移函数零调用，真正跑的是 `agent.js` 手抄一份 | ❌ 遗失 |
+| **S9** | `L323`「`S9` 早就写过'加一列会让所有新单被静默拒绝'」／`L923` | schema 无版本 → 加列后旧库被静默拒绝 | ❌ 遗失 |
+| **S10** | `L923` 同上 | 任务板结构债之一 | ❌ 遗失 |
+| **S17** | `L787`「`pruneFails`/`clearFail` 只有单测调用（S17）」 | `fail` 表只增不减，无人清理 | ❌ 遗失 |
+| **S20** | `L831`「S20（`test_codes` 的 DIED 是误报）修正」 | `test_codes` 把 `code:` 数据载荷当错误码 → 口径错 | ❌ 遗失 |
+| **S21** | `L769`「（第 5 条 / S21）」 | 已知 bug 以"带指纹 XFAIL"记账 → 指纹在就永久绿 | ❌ 遗失 |
+| **S29** | `L568`「第 12 条"S29 / usage 不可测"」 | 19 个适配器零 `usage` → LLM 成本不可测 | ❌ 遗失 |
+
+> **口径更正**：R1 附二把最后一个写成 `S32`，但 `S32` 全文**只出现在本节范围描述里**、从未被正文引用；实际第 10 个是 `S20`（`L831`）。真正的 10 个是 **S3/S4/S5/S6/S9/S10/S17/S20/S21/S29**。
+>
+> 这 10 个编号在正文中**一律保留原样**（删了会让人以为原文如此），定义以上表为准。**v2 新增如下**：
 
 **测试与门禁（v2 新增）**
 - **S33** `preflight.mjs:122-125` 的冒烟测试指向**已删除的模块** `tile_map.js` → 永远走 `:137-139` 的 `~ 非致命` 分支，名义 5 条实际 4 条。（源自 13）
@@ -1206,3 +1234,56 @@ Lean: -1766 行（保守下界 -1212 行）, -1 依赖  可能
 - 第 1 条已写出"**把 `allow_insecure_coding` 改成 `false` 不等于安全**"，并带 `schematic.js:52` 的 `path.resolve` 无校验 + `:56 fs.readFileSync` 的行号。
 - 三类模糊表述（"建议+考虑"、"或+许"、"可能+存在问题"）grep = **0**。
 - 未改任何源码（`cd mindcraft && git status` 为空）。
+
+---
+
+# 四、未收录的已知发现（终审 R2 / t26 补登，2026-11-06）
+
+> **这一节存在的原因**：R1 复核发现"表里的条目对不对"有人核，但**"表外还有没有"没人核**。反向清点后确认：
+> 第一轮 `03-interface-security.md` 有 21 条（I1~I21），其中 **9 条从未进入本报告编号**（43%）；
+> `13-models-agent-preflight.md` 的 **P3** 同样零落点。
+> 本节给它们**正式归属**，避免第三轮再漏。**这些条目不在 1~34 的分母内，所以"未修"不等于本轮失败**，
+> 但现状必须准确登记（判定口径：仍存在 / 已顺手修掉 / 已被其他条目覆盖）。
+
+## 4.1 第一轮 03 分册未收录的 9 条（I 系列）
+
+| 编号 | 内容 | 文件:行号 | 现状判定 | 证据 |
+|---|---|---|---|---|
+| **I6** | 完整提示词无条件打 stdout（含玩家私聊/记忆/人设） | `hyperbolic.js:47`（原） → 现 `hyperbolic.js:50` | **已修（R1 单列为 R1-a，`5d28800`）** | 现为 `if (process.env.LOG_PROMPTS === '1') console.log('Messages:', messages);`；门控**默认关**（`process.env.LOG_PROMPTS` 未设时为 `undefined`）。穷举 21 个适配器，除这一处外无任何适配器打印 `messages/pack/prompt`（deepseek/grok/mercury/qwen/vllm 五处早已注释）。**门控做得对** |
+| **I7** | 退出不回收 agent 子进程 → 孤儿进程 + 重复登录 | `agent_process.js:26-29`、`mindserver.js:438-447` | **仍存在** | `mindserver.js:438-447` 的 `shutdown` 仍是 `for(...) stopAgent()` + `setTimeout(2000) → process.exit(0)`，**不等待子进程 exit**；`stopAgent` 只发 SIGINT。agent 正在等模型 API 时被杀 → 孤儿仍占 MC 会话 |
+| **I8** | `settings_spec.json` 的 `type`/`options` 从不读取 → 类型错误静默传下去 | `mindserver.js:292-306`、`public/settings_spec.json:44-48` | **仍存在** | create-agent 的循环只读 `settings_spec[key].required` 与 `.default`，`type`/`options` 全仓零读取。（注：R1 第 2 条只补了 `profile.name` 格式校验、`auth_gate.js` 只做 `set-agent-settings` 白名单 —— 都不覆盖此项） |
+| **I14** | 日志目录用未校验的 `task_id` 拼路径 → 可写出 bots 之外 | `prompter.js:433-440` | **已顺手修掉（随 R1 第 2 条）** | 改为 `botDirOf(this.agent.name, path.join('logs', String(task_id)), path.resolve(__dirname,'../../bots'))`，而 `botDirOf`（`prompter.js:33-48`）现在 `path.resolve` 后**断言必须以 botsRoot 开头**，越界抛错。实测复刻：`'../../../../tmp/x'` → `THROW: 路径逃逸已拦截` |
+| **I15** | 60 行手写 loop-lag 探针，且最大值从不衰减（永久误报） | `utils/loop_lag.js:1-60`（`maxLagMs` 在 `:33-35` 只增不减） | **仍存在**（文件未改） | 仍是 `setInterval(500ms)` + `max(lag)` 单调累积；`loopLagStats()` 返回历史最大值，一次尖峰后永久"主线程被占住" |
+| **I17** | 贴图代理 `itemName` 只 `toLowerCase()` → `..%2f` 穿越读任意 `.png` | `mindserver.js:150`（取值）、`183-184`（拼路径） | **仍存在** | `const itemName = String(rawName).toLowerCase();` 无非字符集校验；`:183-184` `path.join(base,'items',`${itemName}.png`)` 后 `readFileSync`。限定同前：只能读 `.png`、端点仅本机（+现已在握手门后，见 I18 说明） |
+| **I18** | `bot-output`/`agent-event` 不校验发送方 → 面板内容可伪造 | `mindserver.js:471-478` | **仍存在（已被握手门部分缓解）** | 两个 handler 仍是原样 `io.emit(...)` 转发，不校验发送方是否那台 agent。**缓解**：R1 第 1 条加了 `io.use(makeHandshakeGate)`（`mindserver.js:103`），未持 token 的连接进不到 `io.on('connection')` → 攻击面从"本机任意进程"收窄到"已认证客户端" |
+| **I19** | `get-profiles` 交出绝对路径；`get-profile` 交出私有 profile 全文 | `mindserver.js:237`/`:245`（`path: full`）、`:263`（`raw`） | **仍存在（已被握手门部分缓解）** | `get-profiles` 仍返回 `path: full`；`get-profile` 仍返回 `raw` 全文（`profiles/my-local.json` 含中转站地址 + 私人人设）。同样受握手门收窄 |
+| **I21** | `prismarine-schematic` 未使用依赖 | `package.json:30` | **仍存在** | 依赖仍在（`^1.3.0`）；`schematic.js:9` 注释明写"为什么不用 prismarine-schematic" |
+
+**小结：9 条中「已修 2」（I6、I14）、「仍存在 7」（I7/I8/I15/I17/I18/I19/I21），其中 I18/I19 已被握手门部分缓解。**
+
+## 4.2 13 分册未收录的 1 条（反向覆盖核对查出）
+
+| 编号 | 内容 | 文件:行号 | 现状判定 | 证据 |
+|---|---|---|---|---|
+| **P3** | 适配器在 `catch` 里对 `err.message` 调 `.includes` → 若 reject 的不是 Error（字符串/`{status:429}`/`null`），**在 catch 内再抛 TypeError 并逃出 `sendRequest`** | `gpt.js:79`、`claude.js:51`、`groq.js:64`、`mercury.js:52`、`mistral.js:60` | **仍存在**（本报告零落点） | 五处均未改成 `String(err?.message ?? err)`。触发：`throw 'timeout'` → `:76` 判 false → `:79` `.includes` 于 `undefined` → TypeError。**比 P1 更糟**：P1 至少返回了兜底串，这里直接抛 |
+
+> 核对方法（可复跑）：`grep -n "二次抛\|err.message\|gpt.js:79" docs/audit/00-REPORT.md` → 三个都是 **0**；
+> 症状级 `grep -n "includes" docs/audit/00-REPORT.md` 只命中 `S44` 的 `profile.model.includes` 与一处扫描日志，均非本条。
+
+## 4.3 v1 遗失的 S 项
+
+v1 的 S1~S32 原文**整体遗失且不可恢复**（详见第三节开头的更正框）。正文实际引用了其中 10 个，已在该节表格中逐个给出"从上下文反推的主题"。**未引用的 S1/S2/S7/S8/S11~S16/S18/S19/S22~S28/S30~S32 连主题都无从考证**，只能声明遗失。
+
+## 4.4 反向覆盖核对的总账（本轮执行记录）
+
+| 来源分册 | 编号范围 | 数量 | 找到落点 | 未收录 |
+|---|---|---:|---:|---|
+| `07-deep-skills-atoms.md` | D1~D12 | 12 | 12 | 0 |
+| `11-skills-rest.md` | D13~D26 | 14 | 14 | 0 |
+| `13-models-agent-preflight.md` | P1~P15 | 15 | 14 | **1（P3）** |
+| `03-interface-security.md` | I1~I21 | 21 | 12 | **9**（本节 4.1） |
+| **合计** | — | **62** | **52** | **10** |
+
+> 核对细节见 `docs/audit/20-review-r2-report-integrity.md`。
+> **一条方法论教训**：D26 我第一次判"未收录"是错的 —— 主报告 `L720` 用**行号**（`skills.js:5080`）而不是函数名（`verifyChest`）描述它。
+> 规程要求"按**内容**找，不要只搜编号"是对的，但还要**按内容找时换多种措辞**（函数名/行号/症状）。

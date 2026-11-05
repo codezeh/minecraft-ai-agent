@@ -1,109 +1,96 @@
-# 复核清单 R1（终审第一轮 · 独立复核 · t23）
+# 复核清单 R2（终审第二轮 · 独立复核 · t28）
 
-对象：`docs/audit/17-review-r1-verdict.md`（终审 R1④ 汇总，49 项）+ 分册 `14`/`15`/`16` + 基线 `00-REPORT.md` v2.1。
-分支：`mindcraft` `audit/remediation-2026-11-05`（相对 `main` 20 提交 / 126 文件）。
-方法：`node` 直跑探针 / 在副本里注入后跑 preflight / `grep -n` 定位 / 读 `git diff --stat` 最大改动文件。
+对象：`docs/audit/21-review-r2-verdict.md`（终审 R2④ 汇总）+ 分册 `18`/`19`/`20` + R1 结论 `17-review-r1-verdict.md`。
+分支：`mindcraft` `audit/remediation-2026-11-05`（相对 `main` **26 提交 / 138 文件**）。
+方法：`node` 直跑探针 / 副本注入后跑门禁 / `grep -n` 定位 / 读 `git diff --stat` 最大改动文件。
 **未改 `mindcraft/` 任何文件**（`git status` 为空），只写 `docs/audit/`。
 
-> v2 复核（t14，针对基线报告）的台账已被本文件取代；v2 的结论仍有效，摘要见 §G。
+> R1 复核（t23）台账已被本文件取代；R1 的结论仍有效，摘要见 §G。
 
 ## 结论摘要
 
 | 项 | 结果 |
 |---|---|
 | **我的最终判定** | **`PASS`** —— 与主编**一致** |
-| 抽检条数 | **15 条**（要求 ≥12），含全部高危"真修好"项 |
-| 抽检结果 | **15/15 成立**，主编无虚报 |
-| 三态修正 | **1 处**（第 26 条：判定保留"已实测"，但其**覆盖面被写宽**） |
-| 需降级为"静态确证"的 | **0 条** |
-| 新增问题 | **2 条**（N1 提示词落盘未被任何编号收录；N2 正则词法盲区） |
-| 修出新问题 | **0 条**（专项查了新代码本身） |
-| 覆盖缺口是否诚实 | **诚实**（未把"未覆盖"写成"通过"） |
+| 抽检条数 | **12 条**（要求 ≥12），覆盖全部高危"真修好"项与 R1 遗留项 |
+| 抽检结果 | **12/12 成立**，主编无虚报 |
+| 三态需降级 | **0 条** |
+| 九条遗漏处置 | **全部合格**（0 条"下轮再说"、0 条悬空） |
+| 修出新问题 | **0 条**（读三处最大改动未发现新缺陷） |
 | BLOCK 项 | **0**（主编判定为空，我复核后仍为空） |
+| 新增方法学问题 | **2 条**（exit 码管道陷阱、npx 替代直跑法） |
 
-## A. 我自己跑的 3+ 个关键探针（不转述分册）
+## A. 我自己跑的 4 个关键探针（不转述分册）
 
 | # | 探针 | 我的真实输出 | 判定 |
 |---|---|---|---|
-| 1 | **沙箱逃逸** `node docs/audit/probes/t19-ses-escape-review.mjs` | `===== 汇总：BLOCKED=20  ESCAPED=0  其余(探测类)=6 =====`；`Object.prototype` 相关向量全部 `Function.prototype.constructor is not a valid constructor` | 逃逸**真关住** |
-| 2 | **板库重建** `node docs/audit/probes/t20-board-open.mjs schema <dir>` | `rebuilt = false`；`migration={"added":["interrupted","repeat_ms","dependsOn"],"from":1,"to":2}`；`行数 前=1 后=1` | **不丢数据** |
-| 3 | **门禁假绿** 副本注入 `fail('ZZPROBEUNREGISTERED')` 后跑 `preflight.mjs` | `✗ 有 1 个错误码没注册：ZZPROBEUNREGISTERED` + `← src\agent\library\query_classify.js` | 门禁**真抓**（非假绿） |
-| 4 | 同上的**词法盲区**测试 | 注入 `fail("T23_UNREGISTERED_CODE")`（双引号+数字）→ `✓ 错误码审计通过（扫到 33 个码，均已注册）`；改单引号仍漏；只有 `fail('ZZPROBEUNREGISTERED')` 被抓 | **N2：潜在缺口**（今天 0 处真实触发） |
-| 5 | 玩家财产四路径 | J1 调用点 3 处（`skills.js:1054/:1231/:4166`）；J4 守卫 `:1054` **在**作弊分支 `:1059` **之前**；J2 `'farmland'` 4 处全在 tillAndSow（`:2472/2490/2496/2512`）、**不在** `NATURAL_BLOCKS`；J3 `flow_collect_plan.js:115` | **四条都在** |
+| 1 | **沙箱逃逸** `node docs/audit/probes/t19-ses-escape-review.mjs` | `===== 汇总：BLOCKED=20  ESCAPED=0  其余(探测类)=6 =====` | 逃逸**真关住** |
+| 2 | **板库 schema 不匹配** `node docs/audit/probes/t20-board-open.mjs schema <dir>` | `rebuilt=false`；`migration={"added":["interrupted","repeat_ms","dependsOn"],"from":1,"to":2}`；`行数 前=1 后=1` | **不丢数据** |
+| 3 | **门禁错误码**（副本 `r1/t26` 注入 `fail("ZZT28DQ")` —— **双引号 + 含数字**） | `✗ 有 1 个错误码没注册：ZZT28DQ` + `← src\agent\library\query_classify.js` | R1 版**两个盲区同时命中**，说明 R1-b 真修 |
+| 4 | **lint 门禁** 注入 `undefinedVarT28` + `node mindcraft/node_modules/eslint/bin/eslint.js --config …` | `131:35 error 'undefinedVarT28' is not defined  no-undef`；另 `node tools/lint_hard.mjs` 跑不动时**真实 exit=1** | 规则**活着** + **fail-closed**，不是假绿 |
 
-副本来源：`bash docs/audit/probes/r1/make_sandbox.sh`（复现 t21 的实验环境）。
-
-## B. 抽检 15 条明细
+## B. 抽检 12 条明细
 
 | 编号 | 主编判定 | 我的复核 | 依据 |
 |---|---|---|---|
-| 1 | 真修好 | **成立** | 探针 1；`lockdown.js:56` `const sesLockdown = globalThis.lockdown`；`settings.js:38` `allow_insecure_coding: false` |
-| 3 | 真修好 | **成立**（⚠️我是 t20 作者，仅复跑不独立判定） | 探针 2 |
-| 8 | 真修好 | **成立** | 探针 5（四路径逐个读位置与顺序） |
-| 13 | 真修好 | **成立** | `skills.js:5636` `radius = 24`；`terrain3d.js:273-274` `SCAN_MAX_RADIUS=32` + `Math.min` |
-| 19 | 真修好 | **成立** | `grep process.exit agent_process.js` 2 处命中 = 注释(`:46`) + 字符串(`:142`)，**无真实调用** |
-| 20 | 部分修好 | **成立** | `canReach(bot,pos,max = 4.3)` 仍 `:1984`；主体未修 |
-| 21 | 真修好 | **成立** | `isAttackable` 已 import 进 `skills.js:26`，5 处引用；定义 `act_attack.js:40` |
-| 22 | 真修好 | **成立** | `skills.js:1655` `if (got && got.ok) return true;` |
-| 24 | 真修好 | **成立**（⚠️作者，仅复跑） | 探针 2 |
-| 26 | 真修好 | **成立，但覆盖面被写宽** | 探针 3 通过；探针 4 暴露词法盲区 → N2 |
-| 28 | 真修好 | **成立（行号已漂移）** | 实际在 `skills.js:2896`（不是分册写的 2760，2760 现为 `stringifyTrades`）：`bot.game.gameMode !== 'creative'` |
-| 29 | 真修好 | **成立** | `grep "bot.chat('/"` 仅 2 处、**全是注释**（`:13`/`:1063`）；`:1065` 已改 `command(bot,'setblock',…)` |
-| 30 | 真修好 | **成立** | `novita.js:51` `return await this.sendRequest(...)` |
-| 32 | 真修好 | **成立**（⚠️作者，仅复跑） | `heartbeat_loop.js` catch 在 `while` 内、不 rethrow；实跑 5/5 拍存活 |
-| S35 | 未修 | **成立** | `grep -c NAV_ALLOWED_ACT_FUNCS preflight.mjs` = **1**（仅定义、零使用） |
+| 第 1 沙箱 | 真修好 | **成立** | 探针 1（27 向量 20 BLOCKED / 0 ESCAPED） |
+| 第 3/24 板库 | 真修好 | **成立**（⚠️我是 t25 作者，仅复跑） | 探针 2 |
+| R1-b / 第 26 正则 | 真修好 | **成立（用最难一例）** | 探针 3 |
+| 第 11 lint 接线 | 部分修好 | **成立** | 探针 4 |
+| 第 20③ `waitUntil` 包装 | 真修好（最危险回归点） | **成立** | `atom_wait.js:25` 语义"返回非 undefined/null 即完成（false 也算）"；`skills.js:60-62` 把陷阱写进注释；**唯二真实调用点** `:529`/`:1674` **都写 `\|\| undefined`**；全仓无裸 `waitUntil(bot, () => cond)` |
+| R1-a / I6 提示词落盘 | 真修好 | **成立** | `hyperbolic.js:50` `if (process.env.LOG_PROMPTS === '1')`；全仓未注释的 `console.log('Messages:` **仅此一处** |
+| I7 孤儿进程 | 收录 R2-1（仍存在） | **成立** | `mindserver.js` 退出 = `stopAgent()` 循环 + `globalThis.process.exit(0)`，**不 await 子进程 exit**；全仓 `process.on('exit'/SIGINT/SIGTERM)` = **0** |
+| S35 死配置 | 已删 | **成立** | `grep -c NAV_ALLOWED_ACT_FUNCS preflight.mjs` = 1，且该条是**注释** `:835 "已删除"` |
+| 第 27 文档索引 | 部分修好（已收 2 份） | **成立** | `README:136` 架构交接-总 = 现况手册；`:137` 交接文档 = ⚠️ 历史快照 |
+| `ac477f3` 垫脚 id | 真修好 | **成立（我独立复算 id）** | `scaffold_blocks.js:99` 只用 `itemsByName`；实测 1.21.8 `dirt block=9/item=28`、`cobblestone 12/35`、`oak_planks 13/36` |
+| I14 `task_id` 穿越 | 已修 | **成立**（⚠️t25 已核） | `task_id='logs/../../../../tmp/x'` → `THROW 路径逃逸已拦截` |
+| 第 15 产出账 | 真修好 | **成立**（⚠️**作者，不作独立判定**） | 仅复述 t25 的 16/16 与 board 253 用例/0 失败，不背书 |
 
-## C. 新增问题（我提的，主编没抓到）
+## C. 反向检验：PASS 是否过松（五面）
 
-### N1（Should；**下一轮不收应升级为 BLOCK**）`hyperbolic.js:47` 无条件把完整提示词打到 stdout
-- `mindcraft/src/models/hyperbolic.js:47` = `console.log('Messages:', messages);` **未注释**。
-- 同仓 **5 个兄弟文件都已注释掉**：`deepseek.js:36`、`grok.js:37`、`mercury.js:43`、`qwen.js:35`、`vllm.js:51` —— 说明"这行不该活着"已是共识。
-- **本来有编号**：`03-interface-security.md:292` 「I6 每次模型请求都无条件把完整提示词打到 stdout（含玩家聊天与记忆）」。
-- **丢了**：`grep I6|Messages: 00-REPORT.md` → **0 命中**。I6 从未并入 00-REPORT 的 1~34 / S 题号 ⇒ 不在 R1 的 49 项、三份分册没审、主编 §3 没列。
-- **为什么现在必须提**：`hyperbolic.js` 本轮被改写 **+242 行**（`git diff --stat` 第 4 大），作者在其中加 429 退避与 `recordUsage`，**却没顺手删这行**。
-- 后果：选该模型时，每轮对话把完整 messages（玩家私聊原文、memory、profile 人设）无条件写进 `logs/mindcraft-console.log`；叠加第 12 条新加的 ISO 时间戳后更可检索。
-- 最小修复：删/注释该行，或 `if (process.env.LOG_PROMPTS === '1')`。
-- **不判 BLOCK 的理由**：基线即存在、且不在本轮 49 项范围内（流水线漏收）。按规程 §5，本轮 BLOCK 应限于"本轮变更引入或本轮范围内"。
-
-### N2（Should）`preflight.mjs:55-68` 错误码正则的词法盲区
-两个正则 `\bfail\(\s*'([A-Z_]+)'` 与 `\{…code:\s*'([A-Z_]+)'`：**只认单引号**、**`[A-Z_]+` 不含数字**。
-现状：`CODES` 38 个全部匹配（含数字的 0 个）；`src/` 里 `fail("` = 0 处、含数字的 `fail('` = 0 处 ⇒ **当前覆盖率实际 100%**，属潜在缺口。
-修法：正则加 `["']` 与 `[A-Z0-9_]`（4 个字符），并补一条"注入含数字码必须变红"的单测。
-
-## D. 覆盖缺口核对（主编 §3 是否诚实）
-
-| 主编列的缺口 | 我核对 |
-|---|---|
-| 第 1~34 缺 2 条（第 9、20） | ✅ 已列，且补审结论**不是**"通过"：第 9 = 真修好、第 20 = **部分修好（主体未修）** |
-| S 组缺 5 条（S33/34/35/36/39） | ✅ 已列；其中 **S35 = 未修**（诚实） |
-| `unit_all` 全量没跑过（EPERM） | ✅ 已列并注明"整套测试通过这件事本轮没有任何人证明过" |
-| 无多 bot / 第 6 条未端到端 / 第 14 条未压测 / 第 31 条 usage 仅 grep / socket 未实弹 | ✅ 全部已列 |
-
-**结论：没有虚假覆盖。** 唯一未列的缺口是 N1（不在编号体系内），属于**编号体系本身的洞**，不是主编隐瞒。
-
-## E. "修出新问题"专项（我自己查的新代码）
-
-| 新代码 | 我查什么 | 结果 |
+| 面 | 我的动作 | 结果 |
 |---|---|---|
-| `hyperbolic.js` 重试循环 | `maxAttempts=5`、`attempt++` 是否在循环首、429 是否会被无限重试/双重计数 | `maxAttempts = 5`（:40）、`attempt++` 在循环首（:45）、429 抛 `{status:429}` 由 `isRateLimit` 接住 → **无死循环、无双重计数** |
-| `breakBlockAt` 新守卫（J4） | 是否遮挡正常路径、是否在作弊分支之前 | 守卫在 `:1054`、`if (modesIsOn(bot,'cheat'))` 在 `:1059` → **两条路都过闸，正常路径未被误挡** |
-| `board_store.migrateBoardSchema` | 是否引入死锁/长事务；失败是否比原来更糟 | ALTER 逐条独立提交、判据用 `table_info` 实列而非 user_version ⇒ **可重入**；非 corrupt 走 rethrow（不删库）⇒ **最坏是无板可用，不丢数据** |
+| 沙箱真关 | 自己重跑 | 20/0 ✓ |
+| 板库不丢 | 自己造 schema 不匹配 | rebuilt=false、1→1 ✓ |
+| 门禁真绿 | 自己注入双引号+数字码 | 抓到并点名 ✓ |
+| lint 真接线 | 自己注入 no-undef | 规则活 + lint_hard fail-closed ✓ |
+| 138 文件有漏掉逻辑错误 | 读最大三处 `board_store(+626)` / `skills(+486)` / `preflight(+362)` | 未发现新缺陷；`waitUntil` 语义与 `scaffold` id 两个危险点都被作者主动处理 ✓ |
 
-## F. 行号漂移（给作者的实用提示）
+**未发现"该 BLOCK 却被放过"的项。**
 
-| 条目 | 分册/主编写的 | 实际 |
-|---|---|---|
-| 第 28 条 | `skills.js:2760` | **`:2896`**（2760 现在是 `stringifyTrades`）；同文件累计位移 ≈ +136 行 |
-| 第 8 条 J1 | 原报告称 2 个调用点 | 现为 **3 个**（新增 `:1054` = J4 守卫本体） |
+### C.1 两条方法学产出（建议进规程）
 
-## G. v2 复核（t14）结论摘要 —— 仍有效
+1. **`$?` 管道陷阱**：我第一次测 `lint_hard` 用 `node tools/lint_hard.mjs 2>&1 | tail -6; echo EXIT=$?` → 得到 **EXIT=0**，看上去像"门禁跑不动却返回成功"的假绿（BLOCK 级）。改成 `> file 2>&1; echo EXIT=$?` → **真实 exit=1**。`$?` 取的是管道末端（`tail`）的码。
+   → **凡断言 exit 码，命令里不许有管道。**
+2. **`npx` 不可用时的直跑法**：本会话 `npx` EPERM（npm 连 cache 都写不了），但 `node mindcraft/node_modules/eslint/bin/eslint.js --config mindcraft/eslint.config.js <file>` **可跑**。t26 当时只能给 lint 的"组件级证据"，用这个直跑法可以**真注入真跑**。
 
-当年总账：删 0 / 降 0 / 修正行号路径 4 / 修正数字 5 / 加强表述 2 / 删错误表述 1。
-六条必验断言：a 成立（eslint `5750:12 no-undef`）、b 成立（路径在 `src/agent/npc/item_goal.js`）、c 成立（`src/models/` 20 条 Parsing error）、d 成立（静态，绿路径 EPERM 不可执行）、e 部分成立（同一根因、断言对象不同）、f 成立（`adhoc` 零命中）。
-v2 当时 5 条"队长亲验被标已实测"已降级为静态确证——**本轮 R1 未重犯该错**（我逐条核过标"已实测"的 16 条，均有 `probes/` 或分册输出支撑）。
+## D. 九条遗漏项处置合格性
 
-## H. 我做/没做的边界
+| 编号 | 处置 | 合格 | 备注 |
+|---|---|---|---|
+| I6 | 已修 + 证据 | ✅ | 我独立复跑确认 |
+| I14 | 已修 + 证据 | ✅ | t25 实测 |
+| I7 | 收录 R2-1 | ✅ | 四项齐全（现状行号/定级/最小修法/验证法）；我复核"仍存在"成立 |
+| I8 | 收录 R2-2 | ✅ | 四项齐全 |
+| I15 | 收录 R2-3 | ✅ | 四项齐全 |
+| I17 | 收录 R2-4 | ✅ | 四项齐全 |
+| I18 | 收录 R2-5 | ✅ | 四项齐全，且如实写"部分缓解" |
+| I19 | 收录 R2-6 | ✅ | 四项齐全，如实写"部分缓解" |
+| I21 | 收录 R2-7 | ✅ | 四项齐全（Nice） |
 
-**做了**：重跑 3 个关键探针 + 1 个盲区探针；抽检 15 条；读 4 个最大改动文件中的 2 个（`hyperbolic.js`、`breakBlockAt` 区段）+ `preflight.mjs` 错误码段；核三份分册交集。
-**没做**：`unit_all` 全量（EPERM，`0/64` 不是失败）；socket 实弹（需启动 mindserver）；真机 `!stop` 端到端；250 单压测；真跑一次模型调用看 usage 数值。
-**利益冲突声明**：第 3/4/5/6/7/14/15/16/17/19/24/25/31/32 条是我 t20 的产出，本清单里对这 14 条只做"复跑证据 + 行号核对"，**不充当独立判定**。
+**"下轮再说"式敷衍：0 条。** 9 个 I 编号各出现 1 次、无重复无遗漏。另 R2-8/R2-9 是主编自查残留，也给了号——**比规程要求更好**。
+
+## E. 对「43% 不可追溯」的看法：**这是加分项**
+
+主编明写 `49+32+9+68=158` 自洽，且**没有**把 68 条含糊成"已合并"，而是写"**无法证明被覆盖**"并指出根因（v1/v2 从未建映射表）。
+→ 这 68 条是**报告体系的历史债，不是本轮代码风险**；不挡合并，但应作为下一轮元任务（补映射表）。
+
+## F. 做不到的
+
+- `unit_all` 全量（EPERM，`0/64` 不是失败）；socket 实弹（需启动 mindserver）；真机跑一局看任务板端到端。
+- 第 15 / 3 / 24 / I14 / I7 五项因**我是 t25 作者**，只做复跑与行号核对，**不充当独立判定**。
+
+## G. R1 复核（t23）结论摘要 —— 仍有效
+
+R1 总账：改判 5（把"队长亲验"的 5 条从已实测降为静态确证）/ 状态拆分 1 / 修正内容 1 / 未并入且未登记 4 / 补记缺口 2 / 删除 0；R1 编号稳定。
+R1 提的 N1（`hyperbolic.js:47` 提示词无条件落盘）与 N2（preflight 正则词法盲区）**已在 R2 的 `5d28800` 修掉**，本轮我复跑确认（探针 3 + §B 第 6 项）。
