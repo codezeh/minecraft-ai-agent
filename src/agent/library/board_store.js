@@ -1022,9 +1022,33 @@ export function convergeOrphanParents(db, opts = {}) {
     const now = opts.now ?? Date.now();
     const limit = Math.max(1, Math.floor(Number(opts.limit) || 200));
     const out = [];
+    // ★★★ 2026-11-05（t142，control 的审计抓出来的"时间炸弹"，我离线证伪了）：
+    //
+    //   原来写的是：
+    //     SELECT DISTINCT parentId FROM jobs WHERE parentId IS NOT NULL LIMIT ?
+    //   **无 ORDER BY、无 offset、也不过滤"父单是否还挂着"** ——
+    //   于是**每次都拿同一批前 200 个 parentId**。
+    //
+    //   而 `jobs` 表**从不删除**（全仓无 `DELETE FROM jobs`），只增不减 →
+    //   **distinct parentId 一旦 > 200，第 201 个之后的父单永远扫不到
+    //   → 退回"永久 running 且无人重试"，而且不报错。**
+    //
+    //   离线复现（250 组已完成父子对 + 2 个真该收敛的）：
+    //     总单数 504 ｜ distinct parentId **252** ｜ 实际收敛 **0** ｜ 目标父单仍 **running**
+    //   → 完全确认。
+    //
+    //   修法：**只取"还挂着的"父单**。这样结果集是"需要收敛的"，天然很小，
+    //   `LIMIT` 永远不会被"历史垃圾"占满；再按 rowid 倒序，保证新的优先。
     let rows = [];
     try {
-        rows = db.prepare('SELECT DISTINCT parentId FROM jobs WHERE parentId IS NOT NULL LIMIT ?').all(limit);
+        rows = db.prepare(`
+            SELECT DISTINCT p.id AS parentId
+              FROM jobs p
+              JOIN jobs c ON c.parentId = p.id
+             WHERE p.state IN (?, ?)
+             ORDER BY p.rowid DESC
+             LIMIT ?
+        `).all(JOB_STATE.RUNNING, JOB_STATE.READY, limit);
     } catch { return out; }
 
     const terminal = new Set([JOB_STATE.DONE, JOB_STATE.FAILED, JOB_STATE.BLOCKED, JOB_STATE.CANCELLED]);
