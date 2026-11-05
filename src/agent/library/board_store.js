@@ -997,6 +997,54 @@ export function reopenBlockedWithSatisfiedDeps(db, parentId = null, opts = {}) {
     return out;
 }
 
+/**
+ * ★★★ 2026-11-05（t140）：**兜底收敛 —— 扫出"子单全终态但父单还挂着"的父单。**
+ *
+ *   真机证据（第 59 跑轮 1，第一夜五个步骤首次全部走通）：
+ *     父单 `08_ngl` = **running**
+ *     子单 5 张 = done / done / done / done / done（全部终态）
+ *   → **`rollupParent` 没被触发，父单永远挂在 running。第一夜就差这一步。**
+ *
+ *   为什么只在 `board:finish` 里调 `rollupParent` 不够：
+ *     那是"**事件驱动**"的 —— 依赖"每张子单 finish 的那一刻，回头看父单"。
+ *     只要有一次时间窗没对上（最后一张 finish 时另一张还在 ready/running，
+ *     之后就再也没有 finish 事件了），父单就**永久卡住**，而且**没有任何东西会再来重试**。
+ *
+ *   → 需要"**最终一致**"的兜底：定期扫描，凡是
+ *     「state=running **且** 有子单 **且** 子单全部终态」的父单，重新 rollup 一次。
+ *     这是幂等的（rollupParent 自己会判断 allDone），重复调用无害。
+ *
+ *   ★ 只扫 `running`：`ready`/`paused` 的父单可能是在等新子单，不该被收敛。
+ *
+ * @returns {Array<object>} 被收敛的父单（只含真正 changed 的）
+ */
+export function convergeOrphanParents(db, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const limit = Math.max(1, Math.floor(Number(opts.limit) || 200));
+    const out = [];
+    let rows = [];
+    try {
+        rows = db.prepare('SELECT DISTINCT parentId FROM jobs WHERE parentId IS NOT NULL LIMIT ?').all(limit);
+    } catch { return out; }
+
+    const terminal = new Set([JOB_STATE.DONE, JOB_STATE.FAILED, JOB_STATE.BLOCKED, JOB_STATE.CANCELLED]);
+    for (const row of rows) {
+        const parentId = row?.parentId;
+        if (!parentId) continue;
+        const parent = getJob(db, parentId);
+        if (!parent) continue;
+        // 只处理"挂着的"父单：running 或 ready 都可能卡住（ready 是退避后的形态）
+        if (![JOB_STATE.RUNNING, JOB_STATE.READY].includes(parent.state)) continue;
+        const kids = db.prepare('SELECT state FROM jobs WHERE parentId = ?').all(parentId);
+        if (!kids.length) continue;
+        // 有活着的子单 → 还没到收敛时机
+        if (kids.some((c) => !terminal.has(c.state))) continue;
+        const r = rollupParent(db, parentId, { now });
+        if (r?.changed && r.parent) out.push(r.parent);
+    }
+    return out;
+}
+
 export function rollupParent(db, parentId, opts = {}) {
     const now = opts.now ?? Date.now();
     const parent = getJob(db, parentId);

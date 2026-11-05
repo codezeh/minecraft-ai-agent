@@ -24,6 +24,8 @@ import {
     // B3：预约（06 §9.2）+ 父子收敛（06 §9.1）
     reserve, release, renewClaims, expireClaims, listClaims, rollupParent,
     reopenBlockedWithSatisfiedDeps,
+    // ★ t140：兜底收敛（子单全终态但父单还挂着）
+    convergeOrphanParents,
     // B4：共享数据（06 §9.3）
     putShared, getShared, listShared, delShared, findItemInSharedChests,
 } from './board_store.js';
@@ -392,6 +394,14 @@ export function attachBoardServer(deps = {}) {
             for (const id of recovered) changed(getJob(db, id), 'lease-expired');
             // ★ B3：顺带清过期预约（bot 掉线后它的预约要自动释放，06 §9.2）
             try { expireClaims(db, now()); } catch { /* ignore */ }
+            // ★★★ t140：**父单兜底收敛** —— 见 `convergeOrphanParents` 的注释。
+            //   真机第 59 跑：第一夜 5 张子单全 done，父单却永远 running（就差这一步闭环）。
+            //   事件驱动的 rollup 只要漏一次时间窗，就再也没人重试 → 必须定期扫。
+            try {
+                for (const p of convergeOrphanParents(db, { now: now() })) {
+                    changed(p, 'rollup:sweep-orphan-parent');
+                }
+            } catch { /* 兜底失败不该让进程崩 */ }
         } catch { /* 扫描失败不该让进程崩 */ }
     }, SCAN_MS);
     try { scanTimer.unref?.(); } catch { /* 不让定时器阻止进程退出 */ }
