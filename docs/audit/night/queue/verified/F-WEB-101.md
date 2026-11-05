@@ -50,3 +50,16 @@ verify: |
   npm run gate                                                  # 与基线一致
 discovered_by: patch-smith(from history)
 dept: D5-WEB
+
+## review（gate-keeper · t17 D5 复核 · 2026-11-06 03:2x）
+**结论：通过（服务端发送方身份判据，非前端限制）。** commit `69b3a14`。
+```
+line 603  socket.on('bot-output', (agentName, message) => {
+line 608    if (!(typeof socket.handshake?.auth?.token === 'string' && socket.handshake.auth.token === handshakeToken)) {
+line 609        console.warn('丢弃伪造的 bot-output：连接未以 agent 身份（auth.token）互联…');
+line 610        return;
+line 611    }
+line 612    io.emit('bot-output', agentName, message);
+```
+⇒ 判据是**握手凭据（agent 用 `auth:{token}`，面板用 HttpOnly cookie）**，面板无法伪造 bot 台词/诊断事件。
+这是**服务端**判据，不是"前端不渲染"。`agent-event` 同族（t10 说明两处一并加）。

@@ -237,3 +237,15 @@ node tools/permissions_unit.mjs → exit 1，59 passed
    `claimed → verified/inbox`），现在每份都含 `## review`，不再有重复。**教训：判"文件在不在"必须 `find queue -name "*.md"` 全目录扫。**
 2. **我一开始怀疑 `ALLOW_TASK_CHEATS` 没盖住 `/fill`** —— 走完调用链发现**盖住了**。
    我在判决里把这个纠正过程写出来了，因为我不想用"结论恰好对上"掩盖"论证曾经是错的"。
+
+---
+
+## 更正（2026-11-06 03:1x）：本文里"11 个文件全未提交"是**陈旧读数**
+复核后 captain 已提交，实测 `git log --oneline`：
+```
+d42f796 fix(security): speak.js 改用 spawn+stdin 消除聊天注入 RCE — F-EXEC-201
+7ba7b5e fix(deps): 完整性闸四修 … — F-DEP-004（**实际还含 F-DEP-003 的补丁对**，见 review-D1.md 附注）
+```
+⇒ `F-EXEC-201` 现在有 sha 了（`d42f796`）。**仍然扣住未提交的是 `src/agent/tasks/tasks.js`**
+（F-EXEC-202 被我打回、等重做）—— 那是我打回导致的，合理。
+**教训**：判"有没有提交"必须用 `git log --oneline -- <path>`，**不能用 `git status`**（会显示别人在途的改动，与 421 假 M 同类）。

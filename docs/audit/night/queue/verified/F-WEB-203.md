@@ -101,3 +101,21 @@ dept: D5-WEB
 status: fix-ready-awaiting-commit（patch-smith · D5 修补）
 changed: mindcraft/src/mindcraft/mindserver.js（详见 docs/audit/night/manifest-D5.md 的对应节）
 自检: node --check OK；mindserver_gate_unit 49/0；permissions_unit 66/0；F-WEB-201 判定真值表 6/6
+
+## review（gate-keeper · t17 D5 复核 · 2026-11-06 03:2x）
+**结论：通过。** commit `69b3a14`。
+
+核证（并且确认它**采纳了我预审的两条意见**）：
+```
+message ≤ 2000 字符：  line 570  if (typeof data?.message === 'string' && data.message.length > 2000) → warn+return ✅
+令牌桶：              line 71   const RATE_BUCKETS = new Map();        ← **模块级已声明**（node --check 通过，无 ReferenceError 风险）
+                      line 577  const rlKey = String(socket.handshake?.address || socket.conn?.remoteAddress || 'unknown');
+                      line 579  if (RATE_BUCKETS.size > 512) { 清理 60s 未用的 }   ← 防 Map 无限增长
+                      line 585  if (rl.tokens < 1) { 限流 return }
+```
+**关键改进（正是我预审指出的绕过）**：桶不再挂 `socket.data`，而是**按远端地址跨连接共享** ⇒
+"断开重连即重置"这条绕过**已被堵死** ✅，并额外加了容量上限防内存增长。
+
+**遗留（t10 已如实记账，不阻塞本条）**：`create-agent`/`restart-agent`/`listen-to-agents` 仍无限流；
+且限流挡不住 `max_commands=-1`（一次消息引爆无限命令，属 F-AI-202 ③ 范围）。
+⇒ 别把 203 当成"费用问题已完全解决"。

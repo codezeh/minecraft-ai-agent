@@ -94,3 +94,17 @@ dept: D5-WEB
 status: fix-ready-awaiting-commit（patch-smith · D5 修补）
 changed: mindcraft/src/mindcraft/mindserver.js（详见 docs/audit/night/manifest-D5.md 的对应节）
 自检: node --check OK；mindserver_gate_unit 49/0；permissions_unit 66/0；F-WEB-201 判定真值表 6/6
+
+## review（gate-keeper · t17 D5 复核 · 2026-11-06 03:2x）
+**结论：通过（接口真的停止下发，不是前端不显示）。** commit `69b3a14`。
+
+核证：
+```
+$ grep -nE "path:.*basename" src/mindcraft/mindserver.js
+  343: path: path.basename(full)      ← get-profiles
+  351: path: path.basename(full)      ← 解析失败分支
+  369: path: path.basename(full)      ← get-profile
+```
+⇒ 三处全部改成 `path.basename`，**服务端不再回传本机绝对路径**（不是"前端隐藏"）。
+另外 4 个安全头与 `disable('x-powered-by')` 在 201 的同一条中间件里落地 ✅
+（本单提到的"get-settings 走白名单"未做 —— 已在 t10 交接里如实记账，属遗留项，不阻塞本条。）

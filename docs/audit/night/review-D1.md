@@ -204,3 +204,21 @@ $ 语义模拟（把 fs 打桩）→ 会动到的路径: [["rmSync","node_module
 ```
 **未做**：`gate:full`（本会话不能 spawn，按 captain 裁决由他跑）；`npm ci`（无安装权限）；
 未修改 `mindcraft/` 任何文件。
+
+---
+
+## 附注（2026-11-06 03:1x · 复核后登记，非改写历史）
+
+**`7ba7b5e` 这个 commit 标题写的是 `F-DEP-004`，实际还包含 `F-DEP-003` 的补丁对**
+（`patches/SHA256SUMS` + `patches/mineflayer+4.39.0.patch`），原因 captain 已说明：
+`F-DEP-003` 那次 commit 被 pre-commit 拦下（钩子扫**整个工作区**而非暂存区，当时另一位正在并发改
+`tasks.js`/`text.js`，那 4 处 lint 来自中间态），提交失败后文件留在暂存区，被下一次 `git commit` 一并带走。
+
+**对本复核结论的影响：无。**
+- `F-DEP-003` 的硬要求（补丁与 SUMS **必须同一 commit**）**恰好被满足了**，问题只是归属标注；
+- 我在 t13 复核 `F-DEP-003` 时验的是**补丁内容**（`patch -p1 --dry-run` + 实跑 + 逐行 diff），与 commit 边界无关；
+- captain 选择**如实登记、不改写历史**——我同意：我已按 sha 复核过这批，
+  `rewrite` 会让整条复核链失去锚点。错误用登记纠正，比用历史重写掩盖更可信。
+
+**给早上读报告的人**：不要把"`F-DEP-003` 没单独 commit"误读成"没修"。
+`7a5e5d0` 是补丁替换本体，`7ba7b5e` 里带的是**补丁与 SUMS 的同步更新**。

@@ -116,3 +116,18 @@ changed: web/scripts/stop-all.mjs（token 读取 env→文件 + auth:{token} + A
 自检: 无 token 目录实跑 → exit=2 + "这通常不是 mindserver 没开"；node --check OK；stop-panel.ps1 BOM 保住（ef bb bf）
 未验证: 带正确 token 的真实关服（需运行中的 mindserver，归 captain/用户早上点一次）
 see: docs/audit/night/manifest-D3.md §5
+
+## review（gate-keeper · t17 D5 复核 · 2026-11-06 03:2x）
+**结论：通过（代码层），但**真机验证归用户**。** 已在 D5 预审阶段核过，此处复核当前状态。
+
+```
+web/scripts/stop-all.mjs   : readToken() = MINDSERVER_TOKEN → ./.mindserver-token；拿不到 exit 2 并明确"这通常不是 mindserver 没开"
+                             AUTH_REQUIRED → exit 3，提示"服务器仍在运行，不要关窗口（会丢未刷盘存档）"
+scripts/stop-panel.ps1     : Push-Location (Join-Path $root 'mindcraft') + finally Pop-Location；exit 2/3 分档提示
+start-panel.ps1            : 读 mindcraft/.mindserver-token（与 stop-all 同一路径）⇒ 三处口径一致 ✅
+```
+cwd 链条我逐环验过：mindserver 由 `-WorkingDirectory …\mindcraft` 启动 ⇒ token 落在 `mindcraft\.mindserver-token`，
+stop-panel `Push-Location` 到同一目录 ⇒ 对得上。
+
+**caveat**：**真实的"优雅关服"（RCON stop 刷盘）只能由用户早上点一次 `停止面板.bat` 验证** ——
+我起不了真实例（node 不能 spawn）。**这条不验完，不许在早报里写"优雅关服已恢复"。**

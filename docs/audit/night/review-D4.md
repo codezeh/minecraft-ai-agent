@@ -183,3 +183,14 @@ recon 用的是"70 / 8"（差在是否把 `!do`/`!listSkills` 这类"登记未�
     git diff 扫空 catch / 换模型 / 重试（无）
 未做：gate:full（本会话不能 spawn）
 ```
+
+---
+
+## 更正（2026-11-06 03:1x）：本文两处事实需要更新
+1. **"13 个文件全未提交"是陈旧读数**。实测 `git log --oneline`：
+   `c8df8ce`（F-AI-202 !goal）、`d42f796`（F-EXEC-201）、`7ba7b5e`（F-DEP-004，含 F-DEP-003 补丁对）、
+   `9e7253c`、`7d15339`、`76ee07b` —— **六个 commit 都在**。
+   仍扣住的只有 `tasks.js`（F-EXEC-202 待重做）与 `text.js`（**F-AI-201 死代码待接线**）⇒ 与我的两条打回一致，合理。
+2. **`permissions_unit` 66/0 与 `mindserver_gate_unit` 49/0 已随 `c8df8ce`/`d42f796` 提交** ⇒ 我的"测试是加强不是删弱"结论
+   现在有 sha 可锚定。
+**教训**：判提交用 `git log`，不用 `git status`。

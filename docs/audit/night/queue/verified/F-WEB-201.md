@@ -130,3 +130,21 @@ dept: D5-WEB
 status: fix-ready-awaiting-commit（patch-smith · D5 修补）
 changed: mindcraft/src/mindcraft/mindserver.js（详见 docs/audit/night/manifest-D5.md 的对应节）
 自检: node --check OK；mindserver_gate_unit 49/0；permissions_unit 66/0；F-WEB-201 判定真值表 6/6
+
+## review（gate-keeper · t17 D5 复核 · 2026-11-06 03:2x）
+**结论：通过（服务端实现，非前端藏）。** commit `69b3a14`。
+
+核证（逐条对任务判据）：
+- **鉴权落在服务端**：401 中间件在 `app.use` 链里（`res.status(401)` 实测存在），并且**不是**靠前端路由守卫。
+  同时 `io.use(makeHandshakeGate)` 仍管 socket.io ⇒ 两条通道各自有门。
+- **安全头齐**：`X-Content-Type-Options`/`X-Frame-Options: DENY`/`Referrer-Policy`/`CSP` + `app.disable('x-powered-by')`（实测 4 处命中）。
+- **CSP 不会打死面板（我实测产物）**：`web/dist/index.html` **零内联 script**、bundle 里 `eval(`=0 / `new Function(`=0
+  ⇒ 不需要 `unsafe-eval`；`connect-src` 含 `ws:`、`img-src` 含 `data:`。
+- **我预审提的 P0 已被正确实现**（这条是我最担心的白屏路径）：
+  `scripts/start-panel.ps1` 现在**重试 20×500ms（10 秒）**读 token 文件；**拿不到就不打开面板**，
+  打印期望路径 + 常见原因 + `exit 1`（原文："拿不到握手 token，因此**没有**打开面板（打开也只会看到 unauthorized）"）✅
+- cookie 属性 `Path=/; HttpOnly; SameSite=Strict` ⇒ 全站生效。
+
+**caveat（不能由我签发）**：`npm run build` 在本会话仍 `spawn EPERM`（esbuild 起子进程被沙箱挡），
+`npm run typecheck` **exit 0 绿**。**面板真机冒烟（双击启动→能否打开→socket 是否连上）必须 captain/用户做**，
+我这边只能静态确认"打开面板.bat → start-panel.ps1 → token 文件"这条链是通的。

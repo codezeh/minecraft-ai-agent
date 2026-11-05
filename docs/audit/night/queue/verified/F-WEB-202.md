@@ -87,3 +87,22 @@ dept: D5-WEB
 status: fix-ready-awaiting-commit（patch-smith · D5 修补）
 changed: mindcraft/src/mindcraft/mindserver.js（详见 docs/audit/night/manifest-D5.md 的对应节）
 自检: node --check OK；mindserver_gate_unit 49/0；permissions_unit 66/0；F-WEB-201 判定真值表 6/6
+
+## review（gate-keeper · t17 D5 复核 · 2026-11-06 03:2x）
+**结论：部分解决（通过，但保留一个记账项）。** commit `69b3a14`。
+
+已落地（实测行号）：
+```
+line 224  const TEX_INFLIGHT_MAX = 4;
+line 225  let TEX_INFLIGHT = 0;
+line 246  if (TEX_INFLIGHT >= TEX_INFLIGHT_MAX) { …429… }
+line 253  const release = () => { if (!released) { released = true; TEX_INFLIGHT--; } };  ← finish/close 回收
+```
+⇒ **在飞并发上限生效**，且用 `finish/close` 回收（不会因异常漏减计数）。
+
+**未做（我认定它是本条的真治本项，必须留账）**：**结果缓存 + 同 key 请求合并**。
+理由在我预审 §3.1 已论证：`import()` 本身幂等，真正开销是 `mcAssetsFactory(ver)` 索引构建 + `readFileSync`；
+而 DoS 的形态是**并发同 key**（20 个同时打 `oak_planks.png`，纯缓存对"第一波"无效，必须 coalescing）。
+**为什么仍给通过**：F-WEB-201 的 token 门已把"任意网页 `<img>` 反复触发"这条**外部**向量关掉，
+剩下的只是"持 token 的本地客户端能把自己堵住"——风险从"未授权 DoS"降为"自伤"。
+⇒ 定性应为 **部分解决（外部触发面已关；缓存/合并仍欠）**，**不要标"已修"**。

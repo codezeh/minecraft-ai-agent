@@ -388,3 +388,57 @@ finding 建议把 `!goal` 与 `!endGoal` 一并升 OWNER_ONLY。**我认为 `!en
 
 ### 现场
 未修改任何仓库源码；未删除任何 finding（只 mv + 追加 review）；F-AI-202 → verified，201/203/204 留 inbox 并附打回意见。
+
+---
+
+## R6 2026-11-06 02:5x–03:1x | D5 修前预审（F-WEB-201/203/202）| 通过 0 / 待修 3（其中 201/203 代码已在工作区）
+
+### 前置发现（纠正 captain 的前提）
+三张单**不是"还没开始"**：`F-WEB-201`/`203` 代码**已写好在工作区**（`mindserver.js` 未提交，文件自述 fix-ready）；
+`F-WEB-202` **未实现**（只有一行注释，无缓存/无并发上限/无超时）。故 201/203 是"对已写代码的设计评审"。
+
+### 最有价值的一条：**201 会有一个确定的白屏失败路径（已真实存在，不是假设）**
+```powershell
+# scripts/start-panel.ps1
+$panelUrl = $panel                    # = http://localhost:8080/console  ← 无 token
+if (Test-Path $tokenFile) { … $panelUrl = "$panel?token=$tok" }
+else { Write-Host '[WARN] 未找到 .mindserver-token…' }    # ← 只警告，然后继续
+Start-Process $panelUrl                # ← token 缺失时照样打开裸 /console
+```
+⇒ `.mindserver-token` 缺失/为空时（首次启动失败、cwd 不对、**mindserver 自己就有"写 token 文件失败只告警不阻断"的降级分支**），
+脚本打开无 token 的 `/console` → 新 401 中间件 → **浏览器里只有一行 "unauthorized…" 纯文本**。
+比"打不开"更糟：**看起来像服务器坏了**。另有一次性读文件的时序坑（mindserver 还没写出 token 就读）。
+**建议**：① 拿不到 token 就别 `Start-Process`；② token 文件读取加重试（~10s）（两条缺一不可）。
+
+### 三个问题的答案
+1. **会不会打断 cookie 换发** → **不会**。顺序正确（换发中间件在前、鉴权在后），且鉴权同时接受 cookie 与 `?token=`；
+   `authCookieHeader` 是 `Path=/; HttpOnly; SameSite=Strict` ⇒ 全站生效 ✅
+2. **静态资源要 token 会不会打死面板** → **会**，且已有一个真实踩点（见上）。我建议**混合策略**：
+   **外壳与静态资源放行、`/settings_spec.json` 与数据仍要 token**。依据：recon 已核 bundle 里**零凭据**，
+   放行外壳不泄密；而 `settings_spec.json` 把 `allow_insecure_coding`/`task`/`speak` 这些**隐藏开关列成清单**，必须拦。
+3. **CSP 会不会打死 three.js / vite** → **不会，实测**：`web/dist/index.html` **零内联脚本**（只有外链 module script）；
+   bundle 的 `eval(`=0、`new Function(`=0 ⇒ **不需要 `'unsafe-eval'`**；`connect-src` 含 `ws:` ⇒ socket 通；
+   `img-src data:` ⇒ 贴图代理的 base64 通。**唯一需人工确认的是 three.js 运行时渲染**（已列入最小验证清单第 5 项）。
+
+### 202 的答案（captain 直接问的）
+**光缓存 `import('minecraft-assets')` 不够，必须有"同 key 请求合并"**：
+① `import()` 在 Node 里本来就幂等（模块注册表缓存）⇒ 缓存它解决的是不存在的问题；真正的开销是
+`mcAssetsFactory(ver)` 的资源索引构建 + `readFileSync`；② **纯缓存在"第一波并发"上完全无效**，而攻击形态正是并发同 key
+（20 个同时打 `oak_planks.png` ⇒ 20 个各跑一遍）；③ 还需并发上限 + 8s 硬超时（finding 实测"10 秒不返回"，现在连超时都没有）。
+给出最小实现骨架（缓存 → 合并 → 并发上限 → finally 清理 → 504）。
+
+### 203 的三个设计问题（代码已在，但有缺口）
+① 桶键是 `socket.data.__rl`（**按连接**）⇒ **重连即重置，可无限绕过**；建议改 `remoteAddress` 或加全局桶。
+② 只挂 `send-message`；`create-agent`/`restart-agent`/`listen-to-agents` 无限流（finding 原文要求）。
+③ **不误伤 `narrate`**：我 grep 了全部 22 个 `socket.on(...)`，**没有 narrate 入站事件** ⇒ 零误伤。
+另：限流挡不住 `max_commands=-1`（一次消息引爆无限命令），别把 203 当费用问题的完整解法。
+
+### 我自己的两处更正
+1. **"13 个文件全未提交"是我的错**（第三次同病）。`git log` 实测六个 commit 都在
+   （`7ba7b5e/9e7253c/d42f796/c8df8ce/7d15339/76ee07b`），真正扣住的只有 `tasks.js` 与 `text.js`。
+   **根因与 421 假 M 同类：用 `git status` 判提交**。已定规矩：**判提交一律 `git log --oneline -- <path>`**。
+2. **`7ba7b5e` 含两个 finding**（标题 F-DEP-004，实际含 F-DEP-003 补丁对）已登记进 `review-D1.md` 附注，
+   并同步更正了 `review-D3.md`/`review-D4.md` 里的陈旧读数。**不改写历史**——我已按 sha 复核，rewrite 会让复核链失去锚点。
+
+### 产出
+`docs/audit/night/review-prestage-3.md`（含"改完必须验证的最小清单"8 项，其中第 3/4/5 项只能真机验）

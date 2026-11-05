@@ -186,3 +186,21 @@ node 不能 spawn ⇒ `gate:full`/`unit_all`/`lint_hard` 跑不了，一切"通�
 
 **④ 队列纪律**：本轮全程只 `mv`，未覆盖/未删除任何 finding 文件。附一条事实更正：D1 那 5 条**未曾被清空**，
 它们当时在 `claimed/`（4.1~4.8KB 完整）；SEC 那批后来由复核席移入 `verified/`，也在。所以"inbox/done 里没有"≠"文件被销毁"。
+
+## R5 2026-11-06 02:26 | D5 面板部修补（t10）+ F-RT-002 | 落地 6 条（其中 202 为部分解决）/ 提交 0（归 captain）| 阻塞：node 不能 spawn ⇒ 真机冒烟归 captain
+
+**落地（全部在 `mindcraft/src/mindcraft/mindserver.js`，另 start.bat 一行）**
+- `F-WEB-201`（high）：HTTP token 门 + 安全头 + `disable('x-powered-by')`。判定真值表 **6/6**（无 token 一律 401；对 query/cookie 放行）。不打死面板的推理写进 manifest §1（首屏 `?token=` → 种 cookie；`/socket.io/` 由 engine.io 接管不经 express）。
+- `F-WEB-204`（low）：`path: full` ×3 → `basename`（绝对路径不再回给客户端）。
+- `F-WEB-203`（medium）：`send-message` 加 **message ≤2000** + **30 条/10 秒令牌桶**（无依赖）。
+- `F-WEB-202`（medium）：**部分解决** —— 外部触发面已被 201 关掉；另加**在飞并发上限 4**（res finish/close 回收）。结果缓存未做（性能项，非安全判据）。
+- `F-WEB-101`（我 t12 的历史单）：`bot-output`/`agent-event` 加**发送方身份判据**（只有 `auth.token`==handshakeToken 的 agent 连接能转发）⇒ 面板客户端不能再伪造 bot 台词/诊断事件。判据成立依据：agent 走 auth payload，面板走 Httponly cookie。
+- `F-RT-002`（红队，captain 列最高优先）：**我们自己埋的雷** —— t8 为修 F-REG-001 在 start.bat 推荐 `MINDSERVER_PRINT_TOKEN=1`，而 stdout 被重定向进 logs ⇒ 照做即让 F-SEC-205 复活。修：node 侧**stdout 是文件就忽略该开关**（`fstatSync(1).isFile()` + isTTY 判断）并 warn 指回 `.mindserver-token`；start.bat 侧删掉建议、改成反向提示。
+
+**自检**：`node --check` OK；`mindserver_gate_unit` 49/0；`permissions_unit` 66/0；start.bat 括号 23/23（与 HEAD 一致）；真值表脚本 `tmp/test-web201.mjs` 6/6。
+**未做（记账）**：202 缓存、203 的 listen-to-agents 上限、204 的 get-settings 白名单、全部真机冒烟。
+
+**队列**：F-WEB-201/202/203/204 已 `mv` 到 claimed/（**只 mv**）；F-WEB-205 在 t8 已交。
+
+**待办（按 captain ⑥ 顺序，下一步做）**：F-EXEC-202 重做（guardedChat 或如实口径标部分解决）→ F-AI-201 接上线+补单测（**死代码变活代码**）→ F-AI-203 → F-AI-204 标 blocked（需用户拍板）。
+**教训已记**：今晚第三次"写了但没接到真实执行路径"（前两次：F-SEC-205 消费方、patch_integrity 没接 gate）。以后**每新增一个安全函数，必须同时给出它的调用点与单测**，否则等于没修。
