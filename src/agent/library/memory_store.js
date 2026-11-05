@@ -23,6 +23,9 @@
 
 import fs from 'fs';
 import path from 'path';
+// ★ T17：bots 根唯一可取处（可被 `MC_BOTS_ROOT` 覆盖，测试据此做进程隔离）。
+//   以前这里自己 `path.resolve(process.cwd(), 'bots', …)` —— 与 bot_paths 各算一份。
+import { botsRootOf } from './bot_paths.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -61,7 +64,8 @@ export function registerNamespace(name, defaultFactory) {
 
 function memoryDir(bot) {
     const agentName = bot?.username || 'agent';
-    return path.resolve(process.cwd(), 'bots', agentName, 'memory');
+    // ★ T17：走 `botsRootOf()`（默认为 `./bots`，测试可指到自己的临时目录）
+    return path.resolve(botsRootOf(), agentName, 'memory');
 }
 
 export function storeFileFor(bot, namespace) {
@@ -159,7 +163,7 @@ export function updateStore(bot, namespace, mutator) {
  * @returns {{migrated:boolean, from?:string, parts?:string[]}}
  */
 export function migrateFromLegacyLandmarks(bot) {
-    const legacyPath = path.resolve(process.cwd(), 'bots', bot?.username || 'agent', 'landmarks.json');
+    const legacyPath = path.resolve(botsRootOf(), bot?.username || 'agent', 'landmarks.json');
     try {
         if (!fs.existsSync(legacyPath)) return { migrated: false };
         const raw = fs.readFileSync(legacyPath, 'utf8');

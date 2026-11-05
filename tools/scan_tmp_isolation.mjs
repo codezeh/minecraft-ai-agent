@@ -89,25 +89,117 @@ export function stripComments(src) {
 // ② 判据
 // ───────────────────────────────────────────────────────────────────────────
 
-/** 固定 tmp 路径的三种写法（会命中的都是"与别人共用一个目录"的形态） */
-const FIXED_TMP_PATTERNS = [
-    { id: 'string-literal', re: /(['"`])tmp[\\/][^'"`\n]*/g },
-    { id: 'join-tmp', re: /join\(\s*(['"`])tmp\1\s*,/g },
+/**
+ * 仓库里**会被真实运行共用**的持久化目录。
+ *
+ * ★ T17：原来只认 `tmp/` —— 于是「固定 `bots/` 路径 + 开跑先删」**整类漏掉**。
+ *   `atom_classify_unit` 三路并行互删地标（`bots/<agent>/memory/*.json`）就是这么漏的：
+ *   单跑 6/6 绿，三路并行时「写入=true/true 但读回 A=[] B=[]」。
+ */
+export const SHARED_DIRS = ['tmp', 'bots', 'logs', 'data', 'schemas', 'schematics', 'reports'];
+
+// T17：除上面这些"正常目录"，还要认**点开头的临时目录**（`.tmp_mut` / `.mut_x` …）。
+//   `strat_alloc_unit` 的变异体副本原来写在 `tools/.tmp_mut/`，两路并行时互删 ——
+//   它既不以 `tmp/` 开头、也不在仓库根，旧判据**完全看不到**（第二类病灶的第三张脸）。
+const DOT_TMP_GROUP = '\\.tmp[a-zA-Z0-9_]*';
+
+const DIR_GROUP = SHARED_DIRS.join('|') + '|' + DOT_TMP_GROUP;
+
+/**
+ * 固定共享路径的两种写法（会命中的都是"与别人共用一个目录"的形态）：
+ *   · 字符串/模板字面量前缀：'tmp/x'、`./bots/${name}/memory`、"./logs/a"
+ *   · join('<dir>', ...)：join('bots', name, 'memory')
+ * ★ 模板字面量只匹配**固定前缀**（`bots/` 之后是变量也算）——
+ *   因为"前缀固定"就等于"大家共用一个父目录"。
+ */
+const FIXED_SUBPATH_PATTERNS = [
+    { id: 'string/template', re: new RegExp("(['\"`])(?:\\./)?(" + DIR_GROUP + ")[\\\\/][^'\"`\\n]*", 'g') },
+    { id: 'join(dir,...)', re: new RegExp("join\\(\\s*(['\"`])(" + DIR_GROUP + ")\\1\\s*,", 'g') },
+    // ★ T17：`resolve(process.cwd(), 'bots', name)` 这种"把目录名当**参数**传"的写法
+    //   （memory_store 就是这么算 bots 根的）—— 上面两条都漏掉它。
+    { id: 'dir-as-arg', re: new RegExp("[(,]\\s*(['\"`])(" + DIR_GROUP + ")\\1\\s*,", 'g') },
+    // ★ T17：点开头的临时目录**嵌在路径中间**也算（'tools/.tmp_mut'）——
+    //   上面几条要求目录名出现在字面量开头，抓不到这个形态。
+    { id: 'nested-scratch', re: new RegExp("(['\"`])[^'\"`\\n]*[\\\\/]" + DOT_TMP_GROUP + "[^'\"`\\n]*", 'g') },
 ];
 
-/** 已隔离的形态：出现任一即认为这个文件不会和别人共用目录 */
+/**
+ * 已隔离的形态：出现任一即认为这个文件不会和别人共用目录。
+ * ★ T17 新增 `env-root`：测试若能通过**环境变量**把根指到自己的临时目录
+ *   （本仓约定 `MC_BOTS_ROOT`），也算隔离 —— 这正是修 `bots/` 那一类的正解。
+ */
 const ISOLATED_MARKERS = [
     { id: 'mkdtempSync', re: /\bmkdtempSync\s*\(/ },
     { id: 'os.tmpdir', re: /\btmpdir\s*\(\s*\)/ },
     { id: 'process.pid', re: /process\.pid/ },
     { id: 'randomUUID', re: /randomUUID\s*\(/ },
+    { id: 'env-root', re: /\bMC_BOTS_ROOT\b/ },
+    { id: 'env-root(其他)', re: /\bprocess\.env\.[A-Z0-9_]*_ROOT\b/ },
 ];
 
-/** "开跑先删"的形态 */
-const RM_PATTERNS = [
+/** **删除**动作（"开跑先删"的正身） */
+const DELETE_PATTERNS = [
     { id: 'rmSync', re: /\brmSync\s*\(/g },
+    { id: 'unlinkSync', re: /\bunlinkSync\s*\(/g },
+    { id: 'rmdirSync', re: /\brmdirSync\s*\(/g },
     { id: 'rm -rf', re: /\brm\s+-rf\b/g },
 ];
+
+/** **写入**动作（不是删除，但同样会污染别人共享的目录） */
+const WRITE_PATTERNS = [
+    { id: 'writeFileSync', re: /\bwriteFileSync\s*\(/g },
+    { id: 'appendFileSync', re: /\bappendFileSync\s*\(/g },
+    { id: 'createWriteStream', re: /\bcreateWriteStream\s*\(/g },
+    { id: 'copyFileSync', re: /\bcopyFileSync\s*\(/g },
+];
+
+/**
+ * **只读**的固定共享路径：文件里出现它，但只读不写不删。
+ * 逐条写清理由；扫描器会校验"这条还在文件里"（防僵尸）。
+ */
+export const NON_RISK_USES = [
+    {
+        file: 'tools/test_nav_opt.mjs',
+        path: 'bots/deepseek/map',
+        kind: 'read-only',
+        why: '**真机录的地形库**（bots/ 在 .gitignore 里），只当输入读取；缺失时整支测试 SKIP。'
+            + '它自己的写入/清理都落在 tmpdir 的临时目录（T04 改的），不碰 bots/。'
+            + '★ 不能改成"每进程一份"：这份数据是**真机采集的现场录音**，复制一份没有意义，'
+            + '而且它本来就是只读。',
+    },
+    {
+        file: 'tools/test_path3d.mjs',
+        path: 'bots/deepseek/map',
+        kind: 'read-only',
+        why: '同上：真机地形库只读输入，缺就 SKIP；写入落在 tmpdir。',
+    },
+    {
+        file: 'tools/prompter_path_unit.mjs',
+        path: 'bots/${name}',
+        kind: 'string-message',
+        why: '这两处是**断言消息字符串**（"prompter.js 里没有 mkdirSync(`./bots/${name}`) 这种裸拼"），'
+            + '是给人看的文字，不是本测试用的路径。★ 同一个字符串里还含 `writeFileSync` 字样，'
+            + '所以它同时被"写入动作"命中 —— 这正是"文本里提到路径 != 代码里用了路径"。',
+    },
+    {
+        file: 'tools/prompter_path_unit.mjs',
+        path: "('logs'",
+        kind: 'arg-only',
+        why: '`botDirOf("deepseek", path.join("logs", "task_1"))` —— 这一段只是**喂给路径拼接用例的子路径**，'
+            + '用来断言"子路径仍在 bots/ 之下"，不落盘。',
+    },
+];
+
+/**
+ * 该固定路径是不是"只读用途"（按文件 + 路径前缀登记）。
+ * @param {string} rel 形如 tools/x.mjs
+ * @param {string} text 命中的原文
+ */
+function isNonRiskUse(rel, text) {
+    return NON_RISK_USES.some((e) => e.file === rel && text.includes(e.path));
+}
+// 兼容旧名（本文件早先叫 read-only）
+const isReadOnlyUse = isNonRiskUse;
 
 /** 行号（1 起） */
 const lineOf = (text, index) => text.slice(0, index).split('\n').length;
@@ -115,26 +207,24 @@ const lineOf = (text, index) => text.slice(0, index).split('\n').length;
 /**
  * 分析一段源码。
  * @param {string} src
- * @returns {{fixed:Array<{line:number, text:string, kind:string}>, rms:Array<{line:number, text:string, kind:string}>, isolated:string[]}}
+ * @returns {{fixed:Array, deletes:Array, writes:Array, rms:Array, isolated:string[]}}
+ *   `rms` 保留旧名（= deletes），免得调用方白改。
  */
 export function analyse(src) {
     const code = stripComments(src);
-    const fixed = [];
-    for (const { id, re } of FIXED_TMP_PATTERNS) {
-        re.lastIndex = 0;
-        let m;
-        while ((m = re.exec(code)) !== null) {
-            fixed.push({ line: lineOf(code, m.index), text: m[0].trim(), kind: id });
+    const collect = (patterns) => {
+        const out = [];
+        for (const { id, re } of patterns) {
+            re.lastIndex = 0;
+            let m;
+            while ((m = re.exec(code)) !== null) out.push({ line: lineOf(code, m.index), text: m[0].trim(), kind: id });
         }
-    }
-    const rms = [];
-    for (const { id, re } of RM_PATTERNS) {
-        re.lastIndex = 0;
-        let m;
-        while ((m = re.exec(code)) !== null) {
-            rms.push({ line: lineOf(code, m.index), text: m[0], kind: id });
-        }
-    }
+        return out;
+    };
+    const fixed = collect(FIXED_SUBPATH_PATTERNS);
+    const deletes = collect(DELETE_PATTERNS);
+    const writes = collect(WRITE_PATTERNS);
+    const rms = deletes;
     const isolated = [];
     for (const { id, re } of ISOLATED_MARKERS) {
         if (re.test(code)) isolated.push(id);
@@ -149,7 +239,13 @@ export function analyse(src) {
             return true;
         });
     };
-    return { fixed: uniq(fixed), rms: uniq(rms), isolated };
+    return {
+        fixed: uniq(fixed),
+        deletes: uniq(deletes),
+        writes: uniq(writes),
+        rms: uniq(deletes),
+        isolated,
+    };
 }
 
 /**
@@ -173,15 +269,29 @@ export const EXEMPTIONS = [
         why: '同上：人工触发的基准脚本。',
     },
     {
-        file: 'tools/_dbg_scan.mjs',
-        why: '**未被 git 跟踪**的临时调试脚本（2026-11-01 的手工脚本，直连真实服务器做地形扫描），'
-            + '不在仓库里、也不在 unit_all 名单里。**建议由它的作者删除**；'
-            + '在它被删掉之前扫描器会一直看到它，所以先在此列明"为什么不改"'
-            + '（改了等于替别人保管一个不该入库的东西，删了又可能打断对方正在做的排查）。',
-    },
-    {
         file: 'tools/restart_bot.mjs',
         why: '运维脚本（重启 bot），**要的就是**仓库内固定路径的 pid/日志；不在 unit_all 名单里。',
+    },
+    {
+        file: 'tools/preflight.mjs',
+        why: '**门禁脚本，不是测试**（不归本轮改，且任务书要求"不碰 preflight"）。'
+            + '★ 但要如实纠正一处："它只读"不成立 —— 它在收尾真的会 '
+            + '`rmSync(join(ROOT, "../../bots/preflight_tmp"))`。'
+            + '之所以列成豁免：① 它是**串行**门禁（一次一个提交），不是被 unit_all 并发调度的测试；'
+            + '② 它自己 `mkdtemp` 出的是别的临时目录，那行 `bots/preflight_tmp` 的删除是'
+            + '"清自己上一次的残留"。'
+            + '★ 真正的风险（两次提交恰好同时跑 preflight）已写进文档，交给 gate 的负责人决定是否加 pid 后缀。',
+    },
+    {
+        file: 'tools/bench_s2_main.mjs',
+        why: '**基准脚本，不是测试**：把每轮结果 append 到仓库内 tmp/ 供人对比历史，'
+            + '`unit_all` 不会跑它（不是 *_unit.mjs、不在 UNITS）。两路并发跑基准没有意义 ——'
+            + '基准比的正是"独占机器时的表现"。',
+    },
+    {
+        file: 'tools/t51_firstnight_realagent.mjs',
+        why: '**真机演练脚本**（要连真实服务器跑 agent），把过程 append 到 data/ 给人事后翻；'
+            + '不在 unit_all 名单里，也不该被并发调度。与 t51_triple_round 同类。',
     },
     {
         file: 'tools/t51_triple_round.mjs',
@@ -217,6 +327,10 @@ function isTestLike(relPath) {
 // 5: 代码里的固定 tmp（字符串形态）—— 必须被报
 // 6: rmSync —— 必须被认出来
 // 7: 字符串里带 // 的行 —— 剥注释不许把 `//` 后面的代码吃掉，必须仍报 tmp
+// 8/9: 固定 bots/ 路径（模板字面量）—— 必须被报
+// 10: **嵌在路径中间**的点开头临时目录（'tools/.tmp_mut/...'）—— T17 新增形态
+// T17 追加：固定 `bots/` 路径（模板字面量带变量）也必须被认出来 ——
+//   这正是 atom_classify 三路并行互删地标的那一类。
 const SELFTEST_FIXTURE = `
 // 注释里的假样本：const DIR = join('tmp', 'fake-comment');  rmSync(DIR);
 /* 块注释里的假样本：tmp/block-comment  rmSync(x) */
@@ -224,6 +338,9 @@ const realFixed = join('tmp', 'real-shared-dir');
 const alsoReal = 'tmp/another-shared';
 rmSync(realFixed, { recursive: true, force: true });
 const tricky = 'a//b' + 'tmp/in-string';
+const botsFixed = \`bots/\${name}/memory\`;
+rmSync(\`bots/\${name}\`, { recursive: true, force: true });
+const scratch = 'tools/.tmp_mut/strat_obtain_mut.mjs';
 `;
 
 function selftest() {
@@ -232,12 +349,22 @@ function selftest() {
     const problems = [];
     // 注释里的两处（第 2、3 行）必须**不出现**
     if (lines.includes(2) || lines.includes(3)) problems.push('注释里的样本被当成了真命中');
-    // 代码里的三处必须出现（第 4、5、7 行）
-    for (const want of [4, 5, 7]) if (!lines.includes(want)) problems.push(`漏报第 ${want} 行`);
+    // 代码里的必须出现：4(join tmp)、5(字符串 tmp)、7(字符串里带//)、8(bots 模板)
+    // ★ 9 行是 `rmSync(\`bots/...\`)`，同一行的 fixed 已在 8 命中，9 行本身也会命中 fixed —— 一起要求
+    for (const want of [4, 5, 7, 8, 9, 10]) if (!lines.includes(want)) problems.push(`漏报第 ${want} 行`);
     // rm 必须被发现
     if (!a.rms.length) problems.push('rmSync 没被认出来');
     // 字符串里的 // 不能把后面的内容吃掉（第 7 行还能被找到就说明没吃）
-    console.log(problems.length ? `✗ 自检失败：${problems.join('；')}` : '✓ 自检通过：注释里的样本被忽略、代码里的真样本 3 处全中、字符串里的 // 没误判');
+    // 只读判定也要自检：同一条路径登记成只读时，不该进"需处置"
+    if (!isNonRiskUse('tools/test_nav_opt.mjs', 'bots/deepseek/map')) {
+        problems.push('只读登记没生效（isReadOnlyUse 认不出已登记的只读路径）');
+    }
+    if (isNonRiskUse('tools/atom_classify_unit.mjs', 'bots/probe')) {
+        problems.push('只读登记误伤：未登记的文件被判成只读');
+    }
+    console.log(problems.length
+        ? `✗ 自检失败：${problems.join('；')}`
+        : '✓ 自检通过：注释样本被忽略 / 代码真样本全中 / 字符串里的 // 没误判 / bots 模板命中 / 只读登记双向正确');
     return problems.length === 0;
 }
 
@@ -253,6 +380,8 @@ function selftest() {
 
 /** 本仓测试用过的目录前缀（与各测试里的 mkdtempSync(prefix) 对应） */
 export const TMP_PREFIXES = [
+    // T17：bots 根隔离用的前缀
+    'bots-root-', 'atom-classify-test-', 'mem-corrupt-test-',
     'board-b3-test-', 'board-b4-test-', 'board-iface-test-', 'board-lease-test-',
     'board-openonly-test-', 'board-open-test-', 'board-orphan-test-', 'board-stop-test-',
     'board-converge-test-', 'board-finish-test-', 'board-test-', 'shared-chest-test-',
@@ -319,30 +448,45 @@ function main() {
         const a = analyse(src);
         if (!a.fixed.length) continue;
         const exempt = EXEMPTIONS.find((e) => e.file === rel);
-        const risky = a.fixed.length > 0 && a.rms.length > 0 && a.isolated.length === 0;
-        rows.push({ rel, ...a, exempt, risky, testLike: isTestLike(rel) });
+        // 只读用途：文件里所有固定共享路径都登记成只读 → 不算风险
+        const allReadOnly = a.fixed.every((f) => isNonRiskUse(rel, f.text));
+        const destructive = a.deletes.length > 0 || a.writes.length > 0;
+        const risky = a.fixed.length > 0 && destructive && a.isolated.length === 0 && !allReadOnly;
+        rows.push({ rel, ...a, exempt, risky, allReadOnly, destructive, testLike: isTestLike(rel) });
     }
 
     console.log('扫描范围：tools/**/*.mjs =' + files.length + ' 个文件');
     console.log('');
     const needFix = rows.filter((r) => r.risky && !r.exempt);
-    const alreadyOk = rows.filter((r) => !r.risky);
+    const alreadyOk = rows.filter((r) => !r.risky && !r.exempt && !r.allReadOnly);
     const exempted = rows.filter((r) => r.exempt);
+    const readOnly = rows.filter((r) => r.allReadOnly && !r.exempt);
 
-    console.log('── A) 【固定 tmp + 开跑先删 + 无隔离】需要处置 ─────────────────');
+    console.log('── A) 【固定共享路径 + 删除/写入 + 无隔离】需要处置 ────────────────');
     if (!needFix.length) console.log('  （空）');
     for (const r of needFix) {
         const locs = r.fixed.map((f) => `${f.line}: ${f.text}`).join(' | ');
+        const dels = r.deletes.map((x) => `${x.line}(${x.kind})`).join(',') || '—';
+        const wr = r.writes.map((x) => `${x.line}(${x.kind})`).join(',') || '—';
         console.log(`  ✗ ${r.rel}  [${r.testLike ? '被 unit_all 调度' : '非单测'}]`);
-        console.log(`      tmp 位置 → ${locs}`);
-        console.log(`      rm 位置  → ${r.rms.map((x) => x.line).join(',')}`);
+        console.log(`      固定路径 → ${locs}`);
+        console.log(`      删除动作 → ${dels}`);
+        console.log(`      写入动作 → ${wr}`);
     }
 
     console.log('');
-    console.log('── B) 已隔离 / 无风险（含 mkdtempSync / os.tmpdir / process.pid）──');
+    console.log('── B) 已隔离 / 无风险（mkdtempSync / os.tmpdir / process.pid / MC_BOTS_ROOT）');
     for (const r of alreadyOk) {
-        const why = r.isolated.length ? r.isolated.join('+') : '无 rmSync';
+        const why = r.isolated.length ? r.isolated.join('+') : '无删除/写入动作';
         console.log(`  · ${r.rel}  (${why})`);
+    }
+
+    console.log('');
+    console.log('── B2) 固定路径但**非风险用途**（只读/消息字符串/纯参数，逐条登记）──────');
+    if (!readOnly.length) console.log('  （空）');
+    for (const r of readOnly) {
+        const e = NON_RISK_USES.find((x) => x.file === r.rel);
+        console.log(`  ○ ${r.rel}  ← ${e ? e.path : '?'}  [${e ? e.kind : '?'}]`);
     }
 
     console.log('');
@@ -357,10 +501,17 @@ function main() {
     }
 
     console.log('');
-    console.log(`合计：需处置 ${needFix.length} · 已隔离 ${alreadyOk.length} · 豁免 ${exempted.length}`);
+    // 只读登记也不许变僵尸：每条都要在扫描结果里真的存在
+    const staleRo = NON_RISK_USES.filter((e) => !rows.some((r) => r.rel === e.file && r.allReadOnly));
+    if (staleRo.length) {
+        console.log('');
+        console.log(`  ⚠ 只读登记里有 ${staleRo.length} 条已经对不上（僵尸只读，应删除/复核）：${staleRo.map((e) => e.file).join(', ')}`);
+    }
+    console.log('');
+    console.log(`合计：需处置 ${needFix.length} · 已隔离 ${alreadyOk.length} · 只读 ${readOnly.length} · 豁免 ${exempted.length}`);
 
     if (argv.includes('--check')) {
-        const bad = needFix.length > 0 || stale.length > 0;
+        const bad = needFix.length > 0 || stale.length > 0 || staleRo.length > 0;
         console.log(bad ? '✗ --check 未通过' : '✓ --check 通过');
         process.exit(bad ? 1 : 0);
     }

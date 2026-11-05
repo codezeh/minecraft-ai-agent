@@ -11,10 +11,12 @@
  * ══════════════════════════════════════════════════════════════════════════
  *
  * 输出：PASS / FAIL，全过退出码 0。
- * 注意：`memory_store` 的目录是 `process.cwd()/bots/<username>/memory`（写死），
+ * 注意：`memory_store` 的目录是 `<bots 根>/<username>/memory`
+ *       （bots 根默认 `./bots`，可用 `MC_BOTS_ROOT` 覆盖 —— T17 就是靠它做进程隔离），
  *       所以这里用一个独有的 bot 名 + 跑完整体删除，避免碰到真实记忆。
  */
-import { mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { readStore, writeStore, updateStore } from '../src/agent/library/memory_store.js';
 
@@ -22,9 +24,12 @@ let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };
 const badCase = (name, actual) => { fail++; console.log(`FAIL ${name} ${JSON.stringify(actual)}`); };
 
+// ★★★ T17（并发加固）：**每进程一个独立 bots 根**（`MC_BOTS_ROOT` 是本仓唯一覆盖点）。
+//   原来写死 `process.cwd()/bots/<bot>/memory` 且开跑先 rmSync —— 两路并行会互删。
+process.env.MC_BOTS_ROOT = mkdtempSync(join(os.tmpdir(), 'mem-corrupt-test-'));
+const BOTS_ROOT = process.env.MC_BOTS_ROOT;
 const BOT = { username: '_t30_mem_probe' };
-const DIR = resolve(process.cwd(), 'bots', BOT.username, 'memory');
-rmSync(resolve(process.cwd(), 'bots', BOT.username), { recursive: true, force: true });
+const DIR = resolve(BOTS_ROOT, BOT.username, 'memory');
 mkdirSync(DIR, { recursive: true });
 const fileOf = (ns) => join(DIR, `${ns}.json`);
 const backupsOf = (ns) => readdirSync(DIR).filter((f) => f.startsWith(`${ns}.json.corrupt-`));
@@ -115,7 +120,8 @@ const wipe = (ns) => {
     else badCase('⑥ 端到端 updateStore 行为不对', { added, backupsBefore, backupsAfter, fresh });
 }
 
-try { rmSync(resolve(process.cwd(), 'bots', BOT.username), { recursive: true, force: true }); } catch { /* ignore */ }
+// T17：清掉本进程专属的 bots 根（失败只吞，不许让测试变红）
+try { rmSync(BOTS_ROOT, { recursive: true, force: true }); } catch { /* ignore */ }
 
 console.log('============================================');
 console.log(`${pass}/${pass + fail} 个用例通过`);

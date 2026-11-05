@@ -11,8 +11,22 @@
  *
  * 输出格式：PASS <用例> <证据> / FAIL <用例> <实际>，全过退出码 0。
  */
-import { rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import os from 'node:os';
 import { isProtected } from '../src/agent/library/query_classify.js';
+
+// ★★★ T17（并发加固）：**每个进程一个独立的 bots 根**。
+//
+//   原来三只 bot 的地标都写进同一个 `bots/<name>/memory/*.json`，
+//   而 `cleanup()` 开跑先 `rmSync('bots/<name>')` —— **三路并行时互删**：
+//   现场 `写入=true/true` 但读回 `A=[] B=[]`（或读到别人的地标）。
+//   单跑永远绿，所以这一类 bug 只在并发时露头，最容易被当成"环境抖动"。
+//
+//   `MC_BOTS_ROOT` 是本仓**唯一**的 bots 根覆盖点
+//   （memory_store / history / bot_paths 全走它），指到这里就互不干扰。
+process.env.MC_BOTS_ROOT = mkdtempSync(join(os.tmpdir(), 'atom-classify-test-'));
+const BOTS_ROOT = process.env.MC_BOTS_ROOT;
 
 // 数据层路径可用 LANDMARKS_MODULE 覆盖 —— 只为「反向验证」用：
 // 把修复前（读 c?.pos）的 landmarks.js 副本指进来，本测试必须变红；否则它只是在自证。
@@ -28,10 +42,9 @@ const BOT_B = { username: '__unit_y_semantics_b' };
 const BOT_C = { username: '__unit_y_semantics_c' };
 
 function cleanup() {
-    for (const b of [BOT_A, BOT_B, BOT_C]) {
-        try { rmSync(`bots/${b.username}`, { recursive: true, force: true }); } catch { }
-        resetProtectedCache(b);
-    }
+    // T17：不再 rmSync 共享的 `bots/<name>`（那正是互删的来源）；
+    //      目录本身是本进程独有的临时目录，清缓存就够。
+    for (const b of [BOT_A, BOT_B, BOT_C]) resetProtectedCache(b);
 }
 cleanup();
 
@@ -127,6 +140,8 @@ cleanup();
 }
 
 cleanup();
+// T17：本进程专属的 bots 根，跑完删掉（删不掉也不许让测试变红）
+try { rmSync(BOTS_ROOT, { recursive: true, force: true }); } catch { /* ignore */ }
 
 console.log('============================================');
 console.log(`${pass}/${pass + fail} 个用例通过`);

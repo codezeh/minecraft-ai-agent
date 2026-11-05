@@ -4,11 +4,16 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
 import { scanArea, getChunk, describeArea, coarseWaypoints } from '../src/agent/library/chunk_map.js';
-import { existsSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, existsSync, rmSync, mkdirSync } from 'fs';
+import os from 'node:os';
+import { join } from 'node:path';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25575 });      // 主服
-const DIR = './bots/probe/map-main';
+// ★ T17（并发加固）：**每进程一个独立 bots 根** —— 否则并发跑时
+//   `rmSync(DIR)` 会删掉别人正在用的地图库（表现为「随机变红、单跑全绿」）。
+process.env.MC_BOTS_ROOT ??= mkdtempSync(join(os.tmpdir(), 'probe-map-main2-'));
+const DIR = `${process.env.MC_BOTS_ROOT}/probe/map-main`;
 
 const bot = mineflayer.createBot({ host: '127.0.0.1', port: 25565, username: 'probe', auth: 'offline', version: '1.21.8' });
 bot.loadPlugin(pf.pathfinder);

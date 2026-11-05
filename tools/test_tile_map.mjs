@@ -3,10 +3,15 @@ import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { scanArea, getChunk } from '../src/agent/library/chunk_map.js';
 import { classifyChunk, tileCost, tileAStar, renderTileGrid, describeTile } from '../src/agent/library/tile_map.js';
-import { existsSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, existsSync, rmSync, mkdirSync } from 'fs';
+import os from 'node:os';
+import { join } from 'node:path';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const DIR = './bots/probe/map-tile';
+// ★ T17（并发加固）：**每进程一个独立 bots 根** —— 否则并发跑时
+//   `rmSync(DIR)` 会删掉别人正在用的地图库（表现为「随机变红、单跑全绿」）。
+process.env.MC_BOTS_ROOT ??= mkdtempSync(join(os.tmpdir(), 'probe-map-tile-'));
+const DIR = `${process.env.MC_BOTS_ROOT}/probe/map-tile`;
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {
     if (cond) { passed++; console.log(`  PASS  ${name}  ${detail}`); }

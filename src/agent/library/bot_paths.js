@@ -24,7 +24,27 @@
  */
 
 /**
- * 取 bot 的名字。三层兜底沿用原写法，不要改语义：
+ * **bots 根目录** —— 所有 `bots/<name>/…` 的共同前缀，**唯一可取处**。
+ *
+ * ★★★ 为什么需要它（2026-11-05，T17）：测试并发跑时会**互删对方的地标文件**。
+ *   现场：`atom_classify_unit` 三路并行 —— 单跑 6/6 绿，三路并行时
+ *   `写入=true/true` 但读回 `A=[] B=[]`（或读到别人的）。
+ *   根因：所有测试都把地标写进**同一个** `bots/<agent>/memory/*.json`，
+ *   而每个测试开跑先 `rmSync('bots/<agent>')` —— 三个进程互相删。
+ *
+ *   正解不是改目录结构，而是让**每个进程能有自己的 bots 根**：
+ *   `MC_BOTS_ROOT=<临时目录>` 即可（测试用 `mkdtempSync` 指过去）。
+ *   生产不设这个变量，行为与以前**逐字节一致**（默认仍是 `./bots`）。
+ *
+ * @returns {string} 形如 `./bots`，或 `MC_BOTS_ROOT` 给的值
+ */
+export function botsRootOf() {
+    const override = process.env.MC_BOTS_ROOT;
+    if (typeof override === 'string' && override.trim()) return override.trim();
+    return './bots';
+}
+
+/** 该 bot 的地形库目录（terrain3d / path_3d / scanSphere 都用它）。
  * `username`（已登录） → `entity.name`（登录瞬间可能还没有 username） → `'agent'`。
  */
 function botNameOf(agentOrBot) {
@@ -39,7 +59,7 @@ function botNameOf(agentOrBot) {
  * @returns {string} 形如 `./bots/HEAVENZEH/map`
  */
 export function mapDirOf(agentOrBot) {
-    return `./bots/${botNameOf(agentOrBot)}/map`;
+    return `${botsRootOf()}/${botNameOf(agentOrBot)}/map`;
 }
 
 /**
@@ -49,7 +69,7 @@ export function mapDirOf(agentOrBot) {
  * @returns {string} 形如 `./bots/HEAVENZEH`
  */
 export function botDirOf(agentOrBot) {
-    return `./bots/${botNameOf(agentOrBot)}`;
+    return `${botsRootOf()}/${botNameOf(agentOrBot)}`;
 }
 
 /**
@@ -62,7 +82,7 @@ export function botDirOf(agentOrBot) {
  * @returns {string} 形如 `./bots/_board`
  */
 export function boardDirOf() {
-    return './bots/_board';
+    return `${botsRootOf()}/_board`;
 }
 
 export { botNameOf };

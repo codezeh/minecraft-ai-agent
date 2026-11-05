@@ -23,6 +23,8 @@
  * 输出：PASS / FAIL，全过退出码 0。
  */
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+// ★ T17：动态 import 用绝对 file:// URL（Windows 下盘符绝对路径不被 ESM 接受）
+import { pathToFileURL } from 'node:url';
 import { planObtain } from '../src/agent/library/strat_obtain.js';
 
 let pass = 0, fail = 0;
@@ -62,7 +64,16 @@ for (const c of CASES) {
 // ══════════════════════════════════════════════════════════════════════════
 // ⑦ 反向验证：把 `allocated` 账本去掉（= 回到修前）→ ②③ 必须红，①④⑥ 不该红
 // ══════════════════════════════════════════════════════════════════════════
-const MUT_DIR = 'tools/.tmp_mut';
+// ★★★ T17（并发加固）：变异副本目录**必须每进程一份**。
+//
+//   原来固定写 `tools/.tmp_mut`，而 96 行收尾会 `rmSync(MUT_DIR)` ——
+//   两路 `unit_all` 并行时，A 刚写完变异体、B 把它删掉，A 的 `import` 就报
+//   `ENOENT: lstat ... tools\.tmp_mut\strat_obtain_mut.mjs`（随机红、单跑全绿）。
+//
+//   为什么**只加 pid 后缀**、不搬到 os.tmpdir()：下面把变异体的两处相对 import
+//   改写成了 `../../src/...`（相对 `tools/.tmp_mut/` 算的）。挪到别处就会断，
+//   而"同深度、只换名字"完全不碰那些改写 —— 最小改动、零风险。
+const MUT_DIR = `tools/.tmp_mut-${process.pid}`;
 const MUT_FILE = `${MUT_DIR}/strat_obtain_mut.mjs`;
 let mutant = null;
 try {
@@ -78,7 +89,7 @@ try {
     if (fixed === raw || !fixed.includes('/* MUTANT: 去掉账本 */')) throw new Error('变异没打上（源码那行变了？）');
     mkdirSync(MUT_DIR, { recursive: true });
     writeFileSync(MUT_FILE, fixed, 'utf8');
-    mutant = await import('../tools/.tmp_mut/strat_obtain_mut.mjs');
+    mutant = await import(pathToFileURL(MUT_FILE).href);
 } catch (e) {
     check('⑦ 能生成并加载「去掉账本」的变异副本', false, String(e?.message ?? e));
 }
