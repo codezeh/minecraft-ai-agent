@@ -38,6 +38,11 @@ export const LEVEL = Object.freeze({
  * 所以凡是不在信任清单里的，这里都必须点名 —— 剩下的再靠 `canRunCommand` 的默认拒绝兜底。
  */
 export const OWNER_ONLY_COMMANDS = Object.freeze([
+    // ★ F-AI-202（2026-11-06）：`!goal` 从 TRUSTED 升到这里。
+    //   它是"把任意文本塞进系统提示 + 启动长期重复注入的循环"，不是普通控制命令：
+    //   参数无长度上限、无转义（prompter.js 里 `"${…}"` 只加引号），self_prompter 每 2 秒重注入，
+    //   还会写进 memory.json 跨重启 ⇒ 一次注入长期生效。信任级（默认所有人）不该有这个能力。
+    '!goal',
     '!newAction',        // 写代码执行（SES 沙箱里拿得到 bot，等于游戏里想干什么都行）
     '!restart',          // 重启进程
     '!clearChat',        // 清对话上下文
@@ -80,7 +85,10 @@ export const TRUSTED_COMMANDS = Object.freeze([
     '!checkBlueprint', '!checkBlueprintLevel', '!getBlueprint', '!getBlueprintLevel',
     '!getCraftingPlan', '!searchWiki', '!skillDoc', '!checkTask', '!help',
     // 非破坏性控制（停下来、待机、别说话、设目标）
-    '!stop', '!stay', '!stfu', '!goal', '!endGoal',
+    // ★ F-AI-202（2026-11-06）：`!goal` 已从信任级移出 → 升到 OWNER_ONLY_COMMANDS。
+    //   它不是普通控制命令：参数原样进系统提示（prompter.js 的 $SELF_PROMPT）、无长度上限、
+    //   且每 2 秒重复注入并落 memory.json ⇒ 一次注入长期生效。
+    '!stop', '!stay', '!stfu', '!endGoal',
     // 任务板（未实现的先登记，见上面注释）
     '!do', '!listSkills', '!jobs', '!cancelJob', '!addSharedJob',
     '!cancelJob', '!pauseJob', '!resumeJob',
@@ -144,6 +152,13 @@ export function resolveLevel({ author, permissions, isOtherBot = false, internal
     }
 
     // 5) 没配主人：人人按信任（08 §5 第 1 条）
+    //
+    // ⚠️ 使用约束（F-AI-202，2026-11-06 实测得出，改 owner-only 命令前必读）：
+    //   OWNER 级**只能在"配了 owner 且名字命中"时到达**。所以 owner 为空的 profile 里，
+    //   任何 owner-only 命令（`!goal` / `!newAction` / `!setMode` / `!givePlayer` …）**谁都用不了**。
+    //   本仓 `deepseek` / `defaults/*` 等 profile 实测 owner 均为 null ⇒ 用这些 profile 的人
+    //   会发现 `!goal` "功能莫名不见"。换 profile 前先确认它的 permissions.owner 填了。
+    //   （不要为了让"没配 owner 也能用 !goal"而把它降回 TRUSTED —— 那正是 F-AI-202 要堵的注入面。）
     return LEVEL.TRUSTED;
 }
 

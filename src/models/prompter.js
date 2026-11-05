@@ -223,7 +223,23 @@ export class Prompter {
             prompt = prompt.replaceAll('$CONVO', 'Recent conversation:\n' + stringifyTurns(messages));
         if (prompt.includes('$SELF_PROMPT')) {
             // if active or paused, show the current goal
-            let self_prompt = !this.agent.self_prompter.isStopped() ? `YOUR CURRENT ASSIGNED GOAL: "${this.agent.self_prompter.prompt}"\n` : '';
+            // ★ F-AI-202（2026-11-06）：goal 文本来自 `!goal(...)`，是**外部可控**的，原来直接
+            //   `"${...}"` 塞进系统提示：引号不转义（可以提前闭合、伪造 `（系统更新）…` 段落）、
+            //   长度无上限（可以淹没整段系统提示）。这里做两件事：
+            //   ① 转义/折叠：去掉换行与制表，`"` → `\"`，`\` → `\\`，使它无法闭合引号或另起一行；
+            //   ② 限长 500：超长截断并标注，防止用长文本把系统提示挤掉。
+            //   注意：这**不是**主防线（主防线是 `!goal` 已升 OWNER_ONLY，见 permissions.js），
+            //   是"万一将来又开了信任级"时的纵深防护。
+            const rawGoal = String(this.agent.self_prompter.prompt ?? '');
+            const GOAL_MAX = 500;
+            let safeGoal = rawGoal
+                .replace(/[\r\n\t]+/g, ' ')      // 折叠换行/制表：不能另起一行伪造段落
+                .replace(/\\/g, '\\\\')          // 反斜杠先转
+                .replace(/"/g, '\\"');           // 再转双引号：不能提前闭合 "…"
+            if (safeGoal.length > GOAL_MAX) {
+                safeGoal = safeGoal.slice(0, GOAL_MAX) + `…[已截断，原长 ${rawGoal.length}]`;
+            }
+            let self_prompt = !this.agent.self_prompter.isStopped() ? `YOUR CURRENT ASSIGNED GOAL: "${safeGoal}"\n` : '';
             prompt = prompt.replaceAll('$SELF_PROMPT', self_prompt);
         }
         if (prompt.includes('$LAST_GOALS')) {

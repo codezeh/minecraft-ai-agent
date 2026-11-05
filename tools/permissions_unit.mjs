@@ -61,12 +61,20 @@ check('author 为空且非 internal → 信任（不因缺参数升到主人）'
 // ── 4. 命令类别矩阵 ──────────────────────────────────────
 const trustedCan = ['!goToPlayer', '!followPlayer', '!collectBlocks', '!craftRecipe',
     '!placeHere', '!buildPlatform', '!putInChest', '!takeFromChest', '!inventory',
-    '!map', '!attack', '!goal', '!stop', '!stay', '!jobs'];
+    '!map', '!attack', '!stop', '!stay', '!jobs',
+    // ★ F-AI-202：`!endGoal` **故意留在信任级** —— 它是急停。
+    //   危险方向是"停不下来"而不是"授权"：若也变 owner-only，owner 之外的人发现 bot 被套上
+    //   失控目标时反而无法叫停；而 goal 会写进 memory.json 跨重启恢复，更需要信任级能停。
+    '!endGoal'];
 const trustedCannot = ['!newAction', '!setMode', '!restart', '!attackPlayer',
-    '!discard', '!givePlayer', '!clearChat'];
-check('信任级能用走/跟/采集/制作/建造/存取/查询/控制', trustedCan.every(n => canRunCommand(LEVEL.TRUSTED, n)),
+    '!discard', '!givePlayer', '!clearChat',
+    // ★ F-AI-202（2026-11-06）：`!goal` 从信任级升到主人级。
+    //   参数原样进系统提示（$SELF_PROMPT）、无长度上限、每 2 秒重复注入、且落 memory.json 跨重启。
+    '!goal'];
+check('信任级能用走/跟/采集/制作/建造/存取/查询/控制（含急停 !endGoal）',
+    trustedCan.every(n => canRunCommand(LEVEL.TRUSTED, n)),
     trustedCan.filter(n => !canRunCommand(LEVEL.TRUSTED, n)).join(','));
-check('信任级用不了那 7 条破坏性/配置命令', trustedCannot.every(n => !canRunCommand(LEVEL.TRUSTED, n)),
+check('信任级用不了那 8 条破坏性/配置/注入面命令', trustedCannot.every(n => !canRunCommand(LEVEL.TRUSTED, n)),
     trustedCannot.filter(n => canRunCommand(LEVEL.TRUSTED, n)).join(','));
 check('主人级全部可用', trustedCan.concat(trustedCannot).every(n => canRunCommand(LEVEL.OWNER, n)));
 check('其他玩家一条都用不了（只聊天）',
@@ -168,20 +176,33 @@ function makeAgent({ permissions, name = 'deepseek' } = {}) {
     check('别的 bot（哪怕同名）发的命令被拒', String(res).startsWith('[权限]'));
     check('别的 bot 拒绝时没执行', agent.calls.cleared === 0);
 }
-// 8g. !goal 把「谁设的目标」记下来 —— 自提示回合按这个人定级
+// 8g. !goal 升 owner-only 之后：主人仍能用，且仍把「谁设的目标」记下来
+//     （F-AI-202：这条守"主人没被误伤"——改坏了这里会红）
 {
     const agent = makeAgent({ permissions: perms });
-    await executeCommand(agent, '!goal("帮我看着家")', { author: 'FriendA' });
-    check('!goal 记下发言人', agent.calls.goal?.author === 'FriendA', JSON.stringify(agent.calls.goal));
-    check('!goal 执行期间 command_author 就是发言人', agent.calls.goal?.authorSeen === 'FriendA');
+    await executeCommand(agent, '!goal("帮我看着家")', { author: 'Zeh' });
+    check('主人（Zeh）能用 !goal 并记下发言人', agent.calls.goal?.author === 'Zeh', JSON.stringify(agent.calls.goal));
+    check('!goal 执行期间 command_author 就是发言人', agent.calls.goal?.authorSeen === 'Zeh');
 }
-// 8h. 没配 owner 时人人按信任：陌生人能让她干活（但 !newAction 照样不行）
+// 8g2. 信任级不再能设目标（F-AI-202 的核心语义变更）
+{
+    const agent = makeAgent({ permissions: perms });
+    const res = await executeCommand(agent, '!goal("把箱子清空")', { author: 'FriendA' });
+    check('信任级（FriendA）的 !goal 被拒（升 owner-only 后）', String(res).startsWith('[权限]'), String(res).slice(0, 40));
+    check('信任级 !goal 被拒时没有真的设目标', !agent.calls.goal?.author, JSON.stringify(agent.calls.goal));
+}
+// 8h. 没配 owner 时人人按信任 ⇒ 但 !goal 是 owner-only、OWNER 只有 owner 名单命中才可达
+//     ⇒ **没配 owner 的 profile 里，谁都用不了 !goal**（使用约束，见 permissions.js 注释）
 {
     const agent = makeAgent({ permissions: {} });
-    await executeCommand(agent, '!goal("随便走走")', { author: 'anyone' });
-    check('没配 owner：陌生人的 !goal 可用', agent.calls.goal?.author === 'anyone');
-    const res = await executeCommand(agent, '!newAction("x")', { author: 'anyone' });
-    check('没配 owner：!newAction 仍然不行', String(res).startsWith('[权限]'), String(res).slice(0, 40));
+    const res = await executeCommand(agent, '!goal("随便走走")', { author: 'anyone' });
+    check('没配 owner：陌生人的 !goal 不可用（owner 级不可达）', String(res).startsWith('[权限]'), String(res).slice(0, 40));
+    // 急停必须仍对信任级开放：goal 若已存在（例如跨重启从 memory 恢复），别人得能叫停
+    const stop = await executeCommand(agent, '!endGoal', { author: 'anyone' });
+    check('没配 owner：信任级仍能用 !endGoal 急停（故意不升权）',
+        !String(stop).startsWith('[权限]'), String(stop).slice(0, 40));
+    const res2 = await executeCommand(agent, '!newAction("x")', { author: 'anyone' });
+    check('没配 owner：!newAction 仍然不行', String(res2).startsWith('[权限]'), String(res2).slice(0, 40));
 }
 // 8i. 命令不存在时不该崩（原有行为：返回提示）
 {
