@@ -135,12 +135,28 @@ export function oreNames(ore) {
         return [...names].filter(Boolean);
     }
 
-    // ② 旧逻辑：对**方块名**仍然正确（`iron_ore` → `iron_ore / deepslate_iron_ore`）
-    const bare = base.replace(/^deepslate_/, '').replace(/_ore$/, '');
-    const names = new Set([base, `deepslate_${base}`]);
-    if (!base.endsWith('_ore')) names.add(`${bare}_ore`);
-    names.add(`deepslate_${bare}_ore`);
-    return [...names].filter(Boolean);
+    // ② 旧逻辑：对**方块名**（`iron_ore` / `deepslate_iron_ore`）补双向变体。
+    //
+    // ★★★ t138（fixture 的 ⑥⑧ XFAIL 抓出来的活 bug）：
+    //   旧实现 `new Set([base, \`deepslate_${base}\`])` **没判断 base 是否已带 deepslate_** →
+    //      `deepslate_iron_ore` → `deepslate_deepslate_iron_ore`（不存在的方块）
+    //   而且**丢了 `iron_ore`** —— 挖深层铁矿时不会去找浅层的，反之亦然。
+    //   另外 `if (!base.endsWith('_ore')) names.add(\`${bare}_ore\`)` 对普通方块
+    //   （`stone`）会造出 `stone_ore` / `deepslate_stone_ore` 这些**游戏里不存在**的名字。
+    //
+    //   修法：**先剥掉 deepslate_ 前缀得到 stem，再只生成"stem 和 deepslate_stem"两个**，
+    //   不再凭"没带 _ore 就补 _ore"去猜。
+    const stem = base.replace(/^deepslate_/, '');
+    // ★ 必须保留"补 `_ore`"的猜测：**调用方常传简写**（`mine(bot,'iron',3)` → ore='iron'），
+    //   而真实方块名是 `iron_ore`。我第一版把这行删了 → `oreNames('iron')` 不含 `iron_ore`
+    //   → 三个 `flow_mine` 测试全部 `NO_TARGET`（**删代码时没跑全量，是这次教训**）。
+    //   但要避免 `stone` → `stone_ore` 这种垃圾：只对**不像"普通方块"**的名字补。
+    const isPlainBlock = /^(stone|cobblestone|dirt|sand|gravel|grass_block|oak_log|.*_log|.*_planks)$/.test(stem);
+    const names = [base, stem, `deepslate_${stem}`];
+    if (!stem.endsWith('_ore') && !isPlainBlock) {
+        names.push(`${stem}_ore`, `deepslate_${stem}_ore`);
+    }
+    return [...new Set(names.filter(Boolean))];
 }
 
 /**
