@@ -57,7 +57,10 @@ function makeBot(nearby = []) {
         inventory: { items: () => [], slots: [] },
         modes: { isOn: () => false, pause: () => {}, unpause: () => {} },
         attack: (e) => { side.swings.push(e); },
-        equip: async () => { side.equips++; },
+        // 真 bot.equip() 返回 Promise（skills.equip 里是 `await bot.equip(...)`）。
+        // 这里照样返回 Promise，但不写成 async —— 假实现里没有要 await 的东西，
+        // 写成 async 会踩本仓 require-await（lint 棘轮 278→279）。
+        equip: () => { side.equips++; return Promise.resolve(true); },
         pvp: { attack: (e) => { side.pvp.push(e); }, stop: () => {} },
         output: '',
     };
