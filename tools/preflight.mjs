@@ -167,14 +167,40 @@ const smokeTests = [
     }],
     ['history.load+save', async () => {
         const m = await import(pathToFileURL(join(ROOT, 'history.js')).href);
-        const h = new m.History({
-            name: 'preflight_tmp',
-            self_prompter: { state: 'idle', isStopped: () => true, prompt: null },
-            task: { taskStartTime: 0 }, last_sender: 'x',
-            memory_bank: { getJson: () => ({}) },
-            prompter: { promptMemSaving: async () => 'x' },
-        });
-        h.load();
+        // ★ T18（封版后补钉）：这个冒烟测试原来写死 `name: 'preflight_tmp'`，
+        //   于是临时目录固定落在 `bots/preflight_tmp/`，由文件末尾那句
+        //   `rmSync('bots/preflight_tmp')` 收尾删除。两个进程同时跑 preflight 时，
+        //   一方收尾就会把另一方**正在用**的目录删掉（已实测确证：目录在 3563ms 被删，
+        //   而此刻两个进程都还在运行）。
+        //
+        //   现在改为：本次调用**独占一个 mkdtemp 临时根**，用 `MC_BOTS_ROOT` 把
+        //   `History` 的落盘全部重定向到那里，跑完连根一起删。
+        //   —— 没有任何两个进程会共用同一个路径，也就没有"互删"这回事。
+        //
+        //   为什么能这么改（而不是只能加 pid 后缀）：`History` 的路径来自 `botsRootOf()`，
+        //   它认 `MC_BOTS_ROOT`（T17 已改造），所以**不依赖目录深度、不涉及相对 import**，
+        //   可以整体搬走。board 那种"按目录深度改写相对 import"的约束在这里不存在。
+        const { mkdtempSync, rmSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const root = mkdtempSync(join(tmpdir(), 'mc-preflight-'));
+        const prevRoot = process.env.MC_BOTS_ROOT;
+        process.env.MC_BOTS_ROOT = root;
+        try {
+            const h = new m.History({
+                name: 'preflight_tmp',
+                self_prompter: { state: 'idle', isStopped: () => true, prompt: null },
+                task: { taskStartTime: 0 }, last_sender: 'x',
+                memory_bank: { getJson: () => ({}) },
+                prompter: { promptMemSaving: async () => 'x' },
+            });
+            h.load();
+        } finally {
+            // 恢复环境变量：不能让这次冒烟测试的临时根泄漏给后续阶段（别的层也可能调 botsRootOf）。
+            if (prevRoot === undefined) delete process.env.MC_BOTS_ROOT;
+            else process.env.MC_BOTS_ROOT = prevRoot;
+            // 只删**自己**这个唯一根 —— 这正是"互删"消失的原因。
+            try { rmSync(root, { recursive: true, force: true }); } catch { /* 清理失败不影响判定 */ }
+        }
     }],
     // ★ S33（T05）：这里原来指向 `library/tile_map.js` —— 那个模块**早已删除**，
     //   于是 name 是「tile_map.classifyChunk」的这条永远走 `~ 非致命` 分支：
@@ -1269,8 +1295,18 @@ console.log("");console.log("[6/6] 依赖注入审计（A 档 = 单测能测到�
     console.log('  说明：这些数字会随开发变化。**引用时以本段输出为准**，别抄文档里的快照。\n');
 }
 
-const { rmSync } = await import('fs');
-try { rmSync(join(ROOT, '../../bots/preflight_tmp'), { recursive: true, force: true }); } catch { }
+// ★ T18（封版后补钉）：**这里原来有一句针对固定路径的收尾删除，已移除**：
+//
+//     const { rmSync } = await import('fs');
+//     try { rmSync(join(ROOT, '../../bots/preflight_tmp'), { recursive: true, force: true }); } catch { }
+//
+//   它删的是 `bots/preflight_tmp` —— 一个**所有 preflight 进程共用**的固定路径。
+//   两个进程同时跑时，先跑完的那个会删掉另一个**正在用**的目录（T18 实测确证：
+//   目录在 3563ms 被删，而此刻 A/B 两个进程都还在运行）。
+//
+//   现在临时目录改由 `history.load+save` 那条冒烟测试**各自 mkdtemp、各自删除**，
+//   进程之间不再共享任何路径，所以这里不需要（也不应该）再做全局清理 ——
+//   留着它就等于把"互删"重新装回去。
 
 if (failed === 0) {
     console.log('\n启动自检通过（含函数体冒烟测试）。');
