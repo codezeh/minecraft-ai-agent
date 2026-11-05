@@ -6,14 +6,26 @@
 import { plan3D } from '../src/agent/library/path_3d.js';
 import { recordFail, readFails, clearFail, columnSurfaces, boxSurfaces, stats3d, saveSurfaces, T } from '../src/agent/library/terrain3d.js';
 import { mkdirSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const REAL = './bots/deepseek/map';
-const TMP = 'C:/Users/zeh/AppData/Local/Temp/navopt-test-' + Date.now();
+// ★ T04：原来这里硬编码 `C:/Users/zeh/AppData/Local/Temp/...` —— 换机器/换用户名就跑不了，
+//   而且把某个人的目录结构写进了仓库。改成从系统临时目录推导；需要固定位置时用 NAVOPT_TMP 覆盖。
+const TMP = process.env.NAVOPT_TMP
+    || join(tmpdir(), `navopt-test-${Date.now()}`);
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {
     if (cond) { passed++; console.log(`  PASS  ${name}  ${detail}`); }
     else { failed++; console.log(`  FAIL  ${name}  ${detail}`); }
+}
+
+// ★ T04：本测试拿真机录的地形库（`bots/` 在 .gitignore 里）当输入。
+//   缺数据时必须**明确跳过**（SKIP + exit 0），别让 ENOENT / 空库装成"测试失败"。
+if (!existsSync(REAL)) {
+    console.log(`  SKIP  test_nav_opt：缺少真机地形库 ${REAL}（bots/ 不在版本库里；先跑一次真机再跑本测试）`);
+    process.exit(0);
 }
 
 /** 路径绕路比 */

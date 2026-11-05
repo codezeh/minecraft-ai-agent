@@ -1,7 +1,7 @@
 // B6 验收：memory.json 20 KB 硬上限。
 // 用真实的 History 类（不连服务器）验证 capSize 行为。
 import { History } from '../src/agent/history.js';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 
 let passed = 0, failed = 0;
 function check(name, cond, detail = '') {
@@ -9,7 +9,16 @@ function check(name, cond, detail = '') {
     else { failed++; console.log(`  FAIL  ${name}  ${detail}`); }
 }
 
-const real = JSON.parse(readFileSync('./bots/deepseek/memory.json', 'utf8'));
+// ★ T04：这个脚本读的是**真机录的** memory.json（`bots/` 在 .gitignore 里，干净克隆上不存在）。
+//   缺数据时必须**明确跳过**，而不是抛 ENOENT 装成"测试失败" ——
+//   「环境缺失」和「代码坏了」混在一起报红，是这轮审查里反复出现的同一个坑。
+//   跳过用 exit 0 + 行首 SKIP，`tools/unit_all.mjs` 认得这个约定。
+const MEM = './bots/deepseek/memory.json';
+if (!existsSync(MEM)) {
+    console.log(`  SKIP  test_memory_cap：缺少真机数据 ${MEM}（bots/ 不在版本库里；先跑一次真机再跑本测试）`);
+    process.exit(0);
+}
+const real = JSON.parse(readFileSync(MEM, 'utf8'));
 const fakeAgent = { name: 'testbot', self_prompter: { state: 'idle', isStopped: () => true, prompt: null }, task: { taskStartTime: 0 }, last_sender: 'x', memory_bank: { getJson: () => ({}) } };
 const h = new History(fakeAgent);
 

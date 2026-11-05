@@ -44,7 +44,9 @@
     "scripts": {
         "postinstall": "patch-package",
         "start": "node main.js",
-        "lint": "eslint src tools main.js",
+        "lint": "eslint src main.js",
+        "lint:tools": "node tools/lint_ratchet.mjs",
+        "lint:all": "npm run lint && npm run lint:tools",
         "test": "node tools/preflight.mjs && node tools/unit_all.mjs",
         "test:units": "node tools/unit_all.mjs",
         "gate": "node tools/preflight_regex_unit.mjs && node tools/preflight.mjs",

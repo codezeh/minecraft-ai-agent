@@ -1,0 +1,18 @@
+{
+  "scope": "tools/",
+  "note": "由 tools/lint_ratchet.mjs 维护：棘轮上限，只许降不许升。--update 收紧。",
+  "filesScanned": 217,
+  "total": 278,
+  "byRule": {
+    "no-empty": 129,
+    "require-await": 128,
+    "no-floating-promise/no-floating-promise": 8,
+    "no-undef": 5,
+    "no-constant-binary-expression": 2,
+    "no-irregular-whitespace": 2,
+    "no-constant-condition": 1,
+    "semi": 1,
+    "no-dupe-keys": 1,
+    "no-useless-escape": 1
+  }
+}

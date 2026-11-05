@@ -102,7 +102,8 @@ function extractBlock(name, srcText) {
 
 function evalLiteral(literal) {
     // 只 eval 从**本仓库自己的源码**里抽出来的常量字面量（不做任何外部输入）。
-    // eslint-disable-next-line no-new-func
+    // 注：本仓库没启用 no-new-func（config 里没有这条），所以这里不需要 eslint-disable
+    //     —— 加了反而报 "Unused eslint-disable directive"。
     return new Function(`return ${literal};`)();
 }
 

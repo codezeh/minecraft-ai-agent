@@ -121,6 +121,12 @@ if (skipped.length) {
 
 let failed = 0;
 const results = [];
+/**
+ * ★ T04：脚本**跑过了但自己声明缺环境**（行首 SKIP + exit 0）的，记这里。
+ * 与 `skipped`（按 NEEDS_REAL_DATA 名单事先排除）分开：这些是"跑了才知道没数据"。
+ * 两边都要**点名打印**，否则就是"静默没跑"。
+ */
+const skippedDynamic = [];
 /** t68：统计"绕过了严格假件（覆盖 stubs.blockAt）"的次数 = 单测盲区宽度的下限。 */
 let strictBypass = 0;
 let strictGuarded = 0;          // 其中已调用 assertPointLike 的
@@ -147,7 +153,15 @@ for (const name of list) {
         // ★ 2026-11-01 修：只数**行首**的 PASS（同 atom_all）。汇总行里也含 "PASS" 字样，
         // 用词边界匹配会把汇总行算成一条用例，显示数系统性虚高。
         const passCount = (printed.match(/^\s*PASS\s/mg) || []).length;
-        if (passCount === 0) {
+        // ★ T04：脚本自己声明「缺环境，跳过」= 行首 SKIP 且 exit 0。
+        //   区分「缺数据」和「代码坏了」：前者不算失败，但要**点名报出来**，
+        //   否则就变成"静默没跑"（第18条那族坑）。
+        const skipLines = printed.match(/^\s*SKIP\s.*$/mg) || [];
+        if (passCount === 0 && skipLines.length) {
+            const why = skipLines[0].trim();
+            results.push({ name, ok: true, skipped: true, cases: 0, why });
+            skippedDynamic.push(`${name}（${why}）`);
+        } else if (passCount === 0) {
             console.log(`  ✗ ${name} 一条 PASS 都没有 —— 视为失败`);
             results.push({ name, ok: false, code: 'NO_CASES_RAN' });
             failed++;
@@ -164,12 +178,24 @@ for (const name of list) {
 
 console.log('\n================ 离线单测总览 ================');
 for (const r of results) {
+    if (r.skipped) {
+        console.log(`  ⏭ ${r.name}  (缺环境，脚本自报跳过)`);
+        continue;
+    }
     console.log(`  ${r.ok ? '✅' : '❌'} ${r.name}${r.ok ? `  (${r.cases} 个用例)` : `  (exit ${r.code})`}`);
 }
 for (const name of skipped) {
     console.log(`  ⏭ ${name}  (需要真机数据，加 --real 跑)`);
 }
-console.log(`  ${results.length - failed}/${results.length} 个脚本通过${skipped.length ? `，${skipped.length} 个跳过` : ''}`);
+for (const line of skippedDynamic) {
+    console.log(`  ⏭ ${line}`);
+}
+{
+    // "通过"只数真有断言的；跳过的单独算，不混进分母（混进去会让"跳过"看起来像"通过"）。
+    const ran = results.filter((r) => !r.skipped);
+    const skippedTotal = skipped.length + skippedDynamic.length;
+    console.log(`  ${ran.length - failed}/${ran.length} 个脚本通过${skippedTotal ? `，${skippedTotal} 个跳过` : ''}`);
+}
 // ★ t68：绕过严格假件的次数 —— **单测盲区宽度的下限**。
 //   "门装了吗" 不等于 "有多少人走门"：`strictPoints` 只在**没被 stubs.blockAt 覆盖**时生效。
 //   这个数 = 当前有多少个用例走偏门、对"裸坐标"这类形状错误无感。

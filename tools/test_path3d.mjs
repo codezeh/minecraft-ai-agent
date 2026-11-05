@@ -6,6 +6,7 @@
 //   y=70 有 102 个面（地表），y=44 有 103 个面（洞穴）
 import { plan3D, describe3D, C3 } from '../src/agent/library/path_3d.js';
 import { stats3d } from '../src/agent/library/terrain3d.js';
+import { existsSync } from 'node:fs';
 
 const MAP = './bots/deepseek/map';
 let passed = 0, failed = 0;
@@ -14,11 +15,22 @@ function check(name, cond, detail = '') {
     else { failed++; console.log(`  FAIL  ${name}  ${detail}`); }
 }
 
+// ★ T04：先确认目录在不在，再交给 stats3d。
+//   目录不存在时 stats3d 自己会抛 ENOENT —— 那会被当成"测试红了"，
+//   但这其实是**环境缺失**（bots/ 在 .gitignore 里，干净克隆上没有真机地形库）。
+if (!existsSync(MAP)) {
+    console.log(`  SKIP  test_path3d：缺少真机地形库 ${MAP}（bots/ 不在版本库里；先跑一次真机再跑本测试）`);
+    process.exit(0);
+}
+
 const st = stats3d(MAP);
 console.log(`\n3D 库里: ${st.cells} 个面 / ${st.chunks} 区块`);
 if (st.cells === 0) {
-    console.log('库是空的，先跑 probe_3d_live 扫描');
-    process.exit(2);
+    // ★ T04：原来是 `process.exit(2)` —— unit_all 把非 0 当"测试红了"，
+    //   但这其实是**环境缺失**（bots/ 在 .gitignore 里，干净克隆上没有真机地形库）。
+    //   改成 SKIP + exit 0：让「缺数据」和「代码坏了」在报告里能分开。
+    console.log(`  SKIP  test_path3d：真机地形库为空或不存在（${MAP}），先跑 probe_3d_live 扫描；这不是代码失败`);
+    process.exit(0);
 }
 
 // ---------- 1) 从她的位置出去（不指定终点 = 找最近的开阔处）----------
