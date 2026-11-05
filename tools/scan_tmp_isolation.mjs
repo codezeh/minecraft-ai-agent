@@ -28,6 +28,7 @@
  *   node tools/scan_tmp_isolation.mjs --check    # 有未处置项就 exit 1（可挂 CI）
  *   node tools/scan_tmp_isolation.mjs --selftest # 只验扫描器本身
  *   node tools/scan_tmp_isolation.mjs --leftovers # 列（并可 --purge）%TEMP% 里的测试残留目录
+ *   node tools/scan_tmp_isolation.mjs --audit-exemptions # 逐条核对豁免/非风险登记是否仍与代码相符
  */
 import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -221,7 +222,28 @@ export function analyse(src) {
         }
         return out;
     };
-    const fixed = collect(FIXED_SUBPATH_PATTERNS);
+    // ★ T19：`dir-as-arg` 会把**事件名**当成目录 —— `socket.on('data', cb)`、
+    //   `emit('logs', …)` 都长成"字面量当第一个参数"的样子。
+    //   这类假阳性比漏报更坏：它让人开始不信这个扫描器。所以按行做一次排除。
+    // 注意：匹配起点就是那个 `(`，所以这里只看它前面是不是 .on / .emit 之类（不含括号）
+    const EVENT_CALL = /\.(?:on|once|off|emit|addListener|removeListener)\s*$/;
+    const collectFixed = () => {
+        const out = [];
+        for (const { id, re } of FIXED_SUBPATH_PATTERNS) {
+            re.lastIndex = 0;
+            let m;
+            while ((m = re.exec(code)) !== null) {
+                if (id === 'dir-as-arg') {
+                    const lineStart = code.lastIndexOf('\n', m.index) + 1;
+                    const before = code.slice(lineStart, m.index).trimEnd();
+                    if (EVENT_CALL.test(before)) continue;   // 事件名，不是路径
+                }
+                out.push({ line: lineOf(code, m.index), text: m[0].trim(), kind: id });
+            }
+        }
+        return out;
+    };
+    const fixed = collectFixed();
     const deletes = collect(DELETE_PATTERNS);
     const writes = collect(WRITE_PATTERNS);
     const rms = deletes;
@@ -251,51 +273,58 @@ export function analyse(src) {
 /**
  * **确实不能改成隔离**的（每条都要写清为什么）—— 扫描器会把它们单列，
  * 并且会在结尾断言"清单里每一条都还在"，避免这份豁免表变成僵尸。
+ *
+ * ★ T19 逐条审计过（`--audit-exemptions` 可复现），删掉了两条：
+ *   ① `tools/preflight.mjs` —— T18（`e540515`）已改成 `mkdtempSync` + `MC_BOTS_ROOT` 独占，
+ *      它现在真的**已隔离**。那条豁免的理由还引着 `rmSync(join(ROOT, "../../bots/preflight_tmp"))`
+ *      —— 一句**已不存在于代码**的话（只剩注释里提到）。这正是一条"过期豁免 = 假证据"。
+ *   ② `tools/t51_firstnight_realagent.mjs` —— 它当初被扫到，是因为 `on('data', …)` 里的
+ *      `'data'` 被当成了目录（T19 已修掉这个假阳性）。修完它**不再有任何固定共享目录**，
+ *      豁免成了僵尸。（它确实会写一个固定的 `tmp-t59-agent.log`，但那是**单个文件**、
+ *      不是目录，不在本判据范围内 —— 见文档 §T19 的"边界"。）
+ *
+ * 字段说明：
+ *   · `why`        —— 为什么不能/不该改成每进程隔离
+ *   · `keepReason` —— 可选。给"工具会判它已隔离，但那个标记其实不是目录隔离"的情形留话，
+ *                     避免把假绿当成真隔离（`--audit-exemptions` 会照此显示为"保留"而不是"冗余"）
  */
 export const EXEMPTIONS = [
     {
         file: 'tools/bench_move_actions.mjs',
-        why: '**基准脚本，不是测试**：它把结果写到仓库内 tmp/bench/ 供人对照历史，'
-            + '并在开始前清掉自己的输出目录。unit_all 不会跑它（不是 *_unit.mjs、不在 UNITS），'
-            + '两路并发跑基准本身没有意义 —— 基准比的正是"独占机器时的表现"。',
+        why: '**基准脚本，不是测试**：产物 append 到 `tmp/bench/<日期>-move-actions.jsonl`，'
+            + "并在开头 `join('tmp', 'bench-actions-map')` 清掉自己的地图缓存。"
+            + '`unit_all` 不会跑它（不是 *_unit.mjs、不在 UNITS）——'
+            + '两路并发跑基准没有意义：基准比的正是"独占机器时的表现"。',
     },
     {
         file: 'tools/bench_deepwater.mjs',
-        why: '**基准脚本，不是测试**：它按设计把结果写到仓库内的 tmp/bench-* 供人对照历史，'
-            + 'unit_all 不会跑它（不是 *_unit.mjs / 不在 UNITS），两路并发跑基准本身没有意义。',
+        why: '**基准脚本，不是测试**：产物写 `tmp/bench/deepwater-<日期>.jsonl`（独立 jsonl，'
+            + '不与 move-actions 混），供人对照历史；`unit_all` 不跑它。',
     },
     {
         file: 'tools/bench_move_baseline.mjs',
-        why: '同上：人工触发的基准脚本。',
-    },
-    {
-        file: 'tools/restart_bot.mjs',
-        why: '运维脚本（重启 bot），**要的就是**仓库内固定路径的 pid/日志；不在 unit_all 名单里。',
-    },
-    {
-        file: 'tools/preflight.mjs',
-        why: '**门禁脚本，不是测试**（不归本轮改，且任务书要求"不碰 preflight"）。'
-            + '★ 但要如实纠正一处："它只读"不成立 —— 它在收尾真的会 '
-            + '`rmSync(join(ROOT, "../../bots/preflight_tmp"))`。'
-            + '之所以列成豁免：① 它是**串行**门禁（一次一个提交），不是被 unit_all 并发调度的测试；'
-            + '② 它自己 `mkdtemp` 出的是别的临时目录，那行 `bots/preflight_tmp` 的删除是'
-            + '"清自己上一次的残留"。'
-            + '★ 真正的风险（两次提交恰好同时跑 preflight）已写进文档，交给 gate 的负责人决定是否加 pid 后缀。',
+        why: '**基准脚本，不是测试**：产物写 `tmp/bench/<日期>-move.jsonl`，'
+            + "地图缓存在 `join('tmp', 'bench-move-map', 'terrain')`；`unit_all` 不跑它。",
     },
     {
         file: 'tools/bench_s2_main.mjs',
-        why: '**基准脚本，不是测试**：把每轮结果 append 到仓库内 tmp/ 供人对比历史，'
-            + '`unit_all` 不会跑它（不是 *_unit.mjs、不在 UNITS）。两路并发跑基准没有意义 ——'
-            + '基准比的正是"独占机器时的表现"。',
+        why: '**基准脚本，不是测试**：产物落在**项目根**的 `tmp/bench/<时间戳>-s2-main.jsonl`'
+            + "（`'..', '..', 'tmp', 'bench'`，即 mindcraft 仓**之外**）；"
+            + '`unit_all` 不跑它。',
     },
     {
-        file: 'tools/t51_firstnight_realagent.mjs',
-        why: '**真机演练脚本**（要连真实服务器跑 agent），把过程 append 到 data/ 给人事后翻；'
-            + '不在 unit_all 名单里，也不该被并发调度。与 t51_triple_round 同类。',
+        file: 'tools/restart_bot.mjs',
+        why: '**运维脚本**（重启 bot），`unit_all` 不跑它，并发跑两个"重启"本身没有意义。'
+            + '真实固定路径只有 `tmp/bot_run.log`（**单个文件**日志，开跑 `writeFileSync` 清空）。',
+        keepReason: '工具会把它判成"已隔离（process.pid）"，但那个 `process.pid` 出现在'
+            + '一段 **PowerShell 进程过滤**脚本里（排除自己的 PID），与目录/文件隔离**无关**。'
+            + '所以保留豁免并写明 —— 否则就成了"用无关标记换来的假绿"。',
     },
     {
         file: 'tools/t51_triple_round.mjs',
-        why: '人工真机三轮演练脚本（要连服务器），不在 unit_all 名单里；tmp 路径是给人事后翻日志的。',
+        why: '**人工真机三轮演练脚本**（要连服务器），`unit_all` 不跑它；'
+            + '产物写 `tmp/t51-craft-chain.jsonl` / `tmp/t51-craft-fail-full.jsonl` / `tmp/t51-triple.json`，'
+            + '是给人事后翻的。',
     },
 ];
 
@@ -316,6 +345,25 @@ function isTestLike(relPath) {
     return /_unit\.mjs$/.test(relPath) || /^tools\/test_.*\.mjs$/.test(relPath) || /^tools\/flow_.*\.mjs$/.test(relPath);
 }
 
+/**
+ * 判定**一个文件**落在哪一类 —— `main()` 与 `--audit-exemptions` 共用同一套规则
+ * （★ 单一真相：审查豁免时用的判据必须和扫描时一模一样，否则"审查"就是另一套东西）。
+ *
+ * @param {string} rel 形如 `tools/x.mjs`
+ * @param {string} src 源码
+ * @returns {{rel:string, fixed:Array, deletes:Array, writes:Array, rms:Array, isolated:string[],
+ *            exempt:object|undefined, risky:boolean, allReadOnly:boolean, destructive:boolean, testLike:boolean}}
+ */
+export function classify(rel, src) {
+    const a = analyse(src);
+    const exempt = EXEMPTIONS.find((e) => e.file === rel);
+    // 非风险用途：文件里**所有**固定共享路径都登记过（只读 / 消息字符串 / 纯参数）
+    const allReadOnly = a.fixed.every((f) => isNonRiskUse(rel, f.text));
+    const destructive = a.deletes.length > 0 || a.writes.length > 0;
+    const risky = a.fixed.length > 0 && destructive && a.isolated.length === 0 && !allReadOnly;
+    return { rel, ...a, exempt, risky, allReadOnly, destructive, testLike: isTestLike(rel) };
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // ③ 自检：扫描器自己先被验一遍
 // ───────────────────────────────────────────────────────────────────────────
@@ -329,6 +377,8 @@ function isTestLike(relPath) {
 // 7: 字符串里带 // 的行 —— 剥注释不许把 `//` 后面的代码吃掉，必须仍报 tmp
 // 8/9: 固定 bots/ 路径（模板字面量）—— 必须被报
 // 10: **嵌在路径中间**的点开头临时目录（'tools/.tmp_mut/...'）—— T17 新增形态
+// 11: `sock.on('data', …)` —— 事件名，**不许**被 dir-as-arg 当成目录（T19 假阳性修正）
+// 12: 正对照 —— `resolve(cwd, 'bots', …)` 必须被认出（证明排除事件名没把功能关掉）
 // T17 追加：固定 `bots/` 路径（模板字面量带变量）也必须被认出来 ——
 //   这正是 atom_classify 三路并行互删地标的那一类。
 const SELFTEST_FIXTURE = `
@@ -341,6 +391,8 @@ const tricky = 'a//b' + 'tmp/in-string';
 const botsFixed = \`bots/\${name}/memory\`;
 rmSync(\`bots/\${name}\`, { recursive: true, force: true });
 const scratch = 'tools/.tmp_mut/strat_obtain_mut.mjs';
+sock.on('data', (b) => { void b; });
+const d2 = path.resolve(cwd, 'bots', name);
 `;
 
 function selftest() {
@@ -362,9 +414,21 @@ function selftest() {
     if (isNonRiskUse('tools/atom_classify_unit.mjs', 'bots/probe')) {
         problems.push('只读登记误伤：未登记的文件被判成只读');
     }
+    // ★ T19：第 11 行是 `sock.on('data', …)` —— 那是**事件名**，不许被当成目录
+    if (lines.includes(11)) problems.push('事件名 on(\'data\',…) 被当成了目录（dir-as-arg 假阳性）');
+    // ★ 正对照：同时必须有 resolve(cwd, 'bots', …) 被认出，
+    //   否则「排除事件名」这一条可能把整个 dir-as-arg 功能关掉了，而自检照样绿。
+    if (!lines.includes(12)) problems.push('漏报第 12 行（resolve(cwd, bots, ...) 这个真目录没被认出）');
+
+    // ★ T19：理由里的"代码引用"检查 —— 占位符跳过、真引用必须能找到
+    const spans1 = codeSpansOf('产物写 `tmp/bench/<日期>.jsonl`，并 `rmSync(join(\'tmp\', \'x\'))` 清缓存');
+    if (spans1.some((x) => x.includes('<日期>'))) problems.push('占位符（<日期>）没被跳过：会制造假警报');
+    if (!spans1.some((x) => x.startsWith('rmSync('))) problems.push('真代码引用没被抽出来');
+
     console.log(problems.length
         ? `✗ 自检失败：${problems.join('；')}`
-        : '✓ 自检通过：注释样本被忽略 / 代码真样本全中 / 字符串里的 // 没误判 / bots 模板命中 / 只读登记双向正确');
+        : '✓ 自检通过：注释样本被忽略 / 代码真样本全中 / 字符串里的 // 没误判 / bots 模板命中 / '
+          + '只读登记双向正确 / 事件名不算目录 / 代码引用检查（含占位符跳过）');
     return problems.length === 0;
 }
 
@@ -433,26 +497,128 @@ function reportLeftovers(argv) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// ④b 豁免自审（--audit-exemptions）
+//
+// ★ T19 的由来：一条**过期的豁免理由**，看起来和有效理由一模一样。
+//   `tools/preflight.mjs` 那条写着"它收尾会 rmSync(bots/preflight_tmp)"，
+//   而 T18 已经把 preflight 改成 mkdtemp + MC_BOTS_ROOT 独占 —— 那句话指向一段**已不存在的代码**。
+//   这类"假证据"会让下一个人以为那里还有风险（或以为已经有人处理过）。
+//
+// 所以这个模式对每一条豁免做三件事：
+//   ① 文件还在吗；
+//   ② **如果删掉这条豁免**，它会落在哪类？（还是"需处置"= 豁免仍必要；
+//      落进"已隔离/非风险"= 豁免已是冗余；完全没有命中 = 僵尸豁免，理由在描述一个不存在的东西）
+//   ③ `why` 里用反引号引的**代码片段**，是否仍出现在该文件的**代码**里（剥注释后比 ——
+//      因为"被删的代码"经常还留在注释里，那不算还在）。
+// ───────────────────────────────────────────────────────────────────────────
+
+/** 把空白折叠，便于跨换行比代码片段 */
+const squash = (t) => String(t ?? '').replace(/\s+/g, ' ').trim();
+
+/**
+ * 从 `why` 里抽出反引号包起来的片段，挑出"看起来像代码"的那些。
+ * @param {string} why
+ * @returns {string[]}
+ */
+export function codeSpansOf(why) {
+    const out = [];
+    const re = /`([^`\n]{4,120})`/g;
+    let m;
+    while ((m = re.exec(String(why ?? ''))) !== null) {
+        const span = m[1];
+        // ★ 只查"**声称的代码引用**"。带占位符的（`<日期>`、`…`、`...`）是**人话描述**，
+        //   不是逐字引用 —— 拿它去比对代码只会制造假警报（T19 第一版就这么误伤了自己的文案）。
+        if (/[<…]|\.\.\./.test(span)) continue;
+        // 只查"像代码"的：含调用括号 / 路径分隔 / 赋值 / 点号调用
+        if (/[(){}]|=>|=[^=]|\.\w+/.test(span) || span.includes('/')) out.push(span);
+    }
+    return out;
+}
+
+/**
+ * 一条豁免的现状。
+ * @param {object} e EXEMPTIONS 条目
+ * @param {(rel:string)=>string|null} readSrc 读文件（不存在返回 null）
+ */
+export function auditOne(e, readSrc) {
+    const src = readSrc(e.file);
+    const problems = [];
+    if (src == null) {
+        return { file: e.file, exists: false, verdict: '僵尸（文件不存在）', problems, spans: [], missingSpans: [] };
+    }
+    const row = classify(e.file, src);
+    // 关键：把这条豁免**摘掉**再判一次，看它还需不需要豁免
+    let land;
+    if (!row.fixed.length) land = '没有命中（僵尸豁免）';
+    else if (row.risky) land = '需处置（豁免仍必要）';
+    else if (row.isolated.length) land = `已隔离（${row.isolated.join('+')}）`;
+    else if (row.allReadOnly) land = '非风险用途';
+    else land = '无删除/写入动作';
+
+    const spans = codeSpansOf(e.why);
+    // 比之前把引号也统一：理由是给人看的，用 `"tmp"` 还是 `'tmp'` 不该算"引用失效"。
+    const norm = (t) => squash(t).replace(/"/g, "'").replace(/\s+/g, '');
+    const codeOnly = norm(stripComments(src));
+    const missingSpans = spans.filter((sp) => !codeOnly.includes(norm(sp)));
+
+    let verdict;
+    if (!row.fixed.length) verdict = '僵尸（文件里已无固定共享路径，应删除）';
+    else if (!row.risky && e.keepReason) verdict = '保留（工具判为安全，但那个标记不是目录隔离 —— 见 keepReason）';
+    else if (!row.risky) verdict = `冗余（本身已安全：${land}，应删除）`;
+    else verdict = '仍必要（仍会被判为需处置）';
+    if (missingSpans.length) problems.push(`理由引用了**代码里已不存在**的片段：${missingSpans.join(' / ')}`);
+
+    return { file: e.file, exists: true, land, verdict, problems, spans, missingSpans };
+}
+
+function reportExemptions() {
+    const readSrc = (rel) => {
+        try { return readFileSync(join(ROOT, rel), 'utf8'); } catch { return null; }
+    };
+    console.log('逐条核对 EXEMPTIONS（判定用的是**同一套** classify 规则）');
+    console.log('');
+    let bad = 0;
+    for (const e of EXEMPTIONS) {
+        const r = auditOne(e, readSrc);
+        const flag = (r.verdict.startsWith('僵尸') || r.verdict.startsWith('冗余') || r.problems.length) ? '✗' : '·';
+        if (flag === '✗') bad += 1;
+        console.log(`${flag} ${r.file}`);
+        console.log(`    判定：${r.verdict}`);
+        if (r.land) console.log(`    若去掉豁免会落在：${r.land}`);
+        if (e.keepReason) console.log(`    保留依据：${e.keepReason}`);
+        for (const p of r.problems) console.log(`    ⚠ ${p}`);
+    }
+    console.log('');
+    // NON_RISK_USES 也一起核（同一母题：登记也会过期）
+    console.log('逐条核对 NON_RISK_USES');
+    for (const e of NON_RISK_USES) {
+        const src = readSrc(e.file);
+        if (src == null) { console.log(`✗ ${e.file}  ← ${e.path} [${e.kind}]：**文件不存在**`); bad += 1; continue; }
+        const hit = analyse(src).fixed.some((f) => f.text.includes(e.path));
+        console.log(`${hit ? '·' : '✗'} ${e.file}  ← ${e.path} [${e.kind}]${hit ? '' : '：**该片段已不再命中**（登记过期）'}`);
+        if (!hit) bad += 1;
+    }
+    console.log('');
+    console.log(bad === 0 ? '✓ 所有豁免/非风险登记都与当前代码相符' : `✗ 有 ${bad} 条需要订正`);
+    return bad === 0;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // ⑤ 主流程
 // ───────────────────────────────────────────────────────────────────────────
 function main() {
     const argv = process.argv.slice(2);
     if (argv.includes('--selftest')) process.exit(selftest() ? 0 : 1);
     if (argv.includes('--leftovers')) { reportLeftovers(argv); process.exit(0); }
+    if (argv.includes('--audit-exemptions')) process.exit(reportExemptions() ? 0 : 1);
 
     const files = listTools();
     const rows = [];
     for (const abs of files) {
         const rel = relative(ROOT, abs).split('\\').join('/');
-        const src = readFileSync(abs, 'utf8');
-        const a = analyse(src);
-        if (!a.fixed.length) continue;
-        const exempt = EXEMPTIONS.find((e) => e.file === rel);
-        // 只读用途：文件里所有固定共享路径都登记成只读 → 不算风险
-        const allReadOnly = a.fixed.every((f) => isNonRiskUse(rel, f.text));
-        const destructive = a.deletes.length > 0 || a.writes.length > 0;
-        const risky = a.fixed.length > 0 && destructive && a.isolated.length === 0 && !allReadOnly;
-        rows.push({ rel, ...a, exempt, risky, allReadOnly, destructive, testLike: isTestLike(rel) });
+        const row = classify(rel, readFileSync(abs, 'utf8'));
+        if (!row.fixed.length) continue;
+        rows.push(row);
     }
 
     console.log('扫描范围：tools/**/*.mjs =' + files.length + ' 个文件');
