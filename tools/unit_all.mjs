@@ -40,6 +40,7 @@ const UNITS = [
     'flow_mine_notool_unit',     // t21：mine 的 NO_TOOL 假失败 + 三态判据（读不到≠没工具）
     'flow_mine_pickup_unit',     // t72：挖一块捡一块（每块后 collectDrops，不是攒到最后）+ 源码级守卫 + 行为差分
     'find_stand_unit',           // t65：findStandNear 四邻站位判据（脚下悬空/水/岩浆不算 + 读炸不崩，含反向验证）
+    'board_orphan_parent_unit',    // t96：父单兜底收敛 convergeOrphanParents（含双重防线 A/B 反向验证）
     'board_scheduler_unit',      // M8 B2：调度主循环 / 抢占规则 / autoClaim / requeueStaleBrief
     'board_b3_unit',             // M8 B3：多人单拆单 / 6 种预约 key + TTL / 角色过滤 / dependsOn
     'board_b4_unit',             // M8 B4：共享地标/危险点/箱子内容 + 迁移幂等 + 单一真相
