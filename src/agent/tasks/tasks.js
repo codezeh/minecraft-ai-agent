@@ -411,17 +411,51 @@ export class Task {
     }
 
     async initBotTask() {
-        await this.agent.bot.chat(`/clear ${this.name}`);
-        console.log(`Cleared ${this.name}'s inventory.`);
+        // ★ F-EXEC-202（2026-11-06）：任务脚本里的 cheat 指令闸，**默认关闭（fail-closed）**。
+        //
+        // 背景：cooking_tasks.js / 本文件共有 38 处裸 `bot.chat('/…')`，绕过 atom_input_misc.command()
+        // 的白名单与等级判定。最重的几条：cooking 的 8 条 `/fill`（合并 100×100×10，不可撤销）、
+        // `/kill @e[type=…,distance=..200]`（200 格内该类实体全清）、以及 `/clear`（清背包）。
+        //
+        // 【为什么是"逐段跳过"而不是"整段 return"】（复核席打回后的修法）
+        //   上一版在函数开头直接 return，会连带跳过：等待、initiator 赋值、human 清包、
+        //   **teleportBots()（bot 不传送，会在原地乱走）**、agent_count 检查、killAll()、startConversation。
+        //   而日志只写"拒绝执行 cheat" ⇒ 照日志排障会得出"只有 cheat 被挡、其它正常"的**错误结论**。
+        //   现在：只跳过 cheat 那几段，其余照常；日志**逐条列出"拦了什么、什么照常执行"**。
+        //
+        // 【已知边界，别读成"彻底修好"】闸在**调用方**不在 sink：CookingTaskInitiator.*、
+        //   Task.teleportBots() 等公开方法自身没有判据。今天没有第二调用点，但将来任何新调用
+        //   都会静默绕过。彻底修法是 guardedChat 下沉到 sink —— 已单独立单，标"待真机环境"。
+        const cheatsAllowed = process.env.ALLOW_TASK_CHEATS === '1';
+        if (!cheatsAllowed) {
+            console.error('[F-EXEC-202] ALLOW_TASK_CHEATS 未设为 1 ⇒ 跳过 cheat 段，其余流程照常。');
+            console.error('  ✗ 跳过：`/clear <bot名>`（清空 bot 背包）');
+            console.error('  ✗ 跳过：cooking 任务的场景搭建（内含 8 条 /fill = 100×100×10 不可撤销，');
+            console.error('          以及 /kill @e[type=…,distance=..200] 清 200 格内实体）');
+            console.error('  ✗ 跳过：`/clear <玩家名>`（清人类背包）');
+            console.error('  ✓ 照常：等待、teleportBots()、agent_count 检查、killAll()、startConversation');
+            console.error('  ⇒ 结果：**场景没有搭起来**（这是"部分解决"，不是"cheat 被拦、其它全好"）。');
+            console.error('  确实需要跑（只在造场景/测试时）请设 ALLOW_TASK_CHEATS=1 后重启。');
+        } else {
+            await this.agent.bot.chat(`/clear ${this.name}`);
+            console.log(`Cleared ${this.name}'s inventory.`);
+        }
 
         //wait for a bit so inventory is cleared
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         if (this.data === null)
             return;
-        
+
         if (this.task_type === 'cooking') {
-            this.initiator = new CookingTaskInitiator(this.data, this.agent.bot);
+            if (cheatsAllowed) {
+                this.initiator = new CookingTaskInitiator(this.data, this.agent.bot);
+            } else {
+                // 场景搭建本身就是 cheat（/fill + /kill），不允许时**不建场景**；
+                // 但保留 initiator 为 null 让后续流程照常走（不整段 return）。
+                console.error('[F-EXEC-202] cooking 场景未搭建：initiator=null，后续流程继续执行。');
+                this.initiator = null;
+            }
         } else {
             this.initiator = null;
         }
@@ -430,12 +464,16 @@ export class Task {
         await new Promise((resolve) => setTimeout(resolve, 3000));
 
         if (this.agent.count_id === 0 && this.data.human_count > 0) {
-            console.log('Clearing human player inventories');
-            for (let i = 0; i < this.data.human_count; i++) {
-                const username = this.data.usernames[i];
-                await this.agent.bot.chat(`/clear ${username}`);
+            if (!cheatsAllowed) {
+                console.error('[F-EXEC-202] 跳过 `/clear <玩家名>`（cheat 段未允许）；玩家背包保持原样。');
+            } else {
+                console.log('Clearing human player inventories');
+                for (let i = 0; i < this.data.human_count; i++) {
+                    const username = this.data.usernames[i];
+                    await this.agent.bot.chat(`/clear ${username}`);
+                }
+                await new Promise((resolve) => setTimeout(resolve, 500));
             }
-            await new Promise((resolve) => setTimeout(resolve, 500));
         }
 
         if (this.data.initial_inventory) {
