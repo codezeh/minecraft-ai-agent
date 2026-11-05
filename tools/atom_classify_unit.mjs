@@ -13,8 +13,11 @@
  */
 import { rmSync } from 'node:fs';
 import { isProtected } from '../src/agent/library/query_classify.js';
-import { protectedPlaces, resetProtectedCache } from '../src/agent/library/landmarks.js';
-import { writeStore } from '../src/agent/library/memory_store.js';
+
+// 数据层路径可用 LANDMARKS_MODULE 覆盖 —— 只为「反向验证」用：
+// 把修复前（读 c?.pos）的 landmarks.js 副本指进来，本测试必须变红；否则它只是在自证。
+const LM = process.env.LANDMARKS_MODULE ?? '../src/agent/library/landmarks.js';
+const { protectedPlaces, resetProtectedCache, rememberChest } = await import(LM);
 
 let pass = 0, fail = 0;
 const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${evidence}`); };
@@ -22,9 +25,10 @@ const badCase = (name, actual) => { fail++; console.log(`FAIL ${name} ${actual}`
 
 const BOT_A = { username: '__unit_y_semantics_a' };
 const BOT_B = { username: '__unit_y_semantics_b' };
+const BOT_C = { username: '__unit_y_semantics_c' };
 
 function cleanup() {
-    for (const b of [BOT_A, BOT_B]) {
+    for (const b of [BOT_A, BOT_B, BOT_C]) {
         try { rmSync(`bots/${b.username}`, { recursive: true, force: true }); } catch { }
         resetProtectedCache(b);
     }
@@ -64,9 +68,17 @@ cleanup();
 }
 
 // ── 4. 缓存按 bot 隔离：A 的箱子不能出现在 B 的地标里 ──────────────────
+//
+// ★ 第8条 J3：夹具必须走**真的写入函数** rememberChest()。
+//   旧夹具是 `writeStore(A,'chests',[{ pos:{x:100,…} }])` —— 那是**读端**（`c?.pos`）
+//   才有的形状，真正的写入端 rememberChest / rememberSite / rememberStorageArea
+//   存的是**扁平** {x,y,z,note,lastUsed}。用读端形状当夹具，等于自己把要测的
+//   "读端取错路径"这个 bug 抹平了：生产里 protectedPlaces 恒返回 []，测试却全绿。
 {
-    writeStore(BOT_A, 'chests', [{ pos: { x: 100, y: 64, z: 100 }, note: 'A 的箱子' }]);
-    writeStore(BOT_B, 'chests', [{ pos: { x: -100, y: 64, z: -100 }, note: 'B 的箱子' }]);
+    const wroteA = rememberChest(BOT_A, { x: 100, y: 64, z: 100 }, 'A 的箱子');
+    const wroteB = rememberChest(BOT_B, { x: -100, y: 64, z: -100 }, 'B 的箱子');
+    resetProtectedCache(BOT_A);
+    resetProtectedCache(BOT_B);
 
     const a = protectedPlaces(BOT_A);
     const b = protectedPlaces(BOT_B);
@@ -76,14 +88,34 @@ cleanup();
     const aLeaksB = a.some((s) => s.x === -100);
     const bLeaksA = b.some((s) => s.x === 100);
 
-    if (aHasOwn && bHasOwn && !aLeaksB && !bLeaksA) {
+    if (wroteA && wroteB && aHasOwn && bHasOwn && !aLeaksB && !bLeaksA) {
         okCase('地标缓存按 bot 隔离', `A=${a.length} B=${b.length}`);
     } else {
-        badCase('地标缓存按 bot 隔离', `A=${JSON.stringify(a)} B=${JSON.stringify(b)}`);
+        badCase('地标缓存按 bot 隔离',
+            `写入=${wroteA}/${wroteB} A=${JSON.stringify(a)} B=${JSON.stringify(b)}`);
     }
 }
 
-// ── 5. 缓存命中：同一 bot 连续两次拿到同一份（不重复读盘）──────────────
+// ── 5. 写读同形状：rememberChest 之后 protectedPlaces 必须非空，且真能判出保护 ──
+//
+// 这就是 J3 的直接断言：修之前 spots 恒为 []（读 c?.pos 而写的是扁平 x/y/z），
+// 这道"别挖到玩家的箱子"的闸从写出来那天起没拦过任何东西。
+{
+    const wrote = rememberChest(BOT_C, { x: 7, y: 70, z: 9 }, 'C 的箱子');
+    resetProtectedCache(BOT_C);
+    const spots = protectedPlaces(BOT_C);
+    const guard = isProtected({ x: 7, y: 70, z: 9 }, { spots });
+    const judged = guard.ok && guard.data.protectedBy === 'landmark';
+    if (wrote && spots.length > 0 && judged) {
+        okCase('rememberChest 之后 protectedPlaces 非空且判得出保护',
+            `spots=${spots.length} protectedBy=${guard.data.protectedBy} 形状=${JSON.stringify(spots[0])}`);
+    } else {
+        badCase('rememberChest 之后 protectedPlaces 非空且判得出保护',
+            `写入=${wrote} spots=${JSON.stringify(spots)} protectedBy=${guard?.data?.protectedBy}`);
+    }
+}
+
+// ── 6. 缓存命中：同一 bot 连续两次拿到同一份（不重复读盘）──────────────
 {
     const first = protectedPlaces(BOT_A);
     const second = protectedPlaces(BOT_A);

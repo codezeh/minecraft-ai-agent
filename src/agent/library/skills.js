@@ -21,6 +21,9 @@ import { closeWindow as closeWindowAtom } from './atom_input_inventory.js';
 // 内部改为调动作 —— 这样"谁真的在干活"只有一份真相。
 import { craftOnce, furnaceLoad, furnaceCollect } from './act_craft.js';
 import { eat as eatAction } from './act_items.js';
+// 第21条：攻击目标的"该不该打"判定只有一份真相 —— act_attack.isAttackable。
+// 本文件过去零引用它，于是 attackNearest/attackEntity 能打玩家。
+import { isAttackable } from './act_attack.js';
 import { scanTree, judgeTree, planFelling } from './query_tree.js';
 import { followEntity as followEntityTask } from './flow_follow.js';
 import pf from 'mineflayer-pathfinder';
@@ -705,7 +708,10 @@ export async function attackNearest(bot, mobType, kill=true) {
     modesPause(bot, 'cowardice');
     if (mobType === 'drowned' || mobType === 'cod' || mobType === 'salmon' || mobType === 'tropical_fish' || mobType === 'squid')
         modesPause(bot, 'self_preservation'); // so it can go underwater. TODO: have an drowning mode so we don't turn off all self_preservation
-    const mob = world.getNearbyEntities(bot, 24).find(entity => entity.name === mobType);
+    // 第21条：**在 find 之前过滤**。玩家 / 盔甲架 / 掉落物不该是攻击目标，
+    // 而 attackNearest 是"按名字找最近的"——不过滤就一定会打到玩家。
+    // 判据归 act_attack.isAttackable（唯一真相）。
+    const mob = world.getNearbyEntities(bot, 24).find(entity => entity.name === mobType && isAttackable(entity));
     if (mob) {
         return await attackEntity(bot, mob, kill);
     }
@@ -722,6 +728,14 @@ export async function attackEntity(bot, entity, kill=true) {
      * @example
      * await skills.attackEntity(bot, entity);
      **/
+    // 第21条：本函数是"打这个实体"的通用入口，调用方可能直接传一个玩家进来
+    // （defendSelf / 模型给的实体 / 任务传入）。所以必须在**动手之前**拦。
+    // 拦在 equipHighestAttack / pvp.attack 之前 —— 不然"拒绝"也会先换上武器、先挥一下。
+    if (!isAttackable(entity)) {
+        log(bot, `Refusing to attack ${entity?.name ?? entity?.type ?? 'that'}: not an attackable entity.`);
+        log(bot, `FAILED`);
+        return false;
+    }
     let pos = entity.position;
     await equipHighestAttack(bot)
 
@@ -1022,11 +1036,33 @@ export async function breakBlockAt(bot, x, y, z) {
      **/
     if (x == null || y == null || z == null) throw new Error('Invalid position to break block at.');
     let block = bot.blockAt(Vec3(x, y, z));
+    // ---- 第8条 J4 + 第23条：本函数是**唯一通用拆方块出口**，过去零代码判定 ----
+    // 判据用 world_model.isPlayerBuiltBlock（人工材料 + 后缀通配），和 placeBlock 里
+    // 那道闸是同一份真相。带前缀的方块名（oak_planks / *_stairs）由它自己通配。
+    // 闸放在最前面：作弊分支（/setblock … air）也在它后面，两条路都要过闸。
+    //
+    // ★ 纪律（报告 13.2）：**不要**把这道闸和下面 levelGround 用的 NATURAL_BLOCKS 合并。
+    //   两者语义相反：这里问"它像不像玩家建的"（越像越不许拆）；
+    //   NATURAL_BLOCKS 问"它是不是天然地形"（是才允许 /fill 按材质清）。
+    //   合并成一套判定就会复活 world_model.js 记录过的真实 bug：
+    //   cobblestone 既是最常见的天然裸露方岩、又是玩家会用来盖房的材料，两边判据必须分开。
+    if (block && wmIsPlayerBuilt(block.name)) {
+        log(bot, `Refusing to break ${block.name} at (${x},${y},${z}): looks player-built. Pick natural terrain, or ask the player to remove it.`);
+        log(bot, `REFUSED`);
+        return false;
+    }
     if (block.name !== 'air' && block.name !== 'water' && block.name !== 'lava') {
         if (modesIsOn(bot, 'cheat')) {
             if (useDelay) { await new Promise(resolve => setTimeout(resolve, blockPlaceDelay)); }
-            let msg = '/setblock ' + Math.floor(x) + ' ' + Math.floor(y) + ' ' + Math.floor(z) + ' air';
-            bot.chat(msg);
+            // 第29条：斜杠命令只许从 atom_input_misc.command() 出去（白名单 + cheat 显式声明）。
+            // 原来是 `bot.chat('/setblock … air')` —— 拼串绕过了白名单，preflight 的
+            // slash-command-owner 正则也扫不到（它只认字面量 '/'，见交付说明）。
+            const r = await command(bot, 'setblock', [Math.floor(x), Math.floor(y), Math.floor(z), 'air'], { cheat: true });
+            if (!r.ok) {
+                log(bot, `Failed to /setblock ${block.name} to air at ${x}, ${y}, ${z}: ${r.code}.`);
+                log(bot, `FAILED`);
+                return false;
+            }
             log(bot, `Used /setblock to break block at ${x}, ${y}, ${z}.`);
         return true;
         }
@@ -1608,7 +1644,10 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
         // 这种就该用 waitUntil，比自己写 while+sleep+算超时短且不会漏写退出条件。
         const got = await waitUntil(bot, () => given,
             { timeoutMs: 3000, intervalMs: 500, label: `${username} received ${itemType}` });
-        if (got) return true;
+        // 第22条：waitUntil 返回的是**对象** { ok, waitedMs, reason }，永远真值。
+        // 原来写 `if (got)`，于是"物品已经 toss 到地上、玩家根本没捡"也报成功。
+        // 判据必须是 got.ok —— 这才是"等到了"。
+        if (got && got.ok) return true;
         // 没等到确认：交给函数末尾统一报「没收到」，这里不再重复打日志
     }
     log(bot, `Failed to give ${itemType} to ${username}, it was never received.`);
@@ -2757,7 +2796,10 @@ export async function useToolOn(bot, toolName, targetName) {
      * @param {string} targetName - entity type, block type, or "nothing" for no target
      * @returns {Promise<boolean>} true if action succeeded
      */
-    if (!bot.inventory.slots.find(slot => slot && slot.name === toolName) && !bot.game.gameMode === 'creative') {
+    // 第28条：原来写 `!bot.game.gameMode === 'creative'` —— `!x` 先算成布尔，
+    // 布尔永远不等于字符串 'creative'，整个条件恒假，于是"没有这件工具"的早退永不执行，
+    // 后面 equip/useHeld 拿着不存在的物品去用。改成 !== 才是在比较。
+    if (!bot.inventory.slots.find(slot => slot && slot.name === toolName) && bot.game.gameMode !== 'creative') {
         log(bot, `You do not have any ${toolName} to use.`);
         return false;
     }
@@ -3356,10 +3398,17 @@ export async function findBuildingSite(bot, size = 50, searchRadius = 40) {
 }
 
 // 平地时允许拆除的"自然方块"，玩家建筑（木板/玻璃/砖等）不在名单里，绝不会被拆
+// ★ 第23条：这张表是**破坏性**的（命中就会被 /fill 清掉），所以判据只能是
+//   「生成时就长在地上、玩家不会主动放」。「玩家拿物品/工具摆出来的」一律不进表：
+//   - farmland（锄头点出来的农田）—— 玩家的耕地，属于财产
+//   - moss_block / moss_carpet（苔藓块/苔藓地毯）—— 装饰用，玩家会主动铺
+//   自然植被（草/花/藤/竹/仙人掌/海带等）仍留在表里：它们本来就自然生成，
+//   平地要清的就是这些"高出一格"的东西。
+//   注意与上面 isPlayerBuiltBlock（J1）**分开**：那条问"像不像玩家建的"，这条问"是不是天然地形"。
     const NATURAL_BLOCKS = new Set([
         // 土类
-        'grass_block', 'dirt', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium', 'farmland',
-        'mud', 'muddy_mangrove_roots', 'moss_block', 'moss_carpet',
+        'grass_block', 'dirt', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium',
+        'mud', 'muddy_mangrove_roots',
         // 石类
         'stone', 'cobblestone', 'andesite', 'granite', 'diorite', 'deepslate', 'tuff', 'calcite',
         'dripstone_block', 'pointed_dripstone', 'basalt', 'blackstone', 'obsidian',
@@ -3386,6 +3435,33 @@ export async function findBuildingSite(bot, size = 50, searchRadius = 40) {
         'lapis_ore', 'emerald_ore', 'deepslate_coal_ore', 'deepslate_iron_ore',
         'deepslate_diamond_ore', 'deepslate_gold_ore', 'deepslate_redstone_ore'
     ]);
+
+/**
+ * 数一下这个长方体里有多少格空气 —— 也就是 `/fill … keep` 实际会「造」出多少方块。
+ *
+ * 第23条用：填坑前先问「背包里的 filler 够不够」。只要数到比 have 多就可以停
+ * （结论已经确定是"不够"），所以 insuffcient 的情况很便宜。
+ * budget 是读取上限：区域太大时不硬扫，返回 truncated=true 让调用方按"无法核对"处理
+ * —— 宁可只削高，也不凭猜测刷方块。
+ *
+ * @returns {{count:number, truncated:boolean}}
+ */
+function countGapCells(bot, x0, y0, z0, x1, y1, z1, stopAbove = Number.MAX_SAFE_INTEGER, budget = 200000) {
+    let count = 0;
+    for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+            for (let z = z0; z <= z1; z++) {
+                if (budget-- <= 0) return { count, truncated: true };
+                const b = bot.blockAt(new Vec3(x, y, z));
+                if (b && (b.name === 'air' || b.name === 'cave_air')) {
+                    count++;
+                    if (count > stopAbove) return { count, truncated: false };
+                }
+            }
+        }
+    }
+    return { count, truncated: false };
+}
 
 export async function levelGround(bot, x0, z0, size, targetY, maxOps = 4000) {
     /**
@@ -3429,11 +3505,27 @@ export async function levelGround(bot, x0, z0, size, targetY, maxOps = 4000) {
         const fillerName = filler ? filler.name : 'dirt';
         // 填坑深度自适应：原来固定 6 格，遇到深坑填不满，导致"铲平后仍有高差"
         const _depth = 20;   // 固定填 20 格深：足够应付这次遇到的 4~10 格落差，又不会刷屏
-        // keep 模式只填空气格；从 TY-20 填到 TY，把深坑补齐
+        // ★ 第23条：`/fill … <filler> keep` 是**凭空造方块**。
+        //   命令不扣背包，所以"填低"这一半等于无中生有 —— 坑被填成一片谁也没付出过的土，
+        //   而 bot 背包里可能一块都没有（fillerName 上面还兜底成 'dirt'）。
+        //   前置条件：背包里真有 filler，且数量 >= 真正要填的格数。
+        //   不够就**只削高、不填低**（宁可留个坑，也不刷方块），并把原因写清楚。
+        const haveFiller = countInventoryItem(bot, fillerName);
+        let gap = { count: Infinity, truncated: true };
+        try { gap = countGapCells(bot, X0, TY - _depth, Z0, X1, TY, Z1, haveFiller); } catch { /* 读不到区块 = 无法核对，按"不够"处理 */ }
+        const canFill = !gap.truncated && gap.count <= haveFiller;
+        if (canFill) {
+            // keep 模式只填空气格；从 TY-20 填到 TY，把深坑补齐
             await command(bot, 'fill', [X0, TY - _depth, Z0, X1, TY, Z1, fillerName, 'keep'], { cheat: true });
+        } else {
+            log(bot, gap.truncated
+                ? `Skipping the fill step: cannot verify how much ${fillerName} the region needs (too large / chunk not loaded). Only trimmed the high parts.`
+                : `Skipping the fill step: dips need ${gap.count} ${fillerName}, have ${haveFiller}. Only trimmed the high parts.`);
+            log(bot, `MISSING_ITEM`);
+        }
         await new Promise(resolve => setTimeout(resolve, 300));
         log(bot, `Leveling done (fast mode) at ${X0},${TY},${Z0} .. ${X1},${TY},${Z1}.`);
-        return { mode: 'fill', x0: X0, z0: Z0, size: size, targetY: TY, top: TOP, depth: _depth };
+        return { mode: 'fill', x0: X0, z0: Z0, size: size, targetY: TY, top: TOP, depth: _depth, filled: canFill, filler: fillerName, haveFiller };
     }
 
     // ---- 手工模式：小面积逐格挖/填 ----
@@ -3995,10 +4087,14 @@ export async function buildFromSchematic(bot, schematicFile, x, y, z, options = 
                 const wx = x + bx, wy = y + by, wz = z + bz;
 
                 if (mode === 'command') {
-                    const cmd = `/setblock ${wx} ${wy} ${wz} ${blockStateToString(plan)}`;
+                    // 第29条：走 atom_input_misc.command()（白名单 + 显式 {cheat:true}），
+                    // 不再自己拼 /setblock 塞给 bot.chat —— 那是绕过白名单的第二条路。
+                    // blockStateToString 产出的是 `minecraft:oak_stairs[facing=east,half=bottom]`
+                    // 这种单 token 串（不含空格），按位置参数传进去不会被拆开。
                     try {
-                        bot.chat(cmd);
-                        stats.placed++;
+                        const r = await command(bot, 'setblock', [wx, wy, wz, blockStateToString(plan)], { cheat: true });
+                        if (r.ok) stats.placed++;
+                        else stats.failed++;
                     } catch (err) {
                         stats.failed++;
                     }

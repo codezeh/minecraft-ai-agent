@@ -75,9 +75,14 @@ export function protectedPlaces(bot, opts = {}) {
     const spots = [];
     try {
         const lm = loadLandmarks(bot);
-        for (const c of lm.chests || []) if (c?.pos) spots.push(c.pos);
-        for (const s of lm.sites || []) if (s?.pos) spots.push(s.pos);
-        if (lm.storage?.pos) spots.push(lm.storage.pos);
+        // ★ 第8条 J3（恒空）：读端过去写的是 `if (c?.pos) spots.push(c.pos)`，
+        //   但写入端（rememberChest / rememberSite / rememberStorageArea）存的是**扁平**
+        //   `{x,y,z,note,lastUsed}` —— 没有 `.pos` 这一层。于是 spots 永远是空数组，
+        //   这道「别挖到玩家的箱子和家」的闸从写出来那天起没拦过任何东西。
+        //   现在两端都用 normalizePos 归一成同一形状（顺带 floor，并丢掉 note/contents 等字段）。
+        for (const c of lm.chests || []) { const p = normalizePos(c); if (p) spots.push(p); }
+        for (const s of lm.sites || []) { const p = normalizePos(s); if (p) spots.push(p); }
+        { const p = normalizePos(lm.storage); if (p) spots.push(p); }
     } catch { /* 没有地标数据就不保护（新存档常见） */ }
 
     PROTECTED_CACHE.set(bot, { at: now, spots });
