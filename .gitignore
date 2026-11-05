@@ -1,0 +1,74 @@
+# ============================================================
+# 我的世界ai —— 根仓库 .gitignore
+#
+# 本仓库只收录「需要回滚」的源码 / 文档 / 配置：
+#   scripts/  docs/  文件/  bugs/  config/  web/(源码)  server/(仅配置)  *.bat
+# 不收录：依赖、构建产物、运行期日志与临时数据、大体积二进制、口令、独立子仓库。
+# 理由逐条见 docs/audit-执行/00-基线.md。
+# ============================================================
+
+# ---------- 独立子仓库：mindcraft 自带 .git，禁止嵌套纳入 ----------
+# 若不加此条，git 会把 mindcraft/ 记成一个 gitlink（伪子模块），
+# 既回滚不到它的内容，又让父仓库的 status 永远显示它「有变化」。
+/mindcraft/
+
+# ---------- 依赖与构建产物 ----------
+node_modules/
+/web/dist/
+/.vite/
+/dist/
+
+# ---------- 运行期数据 / 临时产物（每次跑都会变，回了也没意义） ----------
+# 这几条不锚定根目录：server/logs/、docs/**/run/tmp/ 这类嵌套位置同样要排除。
+tmp/
+logs/
+/backups/
+/server-test/
+/bots/
+/.acl-reports/
+/.tmp_probe/
+/.agent-teams/
+*.log
+*.log.gz
+*.log.[0-9]
+*.tmp
+*.pid
+*-wal
+*-shm
+
+# ---------- 备份残留 / 一次性改动的前后对照 ----------
+/.atom-v2-backup/
+*.bak
+*.bak.*
+*.bak-*
+
+# ---------- 大体积二进制与外部工具链（.tools/jdk ≈ 329 MB） ----------
+/.tools/
+*.jar
+*.mca
+*.mcr
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.zip
+
+# ---------- server/：只收 *.yml / *.json / eula.txt 这类文本配置 ----------
+# 世界存档、服务端核心、插件、依赖库、缓存、崩溃报告、渲染图全部排除。
+/server/world/
+/server/world_nether/
+/server/world_the_end/
+/server/libraries/
+/server/cache/
+/server/versions/
+/server/plugins/
+/server/bluemap/
+/server/crash-reports/
+/server/banned-ips.json
+/server/banned-players.json
+/server/usercache.json
+
+# ---------- 口令 ----------
+# server.properties 含 enable-rcon=true + rcon.password（32 位强口令），
+# 不入库。取舍与替代方案见 docs/audit-执行/00-基线.md。
+/server/server.properties

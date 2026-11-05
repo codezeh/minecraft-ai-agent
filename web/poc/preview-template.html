@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>terrain3d.db 3D 预览（原型）</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0d1117; color:#c9d1d9; font:13px/1.5 ui-monospace,Consolas,monospace; overflow:hidden; }
+  #cv { display:block; cursor:grab; }
+  #cv.drag { cursor:grabbing; }
+  .panel { position:fixed; background:rgba(22,27,34,.94); border:1px solid #30363d; border-radius:8px; padding:10px 12px; }
+  #hud { left:12px; top:12px; min-width:240px; }
+  #ctrl { right:12px; top:12px; width:230px; }
+  h3 { margin:0 0 8px; font-size:12px; letter-spacing:.08em; color:#8b949e; text-transform:uppercase; }
+  .row { display:flex; align-items:center; gap:8px; margin:5px 0; }
+  .row label { flex:1; cursor:pointer; display:flex; align-items:center; gap:6px; }
+  .sw { width:10px; height:10px; border-radius:2px; flex:none; }
+  .num { color:#58a6ff; font-variant-numeric:tabular-nums; }
+  input[type=range] { width:100%; }
+  .val { color:#8b949e; font-size:11px; }
+  .hint { color:#6e7681; font-size:11px; margin-top:8px; line-height:1.6; }
+  button { background:#21262d; color:#c9d1d9; border:1px solid #30363d; border-radius:5px; padding:3px 8px; cursor:pointer; font:inherit; font-size:11px; }
+  button:hover { background:#30363d; }
+  #fps { position:fixed; right:12px; bottom:12px; color:#6e7681; font-size:11px; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div class="panel" id="hud">
+  <h3>terrain3d.db</h3>
+  <div>可站立面 <span class="num" id="sTotal">-</span></div>
+  <div>列（x,z） <span class="num" id="sCols">-</span></div>
+  <div>多层列 <span class="num" id="sMulti">-</span></div>
+  <div>范围 y <span class="num" id="sY">-</span></div>
+  <div>当前绘制 <span class="num" id="sDraw">-</span></div>
+  <div class="hint">拖拽旋转 · 滚轮缩放 · 右键拖拽平移</div>
+</div>
+
+<div class="panel" id="ctrl">
+  <h3>过滤</h3>
+  <div class="row">
+    <label><input type="checkbox" id="t0" checked><span class="sw" style="background:#5c8a4a"></span>实心 SOLID</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="t1" checked><span class="sw" style="background:#2f6dd0"></span>水面 WATER</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="t2" checked><span class="sw" style="background:#e0483a"></span>岩浆 LAVA</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="t3" checked><span class="sw" style="background:#c98b3e"></span>建筑 BUILT</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="t4" checked><span class="sw" style="background:#3fa34d"></span>树叶 LEAVES</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="t5" checked><span class="sw" style="background:#d8b23c"></span>可攀爬 CLIMB</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="t6" checked><span class="sw" style="background:#2a8f8f"></span>水下地面 SUBM</label>
+  </div>
+  <h3 style="margin-top:12px">高度切片</h3>
+  <div class="row"><span class="val">下限 <span id="yLoV"></span></span></div>
+  <input type="range" id="yLo">
+  <div class="row"><span class="val">上限 <span id="yHiV"></span></span></div>
+  <input type="range" id="yHi">
+  <div class="row"><button id="yReset">重置切片</button><button id="topOnly">只看最上层</button></div>
+</div>
+
+<div id="fps">-</div>
+
+<script>
+const DATA = /*__DATA__*/;
+
+const TCOL = { 0:'#5c8a4a', 1:'#2f6dd0', 2:'#e0483a', 3:'#c98b3e', 4:'#3fa34d', 5:'#d8b23c', 6:'#2a8f8f' };
+const TNAME = { 0:'SOLID', 1:'WATER', 2:'LAVA', 3:'BUILT', 4:'LEAVES', 5:'CLIMB', 6:'SUBM' };
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let W, H, DPR;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+addEventListener('resize', () => { resize(); draw(); });
+
+// ---- 数据解包 ----
+const { xs, zs, ys, ts } = DATA;
+const N = xs.length;
+const bbox = DATA.bbox;               // [x0,x1,z0,z1,y0,y1]
+const cx = (bbox[0] + bbox[1]) / 2;
+const cz = (bbox[2] + bbox[3]) / 2;
+
+// 预先把点整理成对象数组（一次性，绘图时只做变换）
+const pts = new Array(N);
+for (let i = 0; i < N; i++) pts[i] = { x: xs[i], z: zs[i], y: ys[i], t: ts[i] };
+
+// 每列最上层（"只看最上层"模式用）
+const topY = new Map();
+for (const p of pts) {
+  const k = p.x + ',' + p.z;
+  const v = topY.get(k);
+  if (v === undefined || p.y > v) topY.set(k, p.y);
+}
+
+const show = [true,true,true,true,true,true,true];
+let yLo = bbox[4], yHi = bbox[5], onlyTop = false;
+
+// ---- 相机 ----
+// 自动取景：按 bbox 最大水平跨度定初始距离，避免地形只占画面一角
+const SPAN = Math.max(bbox[1] - bbox[0], bbox[3] - bbox[2]);
+let yaw = -0.7, pitch = 0.9, dist = Math.max(120, SPAN * 1.1), fov = 900, panX = 0, panZ = 0;
+
+function project(x, y, z) {
+  const X = x - cx - panX, Y = y - (bbox[4] + bbox[5]) / 2, Z = z - cz - panZ;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const x1 =  X * cy - Z * sy;
+  const z1 =  X * sy + Z * cy;
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const y1 =  Y * cp - z1 * sp;
+  const z2 =  Y * sp + z1 * cp;
+  const d = z2 + dist;
+  if (d < 8) return null;
+  const s = fov / d;
+  return { sx: W / 2 + x1 * s, sy: H / 2 - y1 * s, d, s };
+}
+
+let lastFps = 0, frames = 0;
+function draw(ts_) {
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // 收集可见点并算深度
+  const vis = [];
+  for (let i = 0; i < N; i++) {
+    const p = pts[i];
+    if (!show[p.t]) continue;
+    if (p.y < yLo || p.y > yHi) continue;
+    if (onlyTop && topY.get(p.x + ',' + p.z) !== p.y) continue;
+    const q = project(p.x, p.y, p.z);
+    if (q) { q.y = p.y; q.t = p.t; vis.push(q); }
+  }
+  // 远 → 近
+  vis.sort((a, b) => b.d - a.d);
+
+  const size = Math.max(1.2, fov / dist * 1.15);
+  for (const q of vis) {
+    const shade = 0.55 + 0.45 * ((q.y - bbox[4]) / Math.max(1, bbox[5] - bbox[4]));
+    ctx.fillStyle = TCOL[q.t];
+    ctx.globalAlpha = 0.55 + 0.45 * shade;
+    const s = size * (fov / q.d) / (fov / dist) * 1.0;
+    ctx.fillRect(q.sx - s / 2, q.sy - s / 2, s, s);
+  }
+  ctx.globalAlpha = 1;
+  document.getElementById('sDraw').textContent = vis.length.toLocaleString();
+
+  frames++;
+  const now = performance.now();
+  if (now - lastFps > 500) {
+    document.getElementById('fps').textContent = Math.round(frames * 1000 / (now - lastFps)) + ' fps · ' + N.toLocaleString() + ' 点';
+    frames = 0; lastFps = now;
+  }
+}
+
+// ---- 交互 ----
+let dragging = false, panning = false, lastX = 0, lastY = 0;
+cv.addEventListener('mousedown', e => {
+  if (e.button === 2) panning = true; else dragging = true;
+  lastX = e.clientX; lastY = e.clientY;
+  cv.classList.add('drag');
+});
+addEventListener('mouseup', () => { dragging = panning = false; cv.classList.remove('drag'); });
+addEventListener('mousemove', e => {
+  if (!dragging && !panning) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  if (dragging) {
+    yaw -= dx * 0.006;
+    pitch = Math.max(-0.2, Math.min(1.5, pitch + dy * 0.005));
+  } else {
+    const k = dist / fov * 1.4;
+    panX += (dx * Math.cos(yaw) - dy * Math.sin(yaw)) * k;
+    panZ += (dx * Math.sin(yaw) + dy * Math.cos(yaw)) * k;
+  }
+  draw();
+});
+cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  dist = Math.max(60, Math.min(2000, dist * (1 + Math.sign(e.deltaY) * 0.12)));
+  draw();
+}, { passive: false });
+
+for (let t = 0; t <= 6; t++) {
+  document.getElementById('t' + t).addEventListener('change', e => { show[t] = e.target.checked; draw(); });
+}
+const yLoEl = document.getElementById('yLo'), yHiEl = document.getElementById('yHi');
+yLoEl.min = yHiEl.min = bbox[4]; yLoEl.max = yHiEl.max = bbox[5];
+yLoEl.value = bbox[4]; yHiEl.value = bbox[5];
+function syncY() {
+  yLo = +yLoEl.value; yHi = +yHiEl.value;
+  if (yLo > yHi) { if (this === yLoEl) yLo = yHi; else yHi = yLo; }
+  document.getElementById('yLoV').textContent = yLo;
+  document.getElementById('yHiV').textContent = yHi;
+  draw();
+}
+yLoEl.addEventListener('input', syncY);
+yHiEl.addEventListener('input', syncY);
+document.getElementById('yReset').onclick = () => { yLoEl.value = bbox[4]; yHiEl.value = bbox[5]; syncY(); };
+document.getElementById('topOnly').onclick = () => { onlyTop = !onlyTop; draw(); };
+
+// ---- 启动 ----
+document.getElementById('sTotal').textContent = N.toLocaleString();
+document.getElementById('sCols').textContent = topY.size.toLocaleString();
+document.getElementById('sMulti').textContent = DATA.multiColumns.toLocaleString();
+document.getElementById('sY').textContent = bbox[4] + ' ~ ' + bbox[5];
+resize(); syncY();
+requestAnimationFrame(function loop() { if (!dragging && !panning) { /* 静态时按需重绘 */ } requestAnimationFrame(loop); });
+</script>
+</body>
+</html>

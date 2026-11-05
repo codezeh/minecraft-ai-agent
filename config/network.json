@@ -1,0 +1,27 @@
+{
+  "_说明": "Minecraft 服务器网络与准入配置。改完运行 `node tools/server-net.mjs apply` 生效（会先备份 server.properties），然后重启服务器。",
+  "_为什么需要这个文件": "原来只有 server-ip=127.0.0.1 一种状态，写死在 server.properties 里。只绑本机很安全但局域网/手机连不上，很多功能用不了；绑所有网卡方便但离线模式下任何人都能冒用 op 名字进服（ops.json 里有 341 个 bot 账号）。所以做成开关，由你按需要切。",
+
+  "_主服与测试服配置不同": "主服是你实际玩的，要绑所有网卡（局域网/手机能连）+ 开白名单（只有你能进）。测试服是跑 atom_all/bench 用的，脚本每轮会新建 ma<时间戳> 的 bot —— 如果测试服开白名单，这些 bot 全部会被挡在外面、测试直接挂。所以测试服固定绑本机 + 不开白名单。",
+
+  "servers": {
+    "main": {
+      "_说明": "主服（25565）。bind: 'localhost' | 'all' | 'custom'；custom 时填 nic。",
+      "bind": "all",
+      "nic": "",
+      "whiteList": true,
+      "enforceWhiteList": true,
+      "onlineMode": false,
+      "players": ["HEAVENZEH"]
+    },
+    "test": {
+      "_说明": "测试服（25566）。**建议不要开白名单**：bench/atom_all 每轮新建 ma<时间戳> bot，开了白名单会被挡住。",
+      "bind": "localhost",
+      "nic": "",
+      "whiteList": false,
+      "enforceWhiteList": false,
+      "onlineMode": false,
+      "players": []
+    }
+  }
+}
