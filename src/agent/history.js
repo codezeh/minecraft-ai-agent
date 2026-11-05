@@ -3,6 +3,8 @@ import { NPCData } from './npc/data.js';
 import settings from './settings.js';
 // ★ T17：bots 根唯一可取处（默认 `./bots`；测试可用 `MC_BOTS_ROOT` 指到独立目录）
 import { botsRootOf } from './library/bot_paths.js';
+// F-AI-203：记忆落盘前净化（去控制字符/折叠空行，不删正文）
+import { sanitizeExternalText } from '../utils/text.js';
 
 /**
  * 记忆的代码版本号。
@@ -60,6 +62,12 @@ export class History {
     async summarizeMemories(turns) {
         console.log("Storing memories...");
         this.memory = await this.agent.prompter.promptMemSaving(turns);
+
+        // ★ F-AI-203（2026-11-06）：记忆是**数据不是命令**，执行侧没有判据可依赖，
+        // 所以落盘前必须净化（只去控制字符/折叠空行，不删正文）；注入时再由 prompter 的
+        // `$MEMORY` 用 fenceUntrusted 包一层。为什么在这里：`turns` 含玩家原始聊天，
+        // 模型写回摘要时可能夹带注入文本，而 memory.json 跨重启存活 ⇒ 污染会长期生效。
+        this.memory = sanitizeExternalText(this.memory, 1500);
 
         if (this.memory.length > 1500) {
             this.memory = this.memory.slice(0, 1500);
