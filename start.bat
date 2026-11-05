@@ -124,7 +124,10 @@ REM F-REG-001（2026-11-06）：token 已不再打印到本窗口/日志（F-SEC
 REM 浏览器需要 ?token= 才能建立 socket 握手。指到实际取用位置，否则用 start.bat 的人无路可走。
 echo   Panel needs a token. Read it from: mindcraft\.mindserver-token
 echo   Then open: http://localhost:8080/?token=^<the value in that file^>
-echo   (Or set MINDSERVER_PRINT_TOKEN=1 before starting to print it once.)
+REM F-RT-002：这里**曾经**建议用户设 MINDSERVER_PRINT_TOKEN=1 —— 但本脚本的 stdout 会被
+REM start-panel.ps1 重定向进 logs\, 一旦照做, 完整 token 就落盘, 等于把 F-SEC-205 的洞重新打开。
+REM 现在 mindserver 在"stdout 不是终端"时会忽略该开关；这里也不再推荐它。
+echo   NOTE: do not use MINDSERVER_PRINT_TOKEN here (stdout is redirected; token would land in logs).
 echo Close both windows to stop.
 echo.
 pause

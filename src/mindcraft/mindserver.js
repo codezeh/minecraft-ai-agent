@@ -13,7 +13,7 @@ import {
 } from './auth_gate.js';
 // 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
 import { validateNameFormat } from '../agent/connection_handler.js';
-import { readFileSync, existsSync, readdirSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync } from 'fs';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
 // 板放 agent 里别的 bot 看不见；放这里就只有一个写者，省掉多进程锁）。
 import { openBoard } from '../agent/library/board_store.js';
@@ -107,6 +107,47 @@ export function createMindServer(host_public = false, port = 8080) {
         next();
     });
 
+    // ★ F-WEB-201 + F-WEB-204（2026-11-06）：HTTP 层也要有门 + 安全响应头。
+    //
+    // 原来的问题（侦察席实测）：`/`、`/settings_spec.json`、`/console/` 三个出口**无需任何 token**
+    // 就返回 200；`io.use(makeHandshakeGate)` 只管 socket.io，管不到 HTTP。且零安全头、
+    // 还带着 `X-Powered-By: Express`（版本指纹）。
+    // 诚实边界：socket 事件仍需 token，所以这不是 RCE；但 `/settings_spec.json` 会把配置结构
+    // （含 allow_insecure_coding / task 这类键名）交给任何本机进程或任意网页。
+    //
+    // 修法：**同一个 token**，两种携带方式（已种下的 cookie / 首屏的 ?token=）。不新增依赖。
+    // 注意：socket.io 的 `/socket.io/` 请求由 engine.io 自己接管，不经 express 中间件，
+    //      所以它仍由 `allowRequest` + `io.use(makeHandshakeGate)` 把关（两套门各管各的）。
+    app.disable('x-powered-by');
+    app.use((req, res, next) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        res.setHeader(
+            'Content-Security-Policy',
+            // 诚实交代一处**故意放宽**（由 captain 复核时实测发现并纠正）：
+            // public/index.html 里有 1 个内联 <script> 与 15 个 onclick= 内联事件属性。
+            // CSP 的 script-src 'self' 会同时拦掉两者 ⇒ 旧控制台按钮全失灵、页面变白。
+            // 而 CSP 在本条修复里只是**附加防御**：真正堵住 F-WEB-201 的是下面的 token 门。
+            // 所以 script-src 保留 'unsafe-inline'（与 style-src 同理），其余不动：
+            //   default-src 'self' 仍然挡住外部源脚本（XSS 最现实的外链向量）
+            //   frame-ancestors 'none' + X-Frame-Options 挡点击劫持
+            // 后续可选加固（另单）：把 index.html 的内联 onclick 迁到外部 js，再收紧回 script-src 'self'。
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; " +
+            "script-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'none'"
+        );
+        next();
+    });
+    app.use((req, res, next) => {
+        const viaCookie = hasAuthCookie(req.headers.cookie, handshakeToken);
+        const viaQuery = typeof req.query?.token === 'string' && req.query.token === handshakeToken;
+        if (viaCookie || viaQuery) return next();
+        console.warn(`[mindserver] 拒绝无 token 的 HTTP 请求 ${req.method} ${req.path}`);
+        res.status(401).type('text/plain; charset=utf-8')
+            .send('unauthorized: 需要握手 token。用 `mindcraft/.mindserver-token` 里的值打开 ' +
+                  '`http://localhost:<port>/?token=<token>`（浏览器会把它换成 cookie）。');
+    });
+
     // 心跳参数放宽：默认 pingInterval 25s / pingTimeout 20s 对本地回环太紧 ——
     // agent 进程在等模型 API 或跑大段同步代码时，一次 20s 的停顿就会被判掉线，
     // 进而触发断连->重连->超时->杀进程的连锁（实测踩过）。
@@ -160,6 +201,9 @@ export function createMindServer(host_public = false, port = 8080) {
     app.use(express.static(path.join(__dirname, 'public')));
 
     // Texture proxy: resolve item/block textures using minecraft-assets with version fallback
+    // F-WEB-202：贴图代理的在飞请求上限（模块级，跨请求共享）
+    const TEX_INFLIGHT_MAX = 4;
+    let TEX_INFLIGHT = 0;
     app.get('/assets/item/:agent/:name.png', async (req, res) => {
         try {
             const agentName = req.params.agent;
@@ -175,6 +219,22 @@ export function createMindServer(host_public = false, port = 8080) {
                 return;
             }
             const conn = agent_connections[agentName];
+            // ★ F-WEB-202（2026-11-06）：这个路由每次请求都要 import('minecraft-assets') + 建资源索引
+            // + readFileSync，侦察席实测"合法名与穿越名都 10s 打满不返回，CLOSE_WAIT 堆积"。
+            // F-WEB-201 的 HTTP token 门已经把"任意网页 <img> 反复触发"这条外部向量关掉了；
+            // 这里再补一道**并发上限**（防同一客户端/面板刷爆 + 防自己把自己堵死）：
+            // 用 res 的 finish/close 回收计数，不需要重构 handler 的控制流。
+            if (TEX_INFLIGHT >= TEX_INFLIGHT_MAX) {
+                res.status(503).json({ ok: false, error: 'texture proxy busy, retry later' });
+                return;
+            }
+            TEX_INFLIGHT++;
+            {
+                let released = false;
+                const release = () => { if (!released) { released = true; TEX_INFLIGHT--; } };
+                res.on('finish', release);
+                res.on('close', release);
+            }
             const preferred = conn?.settings?.minecraft_version;
             const candidates = [];
             if (preferred && preferred !== 'auto') candidates.push(preferred);
@@ -260,7 +320,8 @@ export function createMindServer(host_public = false, port = 8080) {
                         const model = typeof j.model === 'object' && j.model ? (j.model.model || JSON.stringify(j.model)) : j.model;
                         out.push({
                             file: f,
-                            path: full,
+            // F-WEB-204：只回相对名，不回本机绝对路径（带用户名/目录结构 = 前置侦察件）
+                            path: path.basename(full),
                             name: j.name || null,
                             api: j.api || null,
                             model: model || null,
@@ -268,7 +329,7 @@ export function createMindServer(host_public = false, port = 8080) {
                             bytes: readFileSync(full, 'utf8').length,
                         });
                     } catch (e) {
-                        out.push({ file: f, path: full, error: '解析失败: ' + (e.message || e) });
+                        out.push({ file: f, path: path.basename(full), error: '解析失败: ' + (e.message || e) });
                     }
                 }
                 out.sort((a, b) => a.file.localeCompare(b.file));
@@ -286,7 +347,7 @@ export function createMindServer(host_public = false, port = 8080) {
                 const full = path.join(profilesDir, safe);
                 if (!existsSync(full)) { callback({ ok: false, reason: 'profile 不存在: ' + safe }); return; }
                 const raw = readFileSync(full, 'utf8');
-                callback({ ok: true, file: safe, path: full, raw, json: JSON.parse(raw) });
+                callback({ ok: true, file: safe, path: path.basename(full), raw, json: JSON.parse(raw) });
             } catch (e) {
                 callback({ ok: false, reason: String(e && e.message || e) });
             }
@@ -483,6 +544,25 @@ export function createMindServer(host_public = false, port = 8080) {
 			// 门在 io.use(makeHandshakeGate)（见 createMindServer 顶部）：没 token 的连接
 			// 根本进不到 io.on('connection')，也就没有这个处理器。
 			// 另外补一条形状校验：from 必须是短字符串，别让对象/超长串进到 agent 侧的等级计算。
+			// ★ F-WEB-203（2026-11-06）：过去 send-message 只校验 data.from 的形状，不限制
+			// message 长度与调用频率；叠加 settings.max_commands=-1（→Infinity）与按量计费
+			// ⇒ 单连接就能刷爆 token 并把上下文挤出。两道内存闸（不引依赖）：
+			//   ① 单条 ≤ 2000 字符；② 每连接 30 条 / 10 秒（令牌桶，按时间回填）。
+			if (typeof data?.message === 'string' && data.message.length > 2000) {
+				console.warn(`[mindserver] 拒绝 send-message：message 过长（${data.message.length} > 2000）`);
+				return;
+			}
+			{
+				const now = Date.now();
+				const rl = socket.data.__rl || (socket.data.__rl = { tokens: 30, ts: now });
+				rl.tokens = Math.min(30, rl.tokens + ((now - rl.ts) / 10000) * 30);
+				rl.ts = now;
+				if (rl.tokens < 1) {
+					console.warn('[mindserver] 拒绝 send-message：触发限流（30 条/10 秒/连接）');
+					return;
+				}
+				rl.tokens -= 1;
+			}
 			if (!data || typeof data.from !== 'string' || !data.from || data.from.length > 32) {
 				console.warn(`[mindserver] 拒绝 send-message：from 非法（${JSON.stringify(data?.from ?? null)}）`);
 				return;
@@ -495,11 +575,25 @@ export function createMindServer(host_public = false, port = 8080) {
 		});
 
         socket.on('bot-output', (agentName, message) => {
+            // ★ F-WEB-101（2026-11-06）：过去这里原样 io.emit 转发，不校验发送方 ⇒
+            // 任何持 token 的面板客户端都能伪造"某个 bot 说了某句话"，把排障日志污染成假象。
+            // 只有 **agent 自己的连接** 有权发这两类事件：agent 走 `auth:{token}`（见 mindserver_proxy），
+            // 面板走 HttpOnly cookie（web/src/api/socket.ts 不带 auth payload）⇒ 两者可区分。
+            if (!(typeof socket.handshake?.auth?.token === 'string' && socket.handshake.auth.token === handshakeToken)) {
+                console.warn(`[mindserver] 丢弃伪造的 bot-output：连接未以 agent 身份（auth.token）互联，声称 agent=${JSON.stringify(agentName)}`);
+                return;
+            }
             io.emit('bot-output', agentName, message);
         });
 
         // agent 进程把结构化事件推上来 → 广播给所有面板（诊断页的事件流）
         socket.on('agent-event', (agentName, e) => {
+            // ★ F-WEB-101：同 bot-output —— 只有 agent 自己的连接能发结构化事件，
+            // 否则面板客户端可以伪造"挖矿失败/离线/单子卡住"这类诊断事件，误导排障。
+            if (!(typeof socket.handshake?.auth?.token === 'string' && socket.handshake.auth.token === handshakeToken)) {
+                console.warn(`[mindserver] 丢弃伪造的 agent-event：连接未以 agent 身份互联，声称 agent=${JSON.stringify(agentName)}`);
+                return;
+            }
             io.emit('agent-event', agentName, e);
         });
 
@@ -522,9 +616,21 @@ export function createMindServer(host_public = false, port = 8080) {
         console.log(`[mindserver] 握手 token 已生成: ${tokenHint}`);
         console.log(`[mindserver] 完整 token 位置: ${TOKEN_FILE}（或环境变量 MINDSERVER_TOKEN）`);
         console.log(`[mindserver] 控制台地址: http://${host}:${port}/?token=<见上>`);
+        // ★ F-RT-002（2026-11-06，红队复测）：`MINDSERVER_PRINT_TOKEN=1` 曾被 start.bat 当"找不到 token
+        // 就照这个做"推荐给用户 —— 而 start-panel.ps1 把 stdout 重定向进 logs\mindcraft-console.log，
+        // Start-Process 又继承父环境 ⇒ 用户一照做，完整 token 就进日志，F-SEC-205 原样复活。
+        // 修法：**stdout 是文件（被重定向）时，忽略这个开关**，并明确解释为什么忽略。
+        // 只有真正的交互终端（isTTY / 非文件）才允许把完整值打出来。
         if (process.env.MINDSERVER_PRINT_TOKEN === '1') {
-            console.log(`[mindserver] ★ 调试模式（MINDSERVER_PRINT_TOKEN=1）完整值: ${handshakeToken}`);
-            console.log(`[mindserver] ★ 可直接打开: http://${host}:${port}/?token=${handshakeToken}`);
+            let stdoutIsFile = false;
+            try { stdoutIsFile = fstatSync(1).isFile(); } catch { /* 取不到就当不是文件 */ }
+            if (stdoutIsFile || !process.stdout.isTTY) {
+                console.warn('[mindserver] 忽略 MINDSERVER_PRINT_TOKEN：stdout 不是交互终端（很可能被重定向进日志）。');
+                console.warn('           完整 token 请读 .mindserver-token 文件；这样不会把 token 落盘。');
+            } else {
+                console.log(`[mindserver] ★ 调试模式（MINDSERVER_PRINT_TOKEN=1）完整值: ${handshakeToken}`);
+                console.log(`[mindserver] ★ 可直接打开: http://${host}:${port}/?token=${handshakeToken}`);
+            }
         }
     });
 
