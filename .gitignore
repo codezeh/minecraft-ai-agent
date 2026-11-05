@@ -105,3 +105,22 @@ logs/
 
 # 终审用的嵌套测试仓（t26 测 pre-commit hook 的对照仓，本身是独立 git 仓）
 /docs/audit/probes/r2/hooktest/
+
+# ---------- 通用凭据兜底（F-SEC-206，2026-11-06 审计） ----------
+# 为什么不再"逐个文件加一条"：修 F-SEC-201（把密钥搬到环境变量）的标准落地形态就是 .env*；
+# 按旧规则，搬家当天就会写出一个能被 `git add .` 直接提交的明文密钥文件 —— 修 A 洞时打开 B 洞。
+# 本仓侧重 config/ 与 *.bat；mindcraft 子仓有自己的一份（含 keys.json）。
+# 自检（必须全 OK，且 .env.example 必须仍可入库）：
+#   for f in .env .env.local secrets.json credentials.json id_rsa; do git check-ignore -q "$f" && echo "OK $f" || echo "FAIL $f"; done
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa*
+id_ed25519*
+*credentials*.json
+*secrets*.json
+.mindserver-token
