@@ -72,3 +72,18 @@ logs/
 # server.properties 含 enable-rcon=true + rcon.password（32 位强口令），
 # 不入库。取舍与替代方案见 docs/audit-执行/00-基线.md。
 /server/server.properties
+
+# ---------- 审计探针的**运行产物**（不是证据本体） ----------
+# 证据本体是生成它们的 .mjs 探针脚本（docs/audit/probes/*.mjs，已入库）。
+# 下面两个目录是跑探针时倒出来的东西，需要真机/沙箱环境才能重跑，且体积大：
+#
+#   probes/r1/   11M  含 r1/trepo2/.git —— **嵌套 git 仓库**。
+#                     一旦提交，git 只会记成 gitlink（伪子模块），
+#                     内容无法回滚、父仓 status 也会永远显示"有变化"
+#                     （同 /mindcraft/ 那条的理由）。所以**必须**排除。
+#   probes/run/  14M  运行日志、bots 快照、各轮 p2*/t20-disc 中间目录。
+#
+# 排除是**故意的**，不是忘了。判定与自检命令见 docs/audit-执行/README.md §7。
+# 需要复现时照 probes/*.mjs 里的用法重跑即可，不要指望从这两个目录里"恢复"。
+/docs/audit/probes/r1/
+/docs/audit/probes/run/

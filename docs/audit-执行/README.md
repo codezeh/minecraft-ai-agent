@@ -99,26 +99,26 @@ ls -1 docs/audit-执行/ | wc -l
 
 ---
 
-## 5. 已知混乱与待裁决（**下轮定，本轮不动**）
+## 5. 归档口径处置结果（t6 列出 → t7 按 captain 裁决执行完毕）
 
-### 5.1 `docs/audit/probes/` 里混了"探针源码"与"运行产物"
+t6 列出的混乱项，t7 已分类处置。**下表是最终状态，不再是"待办"**：
 
-| 类别 | 内容 | 现状 | 建议 |
+| 类别 | 内容 | 处置 | 结果 |
 |---|---|---|---|
-| 探针源码（该入库） | 顶层 `*.mjs` / `*.sh` / `p4_unit_results.txt`，共 17 个已入库；另有 8 个 **t19/t20 探针未入库**（`t19-discriminator.mjs`、`t19-j3-protected-places.mjs`、`t19-ses-escape-*.mjs` ×3、`t20-board-open.mjs`、`t20-discriminator.mjs`、`t20-parity-probe.mjs`） | 未提交 | 与已入库的 17 个属同类，**建议下轮一并提交** |
-| 运行产物（不该入库） | `probes/r1/`（864 文件）+ `probes/run/`（346 文件），合计约 **25 MB**；含 `r1/trepo2/.git`（**嵌套 git 仓**）、`run/bots/`、`run/logs/` 等 | 未提交，也未 ignore | **必须 gitignore**。尤其 `r1/trepo2` 是嵌套仓库，一旦提交会变成 gitlink/坏目录，且无法回滚其内容 |
+| 探针源码（证据本体） | 8 个 t19/t20 探针 `.mjs` + 4 份 R1 终审报告 + 第20条文档 = **13 个** | ✅ **已入库**（`fa6f29d`） | `git ls-files docs/audit/probes/` 由 **17 → 25** |
+| 运行产物（非证据） | `probes/r1/`(11M，含嵌套 `.git`) + `probes/run/`(14M) = 25M | ✅ **已 gitignore**（见 §7） | `git check-ignore -v` 有命中 |
+| 规程/清单更新 | `REVIEW-PROTOCOL.md`、`verify-checklist.md` | ✅ **已提交**（`c29c5be`） | 工作区不再有这类未提交改动 |
+| stash 补丁归档 | `docs/git-rescue-20261105/` | ⏳ **保持未提交，待 captain 与用户定**（见 §8） | 已写清是什么 + 建议 |
 
-**为什么本轮没订正**：改 `.gitignore` 属于仓库配置变更、且这批产物归属 t19/t20 任务，
-本轮授权是"只碰文档与目录、不改代码"。**列出来给下轮，按上表两栏分开处理即可。**
-
-### 5.2 `mindcraft/tmp/` 里的探针会被静默丢弃
+### 5.1 `mindcraft/tmp/` 里的探针会被静默丢弃（**仍未解决**）
 
 `gate-r1a-probe.mjs`（R1-a 运行时反证）与 `gate-r1b-probe.mjs`（R1-b 误报回归）写在 `mindcraft/tmp/`，
 而 `tmp/` 在 mindcraft 的 `.gitignore` 里 → **这两份证据不入库、随时可能被清掉**。
 
-缓解现状：两份探针的**全部断言已逐条抄进** `R1-收尾-执行报告.md` §2.1 / 上一轮 `R1-收尾-gate.md`，
-所以结论不依赖文件本体存活。**但"照抄"不如"存原件"** —— 建议下轮把这类探针移入
+缓解现状：两份探针的**全部断言已逐条抄进** `R1-收尾-执行报告.md` §2.1 / `R1-收尾-gate.md`，
+所以结论不依赖文件本体存活。**但"照抄"不如"存原件"** —— 建议后续把这类探针移入
 外层 `docs/audit/probes/`（那里正是探针归档地），再在文档里引用路径。
+（t7 未做：本轮授权只到 `.gitignore` + `docs/`，移动探针属于新增归档内容，留待确认。）
 
 ---
 
@@ -128,3 +128,115 @@ ls -1 docs/audit-执行/ | wc -l
 2. **提交前看 `git status` 的落点仓。** 两个仓分支同名（`audit/remediation-2026-11-05`），极易看错；
    `mindcraft` 有自己的 `.git`，外层仓的 `.gitignore` 里写着 `/mindcraft/`（禁止嵌套纳入）。
 3. **运行产物与证据要分开。** 探针脚本入库，`run/` `bots/` `logs/` 之类产物走 ignore。
+
+---
+
+## 7. 为什么 `probes/r1/` 与 `probes/run/` 被排除（**故意的，不是忘了**）
+
+两个目录已写进外层仓 `.gitignore`（:88、:89）。排除理由三层，任何一层都足以排除：
+
+1. **有害**：`probes/r1/trepo2/` 里有一个**嵌套 `.git`**。一旦提交，git 只会记成 gitlink（伪子模块），
+   内容无法回滚、父仓 status 还会永远显示"有变化"—— 与 `/mindcraft/` 被排除是同一个理由。
+2. **体积**：`r1/` 11M + `run/` 14M = **25M**，且每次重跑都会变。
+3. **性质**：它们是**可重建的运行产物**，不是证据本体。
+   **证据是生成它们的 `.mjs` 探针**（已在 `docs/audit/probes/*.mjs`，25 个入库）。
+   `run/` 里是日志与 `bots/` 快照，`r1/` 里是沙箱现场 —— 离开环境无法解读，留着只占地方。
+
+**想复现某条结论时**：读对应 `probes/<名字>.mjs` 的用法注释重跑一遍。
+**不要指望从这两个目录里"恢复"证据** —— 它们本来就不是证据。
+
+### 7.1 自检命令（每轮收尾跑一次）
+
+```bash
+cd "E:/我的世界ai"
+
+# ① 必须命中（说明排除规则还在生效）—— 期望各打印一行 .gitignore:NN
+git check-ignore -v docs/audit/probes/r1 docs/audit/probes/run
+
+# ② status 里不应再出现它们 —— 期望：无输出
+git status --short | grep -E "probes/(r1|run)/" || echo "OK：未被跟踪"
+
+# ③ 被 ignore 的东西仍看得见（确认是"故意排除"而非"文件丢了"）—— 期望：能列出
+git status --short --ignored | grep -E "probes/(r1|run)/"
+```
+
+**2026-11-05 实测**：① 命中 `.gitignore:88` / `.gitignore:89`；② 无输出；③ 可见。
+
+---
+
+## 8. `docs/git-rescue-20261105/` 是什么（**待裁决：未提交、未删除**）
+
+7 个文件、32K：`README.md` + `stash-0..5.patch`。
+**当前 `git stash list` 为空（0 条）** —— 这些 stash 对象**已被 drop，这 7 个补丁是现存的唯一副本**；
+`git reflog show stash` 也报 `unknown revision`（stash 引用已不存在）。
+
+### 8.1 内容摘要
+
+| 补丁 | 目标文件 | 内容 | 价值判断 |
+|---|---|---|---|
+| `stash-0..4.patch`（5 个，几乎相同） | `.gitignore` / `docs/README.md` / `settings.js` | "私有配置清理"：把 `profiles/llmgo.json`、`profiles/*-private.json`、部署类文档加进 `.gitignore`，并从文档索引摘掉链接 | **低**。效果**早已落地**（现行 `.gitignore` 已有这些条目，`docs/README.md` 也已有那段说明）。经扫描**不含口令/密钥/端点**，只有策略文字 |
+| `stash-5.patch` | `src/agent/library/atom_move.js` | `scaffoldItemIds(bot)`：从背包挑可垫脚方块，**用 item id** 而非 block id 喂给 `movements.scafoldingBlocks`；没材料时关掉 `allow1by1towers` | **高**（见 §8.2）。但补丁**已无法直接 apply**：目标文件 `atom_move.js` 已不存在 |
+
+### 8.2 ⚠️ 高价值发现：`stash-5` 想修的那个 bug，**今天仍然活着**（只是换了文件）
+
+**结论**：stash-5 想在 `atom_move.js` 修的"搭桥静默失效"，现在**以同样的形态**存在于
+`nav_pathfinder.js` → `scaffold_blocks.js`。当年没合入的那版修复，等于**丢了**。
+
+**证据链（三层，可逐层复核）**：
+
+1. **pathfinder 的字段要的是 item id**
+   `node_modules/mineflayer-pathfinder/lib/movements.js:86-88` 默认值用 `registry.itemsByName.dirt.id`；
+   而 `:159` / `:170` 判定是 `if (item.type === id)`，`item` 来自 `bot.inventory.items()` ——
+   **`item.type` 是 item id**。所以 `scafoldingBlocks` 这个字段要的是 **item id**。
+
+2. **我们喂的是 block id**
+   `src/agent/library/scaffold_blocks.js` 的 `scaffoldBlockIds()`：
+   ```js
+   const id = bot.registry?.blocksByName?.[it.name]?.id;   // ← blocksByName = block id
+   ```
+   `nav_pathfinder.js:76-83` 把它直接赋给 `m.scafoldingBlocks`。**id 域不匹配。**
+
+3. **两者在 1.21.8 上确实不同**（本机 `minecraft-data` 实测；项目 `minecraft_version` = 1.21.8）：
+
+   | 方块 | block id | item id | 现在能搭桥吗 |
+   |---|---|---|---|
+   | dirt | 9 | 28 | ❌ 静默失效 |
+   | cobblestone | 12 | 35 | ❌ 静默失效 |
+   | oak_planks | 13 | 36 | ❌ 静默失效 |
+   | sand | 37 | 59 | ❌ 静默失效 |
+   | gravel | 40 | 63 | ❌ 静默失效 |
+   | **stone** | **1** | **1** | ✅ **唯一碰巧能用的** |
+
+**后果**：`countScaffoldingItems()` 把这些方块数成 0 → A* 的 `remainingBlocks = 0` →
+pathfinder 判定"没有垫脚材料"，**拒绝规划需要垫脚的路径**。表现为：背包里明明有木板/圆石，
+遇到沟坎就是不搭，绕远路或直接 NO_PATH，**且不报错**。
+（`stone` 因 block id 与 item id 都是 1 恰好绕过，会让人误以为"功能是好的"。）
+
+**为什么值得单独立项**：这正是 captain 说的"几个月后才发现丢了"——
+修复写在 stash 里、stash 被 drop、补丁躺在文档目录没人看，而线上 bug 一直健在。
+
+### 8.3 建议处置（**最终由 captain 与用户定**）
+
+| 对象 | 建议 | 理由 |
+|---|---|---|
+| `stash-0..4.patch` | 确认无用后删除（或只留 `stash-4` 作原始件） | 效果已落地、无密钥、5 份近乎重复 |
+| `stash-5.patch` | **不要删**。按 §8.2 单独立项修复；修好后可只作历史留档 | 它记录了**仍然存在**的真 bug 的原始诊断 |
+| 整个目录 | 若采纳"入库留档"：只提交 `README.md` + `stash-5.patch` 两个即可 | 32K 不大，但 5 个重复补丁是噪音 |
+
+> ⚠️ 特别标注：`stash-5` 是**唯一**记录了"item id vs block id"判据的文字，而该判据今天仍在犯。
+> 丢掉它 = 下次还得从头再查一遍 blockId=9 / itemId=28 这种坑。
+> **属"价值不明但可能有用的代码改动"**，按 captain 要求特别标出。
+
+---
+
+## 9. 归档自检（每轮收尾）
+
+```bash
+cd "E:/我的世界ai"
+find mindcraft -name "*.md" -path "*audit*" -not -path "*/node_modules/*"   # 期望：无输出
+find . -maxdepth 1 -name "docs"                                            # 期望：./docs
+ls -1 docs/audit-执行/ | wc -l                                             # 期望：与 §2 一致
+git check-ignore -v docs/audit/probes/r1 docs/audit/probes/run             # 期望：各有命中
+```
+
+**2026-11-05 实测**：无输出 / `./docs` / `23`（§2 已按 23 校准）/ 命中 `.gitignore:88`、`:89`。
