@@ -68,9 +68,25 @@ if not exist "%ROOT%mindcraft\main.js" (
     exit /b 1
 )
 if not exist "%ROOT%mindcraft\node_modules" (
-    echo [WARN] mindcraft\node_modules missing. Running npm install first ...
+    echo [WARN] mindcraft\node_modules missing. Running npm ci first (strict, per lock) ...
     pushd "%ROOT%mindcraft"
-    call npm install
+    call npm ci
+    if errorlevel 1 (
+        echo [ERROR] npm ci failed - do NOT use --ignore-scripts, it silently drops patches/.
+        echo [ERROR] Fix the node_modules / package-lock.json mismatch, then run this file again.
+        popd
+        pause
+        exit /b 1
+    )
+    if exist tools\patch_integrity.mjs (
+        node tools\patch_integrity.mjs
+        if errorlevel 1 (
+            echo [ERROR] patch integrity check failed - patches/ tampered or drifted. Aborting.
+            popd
+            pause
+            exit /b 1
+        )
+    )
     popd
 )
 
