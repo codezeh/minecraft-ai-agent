@@ -29,13 +29,19 @@ const check = (name, cond, detail = '') => {
     else { fail++; console.log(`FAIL ${name} ${detail}`); }
 };
 
-// ── 1. 定级：没配 owner → 人人信任 ─────────────────────────
-check('没配 owner：陌生人按信任',
-    resolveLevel({ author: 'random_guy', permissions: {} }) === LEVEL.TRUSTED);
-check('没配 owner：连 null 权限也按信任',
-    resolveLevel({ author: 'random_guy', permissions: null }) === LEVEL.TRUSTED);
-check('没配 owner：主人字段是空串也算没配',
-    resolveLevel({ author: 'x', permissions: { owner: '   ' } }) === LEVEL.TRUSTED);
+// ── 1. 定级：没配 owner → **默认拒绝**（F-AI-201，2026-11-06 变更）───────
+// 原来是「人人信任」（08 §5 第 1 条）。改的原因：默认信任 ⇒ 新装机器上任何进服的玩家
+// 都能用 48 条信任级命令驱动 bot，而模型回合本身也按 TRUSTED 执行 ⇒ 提示注入可直接驱动工具调用。
+// 提示层围栏可被绕过，所以必须有执行侧判据：**没声明主人，就不替任何人做事**。
+check('没配 owner：陌生人按其他玩家（默认拒绝，不是信任）',
+    resolveLevel({ author: 'random_guy', permissions: {} }) === LEVEL.OTHER);
+check('没配 owner：连 null 权限也按其他玩家',
+    resolveLevel({ author: 'random_guy', permissions: null }) === LEVEL.OTHER);
+check('没配 owner：主人字段是空串也算没配 ⇒ 其他玩家',
+    resolveLevel({ author: 'x', permissions: { owner: '   ' } }) === LEVEL.OTHER);
+check('没配 owner：执行侧判据真的生效（走/停都不可用）',
+    !canRunCommand(resolveLevel({ author: 'random_guy', permissions: {} }), '!goToPlayer') &&
+    !canRunCommand(resolveLevel({ author: 'random_guy', permissions: {} }), '!stop'));
 
 // ── 2. 定级：配了 owner → 主人 / 信任 / 其他 ───────────────
 const perms = { owner: 'Zeh', trusted: ['FriendA', 'FriendB'] };
@@ -196,11 +202,18 @@ function makeAgent({ permissions, name = 'deepseek' } = {}) {
 {
     const agent = makeAgent({ permissions: {} });
     const res = await executeCommand(agent, '!goal("随便走走")', { author: 'anyone' });
-    check('没配 owner：陌生人的 !goal 不可用（owner 级不可达）', String(res).startsWith('[权限]'), String(res).slice(0, 40));
-    // 急停必须仍对信任级开放：goal 若已存在（例如跨重启从 memory 恢复），别人得能叫停
+    check('没配 owner：陌生人的 !goal 不可用（默认拒绝下一切命令都不可用）', String(res).startsWith('[权限]'), String(res).slice(0, 40));
+    // F-AI-201 变更后：没配 owner ⇒ OTHER ⇒ 连 !endGoal 也不可用（fail-closed）。
+    // 这不会造成"无法叫停失控目标"：同样的 fail-closed 也让**没人能设目标**（!goal 是 owner-only），
+    // 所以"需要别人来叫停"的场景在有 owner 之前不会出现。配上 owner 之后，信任级仍可 !endGoal（见下一条）。
     const stop = await executeCommand(agent, '!endGoal', { author: 'anyone' });
-    check('没配 owner：信任级仍能用 !endGoal 急停（故意不升权）',
-        !String(stop).startsWith('[权限]'), String(stop).slice(0, 40));
+    check('没配 owner：!endGoal 也不可用（fail-closed，不是漏掉了）',
+        String(stop).startsWith('[权限]'), String(stop).slice(0, 40));
+    // 配上 owner 之后：信任级仍能急停 —— 这条守"急停没被误伤"
+    const agentWithOwner = makeAgent({ permissions: perms });
+    const stop2 = await executeCommand(agentWithOwner, '!endGoal', { author: 'FriendA' });
+    check('配了 owner 后：信任级仍能用 !endGoal 急停（故意不升权）',
+        !String(stop2).startsWith('[权限]'), String(stop2).slice(0, 40));
     const res2 = await executeCommand(agent, '!newAction("x")', { author: 'anyone' });
     check('没配 owner：!newAction 仍然不行', String(res2).startsWith('[权限]'), String(res2).slice(0, 40));
 }

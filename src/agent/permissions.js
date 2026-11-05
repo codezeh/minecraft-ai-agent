@@ -151,15 +151,19 @@ export function resolveLevel({ author, permissions, isOtherBot = false, internal
         return LEVEL.OTHER;
     }
 
-    // 5) 没配主人：人人按信任（08 §5 第 1 条）
+    // 5) 没配主人：**默认拒绝**（F-AI-201，2026-11-06 变更；原来是「人人按信任」）
     //
-    // ⚠️ 使用约束（F-AI-202，2026-11-06 实测得出，改 owner-only 命令前必读）：
-    //   OWNER 级**只能在"配了 owner 且名字命中"时到达**。所以 owner 为空的 profile 里，
-    //   任何 owner-only 命令（`!goal` / `!newAction` / `!setMode` / `!givePlayer` …）**谁都用不了**。
-    //   本仓 `deepseek` / `defaults/*` 等 profile 实测 owner 均为 null ⇒ 用这些 profile 的人
-    //   会发现 `!goal` "功能莫名不见"。换 profile 前先确认它的 permissions.owner 填了。
-    //   （不要为了让"没配 owner 也能用 !goal"而把它降回 TRUSTED —— 那正是 F-AI-202 要堵的注入面。）
-    return LEVEL.TRUSTED;
+    // 为什么改：原来"没配 owner ⇒ 人人 TRUSTED"意味着**新装的机器上任何一个进服的玩家**
+    // 都能用 48 条信任级命令驱动 bot —— 而模型回合本身也按 TRUSTED 执行，于是"提示注入
+    // → 驱动工具调用"这条链在默认配置下完全打开。提示层围栏可以被绕过，所以必须有执行侧判据，
+    // 而最省事、最不会误伤的就是这条：**没声明主人，就不要替任何人做事**。
+    //
+    // 为什么不需要保留"急停"：既然没人能设目标（`!goal` 已是 OWNER_ONLY，见 F-AI-202），
+    //   也就不存在"需要别人来叫停的失控目标"这个场景。owner 一旦配上，TRUSTED/OWNER 全部恢复。
+    //
+    // 运维要求：profile 里必须写 `permissions.owner`。本仓 `deepseek` / `defaults/*` 实测 owner
+    //   为 null ⇒ 用这些 profile 会"什么命令都没反应"，这是**有意的 fail-closed**，不是 bug。
+    return LEVEL.OTHER;
 }
 
 /**

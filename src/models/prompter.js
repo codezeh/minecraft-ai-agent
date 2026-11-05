@@ -2,7 +2,7 @@ import { readFileSync, mkdirSync, writeFileSync} from 'fs';
 import { Examples } from '../utils/examples.js';
 import { getCommandDocs } from '../agent/commands/index.js';
 import { SkillLibrary } from "../agent/library/skill_library.js";
-import { stringifyTurns } from '../utils/text.js';
+import { stringifyTurns, fenceUntrusted } from '../utils/text.js';
 import { getCommand } from '../agent/commands/index.js';
 import settings from '../agent/settings.js';
 import { promises as fs } from 'fs';
@@ -216,11 +216,11 @@ export class Prompter {
         if (prompt.includes('$EXAMPLES') && examples !== null)
             prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
         if (prompt.includes('$MEMORY'))
-            prompt = prompt.replaceAll('$MEMORY', this.agent.history.memory);
+            prompt = prompt.replaceAll('$MEMORY', fenceUntrusted(this.agent.history.memory, 'memory'));
         if (prompt.includes('$TO_SUMMARIZE'))
-            prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
+            prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize, { fenced: true }));
         if (prompt.includes('$CONVO'))
-            prompt = prompt.replaceAll('$CONVO', 'Recent conversation:\n' + stringifyTurns(messages));
+            prompt = prompt.replaceAll('$CONVO', 'Recent conversation:\n' + stringifyTurns(messages, { fenced: true }));
         if (prompt.includes('$SELF_PROMPT')) {
             // if active or paused, show the current goal
             // ★ F-AI-202（2026-11-06）：goal 文本来自 `!goal(...)`，是**外部可控**的，原来直接
