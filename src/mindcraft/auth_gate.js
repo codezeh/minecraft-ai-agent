@@ -23,8 +23,10 @@
  *   - agent 子进程：mindserver 把 token 写进 `process.env.MINDSERVER_TOKEN` 再 spawn，子进程继承。
  *   - 本机脚本 / 探针：`MINDSERVER_TOKEN=<token> node xxx.mjs`。
  *
- * **诚实的边界**：这不是「进程隔离」。同一操作系统用户下的任意进程仍能读到启动日志里的 token
- * 或父进程环境变量 —— 那是同用户权限模型本身的问题，不是这道门能解决的。这道门挡的是
+ * **诚实的边界**：这不是「进程隔离」。同一操作系统用户下的任意进程仍能读到 `.mindserver-token`
+ * 文件（已 gitignore）或父进程环境变量 —— 那是同用户权限模型本身的问题，不是这道门能解决的。
+ * （F-SEC-205 起完整 token 已不再打进启动日志，只打指纹；但同一个用户仍能直接读那个文件。）
+ * 这道门挡的是
  * 「没有 token 的本机脚本 / 任意网页」：随机 UUID 每次启动都不同，硬编码 `ws://127.0.0.1:8080`
  * 的老脚本、以及浏览器里任何网站的页面，都进不来了。
  *
@@ -127,15 +129,18 @@ export function hasAuthCookie(cookieHeader, expectedToken) {
  * `set-agent-settings` 允许改的运行期字段白名单。
  *
  * 取值来自 `src/mindcraft/public/settings_spec.json`（面板本来就只发这些），
- * 三条**故意排除**：
+ * 四条**故意排除**：
  *   - `allow_insecure_coding`：等于「远程开代码执行 = 本机 root」；
  *   - `blocked_actions`：清空它等于把 `!newAction` 等被封命令放出来，和上面等价；
- *   - `profile`：里面是 `permissions`（谁是这个 bot 的主人），改它等于自己给自己发权限。
- * 单测会断言这三个不在表里、且表里每个键都真的存在于 settings_spec（防拼错后静默丢弃）。
+ *   - `profile`：里面是 `permissions`（谁是这个 bot 的主人），改它等于自己给自己发权限；
+ *   - `speak`（F-EXEC-201，2026-11-06）：打开后模型输出会被送去本机 TTS；
+ *     原来是"拼字符串进 shell"，现虽已改成 spawn+stdin，但**语音是把模型输出送进本机进程**这件事本身
+ *     应当由人改 settings.json 后重启决定，不该让持 token 的客户端在运行期一键打开。
+ * 单测会断言这几个不在表里、且表里每个键都真的存在于 settings_spec（防拼错后静默丢弃）。
  */
 export const SAFE_RUNTIME_SETTINGS = Object.freeze([
     'minecraft_version', 'host', 'port', 'auth', 'base_profile', 'load_memory',
-    'init_message', 'only_chat_with', 'speak', 'language', 'allow_vision',
+    'init_message', 'only_chat_with', 'language', 'allow_vision',
     'relevant_docs_count', 'max_messages', 'num_examples', 'max_commands',
     'narrate_behavior', 'log_all_prompts', 'show_command_syntax', 'chat_ingame',
     'chat_bot_messages', 'render_bot_view', 'code_timeout_mins', 'spawn_timeout',

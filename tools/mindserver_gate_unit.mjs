@@ -100,6 +100,10 @@ check('hasAuthCookie: 没有 cookie → false', !hasAuthCookie('', TOKEN));
     check('白名单里没有 allow_insecure_coding', !SAFE_RUNTIME_SETTINGS.includes('allow_insecure_coding'));
     check('白名单里没有 blocked_actions', !SAFE_RUNTIME_SETTINGS.includes('blocked_actions'));
     check('白名单里没有 profile（里面是 owner 名单）', !SAFE_RUNTIME_SETTINGS.includes('profile'));
+    // F-EXEC-201：【speak 打开 = 模型输出被送进本机 TTS 进程】。虽已改成 spawn+stdin（不再拼 shell），
+    // 但"要不要让模型发声"该由人改 settings.json 重启决定，不该给持 token 的客户端一个运行期开关。
+    check('白名单里没有 speak（F-EXEC-201：模型输出送本机 TTS，不允许运行期打开）',
+        !SAFE_RUNTIME_SETTINGS.includes('speak'));
     const unknown = SAFE_RUNTIME_SETTINGS.filter((k) => !(k in spec));
     check('白名单每个键都真实存在于 settings_spec（拼错会被静默丢弃，这里挡住）',
         unknown.length === 0, `→ 多余键: ${JSON.stringify(unknown)}`);

