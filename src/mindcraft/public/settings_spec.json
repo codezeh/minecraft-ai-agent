@@ -136,5 +136,10 @@
         "type": "number",
         "description": "Number of seconds allowed for the bot to spawn before throwing an error. Increase when spawning takes a while.",
         "default": 30
+    },
+    "block_place_delay": {
+        "type": "number",
+        "description": "Milliseconds to wait after each place/use action. 0 disables it. Read by src/agent/library/skills.js at module load.",
+        "default": 0
     }
 }
