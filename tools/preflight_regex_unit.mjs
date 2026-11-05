@@ -39,7 +39,9 @@ let passed = 0;
 function ok(name, detail = '') {
     passed++;
     // 行首 PASS —— tools/unit_all.mjs 按 `^\s*PASS` 数用例，本文件要被它自动纳入就得守这个约定。
-    console.log(`  PASS  ${name}${detail ? `　${detail}` : ''}`);
+    // 注：分隔用普通空格，不要用全角空格（U+3000）—— 会被 eslint 判 no-irregular-whitespace，
+    //     而且那种字符在编辑器里看不见，属于"隐形字符"这一类坑。
+    console.log(`  PASS  ${name}${detail ? `  ${detail}` : ''}`);
 }
 function bad(name, detail) {
     failed++;
@@ -191,6 +193,116 @@ if (sawASection instanceof RegExp) {
     assert(t('A·策略'), '[§6] 正例命中：行首 A·策略', '← 0x08 只在三条备选之一上，另两条本来就好的');
     assert(t('未发现"有早退分支但生产不提供"的情况'), '[§6] 正例命中：未发现… 兜底文案');
     assert(!t('── C·需要人判断 13 条'), '[§6] 反例不命中：C 档段落');
+}
+
+// --- 3.4 §4 API 扫描：斜杠命令两条规则（T05 / 第29条闸门加强） ---
+// 为什么要专门盯这条：它原来的 pattern 只认「同一行里先有字面量 /」，
+// 于是 `bot.chat(msg)`（变量实参）从来扫不到 —— 而 skills.js 那次事故正是变量实参。
+// 规则"看得见"这件事必须自证，否则放宽与收紧在报告里长得一样。
+{
+    // 从生产源码抽出 API_SCAN_RULES 数组，取 slash-command-owner 的两条 pattern。
+    const at = src.indexOf('const API_SCAN_RULES = [');
+    const endAt = src.indexOf('\n];', at);
+    let slashPatterns = null;
+    if (at >= 0 && endAt > 0) {
+        try {
+            const literal = src.slice(at + 'const API_SCAN_RULES = '.length, endAt + 3);
+            const rules = evalLiteral(literal);
+            const rule = rules.find((r) => r.id === 'slash-command-owner');
+            slashPatterns = [...(rule?.pattern ? [rule.pattern] : []), ...(rule?.patterns ?? [])];
+            assert(Array.isArray(slashPatterns) && slashPatterns.length >= 2,
+                '[斜杠] 从 API_SCAN_RULES 抽出 ≥2 条 pattern', `共 ${slashPatterns?.length ?? 0} 条`);
+        } catch (e) {
+            bad('[斜杠] 抽取 API_SCAN_RULES 失败', e.message);
+        }
+    } else {
+        bad('[斜杠] 源码里找不到 API_SCAN_RULES');
+    }
+
+    if (slashPatterns && slashPatterns.length >= 2) {
+        const [reVarArg, reSlashStr] = slashPatterns;
+
+        // ---- ① bot.chat 传非字面量：必须命中（这是历史事故的真实形态）----
+        assert(reVarArg.test(`bot.chat(msg);`) === true,
+            '[斜杠①] 正例命中：bot.chat(msg) —— 变量实参（skills.js 旧版那两处正是这种）');
+        assert(reVarArg.test(`bot.chat('/setblock 1 2 3 air');`) === false,
+            '[斜杠①] 反例不命中：bot.chat(\'/setblock …\') 字面量（由 rule ② 管拼串，不由 ① 管）');
+        assert(reVarArg.test(`openChat(bot, message);`) === false,
+            '[斜杠①] 反例不命中：openChat(...) 是合法出口');
+
+        // ---- ② 字符串里拼斜杠命令：必须命中 ----
+        assert(reSlashStr.test(`let msg='/setblock ' + x;`) === true,
+            '[斜杠②] 正例命中：字符串里拼 /setblock（变量拼接的命令串）');
+        assert(reSlashStr.test('bot.chat(`/skin clear`)') === true,
+            '[斜杠②] 正例命中：模板字符串 /skin clear');
+        assert(reSlashStr.test(`const c = '/op Zeh';`) === true,
+            '[斜杠②] 正例命中：/op 这类高危命令');
+
+        // ---- ② 反例：路径 / 正则 flag / 普通聊天 不得误报（实测踩过的三类）----
+        assert(reSlashStr.test(`this.fp = '/action-code/';`) === false,
+            "[斜杠②] 反例不命中：'/action-code/' 是**路径**（coder.js:16 实测误报过）");
+        assert(reSlashStr.test(`this.fp = '/bots/'+agent.name;`) === false,
+            "[斜杠②] 反例不命中：'/bots/' 是路径");
+        assert(reSlashStr.test(`txt.replace(/'/g, "''")`) === false,
+            "[斜杠②] 反例不命中：正则字面量的 flag（/g）");
+        assert(reSlashStr.test(`bot.chat('hello world')`) === false,
+            "[斜杠②] 反例不命中：普通聊天（不带斜杠）");
+        assert(reSlashStr.test(`command(bot, 'setblock', [1,2,3,'air'], {cheat:true})`) === false,
+            "[斜杠②] 反例不命中：合法写法 command(bot,'setblock',…)");
+    }
+}
+
+// --- 3.5 §3 剥注释契约（T05 / 新增1）---
+// 实测事故：board 在注释里写了个 `{ ok:false, code:'XXX' }` 举例，§3 把它当未注册码报红，
+// 而双方代码都没错。修法是扫描前剥注释；但剥注释有两个反向风险必须一起锁死：
+//   ① 剥太少 → 注释里的举例仍然误报（原 bug 没修掉）
+//   ② 剥太多 → 把字符串里的码也抹了（探测力下降，真违规漏报）
+{
+    // 复刻 §3 的调用：maskJsSource(text, { strings: false })
+    const mStart = src.indexOf('function maskJsSource');
+    const mEnd = src.indexOf('/** 在文本里找全部命中位置');
+    let mask = null;
+    if (mStart > 0 && mEnd > mStart) {
+        try {
+            mask = new Function(`${src.slice(mStart, mEnd)}; return maskJsSource;`)();
+        } catch (e) {
+            bad('[§3] 抽不出 maskJsSource', e.message);
+        }
+    } else {
+        bad('[§3] 源码里找不到 maskJsSource');
+    }
+
+    if (mask && codeRegexes) {
+        const reOk = codeRegexes[1];
+        const scanCodes = (text) => {
+            const masked = mask(text, { strings: false });
+            const out = [];
+            for (const re of codeRegexes) {
+                const g = new RegExp(re.source, 'g');
+                for (const m of masked.matchAll(g)) out.push(m[1]);
+            }
+            return out;
+        };
+
+        // ① 注释里的举例 → 不得计入
+        assert(!scanCodes(`// 例：{ ok: false, code: 'FAKE_IN_COMMENT' }`).includes('FAKE_IN_COMMENT'),
+            '[§3] 反例：行注释里的 code 举例不得被计入');
+        assert(!scanCodes(`/* 块注释 { ok: false, code: 'FAKE_IN_BLOCK' } */`).includes('FAKE_IN_BLOCK'),
+            '[§3] 反例：块注释里的 code 举例不得被计入');
+
+        // ② 真代码 / 字符串里的 → 必须仍被抓（剥注释不能削弱探测力）
+        assert(scanCodes(`return { ok: false, code: 'FAKE_REAL' };`).includes('FAKE_REAL'),
+            '[§3] 正例：真代码里的未注册码必须仍被抓到');
+        assert(scanCodes(`const s = "{ ok: false, code: 'FAKE_IN_STR' }";`).includes('FAKE_IN_STR'),
+            '[§3] 正例：**字符串里**的码也必须仍被抓（剥注释 ≠ 剥字符串）');
+
+        // ③ 正则字面量里的引号不得把后面整段代码吞掉（T05 修的那个 82 行泄漏）
+        const withRegex = `const r = /"[^"]*"/g;\nreturn { ok: false, code: 'FAKE_AFTER_REGEX' };`;
+        assert(scanCodes(withRegex).includes('FAKE_AFTER_REGEX'),
+            '[§3] 正例：含引号的正则字面量之后，代码里的码仍被抓（防整段错位）');
+
+        void reOk;
+    }
 }
 
 // ---------- 汇总 ----------

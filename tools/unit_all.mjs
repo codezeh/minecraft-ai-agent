@@ -109,6 +109,26 @@ const UNITS = (() => {
 }
 
 const argv = process.argv.slice(2);
+
+// ★ T05（新增2）：`--list` —— 只吐清单，**不实跑任何脚本**，给 preflight 的统计段用。
+//   为什么加这个而不是让 preflight 去文本解析：T03 把 UNITS 改成 readdirSync 自动发现后，
+//   preflight 里那段 `const UNITS = [...]` 的正则解析就永远匹配不到，于是 [7/7] 打出
+//   「测试脚本 — ← 清单解析失败」。修法有两条：(a) 让 preflight 重新实现一遍发现规则
+//   → 立刻变成第二份真相，改一处必须改两处；(b) **让这里导出清单**，preflight 只消费。
+//   选 (b)：清单只有一份，preflight 不再需要知道"怎么发现脚本"。
+if (argv.includes('--list')) {
+    const payload = {
+        registered: UNITS.length,
+        executed: UNITS.filter((n) => !NEEDS_REAL_DATA.has(n)).length,
+        skipped: UNITS.filter((n) => NEEDS_REAL_DATA.has(n)).length,
+        units: UNITS,
+        needsRealData: [...NEEDS_REAL_DATA],
+        excluded: [...EXCLUDE.keys()],
+    };
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    process.exit(0);
+}
+
 const withReal = argv.includes('--real');
 const filter = argv.filter((a) => !a.startsWith('--'));
 const picked = filter.length ? UNITS.filter((n) => filter.some((f) => n.includes(f))) : UNITS;

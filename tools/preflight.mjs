@@ -176,9 +176,22 @@ const smokeTests = [
         });
         h.load();
     }],
-    ['tile_map.classifyChunk', async () => {
-        const m = await import(pathToFileURL(join(ROOT, 'library/tile_map.js')).href);
-        m.classifyChunk({ explored: true, y: 64, h: 2, water: 0, lava: 0, built: 0, leaves: 0 });
+    // ★ S33（T05）：这里原来指向 `library/tile_map.js` —— 那个模块**早已删除**，
+    //   于是 name 是「tile_map.classifyChunk」的这条永远走 `~ 非致命` 分支：
+    //   名义上 5 条冒烟测试，实际只有 4 条在测东西，而且看起来一切正常。
+    //   现在换成它的继任者：分类判断已迁到 query_classify.js，`isProtected` 是纯函数
+    //   （只吃 pos + opts，不需要 bot），顺手断言两个分支，比原来"只求不抛"更硬。
+    ['query_classify.isProtected', async () => {
+        const m = await import(pathToFileURL(join(ROOT, 'library/query_classify.js')).href);
+        const spot = { x: 10, y: 64, z: 10 };
+        const inside = m.isProtected({ x: 10, y: 64, z: 10 }, { spots: [spot], radius: 6 });
+        const outside = m.isProtected({ x: 200, y: 64, z: 200 }, { spots: [spot], radius: 6 });
+        if (!inside?.ok || inside.data?.protectedBy !== 'landmark') {
+            throw new Error(`isProtected 圈内应判受保护，实际 ${JSON.stringify(inside)}`);
+        }
+        if (!outside?.ok || outside.data?.protectedBy !== null) {
+            throw new Error(`isProtected 圈外不应受保护，实际 ${JSON.stringify(outside)}`);
+        }
     }],
 ];
 
@@ -188,7 +201,16 @@ for (const [name, fn] of smokeTests) {
         console.log(`  ✓ ${name}`);
     } catch (e) {
         const msg = String(e?.message ?? e);
-        if (e?.name === 'ReferenceError' || /is not defined/.test(msg)) {
+        // ★ S33（T05）：**缺模块必须判失败**。
+        //   原来只把 ReferenceError 当致命，于是"冒烟测试指向一个已删除的模块"会永远走
+        //   `~ 非致命` —— 名义 5 条实际 4 条，而报告里看不出任何异常。这是第26条同族：
+        //   "没测到"和"测了没问题"长得一模一样。模块找不到 = 这条冒烟测试根本不存在。
+        const missingModule = e?.code === 'ERR_MODULE_NOT_FOUND'
+            || /Cannot find module|ERR_MODULE_NOT_FOUND/.test(msg);
+        if (missingModule) {
+            failed++;
+            console.log(`  ✗ ${name}: 目标模块不存在（这条冒烟测试形同虚设）: ${e.code ?? ''} ${msg.slice(0, 80)}`);
+        } else if (e?.name === 'ReferenceError' || /is not defined/.test(msg)) {
             failed++;
             console.log(`  ✗ ${name}: ${e.name}: ${msg}`);
         } else {
@@ -236,7 +258,14 @@ try {
 
     const used2 = new Map();
     for (const f of files2) {
-        const t = fs2.readFileSync(f, 'utf8');
+        const raw2 = fs2.readFileSync(f, 'utf8');
+        // ★ T05（新增1）：**先剥注释再扫**。
+        //   实测事故：board 只是在 board_store.js 的注释里写了一个 `{ ok:false, code:'XXX' }`
+        //   形式的举例，这道门就把它当成"未注册错误码"报红，skills 的提交被拒 ——
+        //   而双方代码都没错。绕法是"把注释改成散文"，但那等于把代价转给每个写注释的人，
+        //   而且下一个人还会踩。根治办法是扫描前把注释抹掉。
+        //   strings:false = 只剥注释、**保留字符串内容** —— 字符串里的码仍然要抓（动态拼出来的同样危险）。
+        const t = maskJsSource(raw2, { strings: false });
         for (const re of CODE_AUDIT_REGEXES) {
             for (const mm of t.matchAll(re)) {
                 if (!used2.has(mm[1])) used2.set(mm[1], new Set());
@@ -286,7 +315,13 @@ try {
 {
     const { spawnSync } = await import('node:child_process');
     const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-    const DOC = 'docs/交接文档.md';
+    // ★ 第27条（T05）：这里原来盯的是 `docs/交接文档.md` —— 而**那份文档自己头部就写着**
+    //   「本文是 2026-10-24 的快照…2~6 节已过时…权威交接是 架构交接-总.md」。
+    //   也就是说：这道门在检查"一份自称作废的文档是否比代码新"。
+    //   它当然永远"通过"，因为那份文档本来就不再更新 —— 又一个"检查通过"与"检查没意义"同形。
+    //   现在改成盯权威文档。顺带把历史快照也列出来，但只作提示、不参与判定。
+    const DOC = 'docs/架构交接-总.md';
+    const HISTORICAL_DOCS = ['docs/交接文档.md'];
     const CODE_PATHS = ['src/agent/library', 'src/agent/commands', 'src/agent/process'];
 
     const gitTime = (args) => {
@@ -307,22 +342,33 @@ try {
         const when = days >= 1 ? `${days} 天` : '不到一天';
         // 只提示，不计入 failed —— 不该因为文档没跟上就阻止启动
         console.log(`  ! 交接文档可能过时：代码比它新 ${when}。`);
-        console.log(`    建议看一眼 ${DOC} 的「一·五」章节是否还准确。`);
+        console.log(`    建议看一眼 ${DOC} 是否还准确（这是**当前**的权威交接）。`);
     } else {
-        console.log('  ✓ 交接文档不比代码旧');
+        console.log(`  ✓ 权威交接文档 ${DOC} 不比代码旧`);
+    }
+    // 历史快照只做提示：它们本来就该停在原地，不参与"是否过时"的判定。
+    for (const h of HISTORICAL_DOCS) {
+        const ts = gitTime([h]);
+        if (ts === null) continue;
+        const days = Math.floor((Date.now() / 1000 - ts) / 86400);
+        console.log(`  · ${h} 是历史快照（最后一次提交 ${days} 天前），只作对照，不参与判定`);
     }
 }
 
-// ---- 第四层：API 扫描（骨架；规则由后续任务填）----
+// ---- 第四层：API 扫描（规则已填全，**默认命中即判失败**）----
 //
 // 为什么需要（docs/architecture/09_crosscut.md §5、01_primitives.md §6、02_actions.md）：
 // 分层规矩（"控制键只有 atom_input_move 能碰"、"聊天走 openChat 拦 / 开头"、
 // "RCON 密码不许写死"）写在文档里，靠自觉一定漂。要一条能跑、能报位置、能填规则的检查。
 //
-// 这一层**只报告不判失败**（API_SCAN_ENFORCE = false）：
-// 规则还没填全、代码还没迁完，现在就判失败等于把 preflight 变成红灯常亮。
-// 后续任务把规则填严、代码迁完之后，用 `node tools/preflight.mjs --strict-api`
-// 验一遍再翻默认值。规则格式见下面的 API_SCAN_RULES。
+// ★ S36（T05）：这段注释原来写的是「这一层**只报告不判失败**（API_SCAN_ENFORCE = false）」，
+//   而下面第 :341 行的真实取值是 `!process.argv.includes('--report-api')` —— **默认 true**。
+//   A.1~A.3 迁完、五条规则全绿之后就翻成判失败了，但这段说明一直没改。
+//   后果不是功能错，而是**读码的人会把 §4 的门禁强度判断反**：以为它只是提示，
+//   于是"红了也不管"，等于把一道真门当成装饰。注释与代码不一致，比没有注释更坏。
+//
+// 现状（与代码一致）：**默认命中即判失败**；`--report-api` 临时退回只报告
+// （大改期间明知会红一片时用）。规则格式见下面的 API_SCAN_RULES。
 const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 /** 报多少条；超出的折叠成一句"还有 N 处"，免得刷屏 */
@@ -390,6 +436,22 @@ const API_SCAN_RULES = [
     {
         // A1 的「斜杠命令」那一半。**命令是写在字符串里的**，所以这条必须 scan:'raw'
         // （只去注释、保留字符串内容）——用默认的 code 模式永远扫不到，等于规则形同虚设。
+        //
+        // ★ T05（第29条闸门加强）：原来只有一条 pattern `bot\.chat\(…['"`]\s*\/`
+        //   —— 它要求"同一行里先有字面量 /"。于是 `bot.chat(msg)` 这种**变量实参**扫不到，
+        //   而 skills.js 那两处历史事故正是变量实参（先 `let msg='/setblock '+…`，再 `bot.chat(msg)`）。
+        //   换句话说：规则只能看见"已经写成字面量"的形态，最该防的间接形态正好在盲区里。
+        //   现在补两条（T20 文档 §二 给的形态，我按实测把 ② 收窄了一档，见下）：
+        //   ① 禁止 bot.chat 传**非字面量**实参（变量/表达式）—— 间接传命令的唯一入口
+        //   ② 禁止在字符串里**拼**斜杠命令（`let msg='/setblock '+…`）
+        //
+        //   ② 为什么不是原样 `['"`]\s*\/[a-z]`：实测全仓 77 处命中里，大量是
+        //   **文件路径**（`'/bots/'+agent.name`）、**正则字面量的 flag**（`"/g`、`'/g`）、
+        //   **shell 命令**（`espeak "..."`）—— 全是假阳性，把一个规则做成噪音源，
+        //   下一个人就会给它加豁免加到失效。收窄成「斜杠后至少两个字母、且后面不紧跟斜杠」
+        //   （`\/(?![a-z]*[\\/])[a-z]{2,}`）：77 → 57，路径/flag 类假阳性清零；
+        //   真命令（`/setblock `、`/skin clear`、`/op `、`/ride `）全部保留。
+        //   剩下的命中都在被豁免的 tasks/ 与 atom_input_misc，属于已知待迁点。
         id: 'slash-command-owner',
         why: '斜杠命令只许从 atom_input_misc.command() 出去（op 账号，一条 /op 就是全图）',
         files: ['src/agent/**/*.js'],
@@ -398,8 +460,22 @@ const API_SCAN_RULES = [
             // 冻结文件（src 里没人 import），Phase R 一并删/迁
             // 开发用任务脚本（造场景/烹饪测试），不是运行时链路；后续并入 command()
             'src/agent/tasks/**/*.js',
+            // agent.js 的 sendSlashCommand 是 M1 定的另一个合法出口（openChat 同文件）
+            'src/agent/agent.js',
         ],
-        pattern: /bot\.chat\s*\([^\n]*?['"`]\s*\//,
+        patterns: [
+            // ① bot.chat 传非字面量：`bot.chat(msg)` / `bot.chat('a'+b)` / `bot.chat(code > 1 ? …)`
+            /\bbot\.chat\s*\(\s*(?!['"`])/,
+            // ② 字符串里拼斜杠命令（收窄版，理由见上）：
+            //    `\/(?![a-z]*[\\/\-])[a-z]{2,}` =
+            //    斜杠 + 至少两个小写字母，且**该字母串后面不紧跟** `/` 或 `-`。
+            //    排掉斜杠：`'/bots/'`、`'/usr/local'` 这类**路径**；
+            //    排掉连字符：`'/action-code/'`、`'/tmp/x-y'` 这类**带连字符的路径**
+            //    （实测 coder.js:16 就是这么误报的 —— 只排斜杠挡不住它）。
+            //    真命令（setblock/skin/op/ride/fill…）后面不是斜杠也不是连字符，全部保留。
+            //    注：字符类里连字符放末尾不必转义（`\-` 会被 eslint 判 no-useless-escape）。
+            /['"`]\s*\/(?![a-z]*[\\/-])[a-z]{2,}/,
+        ],
         scan: 'raw',
     },
     {
@@ -411,7 +487,10 @@ const API_SCAN_RULES = [
             'src/agent/agent.js',            // openChat / sendSlashCommand：M1 定的唯一出口
             // 待迁：模型回复之外的直发（任务脚本 / 语音 / 模式提示），尚未接 openChat
             'src/agent/speak.js',
-            'src/agent/library/skills.js',
+            // ★ T05：**skills.js 已从豁免里摘掉**（第29条要求「收紧、要真阳性不靠放宽」）。
+            //   T20 已把 skills.js 里最后两处裸 `bot.chat('/setblock …')` 改成 command(...)，
+            //   现在这个文件里 `bot.chat(` 出现次数是 0 —— 豁免已经没有存在理由。
+            //   留着它的唯一效果：以后有人在 skills.js 里再写一句 bot.chat 直发，门禁看不见。
             'src/agent/modes.js',
             'src/agent/permissions.js',
             'src/agent/library/flow_follow.js',
@@ -487,6 +566,13 @@ function collectApiScanSources() {
  *   （当时 `atom_boat` 的注释、`atom_dig` 里「契约不允许原子直接按键」那句都是）。
  *   不清掉注释，唯一的出路就是给注释加豁免 —— 豁免名单立刻变脏，以后真违规也看不出来。
  *
+ * ★ T05 修：**认得正则字面量**。
+ *   旧版只认行注释和块注释、以及引号；遇到正则字面量里的引号就整段错位 ——
+ *   典型是 `commands/index.js:59` 的 `/!(\w+)…"[^"]*"…/`：里面的 `"` 被当成字符串开头，
+ *   于是它一路"吞"到下一个 `"`，把后面 82 行 JSDoc 当成字符串内容，**注释根本没被抹掉**。
+ *   这是实测出来的：剥注释后该文件仍有 82 行注释原样残留，而全仓其它 165 个文件都干净。
+ *   错位的后果很实在 —— §3 错误码审计会去扫注释里的举例（board 那次 preflight 直接红）。
+ *
  * @param {string} text
  * @param {object} opts
  *   strings=true  连字符串 / 模板字面量的内容也抹掉（引号保留）→ 用来扫 `bot.xxx(` 这类 API
@@ -499,6 +585,28 @@ function maskJsSource(text, { strings = true } = {}) {
     const blank = (from, to) => {
         for (let k = from; k < to && k < n; k++) if (out[k] !== '\n') out[k] = ' ';
     };
+    /**
+     * 这个 `/` 是"正则字面量的开头"还是"除号"？
+     * 判据（业界通行的做法）：看**前一个非空白字符**。
+     *   `=` `(` `,` `:` `[` `!` `&` `|` `?` `{` `}` `;` `+` `-` `*` `%` `~` `<` `>` 之后、
+     *   或行首 / 关键字 return·typeof·case·in·of·new·delete·void·do·else 之后 → 正则
+     *   `)`、`]`、标识符、数字、引号、`++`/`--` 之后 → 除号
+     * 判错只会让"某个正则里的斜杠被当成注释开头"或反之，比整段错位安全得多。
+     */
+    const regexAllowedAfter = (pos) => {
+        let k = pos - 1;
+        while (k >= 0 && /\s/.test(text[k])) k--;
+        if (k < 0) return true;                       // 文件/行开头
+        const prev = text[k];
+        if ('=(,[:!&|?{};+-*%~<>'.includes(prev)) return true;
+        if (prev === ')' || prev === ']') return false;
+        // 关键字结尾（return / typeof / case / in / of / new / delete / void / do / else）
+        const head = text.slice(Math.max(0, k - 8), k + 1);
+        if (/\b(return|typeof|case|in|of|new|delete|void|do|else)$/.test(head)) return true;
+        // 除号：前面是标识符/数字/引号/右括号
+        return false;
+    };
+
     let i = 0;
     while (i < n) {
         const c = text[i];
@@ -516,6 +624,24 @@ function maskJsSource(text, { strings = true } = {}) {
             j2 = Math.min(n, j2 + 2);
             blank(i, j2);
             i = j2;
+            continue;
+        }
+        // ★ 正则字面量：整段跳过，避免里面的引号被当成字符串开头（T05）
+        if (c === '/' && regexAllowedAfter(i)) {
+            let j2 = i + 1;
+            let inClass = false;                       // 字符类 [...] 里的 `/` 不结束正则
+            while (j2 < n) {
+                const ch = text[j2];
+                if (ch === '\\') { j2 += 2; continue; }
+                if (ch === '\n') break;                // 未闭合：当它到此为止，别吞掉后面整份文件
+                if (ch === '[') { inClass = true; j2++; continue; }
+                if (ch === ']') { inClass = false; j2++; continue; }
+                if (ch === '/' && !inClass) { j2++; break; }
+                j2++;
+            }
+            // 跳过 flags
+            while (j2 < n && /[a-z]/.test(text[j2])) j2++;
+            i = j2;                                    // 正则内容原样保留（里面的字符串内容本就不是注释）
             continue;
         }
         if (c === '"' || c === "'" || c === '`') {
@@ -585,8 +711,16 @@ function locateInText(text, index) {
             const scanText = rule.scan === 'raw'
                 ? maskJsSource(src.text, { strings: false })
                 : maskJsSource(src.text, { strings: true });
-            for (const idx of findAllHits(scanText, rule.pattern)) {
-                hits.push({ file: src.path, ...locateInText(src.text, idx) });
+            // 单 pattern 与多 patterns 都支持。注意 rule.pattern 可能**不存在**
+            // （只用 patterns 的规则）—— 不判空就会把 String(undefined) 当成字面量去搜 "undefined"。
+            const allPatterns = [
+                ...(rule.pattern === undefined ? [] : [rule.pattern]),
+                ...(rule.patterns ?? []),
+            ];
+            for (const pat of allPatterns) {
+                for (const idx of findAllHits(scanText, pat)) {
+                    hits.push({ file: src.path, ...locateInText(src.text, idx) });
+                }
             }
         }
         totalHits += hits.length;
@@ -611,8 +745,11 @@ function locateInText(text, index) {
     } else if (totalHits === 0) {
         console.log('  · 命中 0 处，但**扫描输入无效** → 已按护栏判失败，不算通过');
     } else {
-        console.log(`  · 共 ${totalHits} 处命中：现在只报告不判失败；` +
-            '规则填严后用 `node tools/preflight.mjs --strict-api` 验，再翻默认值。');
+        // ★ S36（T05）：原来这里提示用 `--strict-api` 重新验 —— 但那是 §5 前缀 import 规则的开关，
+        //   跟 API 扫描无关（API 扫描的开关是 `--report-api`）。照着旧提示敲命令的人会
+        //   得到"门禁强度没变"的困惑，甚至以为已经验过。参数名写错，等于把说明变成陷阱。
+        console.log(`  · 共 ${totalHits} 处命中：当前是 \`--report-api\` 只报告模式（不判失败）；` +
+            '去掉该参数即恢复「命中即判失败」。');
     }
 }
 
@@ -1093,19 +1230,24 @@ console.log("");console.log("[6/6] 依赖注入审计（A 档 = 单测能测到�
     };
 
     /**
-     * `unit_all` 的注册/执行/跳过数 —— **解析清单，不实跑**（实跑要几分钟，装不进门禁）。
-     * 只读 `UNITS` 与 `NEEDS_REAL_DATA` 两个字面量列表；解析不出来给 `—`。
+     * `unit_all` 的注册/执行/跳过数 —— **问它本人要，不自己解析**（实跑要几分钟，装不进门禁）。
+     *
+     * ★ T05（新增2）：原来是文本解析 `const UNITS = [...]` 两个字面量列表。
+     *   T03 把 UNITS 改成 `readdirSync('tools').filter(/_unit\.mjs$/)` 自动发现之后，
+     *   那段正则就永远匹配不到 → [7/7] 打出「测试脚本 — ← 清单解析失败」。
+     *   当时的修法选择：让 unit_all 提供 `--list` 导出机器可读清单，这里只消费。
+     *   **不在这里重新实现一遍发现规则** —— 否则"哪些脚本算单测"就有两份真相，
+     *   改一处必须记得改两处，迟早点漂（这正是 S34 那条的同一类问题）。
      */
     const unitStats = () => {
         try {
-            const src = readFileSync(join(ROOT, '../../tools/unit_all.mjs'), 'utf8');
-            const unitsBlock = src.match(/const UNITS = \[([\s\S]*?)\];/);
-            if (!unitsBlock) return null;
-            const registered = [...unitsBlock[1].matchAll(/^\s*'([^']+)'/gm)].map((m) => m[1]);
-            const nrBlock = src.match(/NEEDS_REAL_DATA = new Set\(\[([\s\S]*?)\]\)/);
-            const needsReal = nrBlock ? [...nrBlock[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
-            const skipped = registered.filter((n) => needsReal.includes(n));
-            return { registered: registered.length, executed: registered.length - skipped.length, skipped: skipped.length };
+            // 用 execFileSync（与本段其它命令一致，不另引 spawnSync）
+            const out = execFileSync(process.execPath,
+                [join(ROOT, '../../tools/unit_all.mjs'), '--list'],
+                { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'ignore'] });
+            const j = JSON.parse(String(out ?? ''));
+            if (!Number.isInteger(j?.registered) || j.registered <= 0) return null;
+            return { registered: j.registered, executed: j.executed, skipped: j.skipped };
         } catch { return null; }
     };
 

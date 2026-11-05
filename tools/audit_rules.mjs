@@ -125,13 +125,46 @@ export function rulesAudit({ quiet = false } = {}) {
     let base = { count: 0, items: [] };
     if (existsSync(BASELINE)) base = JSON.parse(readFileSync(BASELINE, 'utf8'));
 
-    if (violations.length > base.count) {
-        problems.push(`裸常量新增：基线 ${base.count} 处，现在 ${violations.length} 处`);
-        // 身份用「文件 + 常量值」，不用行号：行号会随着正常编辑上下移动，
-        // 拿它当身份会让"改了一行注释"也报成新增（实测踩过）。
-        const known = new Set(base.items.map(x => `${x.file}:${x.value}`));
-        const fresh = violations.filter(v => !known.has(`${v.file}:${v.value}`));
+    // ★ 第27条（T05）：**基线条目本身必须是活的**。
+    //   为什么必须校验：基线是"欠账名单"。条目一旦指向已删除/已改名的文件，
+    //   它就永远躺在名单里充数 —— 棘轮看起来"还有很多欠账"，实际一大半是死条目，
+    //   等于**给棘轮开了空名额**。没有存在性断言，删掉一个模块就白得一个名额，
+    //   删得越多棘轮越宽松 —— 方向正好反了。
+    //   实测（T05）：14 条里 **9 条**指向已删除的模块（atom_dig / atom_move /
+    //   atom_perceive / task_collect / tile_map），真正活着的只有 skills.js 那 5 条。
+    //   棘轮名义 14、实际 5。
+    const deadItems = (base.items ?? []).filter((it) => !it?.file || !existsSync(join(MC_ROOT, it.file)));
+    if (deadItems.length) {
+        problems.push(`基线里有 ${deadItems.length} 条**死条目**（文件已不存在），棘轮被这些空名额放宽了：`
+            + deadItems.slice(0, 12).map((x) => `${x.file}:${x.line}`).join('、')
+            + ' —— 请删掉它们并同步 count');
+        if (!quiet) {
+            for (const x of deadItems) console.log(`     ✗ 死条目 ${x.file}:${x.line}（常量 ${x.value}，文件不存在）`);
+        }
+    }
+
+    // ★ 第27条（T05）：身份比对**不再挂在"总数超标"这个条件里**。
+    //
+    //   旧写法的漏洞（实测）：`if (violations.length > base.count)` 才去比对身份。
+    //   于是只要总数没超过基线，**内容换了也发现不了** ——
+    //   死条目（文件已删）腾出来的名额，正好被新写的裸常量悄悄占掉：
+    //   示例就是本次实测到的：基线 14 条里 9 条是死条目，而 act_craft/act_dig/
+    //   atom_read/atom_tunnel/nav_pathfinder/query_perceive/query_tree 这 7 处
+    //   **新增**的裸常量一直没被报出来 —— 因为 12 < 14。
+    //   "总数没涨"不等于"没有新增"，这是第26条同族：数字相等，构成全变了。
+    //
+    //   现在：只要有**不在名单里的**违规，就报新增（逐条点名），与总数无关。
+    //   身份用「文件 + 常量值」，不用行号 —— 行号会随正常编辑上下移动，
+    //   拿它当身份会让"改了一行注释"也报成新增（实测踩过）。
+    const known = new Set(base.items.map(x => `${x.file}:${x.value}`));
+    const fresh = violations.filter(v => !known.has(`${v.file}:${v.value}`));
+    if (fresh.length) {
+        problems.push(`裸常量新增 ${fresh.length} 处（基线名单里没有）：`);
         for (const v of fresh.slice(0, 20)) problems.push(`  新增 ${v.file}:${v.line} 常量 ${v.value}（${v.why}）`);
+    }
+    // 总数兜底：即使身份全都认识，条数也不能涨（防"同一文件同一值重复出现"绕过身份比对）
+    if (violations.length > base.count) {
+        problems.push(`裸常量条数上涨：基线 ${base.count} 处，现在 ${violations.length} 处`);
     }
 
     if (!quiet) {

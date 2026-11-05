@@ -1,21 +1,79 @@
 {
-  "updated_at": "2026-10-24",
-  "count": 14,
-  "note": "存量裸常量基线（棘轮）。只许变少：这些数值应当在对应文件被改动时改为从 rules.runtime.js 取，或在行上补 // rule:Rx-xx 出处。新增违规会让 preflight 失败。",
+  "updated_at": "2026-11-05",
+  "count": 12,
+  "note": "存量裸常量基线（棘轮）。只许变少：这些数值应在对应文件被改动时改为从 rules.runtime.js 取，或在行上补 // rule:Rx-xx 出处。新增违规会让 preflight 失败（身份比对已改为无条件，不再依赖总数）。★ 2026-11-05（T05 / 第27条）重建：原 14 条里有 9 条指向**已删除的模块**（atom_dig/atom_move/atom_perceive/task_collect/tile_map），  属死条目 —— 它们给棘轮开了 9 个空名额，于是 7 处真实新增（act_craft/act_dig/atom_read/atom_tunnel/nav_pathfinder/query_perceive/query_tree）  因为\"12 < 14\"从未被报出来。现删除 9 条死条目，并把那 7 处如实补登记（它们是既有欠账，不是本次引入）。  同时 audit_rules.mjs 增加两条硬校验：① 每一条登记项必须 existsSync(file)；② 不在名单里的违规无条件报\"新增\"。",
   "items": [
-    { "file": "src/agent/library/atom_dig.js", "line": 35, "value": "5.1", "why": "没有出处", "target_rule": "R3-01" },
-    { "file": "src/agent/library/atom_move.js", "line": 116, "value": "0.6", "why": "没有出处", "target_rule": "R1-04" },
-    { "file": "src/agent/library/atom_perceive.js", "line": 23, "value": "1.62", "why": "没有出处", "target_rule": "R2-01" },
-    { "file": "src/agent/library/atom_perceive.js", "line": 62, "value": "5.1", "why": "没有出处", "target_rule": "R3-01" },
-    { "file": "src/agent/library/skills.js", "line": 1010, "value": "4.5", "why": "没有出处", "target_rule": "R2-02" },
-    { "file": "src/agent/library/skills.js", "line": 1219, "value": "4.5", "why": "没有出处", "target_rule": "R2-02" },
-    { "file": "src/agent/library/skills.js", "line": 1864, "value": "1.62", "why": "没有出处", "target_rule": "R2-01" },
-    { "file": "src/agent/library/skills.js", "line": 2432, "value": "4.5", "why": "没有出处", "target_rule": "R2-02" },
-    { "file": "src/agent/library/skills.js", "line": 2477, "value": "4.5", "why": "没有出处", "target_rule": "R2-02" },
-    { "file": "src/agent/library/task_collect.js", "line": 50, "value": "5.1", "why": "没有出处", "target_rule": "R3-01" },
-    { "file": "src/agent/library/task_collect.js", "line": 60, "value": "1.62", "why": "没有出处", "target_rule": "R2-01" },
-    { "file": "src/agent/library/task_collect.js", "line": 76, "value": "1.62", "why": "没有出处", "target_rule": "R2-01" },
-    { "file": "src/agent/library/task_collect.js", "line": 592, "value": "5.1", "why": "没有出处", "target_rule": "R3-01" },
-    { "file": "src/agent/library/tile_map.js", "line": 23, "value": "0.6", "why": "没有出处", "target_rule": "R1-04" }
+    {
+      "file": "src/agent/library/act_craft.js",
+      "line": 346,
+      "value": "4.5",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/act_dig.js",
+      "line": 36,
+      "value": "5.1",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/atom_read.js",
+      "line": 45,
+      "value": "1.62",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/atom_tunnel.js",
+      "line": 271,
+      "value": "0.6",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/nav_pathfinder.js",
+      "line": 298,
+      "value": "0.6",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/query_perceive.js",
+      "line": 73,
+      "value": "5.1",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/query_tree.js",
+      "line": 216,
+      "value": "4.5",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/skills.js",
+      "line": 1075,
+      "value": "4.5",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/skills.js",
+      "line": 1295,
+      "value": "4.5",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/skills.js",
+      "line": 1972,
+      "value": "1.62",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/skills.js",
+      "line": 2507,
+      "value": "4.5",
+      "why": "没有出处"
+    },
+    {
+      "file": "src/agent/library/skills.js",
+      "line": 2552,
+      "value": "4.5",
+      "why": "没有出处"
+    }
   ]
 }
