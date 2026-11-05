@@ -39,6 +39,10 @@ import { blockAt as readBlock } from './query_perceive.js';
 import { mapDirOf } from './bot_paths.js';
 import { goTo } from './nav_core.js';
 import { collectDrops } from './flow_pickup.js';
+// ★ t137：**`mc` 必须导入** —— 我第一版用了 `mc.getItemBlockSources` 但忘了 import，
+//   而它外面包了 `try/catch` → **静默退回旧逻辑，修复完全无效**。
+//   （这正是今晚反复栽的"静默降级"：`catch {}` 把"我写错了"变成"什么都没发生"。）
+import * as mc from '../../utils/mcdata.js';
 
 /** 复合技能 manifest（04 §4.1）。 */
 export const manifest = {
@@ -96,13 +100,47 @@ const APPROACH_WINDOW_MS = 30000;   // 走近时额外给的窗口（与预算�
 const MIN_WAIT_BUDGET_MS = 4000;    // 每一步最少给的预算
 
 /** 矿名规范化：`iron_ore` / `deepslate_iron_ore` / `iron` 都认。 */
-function oreNames(ore) {
+export function oreNames(ore) {
     const base = String(ore ?? '').toLowerCase().replace(/^minecraft:/, '');
+
+    // ★★★ 2026-11-05（t137）：**先用"权威的物品→方块来源表"，再退回旧猜测。**
+    //
+    //   真机证据（第 57 跑）：`mine cobblestone c=3` → `failed «附近没有 cobblestone»`，连续三轮。
+    //   我一度以为"是测试场地没石头" —— **查了才发现是代码问题**：
+    //
+    //     `getItemBlockSources('cobblestone')` → **`["stone","cobblestone"]`**   ← 权威
+    //     旧逻辑生成 → `cobblestone / cobblestone_ore / deepslate_cobblestone_ore`
+    //
+    //   → **只命中 `cobblestone` 方块（自然界几乎没有），完全没搜 `stone`（地下满地都是）。**
+    //   所以场地铺多少石头都没用，除非铺的方块名字就叫 `cobblestone`。
+    //
+    //   ★ 这是"名字漂移于真相"：**掉落物名（cobblestone）≠ 方块名（stone）**，
+    //     而挖矿要找的是**方块**。（同族已修：`iron_ore` 掉 `raw_iron`。）
+    // ① 权威来源（对**物品名**有效：cobblestone / raw_iron / coal / diamond …）
+    let srcBlocks = [];
+    try {
+        srcBlocks = (mc.getItemBlockSources?.(base) ?? []).filter(Boolean).map(String);
+    } catch { /* 查不到就走旧逻辑 */ }
+
+    if (srcBlocks.length) {
+        const names = new Set([base, ...srcBlocks]);
+        // 只对"看起来是矿"的方块补 deepslate 变体（stone/oak_log 不需要）
+        for (const b of srcBlocks) {
+            if (/_ore$/.test(b)) {
+                // 只在"没有 deepslate 前缀"时补变体，否则会产出 `deepslate_deepslate_x_ore`
+                if (!b.startsWith('deepslate_')) names.add(`deepslate_${b}`);
+                names.add(b.replace(/^deepslate_/, ''));
+            }
+        }
+        return [...names].filter(Boolean);
+    }
+
+    // ② 旧逻辑：对**方块名**仍然正确（`iron_ore` → `iron_ore / deepslate_iron_ore`）
     const bare = base.replace(/^deepslate_/, '').replace(/_ore$/, '');
-    const names = new Set([base]);
+    const names = new Set([base, `deepslate_${base}`]);
     if (!base.endsWith('_ore')) names.add(`${bare}_ore`);
     names.add(`deepslate_${bare}_ore`);
-    return [...names];
+    return [...names].filter(Boolean);
 }
 
 /**
