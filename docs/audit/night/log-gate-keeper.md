@@ -275,3 +275,52 @@
 
 ### 现场
 未修改 `mindcraft/` 任何文件；`done/` 已清空（D2 全部归档）；产出已 grep 自检无密钥。
+
+---
+
+## R3 2026-11-06 02:0x–02:2x | 预审下一个实现窗口三条（F-EXEC-201 / F-AI-202 / F-WEB-205）| 通过 2 / 需修正 1
+
+### 关键发现：两条已被实现，一条未动
+- **F-EXEC-201（speak RCE）已实现**：`exec(拼串)` → `spawn(字面量argv)` + 文本走 stdin；全仓 `shell:true` grep 为空。
+- **F-WEB-205（停止面板）已实现**：`stop-all.mjs` 按 env→`./.mindserver-token` 取 token 塞 `auth`，
+  退出码 2/3 分档；`stop-panel.ps1` `Push-Location mindcraft` + finally popd。
+- **F-AI-202（!goal）完全未动**：等级仍 trusted、`prompter.js:226` 仍无转义无限长、`self_prompter` 无轮次上限。
+
+### 最有价值的一条：我用实测推翻了自己的"专家直觉"
+我原以为 Windows 上 `[Console]::In.ReadToEnd()` 默认编码会把中文弄乱、应加 `InputEncoding=UTF8`。
+**实测结果相反**：
+```
+printf '中文测试HELLO' | powershell -Command '[Console]::In.ReadToEnd()'         → 中文测试HELLO  ✅
+printf '中文测试HELLO' | powershell -Command '[Console]::InputEncoding=UTF8; …'  → ���Ĳ���HELLO  ❌
+```
+⇒ **现有实现是对的；"顺手加固"会把中文 TTS 弄坏。** 已要求把这条实测结论写进代码注释，
+否则后人（包括未来的我）会加错。
+
+### F-AI-202：我不同意原修法的一处（重要）
+finding 建议把 `!goal` 与 `!endGoal` 一并升 OWNER_ONLY。**我认为 `!endGoal` 必须留在信任级**：
+- 它是**急停**（停自提示循环），危险方向是"停止"不是"授权"；
+- 若两者都升权，**owner 之外的任何人发现 bot 被套上疯狂目标时无法叫停** —— 与降险目标相反；
+- goal 会写进 memory.json 跨重启恢复，更需要信任级能停。
+⇒ 建议**只移 `!goal`**，并在 commit body 写明理由。
+
+另两条判定：
+- `!goal` 升权**对当前用户无影响**（唯一启用 profile `my-local.json` 的 owner = HEAVENZEH）；
+  **但 owner 为空的 profile（deepseek / defaults/*）会 100% 用不了 `!goal`**（OWNER 级不可达）⇒ 需在 settings 注释写明。
+- **限长 500 不是重点，转义才是**：现在的通道是 `"${prompt}"` 未转义 `"`，60 字注入就够；限长挡不住。
+  且若做限长，**不许静默 slice**（会把目标拦腰砍断、语义反转），应超限拒绝并回话。
+- 会红的测试我已定位到行：`permissions_unit:64`（`trustedCan` 含 `!goal`）与 `:181-182`（断言"没配 owner 陌生人 !goal 可用"），必须同 commit 改，并补"owner 配了 HEAVENZEH 时 !goal 可用"的正向断言。
+- 实测现网最长 goal ≈ **170 字符**（bots/*/last_profile.json），500 有 3 倍余量 ⇒ 不会误伤。
+
+### F-WEB-205：cwd 链条逐环验过，对得上
+`start-panel.ps1:187-188` 以 `-WorkingDirectory (Join-Path $root 'mindcraft')` 起 mindserver
+⇒ token 落 `<repo>\mindcraft\.mindserver-token`；`stop-panel.ps1` `Push-Location` 到**同一目录**；
+`start-panel.ps1:203` 读的也是这个路径 ⇒ 三处口径一致 ✅
+失败三档已分开（2=拿不到 token / 3=握手被拒 / 0=真没开），且都警告"服务器仍在运行，别关窗口" ⇒ 不误导 ✅
+两条残留（不在本单）：`$node` 路径硬编码、`8080` 硬编码（改端口会走错分支）。
+
+### 我的失误（第三次，同一病根）
+我上一轮说"`config/network.json` 仍留旧论断"是**没 grep 就凭记忆下的结论**。实测 zero 命中，captain 是对的。
+与前两次泄露口令同源：**拿印象代替实测**。已定：凡"文件里还有没有某句话"必须先 grep。
+
+### 产出
+`docs/audit/night/review-prestage-2.md`

@@ -87,3 +87,10 @@ verify: |
   npm run gate:full
 discovered_by: recon-scout
 dept: REG
+
+---
+status: fix-ready-awaiting-commit（patch-smith · 并入 F-WEB-205 窗口）
+changed: src/agent/mindserver_proxy.js:55-58（提示改为读 .mindserver-token / MINDSERVER_TOKEN，注明日志只有指纹）、
+         start.bat 启动完成提示（打印 token 文件路径 + ?token= 示例 + MINDSERVER_PRINT_TOKEN 提示）、
+         src/mindcraft/auth_gate.js:26 注释（"能读到启动日志里的 token" → "能读 .mindserver-token 文件"）
+自检: node --check 两文件 OK；grep "启动日志里的 token" 仅剩"已不再打印"的说明注释；start.bat 括号 23/23（改前 20/20，delta 0）

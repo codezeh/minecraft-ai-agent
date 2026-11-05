@@ -6,7 +6,9 @@
 
 ---
 
-## 01:45 阶段小结（开工 45 分钟）
+> 说明：本文按发现顺序追加。时间戳为各阶段实际时刻（以 git 提交时间为锚），非撰写时刻。
+
+## 01:40 阶段小结（开工约 35 分钟）
 
 ### 团队
 固定 3 席，吃满三并发：`recon-scout`（侦察）· `patch-smith`（修补）· `gate-keeper`（复核）。
@@ -68,33 +70,7 @@ npm run lint                       → 197 errors（存量基线，不可新增�
 
 ---
 
-## 02:20 复核席推翻了三条修法（这是今晚最重要的质量控制）
-
-复核席独立重跑，把侦察兵和我的修法各推翻了两条。**我逐条核证后确认它对。** 记录在此，因为"差点误改"比"改对了"更有教育意义。
-
-**① 一个会让整套修复当场崩的顺序错误（`F-SEC-201`）**
-侦察兵说"把密钥搬到 `.env`"。我核了 `src/utils/keys.js`：第 5 行 `keys.json` **优先**、第 14 行才回落环境变量、**第 17 行取不到就 `throw`**。
-⇒ 若先清空 `keys.json` 而用户还没 `setx`（且 `setx` 只对**新进程**生效、只能用户本人执行），**所有模型调用当场抛异常全崩**，不是"暂时不可用"。
-**最终做法**：今晚不清空。只写三步手册，标 blocked 等用户。
-```
-1. 用户本人：setx OPENAI_API_KEY "<真值>"
-2. 新开进程验证：getKey('OPENAI_API_KEY').length === 67
-3. 验证通过后，才允许把 keys.json 清成 CHANGE_ME
-```
-实测现状：`keys.json` 里只有 `OPENAI_API_KEY` 有真值（67 位），其余 15 个键全空。
-
-**② `F-SEC-202` 首选修法是错的（会砍掉手机联机）**
-侦察兵建议 `server-ip=127.0.0.1`。复核席指出：`server.properties` **没有独立的 rcon 绑定项**，RCON 只能跟 `server-ip` 走 ⇒ 收了 loopback **25565 也一起收**，而手机能连正是 `config/network.json` 存在的唯一理由。
-更关键的是**会复发**：`network.json` 仍 `bind: all`，下次谁跑 `server-net.mjs apply` 就把 `server-ip` 改回空 —— 修完当天有效、下次切配置即还原。
-**最终做法**：Windows 防火墙拦 25575 入站，`server.properties` 一个字节不改。防火墙不检查 loopback ⇒ bot 走 `127.0.0.1:25575` 照常、手机照玩。
-代价：**规则不入库、换机失效、无法用 `git diff` 证明**，只能实测；且判据不能用 `netstat`（拦包不拦监听），必须从另一台机器 `Test-NetConnection <本机LAN IP> -Port 25575` 应失败。
-
-**③ `F-SEC-204` 升 high，且项目自己的安全论断是错的**
-`server-net.mjs` 头部写"开白名单之后冒用名字就没用了"——**在"白名单只有一个名字"时这句是错的**：白名单只拦"不在名单上的名字"，而攻击者冒用的恰恰是名单上那唯一一个。
-升 high 的依据：`profiles/my-local.json:6 owner=HEAVENZEH` + `settings.js:19` 激活该 profile ⇒ 冒名 = **OWNER 级**，`OWNER_ONLY_COMMANDS` 含 `!newAction`（执行代码）、`!restart`、`!attackPlayer`。
-**减轻因素（如实记录，不夸大）**：HEAVENZEH 本人**不是 op**，所以单看 204 是"控制 bot + 主人身份"；拿服务器管理权要走 RCON（那是 202 的链）。**两条链合起来才是完全接管。**
-
-## 02:50 第一批修复落地 + 一个新闸被自己人打穿
+## 01:47 第一批修复落地 + 一个新闸被自己人打穿
 
 ### 已入库 4 条（mindcraft 仓 `audit/night-20261106`）
 
@@ -154,7 +130,33 @@ npm run lint                       → 197 errors（存量基线，不可新增�
 ### 又一条"改完才发现没落脚点"
 `F-DEP-103`（新，blocked）：**`mindcraft/package-lock.json` 被 `mindcraft/.gitignore:4` 排除**，而 `web/` 的被追踪 ⇒ 生产依赖树（547 条、13 个 high 全在这）**没有任何 git 历史**，`F-DEP-005/006/010` 三条 lock 修复**没有落脚点**。历史 06 分册和 00-REPORT 都没提这条。需用户决定是否删 `.gitignore:4` 并首次入库 lock（6409 行 / 286KB）。
 
-## 03:00 D2 密钥部 5 条入库 + 三条定性纠正
+## 01:50 复核席推翻了三条修法（今晚最重要的质量控制）
+
+复核席独立重跑，把侦察兵和我的修法各推翻了两条。**我逐条核证后确认它对。** 记录在此，因为"差点误改"比"改对了"更有教育意义。
+
+**① 一个会让整套修复当场崩的顺序错误（`F-SEC-201`）**
+侦察兵说"把密钥搬到 `.env`"。我核了 `src/utils/keys.js`：第 5 行 `keys.json` **优先**、第 14 行才回落环境变量、**第 17 行取不到就 `throw`**。
+⇒ 若先清空 `keys.json` 而用户还没 `setx`（且 `setx` 只对**新进程**生效、只能用户本人执行），**所有模型调用当场抛异常全崩**，不是"暂时不可用"。
+**最终做法**：今晚不清空。只写三步手册，标 blocked 等用户。
+```
+1. 用户本人：setx OPENAI_API_KEY "<真值>"
+2. 新开进程验证：getKey('OPENAI_API_KEY').length === 67
+3. 验证通过后，才允许把 keys.json 清成 CHANGE_ME
+```
+实测现状：`keys.json` 里只有 `OPENAI_API_KEY` 有真值（67 位），其余 15 个键全空。
+
+**② `F-SEC-202` 首选修法是错的（会砍掉手机联机）**
+侦察兵建议 `server-ip=127.0.0.1`。复核席指出：`server.properties` **没有独立的 rcon 绑定项**，RCON 只能跟 `server-ip` 走 ⇒ 收了 loopback **25565 也一起收**，而手机能连正是 `config/network.json` 存在的唯一理由。
+更关键的是**会复发**：`network.json` 仍 `bind: all`，下次谁跑 `server-net.mjs apply` 就把 `server-ip` 改回空 —— 修完当天有效、下次切配置即还原。
+**最终做法**：Windows 防火墙拦 25575 入站，`server.properties` 一个字节不改。防火墙不检查 loopback ⇒ bot 走 `127.0.0.1:25575` 照常、手机照玩。
+代价：**规则不入库、换机失效、无法用 `git diff` 证明**，只能实测；且判据不能用 `netstat`（拦包不拦监听），必须从另一台机器 `Test-NetConnection <本机LAN IP> -Port 25575` 应失败。
+
+**③ `F-SEC-204` 升 high，且项目自己的安全论断是错的**
+`server-net.mjs` 头部写"开白名单之后冒用名字就没用了"——**在"白名单只有一个名字"时这句是错的**：白名单只拦"不在名单上的名字"，而攻击者冒用的恰恰是名单上那唯一一个。
+升 high 的依据：`profiles/my-local.json:6 owner=HEAVENZEH` + `settings.js:19` 激活该 profile ⇒ 冒名 = **OWNER 级**，`OWNER_ONLY_COMMANDS` 含 `!newAction`（执行代码）、`!restart`、`!attackPlayer`。
+**减轻因素（如实记录，不夸大）**：HEAVENZEH 本人**不是 op**，所以单看 204 是"控制 bot + 主人身份"；拿服务器管理权要走 RCON（那是 202 的链）。**两条链合起来才是完全接管。**
+
+## 01:56 D2 密钥部 5 条入库 + 三条定性纠正
 
 ### 已入库 6 个 commit（跨两仓，每次过钩子）
 
@@ -195,7 +197,7 @@ npm run lint                       → 197 errors（存量基线，不可新增�
 ### 一条流程违规，已立规矩
 D1 收尾时 `F-DEP-003/004/005/006/012` 五条的 finding 文件被**清空** ⇒ 复核席只能对着 commit 和摘要复核，**无法按"读原始单"的规程独立判断**。已立 PLAYBOOK §8.7：修补者只 `mv`，不得删除或清空 finding。
 
-## 03:20 五部门侦察全部收官 · 总账
+## 02:02 五部门侦察全部收官 · 总账
 
 | 状态 | 数量 |
 |---|---|
@@ -228,6 +230,70 @@ D1 收尾时 `F-DEP-003/004/005/006/012` 五条的 finding 文件被**清空** �
 1. 否掉 `rcon_client.js:153` 命令注入（上游 `bot.players?.[name]` 精确键查挡住）
 2. 不把 `F-AI-201` 写成"提权"（10 条主人级真挡住了）
 3. **否掉我转述的"消息体无大小上限"** —— engine.io 默认 `maxHttpBufferSize=1e6`，本仓未覆盖。**是我错了，它纠正对了。**
+
+## 02:05 消费方审计：我们自己改坏了三处（全部成立）
+
+侦察席转做"消费方审计"——专门查**我们的修复打坏了什么**。这类问题**不在任何漏洞单里**，只能靠"改完之后回头看谁在消费"。
+
+| id | 级 | 我们是怎么把它弄坏的 |
+|---|---|---|
+| `F-REG-002` | **high** | 把 `npm install` 改成 `npm ci`（"严格按 lock 装"），但 **`package-lock.json` 从来没进过 git**（`.gitignore:4` 忽略、`git ls-files`=0，286 KB 只在这台机器的磁盘上）。本机有 lock 所以没事，**换一台机器 `npm ci` 确定性失败 → 启动链路当场断** |
+| `F-REG-001` | medium | token 不再打印进日志后，**两处提示还在教用户"去启动日志里找 token"**：`mindserver_proxy.js:55-58` 的 AUTH_REQUIRED 提示、`start.bat:122` 的 `http://localhost:8080`（不带 token）。用 `start.bat` 的人**无路可走** |
+| `F-REG-003` | medium | 完整性闸要求 `sha256(patch) == SHA256SUMS`，所以**任何半截提交都会让整台机器起不来**（不是降级，是全断），而报错文案却是"可能被投毒"——最容易诱使人把闸注释掉 |
+| `F-REG-004` | low | `mindcraft/start.bat` **全仓无调用方**（面板走 `start-panel.ps1` 直起 `main.js`）；面板链缺 `mindcraft/node_modules` 时不说"缺依赖"，而是 `node main.js` 立刻死、`Wait-Port 8080` **空耗 90 秒**再 `exit 1`，且 `start-panel.ps1:141` 的警告只针对 `web\node_modules` |
+
+**两条因此改掉的规矩**：
+1. **今晚不擅自把 lock 入库** —— 如果 lock 与 `package.json` 不同步，`npm ci` 会失败，而 `start.bat` 现在"失败即退出" ⇒ 我会亲手把启动盘打死。改成标记"本机有效、换机即断，依赖 `F-DEP-103` 解锁"，等你决定。
+2. **`patch` 与 `SHA256SUMS` 必须同一个 commit**，禁止分两次提交（否则中间态机器起不来）。
+
+### 三条"查完没问题"的证明（同样是结论，不是推测）
+- **`F-SEC-104` 零误杀**：拿 minecraft-data 真实名字集实测 —— `items 1416`、`blocks 1105`，被白名单拒绝 **0 / 0**；无含非 `[a-z0-9_]` 的名字、无大写名；前端传的是无命名空间的 `item.name`。⇒ **面板贴图不会变白，功能零退化。**
+- **`F-SEC-206` 零误伤**：两仓 `git ls-files` 对新规则命中 **0**（包括 `*.key`：两仓没有任何非密钥的 `.key` 文件）。
+- **`F-DEP-003` 无第三消费方**：4 个 `placeAgainst` 调用点（`act_pillar:103` / `act_place:159` / `skills:1335` / `tool_prep:317`）**都不传 `timeout`**，那个 `Promise.race` 分支从未被启用 ⇒ 丢掉 hunk 3 的影响仅是"失败多等 4.5 秒"，没有额外断裂点。
+
+### 🔴 token / 口令外泄：今晚三起，这是轮换的第一优先理由
+1. 复核席核证 RCON 时，`grep -nE "^rcon"` 把 `rcon.password` 明文打进会话输出
+2. 复核席比对 `server.properties` 与备份时，**又**把当前口令明文打进会话输出（选错对照文件用了含旧口令的备份）
+3. 侦察席 D5 取证时，`.tmp_probe/d5srv.log`、`d5probe2.log` 里落了**两枚完整 token 明文**（已被它自己删除并复验）
+
+三次都不是漏洞，是**操作卫生问题**——但会话记录本身就是不可撤回的泄漏面。
+已立 PLAYBOOK §8.11：**含 secret 的文件禁止直接 diff**，必须先 `grep -v '^<secret_key>'` 过滤或只输出哈希前缀。
+**结论：RCON 口令与那把 OpenAI key 都必须在今晚/今早轮换。** 清理代码 ≠ 密钥安全。
+
+## 02:12 宿主机 RCE 已修好，但门禁红 —— 所以我按住了不提交
+
+### `F-EXEC-201`（聊天 → 宿主机 RCE）：结构性修复完成
+
+修法不是"过滤危险字符"，而是**把可被逃逸的那一层删掉**：
+- `exec(cmd)`（cmd 由模型输出拼成）→ `spawn(file, argv)`，**argv 全是字面量常量**
+- 文本只走**子进程 stdin**（Windows `[Console]::In.ReadToEnd()` / mac `say` 无参 / linux `espeak --stdin`）
+- 命令行里**不存在可变文本** ⇒ `& | ; " $() \`` 与换行都没有"shell 这一层"可逃逸
+- `speak` 同时移出 `SAFE_RUNTIME_SETTINGS`（持 token 客户端不能再运行期打开它）
+- 单测**加了一条断言**（`!SAFE_RUNTIME_SETTINGS.includes('speak')`）防回归——是加严不是放宽
+
+**一条反直觉的实测（复核席推翻自己的专家直觉）**：原以为 Windows 要加 `[Console]::InputEncoding=UTF8` 才不会乱中文，**实测相反——默认就对，加了那行反而把中文弄成乱码**。
+⇒ 已要求把这条写死进注释，否则下一个人"顺手加固"就会弄坏中文 TTS。**这类"以为要加固、实测反而有害"的结论，比找到一个漏洞更有价值。**
+
+### 其余已改好、待提交
+- `F-WEB-205` 停止面板：`stop-all.mjs` 从 `MINDSERVER_TOKEN` → `./.mindserver-token` 取 token 塞 `auth:{token}`；`stop-panel.ps1` `pushd` 到 `mindcraft`；**退出码 2/3 分开**，两种失败都警告"服务器仍在运行，别关窗口（会丢未刷盘存档）"
+- `F-REG-001`：`mindserver_proxy.js` 与 `start.bat` 的提示改为指向 `.mindserver-token`
+- 完整性闸四修：**我实测四种行为全对** —— patches 缺失 `exit 1` / 正常 `exit 0` / `--write` 未解锁 `exit 1` / 篡改一字节 `exit 1`
+- `F-DEP-003` hunk 3 按复核打回重建（`timeout: 5000→500`），已进补丁且 `patch_integrity` 自洽
+
+### 🔴 为什么还不提交：`gate:full` = exit 1（95/97）
+`permissions_unit` **59 passed / 4 failed** —— `!goal` 升成 `OWNER_ONLY` 了，但四条断言还在断言"它是信任级"：
+```
+信任级能用…!goal ／ !goal 记下发言人 null ／ !goal 执行期间 command_author 就是发言人 ／ 没配 owner：陌生人的 !goal 可用
+```
+已按复核席给的行号下令修，并要求**新增一条正向断言**（`owner` 配了 `HEAVENZEH` 时 `!goal` 仍可用）——只改旧断言会导致没人守"主人没被误伤"。
+**另一个失败 `craft_diagnostic_reachability_unit` 是基线里就有的那条**（96/97 里的"1"），与本次改动无关，已排除。
+
+**决策留痕：带着红的门禁进历史，比不提交更糟。所以在 `permissions_unit` 回绿之前，这批代码一律不提交。**
+
+### `F-AI-202`（!goal）的三处修法被复核席推翻，我采纳
+1. **`!endGoal` 绝不能跟着升权** —— 它是**急停**，危险方向是"停不下来"而不是"授权"。若也变 owner-only，**owner 之外的人发现 bot 被套上疯狂目标时无法叫停**，与降险目标正好相反；且 goal 写进 `memory.json` 跨重启恢复，更需要信任级能停。
+2. **转义优先于限长** —— 现在是 `"${prompt}"` 未转义 `"`，60 字注入就够，限长根本挡不住。若做限长也**不许静默 `slice`**：会把目标拦腰砍断（"…不要攻击玩家"→"…不要攻击"），语义可能反转 ⇒ 超限应拒绝并回话。实测现网最长 goal ≈170 字，500 有 3 倍余量。
+3. **先做 `self_prompter` 的轮次/时长上限**，且 `update()` 的"自动重启"必须受同一上限约束。机制：`MAX_NO_COMMAND=3` 只数"连续没命令"，而模型每轮只要用任意一条命令（哪怕 `!stats`）`no_command_count` 就归零 ⇒ **循环可以无限跑**。叠加 `max_commands:-1` 与按量计费中转站 = 真金白银。
 
 ## 待用户决定（promise：攒着一次性说，不半夜弹）
 

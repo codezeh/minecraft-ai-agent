@@ -234,3 +234,42 @@ fix(deps): start.bat 用 npm ci 且安装失败即中止 — F-DEP-012
 
 本轮 D1 的改动**不改变任何运行时行为**（`clean:modules`/`reinstall`/`start.bat` 冷启动分支/补丁内容语义等价）。
 `F-EXEC-201`（`speak` 从 `SAFE_RUNTIME_SETTINGS` 移出）**是行为变更**，将在那份 manifest 里单独开一节说明。
+
+---
+
+# F-DEP-004 后续（依 review-patch-integrity.md：D1~D4 四修）
+
+复核席判决："作为漂移探测器可信，作为防篡改防线不可信；接进 gate 只会制造假安全感。"我采纳，逐条改：
+
+| 缺陷 | 改了什么 | 验证 |
+|---|---|---|
+| **D1 检查跑在载荷落盘之后** | `start.bat`：把**内容完整性**检查（`--no-version-check`，因为此刻可能还没有 node_modules）**移到 `npm ci` 之前**，且**移出 `if not exist node_modules` 块** ⇒ 每次启动都验；安装后再跑一次完整检查（含版本）。 | 括号平衡 23/23（改前 20/20，delta 0）；`grep ALLOW_TASK_CHEATS` 无关；见下 |
+| **D2 `--write` 可洗白** | `patch_integrity.mjs`：`--write` 必须同时有 `PATCH_INTEGRITY_ALLOW_WRITE=1`，否则 **exit 1 拒绝**并说明理由。 | 实测：`--write` 无 env → `exit=1` + "拒绝 --write"；有 env → 正常写基线（沙箱副本实测） |
+| **D3 删掉整个 `patches/` 静默放行** | `if (!existsSync(PATCH_DIR))` 由 `exit 0` 改为 **`exit 1`**（除非显式 `--allow-no-patches`）。 | 实测：无 `patches/` → **exit=1** + 提示"可能是有人把补丁集整个删了"；`--allow-no-patches` → exit=0 |
+| **D4 没接线** | **未做**（按 captain 指示留给他接 `npm gate`）。接入一行：`"gate": "node tools/patch_integrity.mjs && node tools/settings_check.mjs && ..."` | — |
+
+**当前闸状态**：`node tools/patch_integrity.mjs` → **exit 0**（5 补丁内容一致、5 包版本一一对应）。
+**已知局限（不变，已主动声明）**：补丁与 `SHA256SUMS` **一起改**仍会通过（仓库内哈希基线的上限），防线是评审能看到 SUMS 的 diff。
+
+# F-DEP-003 后续（hunk 3 重建，裁剪复核席打回）
+
+复核席打回成立：我把 hunk 3 的丢弃理由写错了 —— `_getBlockAtEyeLevel` 只在 `digging.js` 里，与 `place_block` 无关；
+`place_block.js:29` 的 `timeout: 5000` **仍在**。旧 hunk 3 客观上套不上 4.39.0（该段被重构），
+但"套不上"≠"意图不重要"：它要把放置失败从 5s 压到 0.5s，丢掉会让每次失败多等 4.5 秒。
+
+**选了 (a)：按 4.39.0 新结构重建 hunk 3。**
+- 新 hunk：`place_block.js` `timeout: 5000,` → `timeout: 500,`（1 行，上下文为该文件 4.39.0 的实际 `onceWithCleanup` 调用）
+- 验证：`patch -p1 --dry-run` + 真套用到 **pristine 4.39.0 双文件副本** → 两个文件都与我的目标副本 `diff -q` **IDENTICAL**；
+  行数 267→273（digging 6 行插入）+ place_block 1 行替换。
+- `SHA256SUMS` 已同步更新（`c2372a4c…`），**与 patch 同一个 commit 提交**（按 captain 新纪律）。
+- 那句话已删：不再声称"上游已用 `_getBlockAtEyeLevel` 覆盖 hunk 3"。
+
+# F-DEP-005 / F-DEP-012 边界描述（captain 要求，防止早上的人读成"换机也能用"）
+
+- **`F-DEP-005`**（`reinstall` → `npm ci`、`clean:modules` 不再删 lock）：**仅在本机有效**。
+  `package-lock.json` 从未入库（`mindcraft/.gitignore:4`，`git ls-files` = 0）⇒ **新 clone / 新机器上 `npm ci` 必然失败**，
+  而 `start.bat` 现在是"失败即 `exit /b 1`" ⇒ 冷启动链路会当场断。**解锁依赖 `F-DEP-103`**（取消 ignore 并首次入库 lock）。
+- **`F-DEP-012`**（`start.bat` 用 `npm ci` + 失败中止）：**部分解决，不是"已修"**。
+  复核席实测：**`npm ci` 仍然执行 lifecycle scripts**（`postinstall=patch-package` 以及 canvas/gl/protobufjs/@google/genai 的 install 脚本）
+  ⇒ 本改动让"安装期脚本执行"从**不确定变成确定**，**风险没有消除**，只是把"可复现性"这个前提补上了。
+  真正的收口需要"安装期脚本白名单 / `--ignore-scripts` + 显式 rebuild"，已另立新单 `F-DEP-013`（见下）。

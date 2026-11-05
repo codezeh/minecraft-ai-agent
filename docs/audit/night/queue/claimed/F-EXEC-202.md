@@ -91,3 +91,13 @@ verify: |
   npm run gate:full
 discovered_by: recon-scout
 dept: D3-EXEC
+
+---
+resolution: 部分解决（总闸已上）+ 38 处逐条改造 blocked（patch-smith · D3 修补）
+已做: src/agent/tasks/tasks.js 的 initBotTask() 开头加 fail-closed 总闸
+  `if (process.env.ALLOW_TASK_CHEATS !== '1') { 打印会执行什么; return; }`
+  —— 这是 38 处的唯一入口（/clear 在下一行，CookingTaskInitiator.init() 也由此 new 出），一处闸覆盖全部。
+blocked（38 处改 command() 通道）: 属"造场景/烹饪测试"脚本；改成 command() 需先在 permissions.js 斜杠白名单登记
+  /fill /setblock /summon /kill /clear /give（cheat+OWNER），并逐条验证 NBT 片段与相对坐标 `~` 语义不变；
+  本会话无法运行 bot / 无法跑 gate ⇒ 只能保语法，无法证明场景仍能建出来。按"保守优先"不赌。
+建议后续单: F-EXEC-204（38 处收回 command()），前置 = 能真机跑一次 cooking/construction 场景。

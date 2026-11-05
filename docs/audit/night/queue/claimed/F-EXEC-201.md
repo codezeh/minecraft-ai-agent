@@ -102,3 +102,9 @@ verify: |
   npm run gate:full
 discovered_by: recon-scout
 dept: D3-EXEC
+
+---
+status: fix-ready-awaiting-commit（patch-smith · D3 修补）
+changed: src/agent/speak.js（exec→spawn+stdin，模板串拼接全删）、src/mindcraft/auth_gate.js（SAFE_RUNTIME_SETTINGS 移除 speak）、tools/mindserver_gate_unit.mjs（新增断言）
+行为变更: speak 只能改 settings.js 后重启打开；持 token 客户端不能再运行期打开（sanitizeAgentSettings 会丢弃并回报 dropped）
+see: docs/audit/night/manifest-D3.md §1（含"原注入串为什么结构性失效"的正反论证）

@@ -87,3 +87,9 @@ verify: |
   npm run gate:full
 discovered_by: recon-scout
 dept: D3-EXEC
+
+---
+resolution: 已在 t7 以 F-SEC-104 修完（同一处代码，两个编号，不重复改）
+已修: mindserver.js 的 /assets/item/:agent/:name.png 加白名单断言 ^[a-z0-9_]{1,64}$，非法 400。
+复核: grep -n "invalid texture name" src/mindcraft/mindserver.js → 行 172 在位。
+注: 复核席在 t7 已把它算作 F-SEC-104 提交；本条与 F-SEC-104 是同一 finding 的两个编号。

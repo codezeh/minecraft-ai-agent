@@ -86,3 +86,7 @@ verify: |
   #    人工：node_modules 存在时双击 启动面板.bat，应直接进面板且无新增告警
 discovered_by: recon-scout
 dept: REG
+
+---
+status: 已并入 F-DEP-004 的 D1 修复（同一处启动接线）
+见: docs/audit/night/manifest-D1.md 的 "D1 检查跑在载荷落盘之后" 行 —— start.bat 的完整性闸已前移到 npm ci 之前且每次启动都跑。

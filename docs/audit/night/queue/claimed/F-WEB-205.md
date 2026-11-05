@@ -109,3 +109,10 @@ verify: |
   npm run gate:full
 discovered_by: recon-scout
 dept: D5-WEB
+
+---
+status: fix-ready-awaiting-commit（patch-smith · captain 指派，紧急）
+changed: web/scripts/stop-all.mjs（token 读取 env→文件 + auth:{token} + AUTH_REQUIRED 区分 exit 3）、scripts/stop-panel.ps1（Push-Location mindcraft + exit 2/3 中文提示）
+自检: 无 token 目录实跑 → exit=2 + "这通常不是 mindserver 没开"；node --check OK；stop-panel.ps1 BOM 保住（ef bb bf）
+未验证: 带正确 token 的真实关服（需运行中的 mindserver，归 captain/用户早上点一次）
+see: docs/audit/night/manifest-D3.md §5

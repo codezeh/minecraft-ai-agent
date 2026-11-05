@@ -139,3 +139,50 @@ S33~S45、I6/I14 全部**真的在位**（复核方式逐条写在 `queue/HISTOR
 
 **我犯过并已纠正的一个错（如实记录）**：改 `config/network.json` 时把英文双引号写进 JSON 字符串 → 文件非法，
 `JSON.parse` 立刻报错；改用全角引号后复验 `JSON_OK`。教训：改 JSON 文案只用全角引号或转义。
+
+## R3 2026-11-06 02:15 | D3 执行体修补（t8）+ 完整性闸四修 + F-WEB-205/REG 返工 | 落地 6 / 部分 2 / blocked 3 | 阻塞：node 不能 spawn（gate 与真机验证归 captain）
+
+**本会话能力边界（不变）**：bash/node/git 对 `mindcraft/`、`server/`、`backups/` 只读（仅 write/edit 文件工具可写）；
+node 不能 spawn ⇒ `gate:full`/`unit_all`/`lint_hard` 跑不了，一切"通过"我用可跑的等价判据给出并留证。
+
+**① F-DEP-004 完整性闸四修（依 review-patch-integrity.md）**
+- D1 载荷先落盘：`start.bat` 把内容完整性（`--no-version-check`）移到 **`npm ci` 之前**，并**移出 `if not exist node_modules`** ⇒ 每次启动都验；装完再验一次完整版。
+- D2 `--write` 洗白：必须同时 `PATCH_INTEGRITY_ALLOW_WRITE=1`，否则 exit 1 拒绝。实测：无 env → exit 1。
+- D3 删 patches 静默放行：`patches/` 缺失由 exit 0 改为 **exit 1**（除非 `--allow-no-patches`）。实测：exit 1 / 带开关 exit 0。
+- D4 接线未做（按 captain 指示留他接）。
+- 现状：`node tools/patch_integrity.mjs` → **exit 0**（5 补丁一致 + 5 版本对应）。
+
+**② F-DEP-003 hunk 3 重建（采纳复核席打回，选方案 a）**
+- 我原写"上游已用 `_getBlockAtEyeLevel` 覆盖 hunk3"**是错的**（该函数只在 digging.js，与 place_block 无关；`timeout: 5000` 仍在）。
+- 按 4.39.0 新结构重建：`place_block.js` `timeout: 5000` → `500`（1 行）。`patch -p1` 套到 pristine 双文件副本，两文件都与目标副本 `diff -q` **IDENTICAL**。
+- `SHA256SUMS` 同步（`c2372a4c…`），**与 patch 同 commit**（按 captain 新纪律）。
+- ⚠️ **补丁尚未生效**：node_modules 里 `incorrect_for_wooden_tool` = 0 ⇒ 需 captain 跑一次 `npm ci`。
+
+**③ F-WEB-205（紧急）+ F-REG-001 返工**
+- `stop-all.mjs`：token 从 env→`./.mindserver-token`，塞 `auth:{token}`；`AUTH_REQUIRED` 单独判为 exit 3 并明说"服务器仍在运行，别强关"（原来一律说"mindserver 可能没开"，把人往强关引 ⇒ 存档未刷盘风险）。
+- `stop-panel.ps1`：`Push-Location mindcraft`（token 在 mindserver 的 cwd）+ exit 2/3 中文提示。
+- `F-REG-001`：`mindserver_proxy.js` 的 AUTH_REQUIRED 提示不再说"启动日志里的 token"；`start.bat` 打印 token 文件路径；`auth_gate.js:26` 注释同步。
+- **BOM 坑**：编辑工具吃掉 `stop-panel.ps1` 的 BOM，我用 node 补回并复验 `ef bb bf`（captain 提醒的正是这条）。
+
+**④ F-EXEC-201（high）speak.js 命令注入 —— 结构性修复**
+- `exec(cmd)` → `spawn(file, argv)` + **文本走 stdin**（win `[Console]::In.ReadToEnd()` / mac `say` 无参 / linux `espeak --stdin`）；模板串拼与 `replace` 转义全删。
+- **为什么原注入串失效（不是过滤字符）**：文本只进子进程 stdin，argv 全是字面量常量 ⇒ **命令行里不存在可变文本**，`& | ; " $() \`` 与换行都没有"shel​l 这一层"可逃逸。
+- `speak` 移出 `SAFE_RUNTIME_SETTINGS`（持 token 客户端不能再运行期打开）；单测补一条断言。
+- 行为变更：只能在 `settings.js` 开 speak 后重启。**未真机验证发声**（无 spawn）—— 已在 manifest 标注为第一嫌疑点与回滚方式。
+
+**⑤ F-EXEC-202（medium）38 处裸斜杠 —— 总闸已上，逐条改造 blocked**
+- `tasks.js initBotTask()` 开头加 fail-closed 闸：`ALLOW_TASK_CHEATS !== '1'` 就打印"会执行 /clear + 8 条 /fill(100×100×10) + /kill @e[...,distance=..200]"并 return。
+- 这是 38 处的**唯一入口**（`/clear` 在下一行，`CookingTaskInitiator.init()` 也由此 new）⇒ 一处闸覆盖全部。
+- 逐条改 `command()` 需在 permissions 白名单登记 6 条命令并验证 NBT/`~` 语义；本会话无法真机跑场景 ⇒ **不赌**，另立 `F-EXEC-204`。
+
+**⑥ F-AI-202（high）`!goal` 持久注入 —— ①② 已做，③ blocked**
+- ① `!goal` 从 TRUSTED → OWNER_ONLY（permissions.js）。行为变更：没配 owner 时玩家不能再自己设目标。
+- ② `$SELF_PROMPT` 折叠换行 + 转义 `\` `"` + 限长 500（prompter.js）。自检脚本可复跑：5 项断言全 true。
+- ③ 循环上限 blocked：动行为语义，无法观察 2 秒节拍真机行为。
+
+**⑦ 两条新单**
+- `F-DEP-013`（安装期脚本执行面仍在，`npm ci` 照样跑 lifecycle scripts）—— 依 captain 转述复核席裁定立单；`F-DEP-012` 定性已改为"部分解决"。
+- `F-DEP-003/005/012` 的边界描述已补进 `manifest-D1.md`（lock 未入库 ⇒ 新机器 `npm ci` 必失败，别读成"换机也能用"）。
+
+**④ 队列纪律**：本轮全程只 `mv`，未覆盖/未删除任何 finding 文件。附一条事实更正：D1 那 5 条**未曾被清空**，
+它们当时在 `claimed/`（4.1~4.8KB 完整）；SEC 那批后来由复核席移入 `verified/`，也在。所以"inbox/done 里没有"≠"文件被销毁"。
