@@ -15,6 +15,8 @@ import { countItem } from './query_perceive.js';
 import Vec3 from 'vec3';                 // bot.blockAt 必须传 Vec3（交接文档 §7.2 记过）
 import pf from 'mineflayer-pathfinder';  // 捡掉落物时要用 GoalNear
 import { countScaffold } from './scaffold_blocks.js';
+// 第9条②：直驱 pathfinder 的调用点要进 nav 闸。
+import { withNav } from './nav_core.js';
 
 export { countScaffold };
 
@@ -199,8 +201,11 @@ export async function ensureScaffold(bot, opts = {}) {
                         e.name === 'item' && e.position && bot.entity.position.distanceTo(e.position) < 4);
                     if (drop) {
                         // D12：捡掉落物的 goto 原来没有上限，会挂死整条链路。
-                        const walked = await withTimeout(bot.pathfinder.goto(new pf.goals.GoalNear(
-                            drop.position.x, drop.position.y, drop.position.z, 1)), 4000);
+                        // ★ 第9条②：直驱 pathfinder.goto 也要进 nav 闸（只包 withNav）。
+                        //   null = 别人正在用导航 → 这一步跳过（捡不到就算了，不抢 goal）。
+                        const walked = (await withNav(bot, () => withTimeout(bot.pathfinder.goto(new pf.goals.GoalNear(
+                            drop.position.x, drop.position.y, drop.position.z, 1)), 4000)))
+                            ?? { timedOut: false, blocked: true };
                         if (walked.timedOut) stopPathfinder(bot);   // 不复位的话下次 goto 直接报错
                         for (let w = 0; w < 8; w++) {
                             await new Promise(r => setTimeout(r, 200));

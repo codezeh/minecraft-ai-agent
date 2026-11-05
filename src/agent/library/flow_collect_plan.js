@@ -24,6 +24,8 @@ import { blockAt } from './query_perceive.js';
 import { digBlock } from './act_dig.js';
 import { moveTo } from './nav_pathfinder.js';
 import { walkTo } from './executor.js';
+// 第9条②：直驱 pathfinder 的调用点要进 nav 闸（只包 withNav，不改流程语义）。
+import { withNav } from './nav_core.js';
 import { collectDrops } from './flow_pickup.js';
 import { query } from './query_target.js';
 import { planClearObstacles } from './flow_clear.js';
@@ -265,12 +267,12 @@ export function makeHandlers(ctx = {}) {
                 const pos = t?.pos ?? t?.posXZ ?? null;
                 if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
                     try {
-                        const r = await walkTo(bot, { x: pos.x, z: pos.z }, {
+                        const r = (await withNav(bot, () => walkTo(bot, { x: pos.x, z: pos.z }, {
                             mapDir,
                             arriveTol: 3,
                             deadlineMs: Math.min(opts.timeout ?? 30000, 45000),
                             onEvent,
-                        });
+                        }))) ?? fail('BLOCKED', '导航被别的任务占用（walk3d 这一步没做成）', { retryable: true });
                         if (r.ok) return r;
                         onEvent({ type: 'walk3d-failed', code: r.code });
 
@@ -296,7 +298,9 @@ export function makeHandlers(ctx = {}) {
                     }
                 }
             }
-            return moveTo(bot, args.target, opts);
+            // 第9条②：最后的兜底 moveTo 也要进闸（这是 plan 层最常用的移动步骤）
+            return (await withNav(bot, () => moveTo(bot, args.target, opts)))
+                ?? fail('BLOCKED', '导航被别的任务占用（moveTo 这一步没做成）', { retryable: true });
         },
         digBlock: async (bot, args) => digBlock(bot, args.target),
         collectDrops: async (bot, args) => {
@@ -403,9 +407,9 @@ export async function climbByTunneling(bot, dest, opts = {}) {
                 const spot = dry.candidates[0];
                 onEvent({ type: 'tunnel-detour', to: { x: spot.x, z: spot.z }, why: `绕到干燥列（离目标 ${Math.round(spot.dToTarget)} 格）` });
                 // walkTo 会自己绕开水（水面代价 0.8，能浮着走）
-                const mv = await walkTo(bot, { x: spot.x, z: spot.z }, {
+                const mv = (await withNav(bot, () => walkTo(bot, { x: spot.x, z: spot.z }, {
                     mapDir, arriveTol: 1.5, deadlineMs: 20000, onEvent,
-                });
+                }))) ?? fail('BLOCKED', '导航被别的任务占用（绕到干燥列的 walkTo 没做成）', { retryable: true });
                 if (!mv.ok) onEvent({ type: 'tunnel-detour-failed', code: mv.code });
             } else {
                 onEvent({ type: 'tunnel-no-dry-column', why: dry.why });

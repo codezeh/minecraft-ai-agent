@@ -7,6 +7,8 @@
 import { ok, fail } from './contract.js';
 import { countItem } from './query_perceive.js';
 import { moveTo } from './nav_pathfinder.js';
+// 第9条②：直驱 pathfinder 的调用点要进 nav 闸（只包 withNav，不改流程语义）。
+import { withNav } from './nav_core.js';
 import { digBlock } from './act_dig.js';
 import { pauseGoalModes, restoreGoalModes } from './modes.js';
 import { ensureAxe, ensureScaffold } from './tool_prep.js';
@@ -124,8 +126,10 @@ export async function collect(bot, name, want, opts = {}) {
         if (d > 8) {
             console.log(`[collect] 先走到你旁边（现在 ${d.toFixed(0)} 格）`);
             onEvent({ type: 'approach-anchor', dist: Math.round(d) });
-            const mv = await moveTo(bot, { kind: 'point', pos: { x: near.x, y: near.y ?? bot.entity.position.y, z: near.z } },
-                { tol: 4, timeout: 45000 });
+            const mv = (await withNav(bot, () => moveTo(bot,
+                { kind: 'point', pos: { x: near.x, y: near.y ?? bot.entity.position.y, z: near.z } },
+                { tol: 4, timeout: 45000 })))
+                ?? fail('BLOCKED', '导航被别的任务占用（先走到你旁边这一步没做成）', { count: 0, retryable: true });
             if (mv.code === 'INTERRUPTED') {
                 return fail('INTERRUPTED', '停了', { count: 0 });
             }

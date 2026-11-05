@@ -24,6 +24,11 @@ import { eat as eatAction } from './act_items.js';
 // 第21条：攻击目标的"该不该打"判定只有一份真相 —— act_attack.isAttackable。
 // 本文件过去零引用它，于是 attackNearest/attackEntity 能打玩家。
 import { isAttackable } from './act_attack.js';
+// 第10条：`digTunnel` 结尾 `return ok({...})` 一直没 import —— 于是它**正常返回时**
+// 抛 ReferenceError: ok is not defined，这个技能从未成功返回过一次。
+import { ok } from './contract.js';
+// 第9条②：本文件直驱 pathfinder 的点（gotoWithTimeout / goToGoal）要进导航闸。
+import { withNav } from './nav_core.js';
 import { scanTree, judgeTree, planFelling } from './query_tree.js';
 import { followEntity as followEntityTask } from './flow_follow.js';
 import pf from 'mineflayer-pathfinder';
@@ -1661,6 +1666,13 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
  * @returns {Promise<boolean>} true 表示到达，false 表示超时或失败
  */
 async function gotoWithTimeout(bot, goal, timeoutMs) {
+    // 第9条②：这是一次直驱 pathfinder.goto（动态目标那种），包进 nav 闸。
+    //   null = 别的任务正拿着导航权 → 老实返回 false（没走过去），不抢 goal。
+    const ran = await withNav(bot, () => _gotoWithTimeoutInner(bot, goal, timeoutMs));
+    return ran === null ? false : ran;
+}
+
+async function _gotoWithTimeoutInner(bot, goal, timeoutMs) {
     let timer = null;
     try {
         await Promise.race([
@@ -1776,7 +1788,14 @@ export async function goToGoal(bot, goal) {
      * @param {MinecraftBot} bot, reference to the minecraft bot.
      * @param {pf.goals.Goal} goal, the goal to navigate to.
      **/
+    // 第9条②：整个函数就是"这次由我来驱动导航"，所以整体包进 withNav。
+    //   拿不到闸（别的任务正在导航）→ 返回 false（没走过去），而不是硬抢 goal。
+    //   注意 withNav 结束时会把 goal 清干净（借了导航就还干净）。
+    const r = await withNav(bot, () => _goToGoalBody(bot, goal));
+    return r === null ? false : r;
+}
 
+async function _goToGoalBody(bot, goal) {
     // 两档，都能改地形，但代价不同 —— 先试"尽量少动地形"的那档：
     //   温和档：挖很贵(digCost=25)、不搭桥  -> 有现成路时优先走现成的
     //   改造档：挖便宜(digCost=5)、可搭桥垫脚 -> 需要抄近路时才挖/搭
@@ -1832,6 +1851,7 @@ export async function goToGoal(bot, goal) {
     // 这里加一个硬上限：超时就停止寻路并抛错，让上层正常收尾。
     const GOTO_HARD_LIMIT_MS = 180000;
     let hardLimitTimer;
+    let interruptTimer;
     try {
         await Promise.race([
             bot.pathfinder.goto(goal),
@@ -1840,7 +1860,20 @@ export async function goToGoal(bot, goal) {
                     try { bot.pathfinder.stop(); } catch { /* ignore */ }
                     reject(new Error(`goToGoal exceeded ${GOTO_HARD_LIMIT_MS / 1000}s hard limit, pathfinding aborted.`));
                 }, GOTO_HARD_LIMIT_MS);
-            })
+            }),
+            // ★★ 第33条：**硬超时 180 秒根本不是"可中断"**。
+            //   玩家按 !stop 之后，她最长还要走 3 分钟才动一下 —— 这是"不听指挥"。
+            //   原来只有两支：goto 自己 + 180s 上限，全程没人看 `bot.interrupt_code`。
+            //   现在加第三支：每 200ms 查一次中断标志，一旦为真就停寻路并按 INTERRUPTED 结束。
+            new Promise((_, reject) => {
+                interruptTimer = setInterval(() => {
+                    if (!bot.interrupt_code) return;
+                    try { bot.pathfinder.stop(); } catch { /* ignore */ }
+                    const e = new Error('goToGoal interrupted by !stop');
+                    e.code = 'INTERRUPTED';
+                    reject(e);
+                }, 200);
+            }),
         ]);
         clearInterval(doorCheckInterval);
         return true;
@@ -1850,6 +1883,7 @@ export async function goToGoal(bot, goal) {
         throw err;
     } finally {
         clearTimeout(hardLimitTimer);
+        clearInterval(interruptTimer);
     }
 }
 
@@ -2299,7 +2333,7 @@ export async function useDoor(bot, door_pos=null) {
 
     bot.pathfinder.setGoal(new pf.goals.GoalNear(door_pos.x, door_pos.y, door_pos.z, 1));
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    while (bot.pathfinder.isMoving()) {
+    while (bot.pathfinder.isMoving() && !bot.interrupt_code) {
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
     
@@ -2373,7 +2407,8 @@ export async function goToBed(bot) {
     await bot.sleep(bed);
     log(bot, `You are in bed.`);
     modesPause(bot, 'unstuck');
-    while (bot.isSleeping) {
+    // 第33条：这个 while 过去只看 isSleeping —— 玩家按 !stop 之后照样睡到天亮。
+    while (bot.isSleeping && !bot.interrupt_code) {
         await new Promise(resolve => setTimeout(resolve, 500));
     }
     log(bot, `You have woken up.`);
@@ -2404,8 +2439,20 @@ export async function tillAndSow(bot, x, y, z, seedType=null) {
                 seedType = seedType.replace(remove, '');
             }
         }
-        placeBlock(bot, 'farmland', x, y, z);
-        placeBlock(bot, seedType, x, y+1, z);
+        // ★ 第10条附带的浮空 promise（报告点名的 39 条里属于本文件的 2 条）：
+        //   这两句过去**没有 await** —— 于是 `tillAndSow` 在方块还没放上去时就 `return true`，
+        //   放失败（没材料 / 没权限 / 位置被占）也完全看不见。
+        //   现在逐句 await 并把失败如实报出来。
+        if (!(await placeBlock(bot, 'farmland', x, y, z))) {
+            log(bot, `Failed to place farmland at ${x}, ${y}, ${z}.`);
+            log(bot, `PLACE_FAILED`);
+            return false;
+        }
+        if (!(await placeBlock(bot, seedType, x, y + 1, z))) {
+            log(bot, `Failed to plant ${seedType} at ${x}, ${y + 1}, ${z}.`);
+            log(bot, `PLACE_FAILED`);
+            return false;
+        }
         return true;
     }
 
@@ -5495,17 +5542,19 @@ function collectHazardsCached(bot, opts = {}) {
  * 64 只要 183ms。而且**地图半径和危险枚举半径必须一致**，否则外圈会显示"安全"
  * 而其实没查过——那是静默失效。
  */
-export function surveyArea(bot, radius = 64, opts = {}) {
+export function surveyArea(bot, radius = 24, opts = {}) {
     /**
      * Scan the terrain around you and report what it looks like: heights, water,
      * lava, buildings, and a small ASCII map. Read-only, changes nothing.
      * The map is downsampled (each character covers several blocks - see blockSize),
      * so use it for direction, not for exact coordinates.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
-     * @param {number} radius, how far to scan in blocks. Defaults to 64.
+     * @param {number} radius, how far to scan in blocks. Defaults to 24 (hard cap 32).
+     *   ★ 第13条：原来默认 64 —— 一次 scanSphere 约 110 万次 blockAt + 12868 次 DELETE，
+     *   直接把主线程按住好几秒。默认降到 24，scanSphere 入口再硬夹到 ≤32 兜底。
      * @returns {Object} { ok, radius, cell, summary, stats, ascii, legend, blockSize, covers }
      * @example
-     * const s = skills.surveyArea(bot, 64);
+     * const s = skills.surveyArea(bot, 24);
      * log(bot, s.summary + '
 ' + s.ascii);
      **/

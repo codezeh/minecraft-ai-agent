@@ -49,9 +49,12 @@ export function mapSummary(bot, opts = {}) {
 
     // ---- 一、刷新（可选）----
     if (refresh) {
+        // ★ 第13条：span 换算可能很大（radius=8 → 128 格），扫球是同步阻塞的。
+        //   上限与 scanSphere 的硬夹一致（≤32），下限仍是 16。
+        const scanR = Math.min(32, Math.max(16, spanBlocks));
         const r = scanSphere(bot, dir, { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) },
-            Math.max(16, spanBlocks));
-        lines.push(`刚扫了半径 ${Math.max(16, spanBlocks)} 格的球：新增 ${r.cells} 个可站立面` +
+            scanR);
+        lines.push(`刚扫了半径 ${scanR} 格的球：新增 ${r.cells} 个可站立面` +
             `（${r.columns} 列 / ${r.chunks} 区块），用时 ${r.ms}ms。`);
     }
 

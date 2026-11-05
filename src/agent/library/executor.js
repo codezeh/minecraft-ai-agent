@@ -332,15 +332,17 @@ export async function execStep(bot, step, opts = {}) {
         let y = Math.floor(p.y);
         const targetY = targetFeetY;   // D1：以脚位为终点，不是方块 y
         let dug = 0;
+        let blockedBy = null;      // 循环为什么提前结束（E2：用来区分"真下去了"和"一格没动"）
         while (y > targetY && dug < 32) {
             const below = blockAt(bot, bx, y - 1, bz);
-            if (!below) break;
+            if (!below) { blockedBy = 'unknown-block'; break; }
             // ★ 2026-10-28 修：**液体不是"挖"的对象，是"穿过"的对象**。
             // 实测：她走到水边，digdown 试图"挖穿 water" → isDiggable 返回 false
             // → 报 NO_TOOL「挖不动 water」，然后卡住。这完全是逻辑错误。
             // 水下落/游泳交给 pathfinder（它会处理），这里直接跳出循环。
             if (IS_LIQUID.test(below.name)) {
                 onEvent({ type: 'liquid-pass', name: below.name, y: y - 1 });
+                blockedBy = below.name;
                 break;
             }
             if (!IS_AIR.has(below.name)) {
@@ -359,6 +361,21 @@ export async function execStep(bot, step, opts = {}) {
             await sleep(250);
             y = Math.floor(bot.entity.position.y);
             if (y <= targetY) break;
+        }
+        // ★★ E2：**一格都没下去，别报成功。**
+        //
+        //   上面"正下方是液体 → break"那条路留了 dug=0，而这里原来照样 `ok({dug})`
+        //   —— 于是"她站在水边、一步没下降"被当成"向下挖成功"。
+        //   同一文件的 dig 分支（拿不到方块/挖不动）早已改成如实失败，digdown 没同步。
+        //   判据收窄：只有"确实没下降"（dug===0）且没到目标高度才算 BLOCKED；
+        //   已经挖了 ≥1 格就仍按 ok 返回（部分完成是真实结果）。
+        if (dug === 0 && Math.floor(bot.entity.position.y) > targetY) {
+            return {
+                ok: false,
+                code: 'BLOCKED',
+                message: `向下挖不下去：正下方是 ${blockedBy ?? '不可挖的方块'}，一格都没下降`,
+                data: { dug: 0, blockedBy, fromY: Math.floor(p.y), targetY },
+            };
         }
         return ok({ dug });
     }

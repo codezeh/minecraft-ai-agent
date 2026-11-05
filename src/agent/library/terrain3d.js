@@ -266,7 +266,12 @@ export function scanSphere(bot, baseDir, center, radius = 32) {
     const cx = Math.floor(center.x);
     const cy = Math.floor(center.y);
     const cz = Math.floor(center.z);
-    const r = Math.max(2, Math.floor(radius));
+    // ★ 第13条：入口硬夹到 ≤32。扫球是**同步阻塞**的：r=64 时约 110 万次 blockAt
+    // + 12868 次 DELETE，一次调用能把主线程按住好几秒（心跳一超时就断线）。
+    // 调用方（surveyArea 默认值、map_query 的 span 换算）都可能算出更大的数，
+    // 所以把上限放在**唯一入口**这里兜底，而不是指望每个调用方都记得。
+    const SCAN_MAX_RADIUS = 32;
+    const r = Math.min(SCAN_MAX_RADIUS, Math.max(2, Math.floor(radius)));
     const r2 = r * r;
 
     let cells = 0, columns = 0;

@@ -20,6 +20,9 @@ import { pauseGoalModes, restoreGoalModes } from './modes.js';
 import Vec3 from 'vec3';
 import { PlayerTracker, ensureTracking, query, queryPlayerExact } from './query_target.js';
 import { ensureScaffold, countScaffold } from './tool_prep.js';
+// 第9条②：直驱 pathfinder 的调用点（moveTo / walkTo / hopTo）要进 nav 闸。
+// 只包 withNav，不改流程语义；null = 别人正在用导航 → 如实 BLOCKED。
+import { withNav } from './nav_core.js';
 import { detectTrapped } from './query_stuck.js';
 // 2026-11-01（t6）：转头改走输入原子（bot.look* 的唯一出口）。
 import { lookAtPoint } from './atom_input_mouse.js';
@@ -84,10 +87,23 @@ export function resolveTarget(bot, name, tracker) {
  */
 export async function follow(bot, name, opts = {}) {
     const {
-        distance = 3, timeoutMs = -1, onEvent = () => {},
+        distance = 3,
+        // ★★ E1：**键名必须和注册表对齐**。
+        //
+        //   注册表（composite_registry.js 的 manifestFollow 条目）传的是 `deadlineMs`
+        //   —— 那是"从 ctx 算出来的剩余毫秒数"。而这里过去只读 `timeoutMs`，默认 -1
+        //   表示"一直跟"。两个名字对不上，注册表给的 deadline **完全没生效**：
+        //   找不到人时这条流会一直跑下去，永远不会按超时收尾。
+        //   现在两个名字都认（deadlineMs 优先，timeoutMs 保留给老调用点），
+        //   并且超时**按 TIMEOUT 失败返回**，不再返回 ok（超时不是成功）。
+        timeoutMs: timeoutMsOpt = null, onEvent = () => {},
+        deadlineMs = null,
         tracker = ensureTracking(bot), lostGraceMs = 3000,
         mapDir = null,     // 传了就用跳格做「远距离接近」
     } = opts;
+    const timeoutMs = Number.isFinite(deadlineMs) && deadlineMs > 0
+        ? deadlineMs
+        : (Number.isFinite(timeoutMsOpt) ? timeoutMsOpt : -1);
 
     if (!bot.players?.[name]) {
         onEvent({ type: 'offline' });
@@ -123,8 +139,11 @@ export async function follow(bot, name, opts = {}) {
                     onEvent({ type: 'hop_start', dist: Math.round(d0) });
                     try {
                         const { hopTo } = await import('./nav_hop.js');
-                        const hr = await hopTo(bot, { x: ent.position.x, z: ent.position.z },
-                            { mapDir, onEvent: (e) => onEvent({ type: 'hop_' + e.type, ...e }) });
+                        // 非 async 箭头：hopTo 返回 Promise，withNav 内部是 `await fn()`，照样等它。
+                        // （写成 async 却没有 await 会踩 require-await —— 本仓棘轮只许降不许升）
+                        const hr = (await withNav(bot, () => hopTo(bot, { x: ent.position.x, z: ent.position.z },
+                            { mapDir, onEvent: (e) => onEvent({ type: 'hop_' + e.type, ...e }) })))
+                            ?? fail('BLOCKED', '导航被别的任务占用（跳格接近没做成）', { retryable: true });
                         onEvent({ type: 'hop_done', code: hr.code, dist: Math.round(bot.entity.position.distanceTo(ent.position)) });
                     } catch (e) {
                         onEvent({ type: 'hop_error', message: String(e?.message ?? e).slice(0, 80) });
@@ -135,7 +154,10 @@ export async function follow(bot, name, opts = {}) {
 
         while (!bot.interrupt_code) {
             if (timeoutMs > 0 && Date.now() - t0 > timeoutMs) {
-                return ok({ reason: 'timeout', costMs: Date.now() - t0 });
+                // E1：**超时不是成功**。原来返回 ok({reason:'timeout'})，
+                // 上层看到 ok:true 会当成"跟随完成" —— 但她可能压根没找到人。
+                return fail('TIMEOUT', `跟了 ${Math.round((Date.now() - t0) / 1000)} 秒还没到（没找到人/走不到）`,
+                    { costMs: Date.now() - t0, distFeetToEntity: null });
             }
 
             const target = resolveTarget(bot, name, tracker);
@@ -247,8 +269,9 @@ export async function goToPlayer(bot, name, opts = {}) {
         console.log(`[goToPlayer] 进入 hopTo，目标 (${known.x.toFixed(0)},${known.z.toFixed(0)})`);
         try {
             const { hopTo } = await import('./nav_hop.js');
-            const hr = await hopTo(bot, { x: known.x, z: known.z },
-                { mapDir, onEvent: (e) => onEvent({ type: 'hop_' + e.type, ...e }) });
+            const hr = (await withNav(bot, () => hopTo(bot, { x: known.x, z: known.z },
+                { mapDir, onEvent: (e) => onEvent({ type: 'hop_' + e.type, ...e }) })))
+                ?? fail('BLOCKED', '导航被别的任务占用（跳格接近没做成）', { retryable: true });
             console.log(`[goToPlayer] hopTo 返回 code=${hr.code} message=${hr.message ?? ''}`);
             onEvent({
                 type: 'hop_done', code: hr.code,
@@ -314,8 +337,9 @@ export async function goToPlayer(bot, name, opts = {}) {
             console.log(`[goToPlayer] 第 ${attempt} 档：允许挖+搭，目标 (${targetPos.x.toFixed(0)},${targetPos.y.toFixed(0)},${targetPos.z.toFixed(0)})，我在 y=${bot.entity.position.y.toFixed(0)}`);
         }
 
-        const r = await moveTo(bot, { kind: 'point', pos: targetPos },
-            { tol: Math.max(distance, 1), canDig: attempt > 1, scaffold: attempt > 1 });
+        const r = (await withNav(bot, () => moveTo(bot, { kind: 'point', pos: targetPos },
+            { tol: Math.max(distance, 1), canDig: attempt > 1, scaffold: attempt > 1 })))
+            ?? fail('BLOCKED', '导航被别的任务占用（跟随的 moveTo 没做成）', { retryable: true });
         if (r.code === 'INTERRUPTED') return r;
         onEvent({ type: 'moved', attempt, code: r.code ?? 'OK', tier: attempt > 1 ? 'dig+scaffold' : 'walk' });
 
@@ -370,8 +394,9 @@ export async function goToPlayer(bot, name, opts = {}) {
                         message: esc.message,
                     });
                     if (esc.ok && yAfter > yBefore + 1) {
-                        const r2 = await moveTo(bot, { kind: 'point', pos: targetPos },
-                            { tol: Math.max(distance, 1), canDig: true, scaffold: true });
+                        const r2 = (await withNav(bot, () => moveTo(bot, { kind: 'point', pos: targetPos },
+                            { tol: Math.max(distance, 1), canDig: true, scaffold: true })))
+                            ?? fail('BLOCKED', '导航被别的任务占用（自救后的 moveTo 没做成）', { retryable: true });
                         onEvent({ type: 'moved-after-escape', code: r2.code ?? 'OK' });
                         console.log(`[goToPlayer] 自救后再走：${r2.code ?? 'OK'}`);
                     }
@@ -499,12 +524,12 @@ export async function followEntity(bot, entityName, opts = {}) {
 
         // 用现有的 3D 行走链路接近它（船在水面上，所以是"走到水边/水面"）
         const { walkTo } = await import('./executor.js');
-        const r = await walkTo(bot, { x: ent.position.x, z: ent.position.z }, {
+        const r = (await withNav(bot, () => walkTo(bot, { x: ent.position.x, z: ent.position.z }, {
             mapDir,
             arriveTol: distance,
             deadlineMs: 45000,
             onEvent: (e) => onEvent({ type: 'walk_' + e.type, ...e }),
-        });
+        }))) ?? fail('BLOCKED', '导航被别的任务占用（followEntity 的 walkTo 没做成）', { retryable: true });
 
         if (r.code === 'INTERRUPTED') return r;
 

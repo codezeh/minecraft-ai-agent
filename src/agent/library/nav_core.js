@@ -25,6 +25,7 @@
  * 它有自己的目标失效、重定位、丢失重找逻辑，硬塞进 goTo 会让两个语义搅在一起。
  * 跟随仍然走 task_follow。
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { ok, fail } from './contract.js';
 import { walkTo } from './executor.js';
 import { moveTo, moveToXZ } from './nav_pathfinder.js';
@@ -47,11 +48,17 @@ import { ensureTraced } from './trace_bus.js';
  * @returns {Promise<any|null>} fn 的返回值；拿不到锁返回 null
  */
 export async function withNav(bot, fn, waitMs = 3000) {
-    const owner = String(bot?.__navJobId ?? 'adhoc');
+    // ★★ 第9条：已经在本条异步链的"导航段"里 → **真重入**，直接跑（外层已持锁）。
+    //   判据是 async 上下文而不是 bot 身份：同一 bot 上两个**并发**调用互不继承
+    //   store，仍会各拿一个唯一 owner 去抢锁 —— 闸才不会被"并发误当嵌套"骗过。
+    const scoped = _navAls.getStore()?.owner;
+    if (scoped) return await fn();
+
+    const owner = resolveNavOwner(bot);
     const lock = await acquireNav(owner, waitMs);
     if (!lock) return null;
     try {
-        return await fn();
+        return await _navAls.run({ owner }, () => fn());
     } finally {
         // ★★ 2026-11-04（t86）：**用完导航必须把目标清掉，别让它挂在那里。**
         //
@@ -114,6 +121,47 @@ const NAV_LOCK_WAIT_MS = 20000;
 export const navLockOwner = () => _navOwner;
 let _navOwner = null;
 let _navDepth = 0;
+
+// ───────────────────────────────────────────────────────────────────────────
+// ★★ 第9条：「没有任务单」的调用**过去全都叫 'adhoc'**，于是两个互不相干的
+//   ad-hoc 调用在 `acquireNav` 眼里是**同一个 owner** → 走"可重入"分支直接放行
+//   → 闸形同虚设。现场证据：两条流互相改 goal，每 150 行就撞 2 次
+//   `The goal was changed`。
+//
+//   现在两种 owner 分开处理：
+//     · 有任务单（`bot.__navJobId` 由 makeCtx 写入）→ 用 jobId，同一任务内可重入（正确）；
+//     · 没有任务单 → `adhoc:<自增序号>`，**每次唯一** → 两个 ad-hoc 调用互相排斥。
+//
+//   配套：**同一异步链内的嵌套调用**要真重入（外层已持锁，内层不该再抢）。
+//   这件事**不能**用 `WeakMap<bot, …>` 判断 —— 同一个 bot 上两个**并发**的调用
+//   也会命中同一个 key，那样"并发"会被误当成"嵌套"，闸又白做了。
+//   只有 async 上下文能区分：`AsyncLocalStorage` 的 store 沿 await 链传递，
+//   兄弟调用各自独立。所以这里用它记录"当前这条链的导航 owner"。
+// ───────────────────────────────────────────────────────────────────────────
+let _adhocSeq = 0;
+const _navAls = new AsyncLocalStorage();
+
+/**
+ * 这次调用该用哪个 owner。
+ * 已在导航段内（同一条 async 链）→ 沿用外层 owner（真重入）；
+ * 有任务单 → jobId；否则每次唯一的 `adhoc:N`。
+ * @returns {string}
+ */
+export function resolveNavOwner(bot) {
+    const scoped = _navAls.getStore()?.owner;
+    if (scoped) return scoped;
+    const job = bot?.__navJobId;
+    if (job != null && String(job) !== '') return String(job);
+    return `adhoc:${++_adhocSeq}`;
+}
+
+/**
+ * 本 bot/本异步链当前是否已经在导航段内（供调用点判断"要不要再抢锁"）。
+ * @returns {string|null}
+ */
+export function navCtxOwner() {
+    return _navAls.getStore()?.owner ?? null;
+}
 
 /**
  * 拿"导航驱动权"。
@@ -185,22 +233,34 @@ export async function goTo(bot, target, opts = {}) {
         rescan = true,
         // ★ t66：驱动者标识。有任务单时 `makeCtx` 会把 jobId 写到 `bot.__navJobId`，
         //   所以所有 flow 的 goTo 都自动带上 owner，不用逐个改调用点。
-        //   没有任务单（`!do` 直调 / 反射 / 离线）就 'adhoc'。
-        owner = bot?.__navJobId ?? 'adhoc',
+        // ★ 第9条：没有任务单（`!do` 直调 / 反射 / 离线）**不能再都叫 'adhoc'** ——
+        //   那样两个 ad-hoc 调用会被判成"自己重入"而放行。交给 resolveNavOwner：
+        //   每次唯一（`adhoc:N`），已是导航段内则沿用外层 owner。
+        owner = null,
     } = opts;
 
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
 
     // ★★ t66：**同一时刻只允许一个驱动者用 pathfinder**（否则两条流互相改 goal
     //   → `The goal was changed` → dig 全部 INTERNAL，真机实测 1590 次）。
-    const lock = await acquireNav(String(owner), Math.min(NAV_LOCK_WAIT_MS, Math.max(1000, deadlineMs)));
+    //
+    // ★ 第9条：已经在本 bot 的导航段内（外层 withNav/goTo 持锁）→ **不再抢锁**，
+    //   直接用外层 owner 干活。否则"默认 owner 唯一"会让自己等自己。
+    const nestedOwner = navCtxOwner();
+    const useOwner = nestedOwner ?? (owner != null && String(owner) !== '' ? String(owner) : resolveNavOwner(bot));
+    if (nestedOwner) {
+        return await _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent, rescan, owner: useOwner });
+    }
+
+    const lock = await acquireNav(String(useOwner), Math.min(NAV_LOCK_WAIT_MS, Math.max(1000, deadlineMs)));
     if (!lock) {
         return fail('BLOCKED', '导航被别的任务占用（pathfinder 同一时刻只允许一个驱动者）', {
-            owner, retryable: true,
+            owner: useOwner, retryable: true,
         });
     }
     try {
-        return await _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent, rescan, owner });
+        return await _navAls.run({ owner: String(useOwner) }, () =>
+            _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent, rescan, owner: useOwner }));
     } finally {
         lock.release();
     }

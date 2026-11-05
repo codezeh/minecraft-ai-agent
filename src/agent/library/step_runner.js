@@ -146,6 +146,22 @@ export async function runSteps(bot, steps, opts = {}) {
         continue;
     }
 
+    // ★ 第10条②：**全部步骤都失败，仍然 return ok** —— 这是"假成功"的典型。
+    //
+    //   onFail 表没写规则的默认动作是 `next`（继续下一条），所以一个 3 步的序列
+    //   可以三步全 FAIL、`doneSteps=0`，然后从这里返回 `ok({doneSteps:0, failed:[…]})`。
+    //   上层（digTunnel / collect / 模型）看到 ok:true 就认为"做成了"，
+    //   实际一格都没成 —— 最坏的情形是它把"什么都没做"当成了"已经做完"。
+    //
+    //   判据（故意收窄）：`failed` 非空 **且** 一步都没成功。只要有过成功，
+    //   就仍按 ok 返回（部分成功是真实结果，交调用方按 failed 数组自己判断）。
+    if (failed.length && doneSteps === 0) {
+        const first = failed[0];
+        return fail(first.code ?? 'INTERNAL',
+            `全部 ${failed.length} 步都失败了（一条也没做成）：第 ${first.step} 步（${first.atom}）${first.message}`,
+            { doneSteps, count: doneSteps, failedStep: first.step, atom: first.atom, failed, costMs: Date.now() - t0 });
+    }
+
     return ok({
         doneSteps,
         count: doneSteps,

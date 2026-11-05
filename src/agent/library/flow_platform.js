@@ -12,6 +12,8 @@ import { ok, fail } from './contract.js';
 import { blockAt } from './query_perceive.js';
 import { placeBlockAt } from './act_place.js';
 import { moveTo } from './nav_pathfinder.js';
+// 第9条②：直驱 pathfinder 的调用点要进 nav 闸（只包 withNav，不改流程语义）。
+import { withNav } from './nav_core.js';
 import { pauseGoalModes, restoreGoalModes } from './modes.js';
 
 /** 复合技能 manifest（04 §4.1）：铺 3×3 平台。 */
@@ -56,7 +58,9 @@ async function stepAside(bot, center, cell, timeout = 8000) {
     const dx = Math.sign(cell.x - center.x) || (b.x >= center.x ? 1 : -1);
     const dz = Math.sign(cell.z - center.z) || (b.z >= center.z ? 1 : -1);
     const spot = { x: center.x + dx * 2.5, y: center.y, z: center.z + dz * 2.5 };
-    return await moveTo(bot, { kind: 'point', pos: spot }, { tol: 1, timeout });
+    // 第9条②：包进 withNav。返回 null = 别人正在用导航 → 如实报 BLOCKED，不假装成功。
+    return (await withNav(bot, () => moveTo(bot, { kind: 'point', pos: spot }, { tol: 1, timeout })))
+        ?? fail('BLOCKED', '导航被别的任务占用（让位这一步没做成）', { retryable: true });
 }
 
 /**

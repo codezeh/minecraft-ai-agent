@@ -27,6 +27,9 @@ import { ok, fail } from './contract.js';
 import { blockAt } from './query_perceive.js';
 import { digBlock, isDiggable } from './act_dig.js';
 import { moveToXZ } from './nav_pathfinder.js';
+// 第9条②：原子里的"走过去"也是直驱 pathfinder —— 必须进 nav 闸，否则和别的流抢 goal。
+// 只包 withNav，不改本原子的判定/返回语义（null = 别人正在用导航 → BLOCKED）。
+import { withNav } from './nav_core.js';
 import { holdKey, releaseAll } from './atom_input_move.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -249,8 +252,9 @@ export async function tunnelStep(bot, dir, opts = {}) {
     const dyUp = chk.to.y - Math.floor(bot.entity.position.y);
     if (dyUp !== 0) {
         // 先水平对齐
-        await moveToXZ(bot, { kind: 'point', posXZ: { x: chk.to.x, z: chk.to.z } },
-            { tol: 0.9, timeout: walkTimeout });
+        const aligned = await withNav(bot, () => moveToXZ(bot, { kind: 'point', posXZ: { x: chk.to.x, z: chk.to.z } },
+            { tol: 0.9, timeout: walkTimeout }));
+        if (!aligned) return fail('BLOCKED', '导航被别的任务占用（挖台阶前的水平对齐没做成）', { from, dug });
         if (dyUp > 0) {
             // 往上：按住 jump，等高度到位（最多 2.5 秒）
             // 2026-11-01（Phase A.1）：按键走 atom_input_move，顺带获得"等待中查中断"。
@@ -263,8 +267,9 @@ export async function tunnelStep(bot, dir, opts = {}) {
             await sleep(120);
             // 还不到位就再朝目标挪一点（贴边跳上去）
             if (Math.floor(bot.entity.position.y) < chk.to.y) {
-                await moveToXZ(bot, { kind: 'point', posXZ: { x: chk.to.x, z: chk.to.z } },
-                    { tol: 0.6, timeout: 4000 });
+                const nudged = await withNav(bot, () => moveToXZ(bot, { kind: 'point', posXZ: { x: chk.to.x, z: chk.to.z } },
+                    { tol: 0.6, timeout: 4000 }));
+                if (!nudged) return fail('BLOCKED', '导航被别的任务占用（跳上台阶时贴边挪不过去）', { from, dug });
             }
         } else {
             // 往下：清空按键让重力带下去
@@ -285,8 +290,9 @@ export async function tunnelStep(bot, dir, opts = {}) {
         //   为什么要后者：`moveToXZ` 报 ok 只代表"goto 没抛错"，不代表她真的挪了窝；
         //   洞挖好了、路通了却没过去，是独立于"挖失败"的一种失败，值得有自己的码。
         const before = { x: bot.entity.position.x, z: bot.entity.position.z };
-        const mv = await moveToXZ(bot, { kind: 'point', posXZ: { x: chk.to.x, z: chk.to.z } },
-            { tol: 0.8, timeout: walkTimeout });
+        const mv = (await withNav(bot, () => moveToXZ(bot, { kind: 'point', posXZ: { x: chk.to.x, z: chk.to.z } },
+            { tol: 0.8, timeout: walkTimeout })))
+            ?? fail('BLOCKED', '导航被别的任务占用（挖通了但走不过去）', { from, dug });
         if (!mv.ok) {
             onEvent({ type: 'tunnel-walk-fail', code: mv.code });
             return fail(mv.code ?? 'INTERNAL', '挖通了但走不过去', { from, dug });
