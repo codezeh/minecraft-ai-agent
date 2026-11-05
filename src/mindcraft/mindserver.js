@@ -13,7 +13,7 @@ import {
 } from './auth_gate.js';
 // 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
 import { validateNameFormat } from '../agent/connection_handler.js';
-import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync, unlinkSync } from 'fs';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
 // 板放 agent 里别的 bot 看不见；放这里就只有一个写者，省掉多进程锁）。
 import { openBoard } from '../agent/library/board_store.js';
@@ -70,6 +70,35 @@ export function logoutAgent(agentName) {
 // F-WEB-203：按远端地址共享的令牌桶（跨连接，重连不清零）
 const RATE_BUCKETS = new Map();
 
+/**
+ * F-WEB-203（2026-11-06）：取一个令牌。返回 true = 放行，false = 该限流了。
+ *
+ * 为什么按**远端地址**而不是按 socket：桶挂 socket 上时"断开重连"就清零，可无限绕过（复核席指出）。
+ * 为什么按事件分桶（key 里带 label）：`send-message` 可以高频（聊天），而 `restart-agent`
+ * 一分钟三次就已经是攻击形态了 —— 两类事件不能共用同一个桶。
+ *
+ * 参数（capacity / windowMs）由调用方按"该事件的正常使用频率"决定，别一刀切。
+ */
+function takeToken(socket, label, capacity, windowMs) {
+    const now = Date.now();
+    const addr = String(socket?.handshake?.address || socket?.conn?.remoteAddress || 'unknown');
+    const key = `${label}@${addr}`;
+    // 容量上限：防 Map 长期累积（本仓只绑 localhost，key 其实只有 2 个；这条是给"将来放开绑定"兜底）
+    if (RATE_BUCKETS.size > 512) {
+        for (const [k, v] of RATE_BUCKETS) { if (now - v.ts > 60000) RATE_BUCKETS.delete(k); }
+    }
+    let rl = RATE_BUCKETS.get(key);
+    if (!rl) { rl = { tokens: capacity, ts: now }; RATE_BUCKETS.set(key, rl); }
+    rl.tokens = Math.min(capacity, rl.tokens + ((now - rl.ts) / windowMs) * capacity);
+    rl.ts = now;
+    if (rl.tokens < 1) {
+        console.warn(`[mindserver] 拒绝 ${label}：触发限流（${capacity} 次/${windowMs}ms，来源 ${addr}）`);
+        return false;
+    }
+    rl.tokens -= 1;
+    return true;
+}
+
 export function createMindServer(host_public = false, port = 8080) {
     const app = express();
     server = http.createServer(app);
@@ -100,12 +129,33 @@ export function createMindServer(host_public = false, port = 8080) {
         console.warn(`[mindserver] 写 ${TOKEN_FILE} 失败（${e?.code ?? e}）；本次 token 只能通过 MINDSERVER_TOKEN 环境变量或 MINDSERVER_PRINT_TOKEN=1 获取`);
     }
 
+    // ★ F-RT-003（2026-11-06）：token 文件**退出时删掉**，别让它长期躺盘上。
+    // 为什么不在启动时删旧的：start-panel 要在**这次**启动后读它；所以只在进程退出时清。
+    // 注意：这只是"减少留存窗口"，不是权限边界（同机其他账户仍可能在运行期读到，见 F-RT-001 手册）。
+    const cleanupTokenFile = () => { try { if (existsSync(TOKEN_FILE)) unlinkSync(TOKEN_FILE); } catch { /* ignore */ } };
+    process.once('exit', cleanupTokenFile);
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+        process.once(sig, () => { cleanupTokenFile(); process.exit(0); });
+    }
+
     // 浏览器控制台：把 ?token=… 换成 HttpOnly + SameSite=Strict 的 cookie，之后同源握手自动带上。
     // 不这么做的话，面板（web/dist 已构建，改前端源码要重打包）会直接连不上。
     app.use((req, res, next) => {
         const fromQuery = typeof req.query?.token === 'string' ? req.query.token : null;
-        if (fromQuery && fromQuery === handshakeToken && !hasAuthCookie(req.headers.cookie, handshakeToken)) {
-            res.setHeader('Set-Cookie', authCookieHeader(handshakeToken));
+        if (fromQuery && fromQuery === handshakeToken) {
+            if (!hasAuthCookie(req.headers.cookie, handshakeToken)) {
+                res.setHeader('Set-Cookie', authCookieHeader(handshakeToken));
+            }
+            // ★ F-RT-003（2026-11-06，红队复测）：`?token=…` 会留在**地址栏 → 浏览器历史/书签同步**里，
+            // 等于把 token 抄到另一个持久化位置。种完 cookie 就 302 到不带 token 的同一路径。
+            // 只对 GET 做（POST 不能这么重定向）；非 GET 请求照旧放行给下面的门判断。
+            if (req.method === 'GET') {
+                const rest = { ...req.query };
+                delete rest.token;
+                const qs = new URLSearchParams(rest).toString();
+                res.redirect(302, req.path + (qs ? `?${qs}` : ''));
+                return;
+            }
         }
         next();
     });
@@ -225,9 +275,83 @@ export function createMindServer(host_public = false, port = 8080) {
     app.use(express.static(path.join(__dirname, 'public')));
 
     // Texture proxy: resolve item/block textures using minecraft-assets with version fallback
-    // F-WEB-202：贴图代理的在飞请求上限（模块级，跨请求共享）
+    //
+    // ★ F-WEB-202（2026-11-06，按复核席裁决重做）：这里的真开销不是 `import()`（它本来就幂等），
+    // 而是 `mcAssetsFactory(ver)` 的索引构建 + `readFileSync`。而**纯缓存在第一波并发上完全无效** ——
+    // 攻击形态恰恰是 20 个请求同时打同一个 `oak_planks.png`。
+    // 所以做三件事，缺一不可：
+    //   ① **同 key 合并**：并发同 key 只跑一遍流水线，其余请求等同一次的结果；
+    //   ② **并发上限**：总数有界，避免把主线程排队排死；
+    //   ③ **8 秒硬超时 + finally 清理**：漏 finally 就是内存泄漏 + 该 key 永久卡在 in-flight（永久 503）。
     const TEX_INFLIGHT_MAX = 4;
-    let TEX_INFLIGHT = 0;
+    const TEX_TIMEOUT_MS = 8000;
+    const TEX_CACHE_MAX = 300;
+    const TEX_CACHE = new Map();        // key -> Buffer|null（null = 确认找不到，别反复重试）
+    const TEX_INFLIGHT = new Map();     // key -> Promise<Buffer|null>
+
+    /** 真正干活：返回 PNG Buffer，或 null（找不到）。**不碰 res**，这样才能被同 key 合并复用。 */
+    async function fetchTextureBuffer(itemName, candidates) {
+        const mod = await import('minecraft-assets');
+        const mcAssetsFactory = mod.default || mod;
+        for (const ver of candidates) {
+            try {
+                const assets = mcAssetsFactory(ver);
+                const item = assets.items[itemName];
+                const block = assets.blocks[itemName];
+                const tex = assets.textureContent?.[itemName]?.texture
+                    || (item ? assets.textureContent?.[itemName]?.texture : null)
+                    || (block ? assets.textureContent?.[itemName]?.texture : null);
+                if (tex && tex.startsWith('data:image')) {
+                    return globalThis.Buffer.from(tex.split(',')[1], 'base64');
+                }
+                // textureContent 缺失时回落到包内静态路径（某些方块如 Leaf Litter 只在这里）
+                const guessPaths = [
+                    path.join(assets.directory, 'items', `${itemName}.png`),
+                    path.join(assets.directory, 'blocks', `${itemName}.png`),
+                ];
+                for (const p of guessPaths) {
+                    try {
+                        const fsMod = await import('fs');
+                        return fsMod.readFileSync(p);
+                    } catch { /* ignore */ }
+                }
+            } catch { /* ignore */ }
+        }
+        return null;
+    }
+
+    /** 带"同 key 合并 + 缓存 + 并发上限 + 硬超时 + finally"的取图入口。 */
+    async function getTexture(itemName, candidates) {
+        const key = `${candidates.join('|')}:${itemName}`;
+        if (TEX_CACHE.has(key)) return TEX_CACHE.get(key);
+        if (TEX_INFLIGHT.has(key)) return TEX_INFLIGHT.get(key);      // ① 合并
+        if (TEX_INFLIGHT.size >= TEX_INFLIGHT_MAX) {                  // ② 上限
+            const e = new Error('texture proxy busy'); e.code = 'TEX_BUSY'; throw e;
+        }
+        const task = (async () => {
+            let timer;
+            try {
+                // ③ 硬超时：无论底层卡在哪（import / 索引 / 读盘），8 秒后一定放手
+                const timeout = new Promise((_, rej) => {
+                    timer = setTimeout(() => {
+                        const e = new Error('texture timeout'); e.code = 'TEX_TIMEOUT'; rej(e);
+                    }, TEX_TIMEOUT_MS);
+                    if (timer.unref) timer.unref();
+                });
+                const buf = await Promise.race([fetchTextureBuffer(itemName, candidates), timeout]);
+                if (TEX_CACHE.size >= TEX_CACHE_MAX) TEX_CACHE.delete(TEX_CACHE.keys().next().value);
+                TEX_CACHE.set(key, buf);
+                return buf;
+            } finally {
+                clearTimeout(timer);
+                TEX_INFLIGHT.delete(key);   // ← 漏这行 = 该 key 永久 503 + 内存泄漏
+            }
+        })();
+        TEX_INFLIGHT.set(key, task);
+        task.catch(() => { });   // 防 unhandled rejection 带走进程；结果由调用方 catch
+        return task;
+    }
+
     app.get('/assets/item/:agent/:name.png', async (req, res) => {
         try {
             const agentName = req.params.agent;
@@ -237,74 +361,36 @@ export function createMindServer(host_public = false, port = 8080) {
             // `..%2f..%2fsettings` ⇒ `path.join(base,'items','../../settings.png')` 会跳出
             // assets.directory（只能读到 .png，但仍是任意 png 读取 + 存在性探测）。
             // 资源名合法字符集本就只有 [a-z0-9_]（物品/方块名），用白名单一刀切。
-            // 注意：这条是**不需要认证的 HTTP 端**（io.use 的握手门只管 socket.io，见 F-SEC-104 证据）。
             if (!/^[a-z0-9_]{1,64}$/.test(itemName)) {
                 res.status(400).json({ ok: false, error: 'invalid texture name' });
                 return;
             }
             const conn = agent_connections[agentName];
-            // ★ F-WEB-202（2026-11-06）：这个路由每次请求都要 import('minecraft-assets') + 建资源索引
-            // + readFileSync，侦察席实测"合法名与穿越名都 10s 打满不返回，CLOSE_WAIT 堆积"。
-            // F-WEB-201 的 HTTP token 门已经把"任意网页 <img> 反复触发"这条外部向量关掉了；
-            // 这里再补一道**并发上限**（防同一客户端/面板刷爆 + 防自己把自己堵死）：
-            // 用 res 的 finish/close 回收计数，不需要重构 handler 的控制流。
-            if (TEX_INFLIGHT >= TEX_INFLIGHT_MAX) {
-                res.status(503).json({ ok: false, error: 'texture proxy busy, retry later' });
-                return;
-            }
-            TEX_INFLIGHT++;
-            {
-                let released = false;
-                const release = () => { if (!released) { released = true; TEX_INFLIGHT--; } };
-                res.on('finish', release);
-                res.on('close', release);
-            }
             const preferred = conn?.settings?.minecraft_version;
             const candidates = [];
             if (preferred && preferred !== 'auto') candidates.push(preferred);
             candidates.push('1.21.8');
 
-            // Lazy import to avoid ESM/CJS conflicts
-            const mod = await import('minecraft-assets');
-            const mcAssetsFactory = mod.default || mod;
-
-            for (const ver of candidates) {
-                try {
-                    const assets = mcAssetsFactory(ver);
-                    // Prefer items path first, then blocks
-                    const item = assets.items[itemName];
-                    const block = assets.blocks[itemName];
-                    const tex = assets.textureContent?.[itemName]?.texture
-                        || (item ? assets.textureContent?.[itemName]?.texture : null)
-                        || (block ? assets.textureContent?.[itemName]?.texture : null);
-                    if (tex) {
-                        // textureContent already provides a data URL in many versions
-                        if (tex.startsWith('data:image')) {
-                            const base64 = tex.split(',')[1];
-                            const img = globalThis.Buffer.from(base64, 'base64');
-                            res.setHeader('Content-Type', 'image/png');
-                            return res.end(img);
-                        }
-                    }
-                    // If textureContent missing, try static path resolution inside package
-                    // Helps with some strange blocks like Leaf Litter
-                    const guessPaths = [];
-                    const base = assets.directory;
-                    guessPaths.push(path.join(base, 'items', `${itemName}.png`));
-                    guessPaths.push(path.join(base, 'blocks', `${itemName}.png`));
-                    for (const p of guessPaths) {
-                        try {
-                            const fsMod = await import('fs');
-                            const buf = fsMod.readFileSync(p);
-                            res.setHeader('Content-Type', 'image/png');
-                            return res.end(buf);
-                        } catch { /* ignore */ }
-                    }
-                } catch { /* ignore */ }
+            let buf;
+            try {
+                buf = await getTexture(itemName, candidates);
+            } catch (e) {
+                if (e?.code === 'TEX_BUSY') {
+                    res.status(503).json({ ok: false, error: 'texture proxy busy, retry later' });
+                    return;
+                }
+                // 超时走这里：回 504，且**不缓存**（下次还能重试）
+                res.status(504).json({ ok: false, error: 'texture proxy timeout' });
+                return;
             }
-            // Not found, fallback svg
-            res.setHeader('Content-Type', 'image/svg+xml');
-            res.status(404).send('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="100%" height="100%" fill="#444"/><text x="50%" y="55%" font-size="12" fill="#bbb" text-anchor="middle">?</text></svg>');
+            if (!buf) {
+                res.setHeader('Content-Type', 'image/svg+xml');
+                res.status(404).send('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="100%" height="100%" fill="#444"/><text x="50%" y="55%" font-size="12" fill="#bbb" text-anchor="middle">?</text></svg>');
+                return;
+            }
+            res.setHeader('Content-Type', 'image/png');
+            res.setHeader('Cache-Control', 'public, max-age=86400');   // 贴图是静态资源
+            res.end(buf);
         } catch (e) {
             res.setHeader('Content-Type', 'image/svg+xml');
             res.status(500).send('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="100%" height="100%" fill="#444"/><text x="50%" y="55%" font-size="12" fill="#bbb" text-anchor="middle">!</text></svg>');
@@ -400,6 +486,12 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('create-agent', async (settings, callback) => {            console.log('API create agent...');
+            // ★ F-WEB-203：`create-agent` 会 **spawn 一个新 bot 进程**（连 MC 服务器、吃内存与 LLM 配额），
+            // 原来完全无限流 ⇒ 单连接可无限拉起 agent。按来源限 5 次/60 秒。
+            if (!takeToken(socket, 'create-agent', 5, 60000)) {
+                try { callback?.({ success: false, error: '太频繁：create-agent 限 5 次/分钟' }); } catch { }
+                return;
+            }
             for (let key in settings_spec) {
                 if (!(key in settings)) {
                     if (settings_spec[key].required) {
@@ -514,6 +606,9 @@ export function createMindServer(host_public = false, port = 8080) {
 
         socket.on('restart-agent', (agentName) => {
             console.log(`Restarting agent: ${agentName}`);
+            // ★ F-WEB-203：`restart-agent` 循环比"刷消息"更伤可用性 —— 每点一次就杀一个 bot 进程
+            // 再拉起，反复点能把机器拖垮。按来源限 3 次/60 秒（正常使用远低于此）。
+            if (!takeToken(socket, 'restart-agent', 3, 60000)) return;
             // D25：停掉的 agent socket 为 null（面板上重启按钮仍可点），原来这里直接崩掉整个 mindserver
             const conn = agent_connections[agentName];
             if (!conn?.socket) {
@@ -576,27 +671,11 @@ export function createMindServer(host_public = false, port = 8080) {
 				console.warn(`[mindserver] 拒绝 send-message：message 过长（${data.message.length} > 2000）`);
 				return;
 			}
-			{
-				// F-WEB-203 补修（复核席指出）：桶原本挂在 socket.data 上 ⇒ **断开重连即重置**，
-				// 可以无限绕过。改为按远端地址计数（跨连接共享），并做容量上限防 Map 无限增长。
-				const now = Date.now();
-				const rlKey = String(socket.handshake?.address || socket.conn?.remoteAddress || 'unknown');
-				// 注意（复核席 review-captain-fixes）：本仓只绑 localhost，handshake.address 只可能是
-				// 127.0.0.1 或 ::1 ⇒ key 最多 2 个，永远到不了这个阈值。此分支实际防的是
-				// **将来放开绑定后的长期累积**，不是"无限增长"。注释如实写清，别让人以为这里挡着什么。
-				if (RATE_BUCKETS.size > 512) {
-					for (const [k, v] of RATE_BUCKETS) { if (now - v.ts > 60000) RATE_BUCKETS.delete(k); }
-				}
-				let rl = RATE_BUCKETS.get(rlKey);
-				if (!rl) { rl = { tokens: 30, ts: now }; RATE_BUCKETS.set(rlKey, rl); }
-				rl.tokens = Math.min(30, rl.tokens + ((now - rl.ts) / 10000) * 30);
-				rl.ts = now;
-				if (rl.tokens < 1) {
-					console.warn(`[mindserver] 拒绝 send-message：触发限流（30 条/10 秒/来源 ${rlKey}）`);
-					return;
-				}
-				rl.tokens -= 1;
-			}
+			// F-WEB-203：send-message 限 30 条/10 秒/来源。桶按**远端地址**共享
+			// （挂 socket.data 上时断开重连即重置，可无限绕过 —— 复核席指出）。
+			// 与 restart-agent / create-agent / listen-to-agents 共用同一个 takeToken 实现，
+			// 只是 capacity/window 不同（见各处调用）。
+			if (!takeToken(socket, 'send-message', 30, 10000)) return;
 			if (!data || typeof data.from !== 'string' || !data.from || data.from.length > 32) {
 				console.warn(`[mindserver] 拒绝 send-message：from 非法（${JSON.stringify(data?.from ?? null)}）`);
 				return;
@@ -632,6 +711,9 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('listen-to-agents', () => {
+            // ★ F-WEB-203：`listen-to-agents` 会让这个 socket 进入广播订阅集合（服务端按 socket 计数
+            // 起计时器），原来无限流 ⇒ 单连接反复订阅可推高服务端负载。按来源限 10 次/60 秒。
+            if (!takeToken(socket, 'listen-to-agents', 10, 60000)) return;
             addListener(socket);
         });
     });

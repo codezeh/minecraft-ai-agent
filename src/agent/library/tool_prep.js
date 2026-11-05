@@ -313,10 +313,14 @@ async function tryCraft(bot, itemName, count = 1) {
                 const ground = bot.blockAt(new Vec3(spot.x, spot.y - 1, spot.z));
                 if (ground) {
                     await bot.equip(bot.inventory.items().find(i => i.name === 'crafting_table'), 'hand');
-                    // 放置交给 atom_input_mouse.placeAgainst；失败就抛出，由外层 catch 落回"没有工作台"
+                    // 放置交给 atom_input_mouse.placeAgainst
                     const placed = await placeAgainst(bot, ground, new Vec3(0, 1, 0));
-                    if (!placed.ok) throw new Error(placed.message);
                     await new Promise(r => setTimeout(r, 400));
+                    // ★ F-RT-005（2026-11-06）：**先读回，再判失败**。
+                    // 为什么：patches/ 把 place_block 的等待超时从 5000ms 压到 500ms（F-DEP-003 的 hunk 3），
+                    // 于是 placeAgainst 可能返回 ok=false（"没等到 blockUpdate"）**而方块其实已经放上去了**。
+                    // 原来这里先 `throw` ⇒ 直接落进外层 catch ⇒ 误判成"没有工作台"，把刚放好的台子白扔。
+                    // 现在：读回确认方块在 → 照常合成；读回也没有 → 才抛。
                     const t2 = bot.blockAt(spot);
                     if (t2?.name === 'crafting_table') {
                         const r3 = bot.recipesFor(item.id, null, 1, t2);
@@ -324,6 +328,8 @@ async function tryCraft(bot, itemName, count = 1) {
                             await bot.craft(r3[0], count, t2);
                             return true;
                         }
+                    } else if (!placed.ok) {
+                        throw new Error(placed.message);
                     }
                 }
             } catch { /* 放工作台失败就算了 */ }
