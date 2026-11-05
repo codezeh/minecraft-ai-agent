@@ -53,8 +53,13 @@ class MindServerProxy {
                 // 第1条 ①：握手 token 不对时 socket.io 会把中间件的 err 送到这里，
                 // 提示要能让人看懂该干什么（否则表现成"连不上，一直重连"）
                 if (err?.data?.code === 'AUTH_REQUIRED') {
+                    // F-REG-001（2026-11-06）：完整 token 已**不再打到启动日志**（F-SEC-205 起只打指纹），
+                    // 所以这句话不能再说"启动日志里的 token"——用户会去一个空的地方找、卡死在这。
                     console.error('MindServer 拒绝握手：缺少/错误的 token（MINDSERVER_TOKEN）。' +
-                        '这个 agent 进程不是由 mindserver 拉起的，请用 mindserver 启动它，或设 MINDSERVER_TOKEN=<启动日志里的 token>。');
+                        '这个 agent 进程不是由 mindserver 拉起的。当前 token 的两条取法：' +
+                        '① 读 mindcraft/.mindserver-token（mindserver 写在它的工作目录）；' +
+                        '② 若启动 mindserver 时设了 MINDSERVER_TOKEN 环境变量，则用它。' +
+                        '（启动日志里只有 token 指纹，已不含完整值。）');
                 }
                 console.error('Connection failed:', err.message);
                 // 首连失败才算致命；连上之后的偶发 connect_error 交给自动重连，
