@@ -40,9 +40,12 @@ function makeBot({ blockName = 'air', gameMode = 'survival', cheat = false, slot
 
 // ── 1.（第22条 机理）waitUntil 超时也返回**对象**，对象永远是真值 ──────────
 //     这就是 `if (got)` 恒真的原因：判据必须是 got.ok。
+//     ★ 第20条（2026-11-05）：waitUntil 的语义已统一到原子层 —— 只有 undefined/null
+//       表示"还没好"，`false` 算已完成。所以"永远等不到"的谓词必须写 `() => undefined`；
+//       原来这里写 `() => false`，在新语义下会立刻返回 ok:true（那正是被修掉的分叉）。
 {
     const { bot } = makeBot();
-    const r = await waitUntil(bot, () => false, { timeoutMs: 30, intervalMs: 10, label: 'unit-never' });
+    const r = await waitUntil(bot, () => undefined, { timeoutMs: 30, intervalMs: 10, label: 'unit-never' });
     if (r && typeof r === 'object' && r.ok === false && Boolean(r) === true) {
         okCase('waitUntil 超时返回真值对象 {ok:false}', `ok=${r.ok} 真值=${Boolean(r)} reason=${r.reason}`);
     } else {

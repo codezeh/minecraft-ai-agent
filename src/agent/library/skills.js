@@ -31,6 +31,16 @@ import { ok } from './contract.js';
 import { withNav } from './nav_core.js';
 import { scanTree, judgeTree, planFelling } from './query_tree.js';
 import { followEntity as followEntityTask } from './flow_follow.js';
+// ★ 第20条（2026-11-05 R1 收尾）：本文件这三处曾经各有一份判据，于是"同一个问题
+//   在原子层和这里给出不同答案"。现在它们的判据**只留原子层一份**，这里只做薄包装：
+//     waitUntil    → atom_wait.waitUntil       （false 算不算"完成"只有一种解释）
+//     canReach     → query_perceive.reachDistanceTo + rules.runtime.digReach()（5.1）
+//     isSafeHere   → query_safe.hostilesNear   （敌对生物要全数，不是"有没有一只"）
+import { waitUntil as atomWaitUntil } from './atom_wait.js';
+import { eyePosition as atomEyePosition } from './atom_read.js';
+import { reachDistanceTo as atomReachDistanceTo } from './query_perceive.js';
+import { hostilesNear } from './query_safe.js';
+import { digReach } from '../rules/rules.runtime.js';
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
@@ -39,39 +49,48 @@ const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_
 const useDelay = blockPlaceDelay > 0;
 
 /**
- * 等到某个条件成立，带超时。这是从一堆手写轮询里抽出来的原子。
- * 原来 giveToPlayer / tradeWithVillager / collectBlock 等处各写了一遍
- * 「while + 500ms sleep + Date.now 判断超时」，超时后只能 log 一句拼出来的话，
- * 而且一旦漏写时间判断就会无限循环（唯一出口是 bot.interrupt_code）。
+ * 等到某个条件**完成**，带超时。**薄包装** —— 唯一实现是原子层 `atom_wait.waitUntil`。
+ *
+ * ★ 第20条（2026-11-05 R1 收尾）：原来本文件这份写的是 `if (predicate())`，
+ *   也就是"谓词返回 `false` = 还没好，继续等"；而原子层那份的约定反过来 ——
+ *   **只有 `undefined` / `null` 才是"还没好"**，`false` 算已完成。
+ *   同一件事两种解释，模型按名字选到哪份就得到哪份的答案
+ *   （报告 13.3 点名：这是三处分叉里最危险的一处）。现在只剩原子层那一种：
+ *     返回 undefined / null                → 还没好，继续等
+ *     返回其它**任何**值（含 false/0/''）  → 完成，立即返回，`value` 就是它
+ *   因此"等它变成 true"的谓词要写 `() => cond || undefined`；
+ *   直接写 `() => cond` 会在第一次 false 时立刻判定"完成"。
+ *
+ * 返回形状仍是本文件的历史契约 `{ ok, waitedMs, reason, label, value }`
+ * （上游按 `.ok` 判断，见第22条；`reason` 取值 met / timeout / interrupted / error）。
+ * 与原子层的差异只有形状（原子返回 ActionResult），判据本身没有第二份。
  */
 export async function waitUntil(bot, predicate, opts = {}) {
     /**
-     * Wait until predicate() returns true, or time out. Use this instead of writing your own
-     * busy-wait loop. Returns whether it became true and how long it took.
+     * Wait until predicate() **finishes**, or time out. Use this instead of writing your own
+     * busy-wait loop. The judgement is the atom layer's one:
+     * return `undefined` (or nothing) while the condition is NOT met yet, and the value you are
+     * waiting for once it is. Returning `false` counts as DONE, not as "keep waiting".
      * @param {MinecraftBot} bot, reference to the minecraft bot.
-     * @param {Function} predicate, () => boolean, checked repeatedly.
+     * @param {Function} predicate, () => value | undefined | null, checked repeatedly.
      * @param {Object} opts, { timeoutMs=5000, intervalMs=250, label='condition' }
-     * @returns {Promise<Object>} { ok, waitedMs, reason }
+     * @returns {Promise<Object>} { ok, waitedMs, reason, label, value }
      * @example
-     * const r = await skills.waitUntil(bot, () => bot.inventory.emptySlotCount() > 3, { label: 'inventory space' });
+     * const r = await skills.waitUntil(bot, () => bot.inventory.emptySlotCount() > 3 || undefined,
+     *     { label: 'inventory space' });
      * if (!r.ok) log(bot, `等不到空位（${r.waitedMs}ms）`);
      **/
     const timeoutMs = opts.timeoutMs ?? 5000;
     const intervalMs = opts.intervalMs ?? 250;
     const label = opts.label ?? 'condition';
-    const t0 = Date.now();
-    while (Date.now() - t0 < timeoutMs) {
-        if (bot.interrupt_code) {
-            return { ok: false, waitedMs: Date.now() - t0, reason: 'interrupted', label };
-        }
-        if (predicate()) {
-            return { ok: true, waitedMs: Date.now() - t0, reason: 'met', label };
-        }
-        await new Promise(r => setTimeout(r, intervalMs));
+    const r = await atomWaitUntil(predicate, { timeoutMs, intervalMs, bot });
+    if (r.ok) {
+        return { ok: true, waitedMs: r.data?.waitedMs ?? 0, reason: 'met', label, value: r.data?.value };
     }
-    // 最后一次检查（超时边界上刚好满足）
-    if (predicate()) return { ok: true, waitedMs: Date.now() - t0, reason: 'met_late', label };
-    return { ok: false, waitedMs: Date.now() - t0, reason: 'timeout', label };
+    const reason = r.code === 'TIMEOUT' ? 'timeout'
+        : r.code === 'INTERRUPTED' ? 'interrupted'
+            : 'error';
+    return { ok: false, waitedMs: r.data?.waitedMs ?? 0, reason, label, message: r.message };
 }
 
 /**
@@ -504,7 +523,10 @@ export async function waitForSmelt(bot, furnace, opts = {}) {
     if (!winOk.ok) {
         return { ok: false, reason: 'window_closed', waitedMs: 0, detail: winOk.message };
     }
-    const r = await waitUntil(bot, () => !!furnace.outputItem(),
+    // 谓词按**原子语义**写：没出产物就返回 undefined（继续等），出了返回 true（完成）。
+    // 不能写 `() => !!furnace.outputItem()` —— 那在"还没出"时返回 false，原子层会把
+    // false 当已完成，于是"等熔炼"变成"立刻返回 true"（报告 13.3 警告的那一幕）。
+    const r = await waitUntil(bot, () => !!furnace.outputItem() || undefined,
         { timeoutMs, intervalMs: 250, label: 'furnace output' });
     return { ok: r.ok, reason: r.ok ? 'output_ready' : r.reason, waitedMs: r.waitedMs };
 }
@@ -923,7 +945,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
                 if (!canReach(bot, block.position)) {
                     const d = reachDistanceTo(bot, block.position);
                     log(bot, `够不着 ${blockType}：眼睛到方块还有 ${d.toFixed(1)} 格` +
-                        `（交互距离约 4.3）。方块在 y=${block.position.y}，你在 y=${Math.floor(bot.entity.position.y)}` +
+                        `（挖掘可达距离 ${digReach().toFixed(1)} 格，与 act_dig 同一判据）。方块在 y=${block.position.y}，你在 y=${Math.floor(bot.entity.position.y)}` +
                         `（眼高 ${(bot.entity.eyeHeight ?? 1.62).toFixed(2)}），需要先挖过去/垫上去。`);
                     break;
                 }
@@ -1647,7 +1669,9 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
         });
         // 纯等待（given 只由 playerCollect 事件设置，循环里没有副作用）——
         // 这种就该用 waitUntil，比自己写 while+sleep+算超时短且不会漏写退出条件。
-        const got = await waitUntil(bot, () => given,
+        // 谓词按**原子语义**写：没收到就 undefined（继续等），收到才 true（完成）。
+        // `() => given` 在"还没收到"时返回 false，原子层会把 false 当已完成。
+        const got = await waitUntil(bot, () => given || undefined,
             { timeoutMs: 3000, intervalMs: 500, label: `${username} received ${itemType}` });
         // 第22条：waitUntil 返回的是**对象** { ok, waitedMs, reason }，永远真值。
         // 原来写 `if (got)`，于是"物品已经 toss 到地上、玩家根本没捡"也报成功。
@@ -1968,21 +1992,34 @@ function startDoorInterval(bot) {
  * 但眼睛到底能不能碰到方块完全是另一回事 —— 这正是"挖矿总是差一点"的来源。
  */
 export function eyePosition(bot) {
-    const e = bot.entity;
-    return e.position.offset(0, e.eyeHeight ?? 1.62, 0);
+    return atomEyePosition(bot);
 }
 
-/** 眼睛到「方块中心」的距离（方块中心 = 坐标 + 0.5） */
+/** 眼睛到「方块中心」的距离（方块中心 = 坐标 + 0.5）。**判据只有原子层一份**。 */
 export function reachDistanceTo(bot, pos) {
     if (!pos) return Infinity;
-    const eye = eyePosition(bot);
-    const cx = pos.x + 0.5, cy = pos.y + 0.5, cz = pos.z + 0.5;
-    return Math.hypot(eye.x - cx, eye.y - cy, eye.z - cz);
+    return atomReachDistanceTo(bot, pos);
 }
 
-/** 能不能碰到这个方块（默认按 MC 的 4.5 格交互距离，留 0.2 余量） */
-export function canReach(bot, pos, max = 4.3) {
-    return reachDistanceTo(bot, pos) <= max;
+/**
+ * 能不能够着这个方块。**薄包装** —— 距离和阈值都取自原子层，本文件不再自带数字。
+ *
+ * ★ 第20条（2026-11-05 R1 收尾）：这里以前写死一个"4.5 格留 0.2 余量"的阈值
+ *   （比原子层少 0.8 格），而原子侧两条可达判据都是 **5.1**：
+ *     · `query_perceive.canReach`（距离 + 视线，给右键交互用）
+ *     · `act_dig.digBlock`（只看距离，5.1 —— R3-01 实测 6.10 仍能挖，取保守值）
+ *   于是同一次"够不着吗"会得到两个答案：模型以为还差 0.8 格就够不着，动作层按 5.1 照样挖。
+ *
+ * 为什么这里用「只看距离」那条：调用方是挖前预检（见 collectBlock）。
+ *   加视线检查会把"隔着树叶的目标"误判成够不着 —— `act_dig.digBlock` 里有实测记录。
+ *   阈值来自 `rules.runtime.digReach()`（`dig_reach_usable` = 5.1 的唯一出处，挂 R3-01），
+ *   距离来自 `query_perceive.reachDistanceTo` —— 两边都不是这里抄的数字。
+ *
+ * @param {number} max 可覆盖阈值（默认取规则层 5.1）；需要"留余量"的调用方自己传。
+ */
+export function canReach(bot, pos, max = digReach()) {
+    if (!pos) return false;
+    return atomReachDistanceTo(bot, pos) <= max;
 }
 
 export async function goToPosition(bot, x, y, z, min_distance = 2) {
@@ -5399,11 +5436,13 @@ export async function markDanger(bot, x = null, y = null, z = null, reason = 'un
 export async function isSafeHere(bot, x = null, y = null, z = null) {
     /**
      * Check whether a place is safe to work in: looks for remembered danger zones,
-     * lava/water right next to the spot, and hostile mobs within 12 blocks.
+     * lava/water right next to the spot, and **all** hostile mobs within 12 blocks
+     * (not just the nearest one). The hostile judgement is the same function the
+     * atomic layer (`query_safe.isSafe`) uses.
      * Call this before building or storing things somewhere unfamiliar.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
      * @param {number} x, y, z, the position to check. Defaults to the bot's current position.
-     * @returns {Promise<Object>} { safe, reasons:[], dangers:[], hostiles }
+     * @returns {Promise<Object>} { safe, reasons:[], dangers:[], hazards:[], hostiles }
      * @example
      * const s = await skills.isSafeHere(bot);
      * if (!s.safe) log(bot, 'Not safe: ' + s.reasons.join('; '));
@@ -5415,6 +5454,14 @@ export async function isSafeHere(bot, x = null, y = null, z = null) {
         z: z == null ? Math.floor(p.z) : Math.floor(z),
     };
     const reasons = [];
+
+    // ★ 第20条（2026-11-05 R1 收尾）：本函数**故意不整体转发**给 `query_safe.isSafe`，
+    //   原因是它多一份原子层没有的信息：地形危险走 `collectHazardsCached`（TTL 缓存 +
+    //   store 里的 hazards 记忆合并，见下方 S37 注释），而原子层为了不丢方块名、不把圆心
+    //   定在 bot 身上，自己用 findBlocks 枚举。整体转发会同时（a）让这份记忆/缓存重新变成
+    //   死代码（S37 修过的正是这个），（b）丢掉"上次扫到、这次没扫到"的历史危险。
+    //   所以"同源"落在**判据**上：敌对生物计数 → query_safe.hostilesNear（两边同一个函数）。
+    //   危险/液体两条本来就与原子层同规则（先查记忆、再采样、再枚举），不是分叉。
 
     // 1) 危险：手工标记 + 地形枚举，两份都查（owner 是 world_model.dangersAt）
     //    以前这里只读 dangers（人标的），规划器只读 hazards（枚举），
@@ -5457,14 +5504,16 @@ export async function isSafeHere(bot, x = null, y = null, z = null) {
     } catch (err) { /* 枚举失败就只靠上面的采样 */ }
 
     // 3) 附近敌对生物
+    // ★ 第20条（2026-11-05 R1 收尾）：这里过去是 `world.getNearestEntityWhere(...)`
+    //   —— 拿到最近的那一只就 `hostiles = 1`。于是"被 10 只僵尸围住"和"旁边站 1 只僵尸"
+    //   报告得一模一样，而同一个问题问 `query_safe.isSafe` 得到的是**全数**。
+    //   现在两边都调 `query_safe.hostilesNear`：认哪些名字、半径多大、怎么数都只有一处。
     let hostiles = 0;
-    try {
-        const e = world.getNearestEntityWhere(bot, ent => mc.isHostile(ent), 12);
-        if (e) {
-            hostiles = 1;
-            reasons.push(`${e.name} within 12 blocks`);
-        }
-    } catch (err) { /* 实体查询失败不影响其他判断 */ }
+    const hostileHit = hostilesNear(bot, pos, { radius: 12 });
+    hostiles = hostileHit.count;
+    if (hostiles > 0) {
+        reasons.push(`${hostiles} hostile mob(s) within 12 blocks (${hostileHit.names.join(', ')})`);
+    }
 
     const safe = reasons.length === 0;
     log(bot, safe

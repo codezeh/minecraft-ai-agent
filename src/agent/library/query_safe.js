@@ -44,6 +44,41 @@ const HOSTILE = new Set([
 ]);
 
 /**
+ * 某个位置附近的敌对生物：**数全部**，不是"有没有一只"。
+ *
+ * 为什么要单独导出来（第20条，2026-11-05 R1 收尾）：
+ *   `skills.isSafeHere` 过去自己实现了一遍，用的是
+ *   `world.getNearestEntityWhere(...)` —— 拿到最近的一只就 `hostiles = 1`，
+ *   于是"围上来 10 只怪"和"旁边站 1 只怪"给出同一个答案，
+ *   而同一个问题问 `query_safe.isSafe` 却是全数。两个答案，模型只知道其中一个。
+ *   现在两边都走这里：**数几只、半径多大、认哪些名字**都只有这一处。
+ *
+ * @param {object} bot
+ * @param {{x:number,y:number,z:number}} pos 圆心（方块坐标即可）
+ * @param {object} opts
+ *   radius       半径，默认 12（与 isSafe 的 hostileRadius 默认值同一个数）
+ *   nameLimit    最多带回几个名字（只用于日志/原因，不影响计数），默认 3
+ * @returns {{count:number, names:string[], radius:number}}
+ */
+export function hostilesNear(bot, pos, opts = {}) {
+    const { radius = 12, nameLimit = 3 } = opts;
+    let count = 0;
+    const names = [];
+    try {
+        for (const e of Object.values(bot.entities || {})) {
+            if (!e || e.isValid === false || !e.position) continue;
+            if (!HOSTILE.has(e.name)) continue;
+            const d = Math.hypot(e.position.x - pos.x, e.position.y - pos.y, e.position.z - pos.z);
+            if (d <= radius) {
+                count++;
+                if (names.length < nameLimit) names.push(e.name);
+            }
+        }
+    } catch { /* 实体读不到就当 0 只 —— 与 isSafe 原有的降级一致，不当成"安全"的证明 */ }
+    return { count, names, radius };
+}
+
+/**
  * 检查某处是否有已知风险。
  *
  * @param {object} bot
@@ -135,23 +170,12 @@ export function isSafe(bot, target = null, opts = {}) {
         }
     } catch { /* 枚举失败就只靠上面的采样；这是降级，不是安全证明 */ }
 
-    // 3) 敌对生物
-    let hostiles = 0;
-    const hostileNames = [];
-    try {
-        for (const e of Object.values(bot.entities || {})) {
-            if (!e || e.isValid === false || !e.position) continue;
-            if (!HOSTILE.has(e.name)) continue;
-            const d = Math.hypot(e.position.x - pos.x, e.position.y - pos.y, e.position.z - pos.z);
-            if (d <= hostileRadius) {
-                hostiles++;
-                if (hostileNames.length < 3) hostileNames.push(e.name);
-            }
-        }
-        if (hostiles > 0) {
-            reasons.push(`附近 ${hostileRadius} 格内有 ${hostiles} 个敌对生物（${hostileNames.join('、')}）`);
-        }
-    } catch { /* ignore */ }
+    // 3) 敌对生物（计数与判定都走 hostilesNear —— skills.isSafeHere 用的是同一个函数）
+    const hostileHit = hostilesNear(bot, pos, { radius: hostileRadius });
+    const hostiles = hostileHit.count;
+    if (hostiles > 0) {
+        reasons.push(`附近 ${hostileRadius} 格内有 ${hostiles} 个敌对生物（${hostileHit.names.join('、')}）`);
+    }
 
     return ok({
         safe: reasons.length === 0,
