@@ -244,3 +244,114 @@ $ node tools/lint_ratchet.mjs                                      → ✓ 274 �
    （没有测试构造 Coder 写盘），且它前面带 `/` 是另一个问题；**记账未动**，避免借"并发加固"扩范围。
 4. **实弹多 bot 现场没有**：本轮的证明全部是"真进程 + 真文件 + 真并发"的离线实验（三路/两路并行），
    不是真机多 bot —— 但对"互删文件"这个机制，离线并发已经等价（就是同一台机器上的两个进程）。
+
+---
+
+# T19 收尾：豁免表逐条审计（过期豁免 = 假证据）
+
+> 背景：T17 的 `EXEMPTIONS` 里那条 `tools/preflight.mjs` 写着"它收尾会 `rmSync(bots/preflight_tmp)`"、
+> 并留着"交给 gate 决定是否加 pid 后缀"。而 **T18（`e540515`）已经把 preflight 改成
+> `mkdtempSync` + `MC_BOTS_ROOT` 独占** —— 那句话指向一段**已不存在的代码**。
+>
+> 这正是本轮反复踩的同一个母题：**引用了作废对象的检查，看起来和有效检查一模一样**
+> （S33 的冒烟测试指向已删的 `tile_map.js`、第 27 条那份"自称已过期"的交接文档、现在这条豁免）。
+> 一条过期豁免会让下一个人**以为那里还有风险**，或者**以为已经有人处理过**。
+
+## T19.1 不是靠眼睛，靠工具（新增 `--audit-exemptions`）
+
+给扫描器加了三样东西，让"豁免是否过期"变成**可机械复现**的判断：
+
+1. **`classify(rel, src)` 抽出来**，`main()` 与审查用**同一套**判据 ——
+   否则"审查豁免"用的就是另一套规则，那审查本身不可信。
+2. **必要性判定**：把这条豁免**摘掉**再判一次，看它会落在哪：
+   - 仍落"需处置" → 豁免**仍必要**
+   - 落"已隔离/非风险" → 豁免**冗余**（应删）
+   - **完全没有命中** → **僵尸豁免**（理由在描述一个不存在的东西）
+3. **理由里"代码引用"的失效检测**：把 `why` 里反引号包起来的片段抽出来，
+   去该文件的**代码**（`stripComments` 之后）里找。
+   ★ 关键细节：被删的代码**经常还留在注释里** —— 所以必须剥注释再比，否则这个检查会假绿。
+   ★ 反过来也不能太死：带占位符的描述（`<日期>`、`…`）是**人话**不是逐字引用，
+   一律跳过；比对时还统一了引号（`"tmp"` 与 `'tmp'` 不该算失效）。
+   （第一版两条都踩了：既误伤我自己的文案，又把 `rmSync(join(...))` 这种省略了后面参数的引用判失效。）
+
+## T19.2 逐条核对结果（8 条 → 删 2 条，留 6 条）
+
+| # | 条目 | 摘掉豁免会落在 | 判定 | 处置 |
+|---|---|---|---|---|
+| 1 | `bench_move_actions.mjs` | 需处置 | 仍必要 | **保留**；理由改成逐字引用（`join('tmp', 'bench-actions-map')`、`tmp/bench/*.jsonl`） |
+| 2 | `bench_deepwater.mjs` | 需处置 | 仍必要 | **保留**；原文写 `tmp/bench-*`，实际是 `tmp/bench/deepwater-<日期>.jsonl` → 已订正 |
+| 3 | `bench_move_baseline.mjs` | 需处置 | 仍必要 | **保留**；原文只有"同上：人工触发的基准脚本" —— **太含糊**，已写清产物：`tmp/bench/<日期>-move.jsonl` + `join('tmp','bench-move-map','terrain')` |
+| 4 | **`bench_s2_main.mjs`** | 需处置 | 仍必要 | **保留**；★ 原文说"仓库内 `tmp/`"，**实际是项目根**（`join(toolsDir,'..','..','tmp','bench')`，在 mindcraft 仓**之外**）→ 已订正 |
+| 5 | **`restart_bot.mjs`** | 已隔离（`process.pid`） | 工具会判"冗余"，**但那是假绿** | **保留 + `keepReason`**（见下） |
+| 6 | **`preflight.mjs`** | 已隔离（`mkdtempSync+os.tmpdir+env-root`） | **冗余** | **删除**（T18 起它真的隔离了）；且理由引用的 `rmSync(join(ROOT, "../../bots/preflight_tmp"))` 已被机械检测标出"代码里已不存在" |
+| 7 | **`t51_firstnight_realagent.mjs`** | **没有命中** | **僵尸** | **删除**（见下） |
+| 8 | `t51_triple_round.mjs` | 需处置 | 仍必要 | **保留**；理由补上产物 `tmp/t51-craft-chain.jsonl` / `tmp/t51-craft-fail-full.jsonl` / `tmp/t51-triple.json` |
+
+### 第 5 条的坑：`process.pid` 不等于"已隔离"
+`restart_bot.mjs` 里有 `process.pid`，工具因此判它"已隔离"。**但那个 `process.pid`
+出现在一段 PowerShell 进程过滤脚本里**（`Where-Object { $_ -ne $PID -and $_ -ne ${process.pid} }`，
+用于排除自己），跟目录/文件隔离毫无关系；它真实的固定路径只有 `tmp/bot_run.log`（单个日志文件）。
+→ 所以**保留豁免**，并新增 `keepReason` 字段把这件事写在条目里，
+`--audit-exemptions` 会显示成「保留（工具判为安全，但那个标记不是目录隔离）」而不是"冗余"。
+**这是"别用无关标记换来的假绿"的落地**：我没有删掉它去让报告好看，也没有假装工具是对的。
+
+### 第 7 条的坑：它当初是被**假阳性**扫进来的
+`t51_firstnight_realagent.mjs` 命中的是 `agentProc.stdout.on('data', …)` 里的 **`'data'`** ——
+我加的 `dir-as-arg` 判据（`[(,]\s*'<dir>'\s*,`）把**事件名**当成了目录。
+→ T19 顺手修掉这个假阳性（排除 `.on/.once/.off/.emit/.addListener/.removeListener` 后面的那种形态），
+于是该文件**不再有任何固定共享目录**，豁免成了僵尸 → **删除**。
+它确实会写一个固定的 `tmp-t59-agent.log`，但那是**单个文件**、不是目录（见 T19.5 边界）。
+
+★ 修假阳性本身的附带效果（也说明假阳性的代价）：`已隔离 25 → 18`（**7 个文件原来只是被
+`on('data')` 这类噪声带进了报告**），同时 `t51_firstnight` 由"豁免"变成"僵尸"（`豁免 8 → 7`）。
+再删掉 preflight 与 t51_firstnight 两条之后，最终是 **`已隔离 19 · 豁免 6`**。
+
+## T19.3 现状（可复现）
+
+```
+$ node tools/scan_tmp_isolation.mjs --audit-exemptions
+· tools/bench_move_actions.mjs      判定：仍必要（仍会被判为需处置）
+· tools/bench_deepwater.mjs         判定：仍必要
+· tools/bench_move_baseline.mjs     判定：仍必要
+· tools/bench_s2_main.mjs           判定：仍必要
+· tools/restart_bot.mjs             判定：保留（工具判为安全，但那个标记不是目录隔离 —— 见 keepReason）
+· tools/t51_triple_round.mjs        判定：仍必要
+逐条核对 NON_RISK_USES
+· tools/test_nav_opt.mjs        ← bots/deepseek/map       [read-only]
+· tools/test_path3d.mjs         ← bots/deepseek/map       [read-only]
+· tools/prompter_path_unit.mjs  ← bots/${name}            [string-message]
+· tools/prompter_path_unit.mjs  ← ('logs'                 [arg-only]
+✓ 所有豁免/非风险登记都与当前代码相符            （exit 0）
+```
+
+`NON_RISK_USES` 的 4 条也一并核过（同一母题：登记也会过期）——
+全部仍然**能命中**对应片段，且 `test_nav_opt` / `test_path3d` 的"真机地形库只读"至今成立。
+
+**preflight 现在落在「已隔离」**（不再是豁免）：
+```
+$ node tools/scan_tmp_isolation.mjs | grep preflight
+  · tools/preflight.mjs  (mkdtempSync+os.tmpdir+env-root+env-root(其他))
+
+合计：需处置 0 · 已隔离 19 · 只读 3 · 豁免 6
+✓ --check 通过
+```
+
+## T19.4 验收
+
+| 验收项 | 结果 |
+|---|---|
+| `--check` 需处置 0，且 preflight 在「已隔离」 | ✅ 需处置 0；preflight → `已隔离(mkdtempSync+os.tmpdir+env-root)` |
+| `--selftest` 仍全过（注释感知 + 只报真样本不能被破坏） | ✅ 通过，且**加了两条新断言**：① 事件名 `on('data',…)` 不许被当目录；② 理由里的代码引用检查（占位符跳过 + **正对照** `resolve(cwd,'bots',…)` 必须被认出 —— 否则"排除事件名"可能把功能整体关掉而自检照样绿） |
+| `unit_all` 93/93 + 4 跳过不回归 | ✅ EXIT=0，93/93 通过 4 跳过 |
+| `lint:tools` ≤ 278（当前 273，别抬基线） | ✅ **273 ≤ 278**（未跑 `--update`） |
+| 文档列出每条豁免的现状 | ✅ 本节 T19.2 / T19.3 |
+
+## T19.5 边界（本轮明确不覆盖的）
+
+1. **固定"单个文件"不在判据内**：本扫描器的判据是**共享目录**。
+   `restart_bot.mjs` 的 `tmp/bot_run.log`、`t51_firstnight_realagent.mjs` 的 `tmp-t59-agent.log`
+   都是**cwd 下的单个固定文件**，并发跑会互相覆盖 —— 但它们都是**人工脚本、不在 `unit_all`**，
+   而且把"单文件"也纳入判据会让大量正常测试（写自己的 report/result 文件）被误报。
+   → 判据保持"目录"，这两处写在文档里而不是塞进扫描器（**不静默**）。
+2. **`--purge` 仍不区分"正在被并发跑的测试所用"的目录**（T17 已有的提示保留在输出里）。
+3. **没有改 `preflight.mjs`、没有改 `src/`**（任务约束）。
