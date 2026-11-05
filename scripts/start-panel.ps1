@@ -209,7 +209,9 @@ $tok = $null
 for ($i = 0; $i -lt 20 -and -not $tok; $i++) {
     if (Test-Path $tokenFile) {
         $raw = (Get-Content $tokenFile -Raw)
-        if ($raw) { $tok = $raw.Trim() }
+        # writeFileSync 不是原子的，可能读到半截 —— 用定长做硬判据
+        # （crypto.randomUUID() 恒为 36 字符，零成本的决定性判断）
+        if ($raw) { $t = $raw.Trim(); if ($t.Length -eq 36) { $tok = $t } }
     }
     if (-not $tok) { Start-Sleep -Milliseconds 500 }
 }
@@ -219,6 +221,12 @@ if (-not $tok) {
     Write-Host "         期望位置：$tokenFile" -ForegroundColor Yellow
     Write-Host '         常见原因：mindserver 未能写出该文件（权限或工作目录不对），或它还没起来。' -ForegroundColor Yellow
     Write-Host '         排查：看日志里有没有「写 .mindserver-token 失败」（F-RT-002 起该开关在重定向下会被忽略）。' -ForegroundColor Yellow
+    Write-Host ''
+    # ★ 复核席指出的必改项：token 块在脚本最后，此时 java 与 node 都已 Start-Process 起来。
+    #   Start-Process 起的是独立进程，父脚本 exit 带不走它们 ⇒ 用户看到红字会**再双击一次**，
+    #   第二次 java 撞 25565、第二次 node 撞 8080 ⇒ 双开。必须明确告知"服务已在跑、别重复启动"。
+    Write-Host '  [重要] Minecraft 服务端与 Mindserver 已在后台运行（本脚本已启动它们）。' -ForegroundColor Yellow
+    Write-Host '         不要重复双击本脚本（会撞端口）。要停止请双击 停止面板.bat（RCON 优雅关服，不会损坏存档）。' -ForegroundColor Yellow
     Read-Host '按回车退出'
     exit 1
 }
