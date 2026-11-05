@@ -67,6 +67,9 @@ export function logoutAgent(agentName) {
 }
 
 // Initialize the server
+// F-WEB-203：按远端地址共享的令牌桶（跨连接，重连不清零）
+const RATE_BUCKETS = new Map();
+
 export function createMindServer(host_public = false, port = 8080) {
     const app = express();
     server = http.createServer(app);
@@ -143,6 +146,22 @@ export function createMindServer(host_public = false, port = 8080) {
         const viaQuery = typeof req.query?.token === 'string' && req.query.token === handshakeToken;
         if (viaCookie || viaQuery) return next();
         console.warn(`[mindserver] 拒绝无 token 的 HTTP 请求 ${req.method} ${req.path}`);
+        // F-WEB-201 P0（captain 补修）：浏览器访问时返回**可读的 HTML**，而不是一行纯文本。
+        // 一行 "unauthorized" 看起来像服务器坏了；给一段人能照做的说明，差一个数量级。
+        const wantsHtml = String(req.headers.accept || '').includes('text/html');
+        if (wantsHtml) {
+            res.status(401).type('html; charset=utf-8').send(
+                '<!doctype html><meta charset="utf-8"><title>需要握手 token</title>' +
+                '<body style="font:14px/1.7 system-ui;max-width:640px;margin:60px auto;padding:0 20px">' +
+                '<h2>面板需要握手 token</h2>' +
+                '<p>这不是故障。MindServer 每次启动生成一个新 token，必须带上它才能打开面板。</p>' +
+                '<ol><li>打开文件 <code>mindcraft\.mindserver-token</code>，复制里面的值</li>' +
+                '<li>访问 <code>http://localhost:' + port + '/?token=&lt;那个值&gt;</code></li>' +
+                '<li>之后浏览器会把它换成 cookie，整站不再需要带 token</li></ol>' +
+                '<p style="color:#666">也可以直接双击 <code>启动面板.bat</code>，它会自动读该文件。</p>' +
+                '</body>');
+            return;
+        }
         res.status(401).type('text/plain; charset=utf-8')
             .send('unauthorized: 需要握手 token。用 `mindcraft/.mindserver-token` 里的值打开 ' +
                   '`http://localhost:<port>/?token=<token>`（浏览器会把它换成 cookie）。');
@@ -553,12 +572,19 @@ export function createMindServer(host_public = false, port = 8080) {
 				return;
 			}
 			{
+				// F-WEB-203 补修（复核席指出）：桶原本挂在 socket.data 上 ⇒ **断开重连即重置**，
+				// 可以无限绕过。改为按远端地址计数（跨连接共享），并做容量上限防 Map 无限增长。
 				const now = Date.now();
-				const rl = socket.data.__rl || (socket.data.__rl = { tokens: 30, ts: now });
+				const rlKey = String(socket.handshake?.address || socket.conn?.remoteAddress || 'unknown');
+				if (RATE_BUCKETS.size > 512) {
+					for (const [k, v] of RATE_BUCKETS) { if (now - v.ts > 60000) RATE_BUCKETS.delete(k); }
+				}
+				let rl = RATE_BUCKETS.get(rlKey);
+				if (!rl) { rl = { tokens: 30, ts: now }; RATE_BUCKETS.set(rlKey, rl); }
 				rl.tokens = Math.min(30, rl.tokens + ((now - rl.ts) / 10000) * 30);
 				rl.ts = now;
 				if (rl.tokens < 1) {
-					console.warn('[mindserver] 拒绝 send-message：触发限流（30 条/10 秒/连接）');
+					console.warn(`[mindserver] 拒绝 send-message：触发限流（30 条/10 秒/来源 ${rlKey}）`);
 					return;
 				}
 				rl.tokens -= 1;
