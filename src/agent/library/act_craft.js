@@ -53,7 +53,20 @@ export async function craftOnce(bot, itemName, n = 1, knownTable = null) {
     };
     // ★ t123：把 `flow_craft` 的前置检查结果也带上（它现在不 return 了，只记事件）。
     //   这样一次失败里既有"上游怎么看料"也有"act_craft 怎么算 limit / 表 / 窗口"。
-    const precheck = (() => { try { return bot?.__craftPrecheckMiss ?? null; } catch { return null; } })();
+    // ★ t142：**读完即清**。这个标记由 `flow_craft` 写、`act_craft` 读，
+    //   原来只写不清 → **上一张单的 precheck 会永久挂进后面所有 craft 的 diag**
+    //   （和 `matCounts`/`recipesForCount` 同一族：诊断字段把旧信息冒充成当前信息）。
+    //   同时加 60 秒时效：即使清理漏了，也不会把很久以前的一次 miss 当成这次的。
+    const precheck = (() => {
+        try {
+            const pc = bot?.__craftPrecheckMiss ?? null;
+            if (!pc) return null;
+            try { delete bot.__craftPrecheckMiss; } catch { /* ignore */ }
+            const at = Number(pc.at) || 0;
+            if (at && Date.now() - at > 60_000) return null;      // 太旧 → 不算这次的
+            return pc;
+        } catch { return null; }
+    })();
     const diag = (extra = {}) => ({ item: itemName, want, inv: snapInv(), precheck, ...extra });
 
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');

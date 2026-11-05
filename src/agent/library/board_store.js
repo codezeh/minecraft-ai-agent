@@ -976,6 +976,51 @@ export function dependsSatisfied(db, job) {
  *
  * @returns {Array} 被重开的单（供调用方广播）
  */
+/**
+ * ★★★ 2026-11-05（t142）：**兜底重开 —— 扫"blocked 且依赖已满足"的单。**
+ *
+ *   `reopenBlockedWithSatisfiedDeps` 只在 `board:finish` 那个事件里被调（`board_server.js:262`）。
+ *   这是**纯事件驱动**的：只要那次 finish 的时间窗没对上（比如依赖是在**别的路径**下变成 done 的），
+ *   这张 blocked 单就**永远不会被重开，而且不报错** —— 与 t140（父单永不收敛）**完全同构**。
+ *
+ *   → 挂进 `scanTimer` 定期扫（和 `convergeOrphanParents` 同一个兜底思路）。
+ *
+ *   ★ SQL 必须带**状态过滤**，否则会被历史垃圾占满 LIMIT（t141 在
+ *     `convergeOrphanParents` 上踩过：`jobs` 表从不删除，distinct parentId 超 LIMIT 后
+ *     第 LIMIT+1 个之后的单**永不被扫**，且不报错）。
+ *   ★ `ORDER BY rowid DESC`：优先看新单（老的 blocked 单多半已 `reopenedOnce`，看了也没用）。
+ *
+ * @param {object} [opts] { now, limit }
+ * @returns {Array<object>} 被重开的单（供调用方广播）
+ */
+export function reopenOrphanBlocked(db, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const limit = Math.max(1, Math.floor(Number(opts.limit) || 200));
+    const out = [];
+    let rows = [];
+    try {
+        // ★ 状态过滤放在 SQL 里（不是拿回来再 continue）—— 这是 t141 的教训：
+        //   `WHERE state='blocked'` 让结果集天然小，LIMIT 不会被历史垃圾占满。
+        rows = db.prepare(
+            "SELECT id FROM jobs WHERE state = 'blocked' ORDER BY rowid DESC LIMIT ?",
+        ).all(limit);
+    } catch { return out; }
+
+    for (const { id } of rows) {
+        const job = getJob(db, id);
+        if (!job) continue;
+        const deps = Array.isArray(job.dependsOn) ? job.dependsOn : [];
+        if (!deps.length) continue;                       // 没依赖 → NO_ITEM 是真缺料，不重开
+        if (job.checkpoint?.reopenedOnce) continue;       // 只给一次机会（防死循环）
+        if (!dependsSatisfied(db, job)) continue;         // 依赖还没满足 → 继续等
+        const r = setState(db, id, JOB_STATE.READY, { now });
+        if (!r.ok) continue;
+        updateJob(db, id, { checkpoint: { ...(job.checkpoint ?? {}), reopenedOnce: true } });
+        out.push(getJob(db, id));
+    }
+    return out;
+}
+
 export function reopenBlockedWithSatisfiedDeps(db, parentId = null, opts = {}) {
     const now = opts.now ?? Date.now();
     const rows = parentId == null
@@ -1014,7 +1059,12 @@ export function reopenBlockedWithSatisfiedDeps(db, parentId = null, opts = {}) {
  *     「state=running **且** 有子单 **且** 子单全部终态」的父单，重新 rollup 一次。
  *     这是幂等的（rollupParent 自己会判断 allDone），重复调用无害。
  *
- *   ★ 只扫 `running`：`ready`/`paused` 的父单可能是在等新子单，不该被收敛。
+ *   ★ 扫 `running` **和** `ready`（原注释写成"只扫 running"，与实现不符 —— control 抓出来的）：
+ *     - `running`：正常在跑，子单全终态 → 该收敛
+ *     - `ready`  ：通常是"退避后等着重试"的形态。**若它已有子单且子单全部终态**，
+ *                  说明"退避后没有任何东西再推它" → **同样该收敛**（否则永久挂着）
+ *     - `paused` / 终态：不碰（`paused` 是人为暂停，替它做决定是错的）
+ *   → **保留 READY 是有意的，不是笔误。**
  *
  * @returns {Array<object>} 被收敛的父单（只含真正 changed 的）
  */

@@ -3235,6 +3235,56 @@ if (s.type === 'collect' && isCraftable(name) && (s.source === name || s.source 
 ---
 
 
+### 「事件驱动但无兜底」系统审计（t97，2026-11-05）
+
+**判据**：一段逻辑**只在某个事件/某条路径上被调用**，而它要达成的是**最终一致**的状态 ——
+事件漏发/漏接/时序错，状态就**永久不一致且不报错**。
+
+起因：真机第 59 跑 `first_night` 父单 `running`、5 张子单全 `done`，父单永不收敛 ——
+`rollupParent` 只在 `board:finish` 里被调。已修（`bff4e08`）把 `convergeOrphanParents` 接进 `scanTimer`。
+
+| 位置 | 要达成的一致性 | 触发点（唯一？）| 有兜底吗 | 漏掉的后果 | 风险 |
+|---|---|---|---|---|---|
+| `rollupParent`（`board_store.js:1046`）| 父单推到终态 | ①`board_server.js:266` finish 事件 ②sweep `:401` | **有**（`convergeOrphanParents` @5s）| 父单永久 running | 🟢 已修 |
+| `reopenBlockedWithSatisfiedDeps`（`board_store.js:979`）| blocked 单在依赖满足后重开一次 | **只有 `board_server.js:262`（finish 事件）** | **无**（scanTimer 只扫孤儿父单，不扫 blocked 单）| blocked 单永不重开 | 🔴 **同类第 2 例** |
+| `convergeIfSatisfied`（`board_store.js:401`）| 进度已达标的单推终态 | ①claim-sweep `:468` ②heartbeat `:516` | **有**（两条路径 + 心跳）| — | 🟢 |
+| `expireLeases`（`board_store.js:668`）| 掉线 bot 的单回 ready | `scanTimer` `board_server.js:394` | **有**（5s，无 LIMIT）| — | 🟢 |
+| `expireClaims`（`board_store.js:860`）| 掉线 bot 的预约自动释放 | ①`scanTimer:396` ②`reserve` 内部 `:800` | **有**（双保险）| — | 🟢 |
+| `renewClaims`（`board_store.js:871`）| 预约续期 | 只在 `board:heartbeat`（`board_server.js:231`）| **无**（但停发心跳 → TTL 30s → `expireClaims` 回收）| 最坏晚 30s 释放 | 🟢（TTL 就是兜底）|
+| `bot.__digInFlight`（`atom_input_mouse.js:226`）| 「一次 dig 未收尾」的互斥标记 | 进入时**自检并强制清零**（`:230-234`，最多等 10 拍）| **有（自愈）** | — | 🟢 t94 已修 |
+| `bot.__placedTablePos`（`flow_craft.js:246` 写）| 记住"自己放的工作台位置" | 读到位置已非工作台 → **立刻清**（`:100-103`）| **有（自愈）** | — | 🟢 |
+| `bot.__silencingForDig`（`atom_input_mouse.js:172`）| 静默松键期间抑制回写 | `try/finally` 必定复位（`:173`）| **有（finally）** | — | 🟢 |
+| 导航锁 `_navOwner/_navDepth`（`nav_core.js:128`）| 单一驱动者 | `withNav` 的 `finally → lock.release()`（`:79`）| **有（finally）**；进程内变量，SIGKILL 后随进程消失 | — | 🟢 |
+| `bot.__navJobId`（`composite_registry.js:419` 写）| 导航闸的 owner 身份 | **写后不清**；`nav_core.js:42` 读 `bot.__navJobId ?? 'adhoc'` | **无**（陈旧值会残留）| **无 job 上下文的调用会沿用上一张单的 owner** → 闸误判"同一驱动者"放行 → 又可能两条流并驱 | 🟡 |
+| `bot.__craftPrecheckMiss`（`flow_craft.js:296` 写）| 把上游"怎么看料"带给 `act_craft` 诊断 | **写后不清**（`act_craft.js:56` 只读）| **无** | 上一张单的 precheck 会**永久挂在后面所有 craft 的 diag 里** → 诊断误导（今晚 `matCounts`/`recipesForCount` 同一族）| 🟡 |
+| `checkpoint.reopenedOnce`（`board_store.js:994` 写 / `:990` 判）| "只给一次重开机会" | 写完**永不清**（设计如此）| **无**（一次性）| 依赖第二次满足时不再重开 → 单永久 blocked | 🟡（与上面 🔴 叠加更严重）|
+| `bot.__lastAttackAt` / `__digSeq` / `__digCaller` | 冷却时间戳 / 诊断序号 | 只读或自增 | 无需兜底 | 陈旧只影响一次冷却/诊断 | 🟢 |
+
+**🔴 只有 1 条**：`reopenBlockedWithSatisfiedDeps` 只在 `board:finish` 的处理器里被调，
+`scanTimer` 只调 `convergeOrphanParents`（不扫 blocked 单）。
+**建议（不改）**：把"扫 blocked 且有 satisfied 依赖的单"也挂进同一个 `scanTimer` sweep，参数同 `LIMIT` 口径。
+
+**🟡 3 条**：`__navJobId`（陈旧 owner 会削弱 t66 的闸）、`__craftPrecheckMiss`（跨单污染诊断）、
+`reopenedOnce`（一次性，与 🔴 叠加）。**三条的共同点：都是"写进 bot/checkpoint 的标记，没人负责复核或清理"。**
+
+#### `scanTimer` 参数评估
+
+- **`SCAN_MS = 5000`**（`board_server.js:37`）→ 父单最坏**晚 5 秒**收敛；叠加一次 `expireLeases` 先跑，实际 ≤5s 量级。
+- **`LIMIT 200`（`board_store.js:1026`）：有真问题 —— 会漏。**
+  ```sql
+  SELECT DISTINCT parentId FROM jobs WHERE parentId IS NOT NULL LIMIT ?
+  ```
+  **无 `ORDER BY`、无 offset、无"只取非终态父单"的过滤** → 每次拿的是**同一批**前 200 个 parentId。
+  而 **`jobs` 表从不删除**（全仓无 `DELETE FROM jobs`），只会增长 → 一旦 distinct parentId > 200，
+  **第 201 个之后的父单永远不会被扫到** → 又变回"永久 running 且无人重试"。
+  **判断**：这是**时间炸弹**，不是当前 bug（现库 22 单 / 7 个 parentId，还远）。
+  **建议（不改）**：`WHERE ... AND state NOT IN ('done','failed','blocked','cancelled')` 或用 `ORDER BY rowid DESC` 取最近的。
+- **串行**：`expireLeases` → `expireClaims` → `convergeOrphanParents` 在**同一个 `setInterval` 回调里同步串行**（`:392-405`）。
+  `expireLeases` **无 LIMIT**（`:668-672`），单多时会拖长一拍；但都是本地 SQLite 小查询，量级 ms 级，**当前不是热点**。
+  **风险点**：若将来单量上万，`expireLeases` 全表扫会成为长任务，**把 `convergeOrphanParents` 推后**（同一拍内串行）→ 父单收敛延迟叠加。
+
+---
+
 **文档版本**: 1.0  
 **生成时间**: 2026-10-31  
 **基于报告**: 4个子agent只读调研（token总计~2.1M）

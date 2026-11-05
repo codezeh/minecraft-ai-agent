@@ -53,6 +53,7 @@ const UNITS = [
     'strat_obtain_unit',         // M10：strat_obtain 来源顺序 + ★防无限展开 + 不碰身体
     'strat_cycles_unit',         // t73：cycles 独立出口（成环 vs 真缺料）
     'strat_material_claims_unit', // t131：跨单材料预约（craft 子单带 item: claim）
+    'reopen_orphan_blocked_unit', // t142：blocked 单兜底重开（含 LIMIT 饥饿证伪）
     'strat_tool_tier_unit',      // M10：strat_tool_tier 不跳档 / 已够直接 ok / 三件工具
     'strat_first_night_unit',    // M10：first_night 跳过已满足 / dependsOn / 嵌套闸 / 不碰身体
     'job_budget_unit',           // A2：ctx.jobBudget 跨调用共享（无 ctx 行为不变 / 余量生效 / hitCap 上报）

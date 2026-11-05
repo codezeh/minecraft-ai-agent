@@ -26,6 +26,7 @@ import {
     reopenBlockedWithSatisfiedDeps,
     // ★ t140：兜底收敛（子单全终态但父单还挂着）
     convergeOrphanParents,
+    reopenOrphanBlocked,
     // B4：共享数据（06 §9.3）
     putShared, getShared, listShared, delShared, findItemInSharedChests,
 } from './board_store.js';
@@ -400,6 +401,14 @@ export function attachBoardServer(deps = {}) {
             try {
                 for (const p of convergeOrphanParents(db, { now: now() })) {
                     changed(p, 'rollup:sweep-orphan-parent');
+                }
+            } catch { /* 兜底失败不该让进程崩 */ }
+            // ★★★ t142：**blocked 单兜底重开** —— 同 `convergeOrphanParents` 的理由：
+            //   `reopenBlockedWithSatisfiedDeps` 只挂在 `board:finish` 上（纯事件驱动），
+            //   事件漏一次，"依赖已满足的 blocked 单"就永远不重开且不报错。
+            try {
+                for (const j of reopenOrphanBlocked(db, { now: now() })) {
+                    changed(j, 'reopen:sweep-orphan-blocked');
                 }
             } catch { /* 兜底失败不该让进程崩 */ }
         } catch { /* 扫描失败不该让进程崩 */ }
