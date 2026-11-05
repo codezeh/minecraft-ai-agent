@@ -13,7 +13,7 @@ import {
 } from './auth_gate.js';
 // 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
 import { validateNameFormat } from '../agent/connection_handler.js';
-import { readFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync } from 'fs';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
 // 板放 agent 里别的 bot 看不见；放这里就只有一个写者，省掉多进程锁）。
 import { openBoard } from '../agent/library/board_store.js';
@@ -79,6 +79,21 @@ export function createMindServer(host_public = false, port = 8080) {
     handshakeToken = process.env.MINDSERVER_TOKEN || makeToken();
     // agent 子进程（AgentProcess 默认继承 process.env）靠这个连回来
     process.env.MINDSERVER_TOKEN = handshakeToken;
+
+    // F-SEC-205（2026-11-06）：token 不再无条件打到 stdout。
+    // 为什么：scripts/start-panel.ps1:189 把 mindcraft 的 stdout 重定向进
+    // `logs/mindcraft-console.log` ⇒ 原来那三行 `token=…` 会**落盘**，而日志正是
+    // "出问题时发给别人看"的东西（拿到它 = 能指挥 bot / 改设置 / 停服）。
+    // 新通道：写到 cwd 下的 `.mindserver-token`（已进 .gitignore，F-SEC-206），
+    // 只有本机用户可读；start-panel.ps1 从它读 token 拼出可点的面板地址。
+    // 仍然需要"在终端里看见完整值"时，显式设 MINDSERVER_PRINT_TOKEN=1（调试用）。
+    const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token');
+    try {
+        writeFileSync(TOKEN_FILE, handshakeToken, { encoding: 'utf8', mode: 0o600 });
+    } catch (e) {
+        // 只读 cwd / 无权限也要能启动：降级为"只在显式开关下打印"
+        console.warn(`[mindserver] 写 ${TOKEN_FILE} 失败（${e?.code ?? e}）；本次 token 只能通过 MINDSERVER_TOKEN 环境变量或 MINDSERVER_PRINT_TOKEN=1 获取`);
+    }
 
     // 浏览器控制台：把 ?token=… 换成 HttpOnly + SameSite=Strict 的 cookie，之后同源握手自动带上。
     // 不这么做的话，面板（web/dist 已构建，改前端源码要重打包）会直接连不上。
@@ -148,6 +163,15 @@ export function createMindServer(host_public = false, port = 8080) {
             const agentName = req.params.agent;
             const rawName = req.params.name;
             const itemName = String(rawName).toLowerCase();
+            // F-SEC-104（2026-11-06）：路由参数经 Express decodeURIComponent 后可以是
+            // `..%2f..%2fsettings` ⇒ `path.join(base,'items','../../settings.png')` 会跳出
+            // assets.directory（只能读到 .png，但仍是任意 png 读取 + 存在性探测）。
+            // 资源名合法字符集本就只有 [a-z0-9_]（物品/方块名），用白名单一刀切。
+            // 注意：这条是**不需要认证的 HTTP 端**（io.use 的握手门只管 socket.io，见 F-SEC-104 证据）。
+            if (!/^[a-z0-9_]{1,64}$/.test(itemName)) {
+                res.status(400).json({ ok: false, error: 'invalid texture name' });
+                return;
+            }
             const conn = agent_connections[agentName];
             const preferred = conn?.settings?.minecraft_version;
             const candidates = [];
@@ -488,11 +512,18 @@ export function createMindServer(host_public = false, port = 8080) {
     const host = 'localhost';
     server.listen(port, host, () => {
         console.log(`MindServer running on port ${port} on host ${host}`);
-        // 第1条 ①：token 必须让人看得到 —— 否则正常用户会被自己的门挡在外面。
-        // 控制台用这条带 token 的地址打开（cookie 由上面的 express 中间件换成 HttpOnly cookie）。
-        console.log(`[mindserver] 握手 token: ${handshakeToken}`);
-        console.log(`[mindserver] 控制台地址: http://${host}:${port}/?token=${handshakeToken}`);
-        console.log(`[mindserver] 本机脚本对接: 设 MINDSERVER_TOKEN=${handshakeToken}`);
+        // 第1条 ①：token 必须让人拿得到 —— 否则正常用户会被自己的门挡在外面。
+        // F-SEC-205：但**不能无条件写进 stdout**（start-panel.ps1 把它重定向进 logs/，等于落盘）。
+        // 默认只打印指纹 + 取用位置；完整值在 `.mindserver-token` / MINDSERVER_TOKEN，
+        // 或显式 `MINDSERVER_PRINT_TOKEN=1` 打开（调试用，会进日志，用完请关掉）。
+        const tokenHint = `${handshakeToken.slice(0, 4)}…${handshakeToken.slice(-4)}(len=${handshakeToken.length})`;
+        console.log(`[mindserver] 握手 token 已生成: ${tokenHint}`);
+        console.log(`[mindserver] 完整 token 位置: ${TOKEN_FILE}（或环境变量 MINDSERVER_TOKEN）`);
+        console.log(`[mindserver] 控制台地址: http://${host}:${port}/?token=<见上>`);
+        if (process.env.MINDSERVER_PRINT_TOKEN === '1') {
+            console.log(`[mindserver] ★ 调试模式（MINDSERVER_PRINT_TOKEN=1）完整值: ${handshakeToken}`);
+            console.log(`[mindserver] ★ 可直接打开: http://${host}:${port}/?token=${handshakeToken}`);
+        }
     });
 
     return server;
