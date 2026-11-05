@@ -93,8 +93,10 @@ check('isRateLimit: 普通错误 → false', !isRateLimit(new Error('boom')) && 
 // B. 每个适配器真跑：成功记 usage / 失败给标记
 // ════════════════════════════════════════════════════════════
 const CHAT = (content, usage) => ({ choices: [{ message: { content }, finish_reason: 'stop' }], usage });
-const okChat = (usage) => ({ chat: { completions: { create: async () => CHAT('模型说的话', usage) } } });
-const badChat = () => ({ chat: { completions: { create: async () => { throw new Error('stub-network-down'); } } } });
+// 桩只返回固定值 ⇒ **不写 async**（`return Promise.resolve(x)` 对 await 调用方语义相同，
+// 而且不触发 require-await —— 这条规则在本仓的 lint:tools 棘轮里是要计数的）。
+const okChat = (usage) => ({ chat: { completions: { create: () => Promise.resolve(CHAT('模型说的话', usage)) } } });
+const badChat = () => ({ chat: { completions: { create: () => Promise.reject(new Error('stub-network-down')) } } });
 
 /** 每个适配器：怎么造 + 怎么替换网络层 + 期望的 usage 形状 */
 const ADAPTERS = [
@@ -105,8 +107,8 @@ const ADAPTERS = [
         ok: (m) => { m.openai = okChat({ prompt_tokens: 12, completion_tokens: 4 }); },
         bad: (m) => { m.openai = badChat(); } },
     { name: 'gpt', file: 'gpt.js', cls: 'GPT', usage: { prompt_tokens: 13, completion_tokens: 5 },
-        ok: (m) => { m.openai = { responses: { create: async () => ({ output_text: '模型说的话', usage: { prompt_tokens: 13, completion_tokens: 5 } }) } }; },
-        bad: (m) => { m.openai = { responses: { create: async () => { throw new Error('stub-network-down'); } } }; } },
+        ok: (m) => { m.openai = { responses: { create: () => Promise.resolve({ output_text: '模型说的话', usage: { prompt_tokens: 13, completion_tokens: 5 } }) } }; },
+        bad: (m) => { m.openai = { responses: { create: () => Promise.reject(new Error('stub-network-down')) } }; } },
     { name: 'grok', file: 'grok.js', cls: 'Grok', usage: { prompt_tokens: 14, completion_tokens: 6 },
         ok: (m) => { m.openai = okChat({ prompt_tokens: 14, completion_tokens: 6 }); },
         bad: (m) => { m.openai = badChat(); } },
@@ -132,14 +134,15 @@ const ADAPTERS = [
         ok: (m) => { m.vllm = okChat({ prompt_tokens: 21, completion_tokens: 13 }); },
         bad: (m) => { m.vllm = badChat(); } },
     { name: 'claude', file: 'claude.js', cls: 'Claude', usage: { input_tokens: 22, output_tokens: 14 },
-        ok: (m) => { m.anthropic = { messages: { create: async () => ({ content: [{ type: 'text', text: '模型说的话' }], usage: { input_tokens: 22, output_tokens: 14 } }) } }; },
-        bad: (m) => { m.anthropic = { messages: { create: async () => { throw new Error('stub-network-down'); } } }; } },
+        ok: (m) => { m.anthropic = { messages: { create: () => Promise.resolve({ content: [{ type: 'text', text: '模型说的话' }], usage: { input_tokens: 22, output_tokens: 14 } }) } }; },
+        bad: (m) => { m.anthropic = { messages: { create: () => Promise.reject(new Error('stub-network-down')) } }; } },
     { name: 'gemini', file: 'gemini.js', cls: 'Gemini', usage: { promptTokenCount: 23, candidatesTokenCount: 15 },
-        ok: (m) => { m.genAI = { models: { generateContent: async () => ({ text: '模型说的话', usageMetadata: { promptTokenCount: 23, candidatesTokenCount: 15 } }) } }; },
-        bad: (m) => { m.genAI = { models: { generateContent: async () => { throw new Error('stub-network-down'); } } }; } },
+        ok: (m) => { m.genAI = { models: { generateContent: () => Promise.resolve({ text: '模型说的话', usageMetadata: { promptTokenCount: 23, candidatesTokenCount: 15 } }) } }; },
+        bad: (m) => { m.genAI = { models: { generateContent: () => Promise.reject(new Error('stub-network-down')) } }; } },
     { name: 'huggingface', file: 'huggingface.js', cls: 'HuggingFace', usage: null,
-        ok: (m) => { m.huggingface = { chatCompletionStream: async function* () { yield { choices: [{ delta: { content: '模型说的话' } }] }; } }; },
-        bad: (m) => { m.huggingface = { chatCompletionStream: async function* () { throw new Error('stub-network-down'); } }; } },
+        ok: (m) => { m.huggingface = { chatCompletionStream: function* () { yield { choices: [{ delta: { content: '模型说的话' } }] }; } }; },
+        // 失败桩：一个「立刻 reject 的 asyncIterator」（不写成没有 yield 的 async generator）
+        bad: (m) => { m.huggingface = { chatCompletionStream: () => ({ [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(new Error('stub-network-down')) }) }) }; } },
 ];
 
 for (const a of ADAPTERS) {
@@ -182,7 +185,7 @@ for (const a of ADAPTERS) {
 {
     const { ReplicateAPI } = await import('../src/models/replicate.js');
     const good = new ReplicateAPI('test-model');
-    good.replicate = { run: async () => '模型说的话', stream: async function* () { yield '模型说的话'; } };
+    good.replicate = { run: () => Promise.resolve('模型说的话'), stream: function* () { yield '模型说的话'; } };
     lines.length = 0;
     const out = await good.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('replicate: 成功时返回内容', out === '模型说的话', `→ ${JSON.stringify(out)}`);
@@ -192,8 +195,8 @@ for (const a of ADAPTERS) {
     let tries = 0;
     const bad = new ReplicateAPI('test-model');
     bad.replicate = {
-        run: async () => { throw new Error('boom'); },
-        stream: async function* () { tries++; if (tries <= 2) throw Object.assign(new Error('rate limited'), { status: 429 }); yield '重试后成功'; },
+        run: () => Promise.reject(new Error('boom')),
+        stream: function* () { tries++; if (tries <= 2) throw Object.assign(new Error('rate limited'), { status: 429 }); yield '重试后成功'; },
     };
     const out2 = await bad.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('replicate: 429 会退避重试（stream 被调用 ≥3 次）', tries >= 3, `→ tries=${tries}`);
@@ -205,10 +208,10 @@ for (const a of ADAPTERS) {
     const { Hyperbolic } = await import('../src/models/hyperbolic.js');
     const realFetch = globalThis.fetch;
     let calls = 0;
-    globalThis.fetch = async () => {
+    globalThis.fetch = () => {
         calls++;
-        if (calls <= 2) return { ok: false, status: 429, json: async () => ({}) };
-        return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '重试后成功' }, finish_reason: 'stop' }], usage: { prompt_tokens: 31, completion_tokens: 17 } }) };
+        if (calls <= 2) return Promise.resolve({ ok: false, status: 429, json: () => Promise.resolve({}) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ choices: [{ message: { content: '重试后成功' }, finish_reason: 'stop' }], usage: { prompt_tokens: 31, completion_tokens: 17 } }) });
     };
     const h = new Hyperbolic('test-model');
     lines.length = 0;
@@ -218,7 +221,7 @@ for (const a of ADAPTERS) {
     check('hyperbolic: 记了 usage（prompt=31 completion=17）',
         lines.some((l) => l.includes('prompt=31') && l.includes('completion=17')), `→ ${JSON.stringify(lines)}`);
 
-    globalThis.fetch = async () => { throw new Error('ECONNRESET stub'); };
+    globalThis.fetch = () => Promise.reject(new Error('ECONNRESET stub'));
     const h2 = new Hyperbolic('test-model');
     const out2 = await h2.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('hyperbolic: 网络异常 → 返回 FAILED_REPLY（不是假台词）', isFailedReply(out2), `→ ${JSON.stringify(out2)}`);
@@ -238,10 +241,10 @@ function makePrompter(reply) {
     p.awaiting_coding = false;
     p.convo_examples = null;
     p.coding_examples = null;
-    p.checkCooldown = async () => {};
-    p.replaceStrings = async (s) => s;
-    p._saveLog = async (prompt, msgs, gen, tag) => { (p.saved ||= []).push(tag); };
-    p.chat_model = { sendRequest: async () => (typeof reply === 'function' ? reply() : reply) };
+    p.checkCooldown = () => Promise.resolve();
+    p.replaceStrings = (s) => Promise.resolve(s);
+    p._saveLog = (prompt, msgs, gen, tag) => { (p.saved ||= []).push(tag); return Promise.resolve(); };
+    p.chat_model = { sendRequest: () => Promise.resolve(typeof reply === 'function' ? reply() : reply) };
     p.code_model = p.chat_model;
     p.vision_model = p.chat_model;
     return p;
@@ -300,7 +303,7 @@ function makePrompter(reply) {
     const realFetch = globalThis.fetch;
 
     // D1: 网络异常 → 不再是 null / "No response data."，而是失败标记
-    globalThis.fetch = async () => { throw new Error('ECONNREFUSED stub'); };
+    globalThis.fetch = () => Promise.reject(new Error('ECONNREFUSED stub'));
     const m1 = new Ollama('test-model');
     const r1 = await m1.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('ollama: 网络异常 → 返回 FAILED_REPLY（不再吞成 null→"No response data."）',
@@ -308,10 +311,10 @@ function makePrompter(reply) {
 
     // D2: 前两次 429、第三次 200 → 必须重试到成功
     let calls = 0;
-    globalThis.fetch = async () => {
+    globalThis.fetch = () => {
         calls++;
-        if (calls <= 2) return { ok: false, status: 429, json: async () => ({}) };
-        return { ok: true, status: 200, json: async () => ({ message: { content: '重试后成功' }, prompt_eval_count: 7, eval_count: 2 }) };
+        if (calls <= 2) return Promise.resolve({ ok: false, status: 429, json: () => Promise.resolve({}) });
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ message: { content: '重试后成功' }, prompt_eval_count: 7, eval_count: 2 }) });
     };
     const m2 = new Ollama('test-model');
     lines.length = 0;
@@ -354,9 +357,10 @@ function makePrompter(reply) {
     check('hyperbolic / ollama / replicate 都接上了 429 退避重试', noRetry.length === 0, `→ 缺: ${JSON.stringify(noRetry)}`);
 
     const ollamaSrc = fs.readFileSync(new URL('ollama.js', dir), 'utf8');
-    const swallow = /catch \(err\) \{[\s\S]{0,400}?console\.error\(err\);[\s\S]{0,80}?\n        \}\n        return data;/;
+    // 判据：send() 的 catch 里「先 log 再 throw err」（原来只 log、然后 return data=null）
+    const sendCatch = ollamaSrc.slice(ollamaSrc.indexOf('Failed to send Ollama request.'));
     check('ollama.send() 不再把异常吞成 null（catch 里重新 throw）',
-        /console\.error\('Failed to send Ollama request\.'\);[\s\S]{0,120}?throw err;/.test(ollamaSrc), `→ ${swallow.test(ollamaSrc)}`);
+        sendCatch.includes('throw err;'), `→ ${sendCatch.slice(0, 80).replace(/\s+/g, ' ')}`);
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURES'}: ${pass} passed, ${fail} failed`);
