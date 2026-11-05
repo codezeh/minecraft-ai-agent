@@ -129,7 +129,46 @@
 
 ## 9. 没做 / 留给下游
 
+0. **一个我自己踩、差点留在树上的坑（队长当场抓到的）**：新建的 `tools/llm_usage_unit.mjs` 里
+   桩函数写成 `async () => 固定值`，触发 **21 条 require-await + 1 条 require-yield + 1 条 no-regex-spaces**，
+   把 `npm run lint:tools` 的棘轮从 **278 顶到 301**。
+   修法（**没有** `eslint-disable`、**没有** `--update` 抬基线）：
+   - 只返回固定值的桩 → `() => Promise.resolve(x)` / `() => Promise.reject(e)`（对 `await` 调用方语义不变）；
+   - 要"迭代时抛"的流桩 → 不用没有 `yield` 的 `async function*`，改成显式
+     `{ [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(e) }) }`；
+   - 删掉一条多余的正则（`no-regex-spaces`）。
+   结果：该文件 eslint **23 → 0**，棘轮回到 **278 ≤ 278**。
+   教训值得写进流程：**"桩函数别写 async"** —— 这是三个人这轮同时踩的坑。
+
 1. **`agent.js` 侧的消费点**（`routeResponse`、response 预算）按分工归 T32 —— 我只保证 prompter 不再把失败当回答。
 2. **统一 `withRetry`**：本任务只给三个裸 fetch 加了最小退避，没有抽象重试框架（第三批）。
 3. **`vllm.saveToFile()` 死代码**：见 §6，删/接需要先确认无人计划调用。
 4. `[llm]` 目前只打到日志 sink；落库/出报表属于成本核算专项（第12条后续）。
+
+---
+
+## 附：T10（第1/2/30条）两处「实现偏离报告字面」的补遗（应队长复核要求补记）
+
+T10 当时写在 `T10-控制面-沙箱-注入.md` 与提交信息里，但**报告正文没有这两条**，
+所以这里集中补一次，供 T90 汇总时引用（队长已列入其「实现偏离报告字面」清单 ⑧⑨）。
+
+### ⑧ `set-agent-settings` 白名单把 `profile` 也一并丢弃（报告只点了两项）
+
+- 报告第 1 条 ② 原文只要求丢 `allow_insecure_coding` 与 `blocked_actions`。
+- 实现：`src/mindcraft/auth_gate.js` 的 `SAFE_RUNTIME_SETTINGS` 里**还排除了 `profile`**。
+- **理由**：`profile` 里装的是 `permissions`（谁是这只 bot 的主人）。
+  `set-agent-settings` 能改它 ⇒ 任何能发这条事件的人都能**把 owner 改成自己**，
+  等于自己给自己发权限。留着它，另外两项白名单就形同虚设（拿到 owner 就能再开一切）。
+- 代价：面板无法经 socket 改 profile —— 但面板本来就不发这条（实测 `grep set-agent-settings web/src` 无命中），
+  改 profile 一直是「改文件 + 重启」，行为没变。
+
+### ⑨ `INSECURE_CODING` 环境变量只认 `1/true/yes/on`（原来 `=0` 也算开）
+
+- 报告第 1 条 ③ 只说「`main.js:50` 的 `INSECURE_CODING` 要么删、要么保留但打印告警」。
+- 实测原文是 `if (process.env.INSECURE_CODING) { allow_insecure_coding = true }` ——
+  **只要非空就开**，于是 `INSECURE_CODING=0` / `=false` / `=no` 这些**看起来是关闭**的写法
+  全都会把代码执行**打开**。这是「设了关反而开着」的经典坑，比不设更危险（人会以为自己关了）。
+- 实现：显式白名单 `1/true/yes/on` 才算开；`0/false/no/off` 走「按关闭处理」并打一条 warn；
+  真开启时打印 72 个 `=` 夹的「代码执行已开启 = 本机 root 权限」。
+- 位置：`mindcraft/main.js`（T10 提交 `ce053e3`）。
+
