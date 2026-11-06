@@ -86,15 +86,36 @@ if exist tools\patch_integrity.mjs (
 popd
 
 if not exist "%ROOT%mindcraft\node_modules" (
-    echo [WARN] mindcraft\node_modules missing. Running npm ci first (strict, per lock) ...
+    echo [WARN] mindcraft\node_modules missing. Installing dependencies ...
     pushd "%ROOT%mindcraft"
-    call npm ci
-    if errorlevel 1 (
-        echo [ERROR] npm ci failed - do NOT use --ignore-scripts, it silently drops patches/.
-        echo [ERROR] Fix the node_modules / package-lock.json mismatch, then run this file again.
-        popd
-        pause
-        exit /b 1
+    REM ★ F-DEP-103 / F-REG-002（2026-11-06 终审 R3-3 指出；用户批准方案②）：
+    REM   package-lock.json 被 .gitignore 忽略且从未入库 => 全新 clone 必然没有 lock，
+    REM   而 npm ci 的硬性前提就是"存在 lock" => 在全新 clone 上必失败 =>
+    REM   F-DEP-005 那条"失败即中止"在 clone 场景反而变成负收益（能装变成装不上）。
+    REM   处置：有 lock 走 npm ci（可复现，首选）；无 lock 降级 npm install 并明确告警。
+    REM   注意：%ERRORLEVEL% 在括号块内不即时更新，故用 if errorlevel 1（运行期求值）。
+    if exist package-lock.json (
+        echo [WARN] Running npm ci (strict, per lock) ...
+        call npm ci
+        if errorlevel 1 (
+            echo [ERROR] npm ci failed - do NOT use --ignore-scripts, it silently drops patches/.
+            echo [ERROR] Fix the node_modules / package-lock.json mismatch, then run this file again.
+            popd
+            pause
+            exit /b 1
+        )
+    ) else (
+        echo [WARN] package-lock.json NOT found (this repo does not track its lock - see F-DEP-103).
+        echo [WARN] Falling back to npm install: it works, but versions are NOT reproducible.
+        echo [WARN] For reproducibility: commit the lock, or drop a trusted lock into mindcraft\.
+        call npm install
+        if errorlevel 1 (
+            echo [ERROR] npm install failed - do NOT use --ignore-scripts, it silently drops patches/.
+            echo [ERROR] Fix node_modules / network / registry, then run this file again.
+            popd
+            pause
+            exit /b 1
+        )
     )
     if exist tools\patch_integrity.mjs (
         node tools\patch_integrity.mjs
