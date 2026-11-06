@@ -3,6 +3,9 @@
 //  2) shutdown     → 让 mindserver 停掉所有 agent 后自己退出
 // 跑法：node web/scripts/stop-all.mjs
 //
+// 退出码：0=已停 / 本来没跑；2=拿不到 token；3=握手被拒；4=**关服没成功**（此时管理端保持运行）。
+// ★ OPS-002（2026-11-06 深度检查）：4 就是这条修出来的 —— 以前关服失败也照样关管理端并 exit 0。
+//
 // ★ F-WEB-205（2026-11-06）：**必须带握手 token**。
 //   server-stop / shutdown 都在 auth_gate.js 的握手门后面；不带 token 会被直接拒（AUTH_REQUIRED），
 //   而旧代码把一切连接失败都说成"mindserver 没在跑" ⇒ 用户以为没开服、去关窗口 ⇒ 非优雅关停
@@ -10,7 +13,9 @@
 //   token 来源顺序：环境变量 MINDSERVER_TOKEN → 当前目录 ./.mindserver-token（mindserver 写在它的 cwd）。
 import { io } from 'socket.io-client';
 import { readFileSync } from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
+import { decideAfterStop, decideAfterExitWait, STOP_EXIT } from './stop-policy.mjs';
 
 const URL = 'http://127.0.0.1:8080';
 
@@ -77,10 +82,63 @@ if (!connected) {
 
 console.log('1) 优雅停止 Minecraft 服务器（RCON stop）...');
 const r = await ack('server-stop');
+
+// ★ OPS-002（2026-11-06 深度检查）：关服失败**不许**照样关掉管理端并报告"完成"。
+//
+//   缺陷原貌：这里无论 `r.ok` 是什么都往下走 —— 打印一句"跳过：rcon_failed"，
+//   然后 emit('shutdown') 关掉 mindserver，最后 exit 0 + "完成。"。
+//   用户看到"完成"，实际 Minecraft 还在后台跑（RCON 没配/认证失败/超时都走这条），
+//   接着很可能去强关窗口 ⇒ 存档没刷盘。
+//
+//   现在的口径：
+//     · not_running  → 本来就没跑，跳过是正确行为（继续收尾）；
+//     · ok           → 发出停止指令后**必须确认它真的退出**（端口不再监听）才关管理端；
+//     · 其它（rcon_failed / rcon_disabled / 超时）→ **保留管理端、非零退出**，
+//       文案说清"服务器可能仍在运行"以及怎么修。
+const MC_PORT = Number(process.env.MINECRAFT_PORT || process.env.MC_PORT || 25565);
+
+/** 端口还在监听吗（纯 node:net，不引依赖）。 */
+function isPortOpen(port, host = '127.0.0.1', timeoutMs = 800) {
+    return new Promise((resolve) => {
+        const sock = net.connect({ port, host });
+        const done = (v) => { try { sock.destroy(); } catch { } resolve(v); };
+        const t = setTimeout(() => done(false), timeoutMs);
+        sock.once('connect', () => { clearTimeout(t); done(true); });
+        sock.once('error', () => { clearTimeout(t); done(false); });
+    });
+}
+
+/** 等 Minecraft 自己刷盘退出：最多 timeoutMs，超时返回 false。 */
+async function waitServerExit(timeoutMs = 45000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+        if (!(await isPortOpen(MC_PORT))) return true;
+        await sleep(1000);
+    }
+    return !(await isPortOpen(MC_PORT));
+}
+
+function failStop(reason, hint) {
+    console.log('');
+    console.log('[ERROR] 关服没有成功：' + (reason || '?') + (hint ? ' — ' + hint : ''));
+    console.log('        Minecraft **很可能仍在运行**，所以管理端（mindserver）**保持开启**，');
+    console.log('        方便你修复后重跑本脚本。请不要用关窗口/杀进程的方式停它（会丢未刷盘的存档）。');
+    console.log('        常见修法：server.properties 里 enable-rcon=true + rcon.password=<非空>，重启服务器后再试。');
+    try { s.close(); } catch { /* ignore */ }
+    // 退出码 4：关服失败（2=拿不到 token，3=握手被拒，4=关服没成功）—— stop-panel.ps1 按它给提示。
+    process.exit(STOP_EXIT.STOP_FAILED);
+}
+
 if (r?.ok) {
     console.log('   已发出停止指令，等它自己刷盘退出（5~15 秒）');
-} else {
-    console.log('   跳过：' + (r?.reason || '?') + (r?.hint ? ' — ' + r.hint : ''));
+    const d = decideAfterExitWait(await waitServerExit());
+    if (d.action === 'fail') failStop(d.reason, d.hint);
+    console.log('   已确认 Minecraft 退出（' + MC_PORT + ' 端口已关闭）');
+}
+else {
+    const d = decideAfterStop(r);
+    if (d.action === 'fail') failStop(d.reason, d.hint);
+    console.log('   跳过：Minecraft 本来就没在运行');
 }
 
 console.log('2) 停止 agent 并关闭 mindserver...');

@@ -1,4 +1,4 @@
-﻿# Minecraft AI 陪玩面板 —— 停止 / 优雅关服
+# Minecraft AI 陪玩面板 —— 停止 / 优雅关服
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -31,6 +31,18 @@ if ($stopCode -eq 2) {
 if ($stopCode -eq 3) {
     Write-Host ''
     Write-Host '[未完成] 握手被拒（token 已过期）。服务器仍在运行，请重跑本脚本而不是强关。' -ForegroundColor Yellow
+}
+# ★ OPS-002（2026-11-06 深度检查）：关服失败现在是**独立退出码 4**。
+#   过去这种情况也走到"完成"，用户以为停了，其实 Minecraft 还在后台跑 —— 接着强关窗口就丢存档。
+if ($stopCode -eq 4) {
+    Write-Host ''
+    Write-Host '[未完成] 关服没有成功（RCON 没配好 / 认证失败 / 服务器没退出）。' -ForegroundColor Red
+    Write-Host '        管理端**仍在运行**，Minecraft 可能也还在运行 —— 别强关窗口（会丢未刷盘的存档）。' -ForegroundColor Red
+    Write-Host '        修好 server.properties 的 enable-rcon / rcon.password 后，重跑本脚本。' -ForegroundColor Yellow
+}
+if ($stopCode -ne 0 -and $stopCode -ne 2 -and $stopCode -ne 3 -and $stopCode -ne 4) {
+    Write-Host ''
+    Write-Host "[未完成] stop-all.mjs 以退出码 $stopCode 结束，详见上面的输出。" -ForegroundColor Yellow
 }
 
 Write-Host ''

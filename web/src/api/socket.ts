@@ -18,13 +18,57 @@ export function disconnect() {
   if (socket.connected) socket.disconnect()
 }
 
-/** 带超时的 ack 调用，避免界面无限转圈 */
+/** 现在能不能真的把事件发出去（没有连接时 socket.io 会把事件**存起来**，见下）。 */
+export function isOnline(): boolean {
+  return socket.connected === true
+}
+
+/**
+ * 请求失败的分类。界面据此决定"能不能重试"，不要一律说"失败了"。
+ *
+ * - `OFFLINE`        没连上，**事件根本没发出去** ⇒ 可以放心重试；
+ * - `UNKNOWN_RESULT` 事件已经发出去了，只是没等到回执 ⇒ **结果未知**，
+ *                    不能当成失败自动重试（可能已经执行了）。
+ */
+export type RequestErrorCode = 'OFFLINE' | 'UNKNOWN_RESULT'
+
+export class RequestError extends Error {
+  code: RequestErrorCode
+  event: string
+  constructor(code: RequestErrorCode, event: string, message: string) {
+    super(message)
+    this.name = 'RequestError'
+    this.code = code
+    this.event = event
+  }
+}
+
+/**
+ * 带超时的 ack 调用。
+ *
+ * ★ WEB-001（2026-11-06 深度检查）：**断线时不许把事件塞进 sendBuffer**。
+ *
+ * 缺陷原貌：这里无条件 `socket.emit(...)`。`autoConnect: false` 且断线期间
+ * socket.io 会把 emit 的事件**缓存**在 `socket.sendBuffer` 里；15 秒后界面报"超时失败"，
+ * 但那个事件还在缓冲区 —— 一旦重连，`emitBuffered` 会把 **server-stop / restart-agent /
+ * 游戏指令** 真发出去。用户看到"失败了"，几秒后服务却停了（或指令迟到执行、重复执行）。
+ *
+ * 现在的口径：
+ *   1. 没连接 ⇒ 立即以 `OFFLINE` 拒绝，**不发**（因此也不可能进缓冲区）；
+ *   2. 已发出但超时 ⇒ 以 `UNKNOWN_RESULT` 拒绝，文案明确"结果未知"，
+ *      界面不许把它当"确定失败"去自动重试。
+ */
 export function request<T = any>(event: string, ...args: any[]): Promise<T> {
   const timeoutMs = 15000
+  if (!socket.connected) {
+    return Promise.reject(new RequestError('OFFLINE', event, '未连接到 mindserver，请求未发送：' + event))
+  }
   return new Promise((resolve, reject) => {
     let done = false
     const timer = setTimeout(() => {
-      if (!done) { done = true; reject(new Error('请求超时：' + event)) }
+      if (done) return
+      done = true
+      reject(new RequestError('UNKNOWN_RESULT', event, '请求已发出但没有回执，结果未知：' + event))
     }, timeoutMs)
     ;(socket as any).emit(event, ...args, (res: T) => {
       if (done) return
@@ -33,4 +77,22 @@ export function request<T = any>(event: string, ...args: any[]): Promise<T> {
       resolve(res)
     })
   })
+}
+
+export type ControlResult = { ok: true } | { ok: false; code: RequestErrorCode; message: string }
+
+/**
+ * 发一个**有副作用**的事件（启停/重启/销毁 agent、给游戏发指令、关服…）。
+ *
+ * 与 `request()` 的区别：这类事件服务端不一定回 ack，所以这里只保证一件事 ——
+ * **没连接时绝不发**，免得它躺在缓冲区里等重连后突然执行（WEB-001）。
+ *
+ * @returns ok:false 时 `code:'OFFLINE'`，调用方应把"没执行"告诉用户，而不是静默吞掉。
+ */
+export function emitControl(event: string, ...args: any[]): ControlResult {
+  if (!socket.connected) {
+    return { ok: false, code: 'OFFLINE', message: '未连接到 mindserver，这条操作没有发出去：' + event }
+  }
+  socket.emit(event, ...args)
+  return { ok: true }
 }

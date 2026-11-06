@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { socket, request } from '../api/socket'
+import { socket, request, emitControl } from '../api/socket'
 import { store, selectAgent } from '../stores/agents'
 
 // ---------- agent ----------
@@ -20,8 +20,11 @@ function loadSettings(name: string) {
 }
 
 function act(evt: string, name: string) {
+  // WEB-001：启停/重启/销毁是**有副作用**的控制命令，断线时绝不能 emit
+  // （socket.io 会把事件存进 sendBuffer，重连后突然执行 —— 实测过 server-stop 迟到执行）。
+  const r = emitControl(evt, name)
+  if (!r.ok) { err.value = r.message; return }
   busy.value = true
-  socket.emit(evt, name)
   setTimeout(() => { busy.value = false }, 800)
 }
 
@@ -44,7 +47,10 @@ const form = ref({
   minecraft_version: '1.21.8',
   base_profile: 'assistant',
   init_message: '用中文回复 hello world 和你的名字',
-  allow_insecure_coding: true,
+  // ★ WEB-012（2026-11-06 深度检查）：默认 **false**，与后端 settings_spec 的安全默认一致。
+  //   原来这里写 true，等于"用户在面板上点创建"就静默把模型写/运行本机代码打开，
+  //   而命令行启动的 bot 是 false —— 同一个产品两个默认值，其中一个等于本机 root。
+  allow_insecure_coding: false,
   max_messages: 30,
   spawn_timeout: 60,
   load_memory: true,
@@ -220,7 +226,9 @@ onMounted(() => {
           </div>
           <label class="wide">init_message<input v-model="form.init_message" /></label>
           <div class="checks">
-            <label><input v-model="form.allow_insecure_coding" type="checkbox" />allow_insecure_coding</label>
+            <label
+              title="允许模型写并运行任意 JS，等于把本机 root 权限交给模型。只有你主动勾选才开启。"
+            ><input v-model="form.allow_insecure_coding" type="checkbox" />allow_insecure_coding（= 本机 root，默认关）</label>
             <label><input v-model="form.load_memory" type="checkbox" />load_memory</label>
           </div>
           <div class="row">

@@ -1,4 +1,4 @@
-﻿# Minecraft AI 陪玩面板 —— 一键启动
+# Minecraft AI 陪玩面板 —— 一键启动
 # 由 启动面板.bat 调起。所有中文都在这里（UTF-8+BOM），cmd 那层只留 ASCII。
 #
 # 设计要点（都是实测踩出来的）：
@@ -269,7 +269,11 @@ if (-not $tok) {
     Read-Host '按回车退出'
     exit 1
 }
-$panelUrl = "$panel?token=$tok"
+# ★ OPS-001（2026-11-06 深度检查）：这里原来用的是不带花括号的 $panel 紧跟 ?token。
+#   PowerShell 把 `?` 当成变量名的一部分 ⇒ 整段展开成 `=DUMMY_ONLY`（实测），
+#   于是浏览器打开的是一个相对地址，进不了控制台 —— 服务其实已经起来了，
+#   用户只看到"打不开面板"。改成 ${panel} 显式划定变量边界。
+$panelUrl = "${panel}?token=$tok"
 Write-Step '4/4' "打开面板"
 Start-Process $panelUrl | Out-Null
 

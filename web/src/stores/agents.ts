@@ -1,5 +1,5 @@
 import { reactive, computed } from 'vue'
-import { socket, connect } from '../api/socket'
+import { socket, connect, emitControl } from '../api/socket'
 import type { AgentInfo, FullState, TerrainResult } from '../api/types'
 
 export interface ChatLine {
@@ -114,18 +114,33 @@ export function selectAgent(name: string) {
 }
 
 /** 发消息给她。旧面板同一条通路：send-message → agent.respondFunc */
-export function say(text: string) {
+export function say(text: string): boolean {
   const a = currentAgent.value
   const msg = text.trim()
-  if (!a || !msg) return
-  socket.emit('send-message', a.name, { from: 'ADMIN', message: msg })
+  if (!a || !msg) return false
+  // WEB-001：断线时不发（否则事件躺在 sendBuffer 里，重连后突然执行一条"迟到指令"）。
+  const r = emitControl('send-message', a.name, { from: 'ADMIN', message: msg })
+  if (!r.ok) {
+    store.lastError = r.message
+    return false
+  }
   pushChat({ kind: 'me', agent: a.name, text: msg })
+  return true
 }
 
-export async function agentAction(evt: 'start-agent' | 'stop-agent' | 'restart-agent' | 'destroy-agent') {
+export async function agentAction(
+  evt: 'start-agent' | 'stop-agent' | 'restart-agent' | 'destroy-agent',
+): Promise<boolean> {
   const a = currentAgent.value
-  if (!a) return
-  socket.emit(evt, a.name)
+  if (!a) return false
+  // WEB-001：启停/重启这类控制命令绝不能进了缓冲区等重连 ——
+  // 报告实测过"界面报超时失败，重连后 server-stop 真的执行了"。
+  const r = emitControl(evt, a.name)
+  if (!r.ok) {
+    store.lastError = r.message
+    return false
+  }
+  return true
 }
 
 export async function refreshTerrain(opts: {
