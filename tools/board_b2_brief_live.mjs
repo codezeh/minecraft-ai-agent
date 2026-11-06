@@ -32,12 +32,14 @@ const log = (...a) => console.log(...a);
 if (process.argv[2] === '--agent') {
     const NAME = process.argv[3];
     const { io: ioClient } = await import('socket.io-client');
+    // ★ t145：连 mindserver 必须带握手 token（否则 AUTH_REQUIRED，且退出码仍是 0）
+    const { connectMindserver } = await import('./lib/ms_token.mjs');
     const mineflayer = (await import('mineflayer')).default;
     const pf = (await import('mineflayer-pathfinder')).default;
     const { installPositionGuard } = await import('../src/sim/position_guard.js');
     const { BoardScheduler } = await import('../src/agent/library/board_scheduler.js');
 
-    const sock = ioClient(`http://localhost:${MS_PORT}`, { transports: ['websocket'] });
+    const sock = connectMindserver(ioClient, MS_PORT);
     await new Promise((res, rej) => { sock.on('connect', res); sock.on('connect_error', rej); });
     const board = new BoardClient({ socket: sock, name: NAME, skills: ['mine'], timeoutMs: 5000 });
     await board.hello();
@@ -85,8 +87,10 @@ const { createMindServer } = await import('../src/mindcraft/mindserver.js');
 createMindServer(false, MS_PORT);
 await sleep(2500);
 const { io: ioClient } = await import('socket.io-client');
+// ★ t145：连 mindserver 必须带握手 token（否则 AUTH_REQUIRED，且退出码仍是 0）
+const { connectMindserver } = await import('./lib/ms_token.mjs');
 
-const sock = ioClient(`http://localhost:${MS_PORT}`, { transports: ['websocket'] });
+const sock = connectMindserver(ioClient, MS_PORT);
 await new Promise((res, rej) => { sock.on('connect', res); sock.on('connect_error', rej); });
 const probe = new BoardClient({ socket: sock, name: 'briefprobe', skills: ['mine'], timeoutMs: 5000 });
 await probe.hello();
