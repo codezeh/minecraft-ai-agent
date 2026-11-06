@@ -125,6 +125,8 @@ id_ed25519*
 *secrets*.json
 .mindserver-token
 config.local.js
+# ⑤ R3 审查纠正：真正漏的不是 `.env.local`（已被 `.env.*` 覆盖），而是**通配的 token 文件**。
+*.token
 
 # ---------- 运行期状态文件，不入 git（2026-11-06 终审 R3 用户动作②）----------
 # 为什么：ops.json 里 341 条全是 lvl4 op（测试刷出来的 bot 账号），whitelist.json 同理；
