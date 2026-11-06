@@ -33,7 +33,12 @@ function b64ToBytes(b64: string): Uint8Array {
 }
 
 /** 后端给的是相对 origin 的整型三元组（int16 或 int32）+ Uint8 类型码，这里解回世界坐标 */
-export function decodeTerrain(res: TerrainResult) {
+// ★ F-WEB-102（2026-11-06）：参数类型放宽为 `TerrainResult | null`。
+//   依据：`refreshTerrain()` 的声明返回就是 `Promise<TerrainResult | null>`（agents.ts:135，
+//   无 agent 时 `return null`），而本函数**第 37 行本来就在用 `!res?.ok` 处理 null** ——
+//   也就是说运行时语义早就容许 null，只是类型签名写窄了。
+//   这是**纯类型修正**（签名对齐既有行为），不改任何运行逻辑。
+export function decodeTerrain(res: TerrainResult | null) {
   if (!res?.ok || !res.origin || !res.pos || !res.types) {
     terrain.decoded = null
     terrain.stats = res?.reason || '无数据'

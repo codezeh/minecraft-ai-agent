@@ -4,8 +4,17 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "strict": false,
-    "noImplicitAny": false,
+    // ★ F-WEB-102（2026-11-06）：原来的 strict / noImplicitAny / skipLibCheck **全关**，
+    //   等于类型检查基本不设防（`any` 满天飞也照样绿）。实测代价后按"可控就开"处理：
+    //     · strict:true         → 1 error（src/stores/terrain.ts:85 null 安全）⇒ **已顺手修**
+    //     · noImplicitAny:true  → 2 error（three 缺类型）⇒ 用本地垫片
+    //                             src/types/three-shim.d.ts 解决，**未新增任何依赖**
+    //     · skipLibCheck:false  → 41 error，全部是 node_modules/vite 的 .d.ts 里缺 `Buffer`
+    //                             （需要 @types/node —— 属新增依赖，本仓红线不允许）
+    //                             ⇒ **保持 true**，并把数字写在这里，别让人以为"忘了开"。
+    //   注：strict 已包含 noImplicitAny，这里仍显式写出，是为了让"我们到底要什么"一眼可见。
+    "strict": true,
+    "noImplicitAny": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
