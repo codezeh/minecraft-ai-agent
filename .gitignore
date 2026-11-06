@@ -91,3 +91,15 @@ config.local.js
 # ⑤ R3 审查纠正：`.env.local` 其实已被上面的 `.env.*` 覆盖，真正漏的是**通配的 token 文件**
 # （原来只有 `.mindserver-token` 这一个精确项）。任何 `*.token` 一律不入库。
 *.token
+
+# ---------- 大小写变体显式声明（2026-11-06 复核席实测）----------
+# 为什么必须显式写：git 的 glob **区分大小写**。`.ENV` 在本机显示"已忽略"，
+# 只是因为 Windows 上 core.ignorecase=true 让 ignore 匹配变成不区分大小写 ——
+# 那是**平台假绿**，换到 Linux/macOS 立刻漏。
+# 实测：git config --local core.ignorecase false 后，.ENV 不再被忽略。
+.env
+.env.*
+.ENV
+.ENV.*
+.Env
+.Env.*
