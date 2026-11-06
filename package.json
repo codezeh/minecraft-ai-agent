@@ -50,7 +50,7 @@
         "lint:all": "npm run lint && npm run lint:tools",
         "test": "node tools/preflight.mjs && node tools/unit_all.mjs",
         "test:units": "node tools/unit_all.mjs",
-        "gate": "node tools/settings_check.mjs && node tools/preflight_regex_unit.mjs && node tools/preflight.mjs && node tools/lint_hard.mjs",
+        "gate": "node tools/patch_integrity.mjs && node tools/settings_check.mjs && node tools/preflight_regex_unit.mjs && node tools/preflight.mjs && node tools/lint_hard.mjs",
         "gate:full": "npm run gate && node tools/unit_all.mjs",
         "gate:install": "git config core.hooksPath .githooks",
         "reinstall": "npm run clean:modules && npm ci",

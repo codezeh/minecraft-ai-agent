@@ -69,6 +69,10 @@ export function logoutAgent(agentName) {
 // Initialize the server
 // F-WEB-203：按远端地址共享的令牌桶（跨连接，重连不清零）
 const RATE_BUCKETS = new Map();
+// R3-2：**真上限**（不是"清理触发条件"）。超过就淘汰最旧的那条。
+// 512 条 × 每条约 60B ≈ 30KB 上界；本仓只绑 localhost（key 其实只有 2~8 个），这个值只是防将来放开绑定后的长期累积。
+const RATE_BUCKETS_MAX = 512;
+const STALE_MS = 60000;
 
 /**
  * F-WEB-203（2026-11-06）：取一个令牌。返回 true = 放行，false = 该限流了。
@@ -83,9 +87,18 @@ function takeToken(socket, label, capacity, windowMs) {
     const now = Date.now();
     const addr = String(socket?.handshake?.address || socket?.conn?.remoteAddress || 'unknown');
     const key = `${label}@${addr}`;
-    // 容量上限：防 Map 长期累积（本仓只绑 localhost，key 其实只有 2 个；这条是给"将来放开绑定"兜底）
-    if (RATE_BUCKETS.size > 512) {
-        for (const [k, v] of RATE_BUCKETS) { if (now - v.ts > 60000) RATE_BUCKETS.delete(k); }
+    // ★ R3-2（终审实测）：这里原来是 `if (size > 512) { 删 >60s }` —— 那是**清理触发条件**，
+    // 不是上限：513 个新鲜 key 时一个都删不掉，之后每条消息全表扫一遍。名不副实。
+    // 现在给它**真上限**：新 key 且已满 ⇒ 先清陈旧项；仍满 ⇒ 淘汰**最旧**的那一条（LRU-ish）。
+    // 只在"要插入新 key"时才做，已有 key 的路径不受影响（不引入每条消息的开销）。
+    if (!RATE_BUCKETS.has(key) && RATE_BUCKETS.size >= RATE_BUCKETS_MAX) {
+        for (const [k, v] of RATE_BUCKETS) { if (now - v.ts > STALE_MS) RATE_BUCKETS.delete(k); }
+        while (RATE_BUCKETS.size >= RATE_BUCKETS_MAX) {
+            // Map 迭代顺序 = 插入顺序 ⇒ 第一个就是最旧的
+            const oldest = RATE_BUCKETS.keys().next().value;
+            if (oldest === undefined) break;
+            RATE_BUCKETS.delete(oldest);
+        }
     }
     let rl = RATE_BUCKETS.get(key);
     if (!rl) { rl = { tokens: capacity, ts: now }; RATE_BUCKETS.set(key, rl); }

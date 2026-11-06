@@ -104,7 +104,7 @@ if (patches.length === 0) {
 const actual = new Map(patches.map((f) => [f, sha256(path.join(PATCH_DIR, f))]));
 
 // ── ① 内容完整性 ────────────────────────────────────────────────
-console.log('[1/2] 内容完整性（sha256 vs patches/SHA256SUMS）');
+console.log('[1/3] 内容完整性（sha256 vs patches/SHA256SUMS）');
 if (WRITE) {
     const lines = [...actual.entries()].map(([f, h]) => `${h}  ${f}`);
     writeFileSync(SUMS, lines.join('\n') + '\n', 'utf8');
@@ -130,7 +130,7 @@ if (WRITE) {
 }
 
 // ── ② 版本漂移 ──────────────────────────────────────────────────
-console.log('[2/2] 版本漂移（文件名里的版本 vs node_modules 实装版本）' + (CHECK_VERSIONS ? '' : '（已跳过）'));
+console.log('[2/3] 版本漂移（文件名里的版本 vs node_modules 实装版本）' + (CHECK_VERSIONS ? '' : '（已跳过）'));
 if (!CHECK_VERSIONS) {
     skip('--no-version-check');
 } else {
@@ -159,6 +159,57 @@ if (!CHECK_VERSIONS) {
         }
     }
     if (checked > 0 && failed === 0) pass(`版本一一对应（${checked} 个包）`);
+}
+
+// ── ③ 补丁哨兵：补丁**真的落到 node_modules 了吗**（R3-5）─────────────
+//
+// 为什么需要（终审实测）：① 比的是补丁文件的哈希、② 比的是"文件名版本 vs 实装版本"，
+// 两者都**不证明补丁被套用过**。实测反例：`F-DEP-003` 的补丁已换成 4.39.0、版本号也对得上，
+// 但本机 node_modules 从没重装 ⇒ `grep -c incorrect_for_wooden_tool` = 0，而本工具**报绿**。
+// 这是"写了检查，但检查的不是那个东西"的变体病。所以补一条：**补丁引入的符号必须在实装文件里出现**。
+//
+// 每个补丁登记 1~2 个"只有打了补丁才会存在"的字符串（哨兵）。宁少勿滥：只登记确定性的。
+console.log('[3/3] 补丁哨兵（补丁是否真的落到 node_modules）' + (CHECK_VERSIONS ? '' : '（仍会检查：与版本开关无关）'));
+const SENTINELS = {
+    'mineflayer+4.39.0.patch': [
+        ['node_modules/mineflayer/lib/plugins/digging.js', 'incorrect_for_wooden_tool'],   // hunk 1
+        ['node_modules/mineflayer/lib/plugins/place_block.js', 'timeout: 500,'],           // hunk 3
+    ],
+    'mineflayer-pathfinder+2.4.5.patch': [
+        ['node_modules/mineflayer-pathfinder/lib/movements.js', 'updateLavaAvoidance'],
+    ],
+    'mineflayer-pvp+1.3.2.patch': [
+        ['node_modules/mineflayer-pvp/lib/PVP.js', 'physicsTick'],
+    ],
+    'prismarine-viewer+1.33.0.patch': [
+        ['node_modules/prismarine-viewer/viewer/lib/entity/Entity.js', 'if (!e) return; //throw new Error'],
+    ],
+    'protodef+1.19.0.patch': [
+        ['node_modules/protodef/src/serializer.js', "// console.log('Chunk size is"],
+    ],
+};
+{
+    let probed = 0, unregistered = [];
+    for (const f of patches) {
+        const list = SENTINELS[f];
+        if (!list) { unregistered.push(f); continue; }
+        let anyFilePresent = false;
+        for (const [rel, needle] of list) {
+            const abs = path.join(ROOT, rel);
+            if (!existsSync(abs)) continue;          // node_modules 没装 ⇒ 这一段没有可判的实体
+            anyFilePresent = true;
+            probed++;
+            const src = readFileSync(abs, 'utf8');
+            if (!src.includes(needle)) {
+                fail(`${f} 的哨兵不在 ${rel} 里（缺 \`${needle}\`）—— ` +
+                     `补丁**没有落到 node_modules**（跑一次 \`npm ci\` 才会生效）。` +
+                     `注意：这不是"补丁写错了"，是"没装"。`);
+            }
+        }
+        if (!anyFilePresent) skip(`${f}: node_modules 未安装，哨兵跳过`);
+    }
+    if (probed > 0 && failed === 0) pass(`${probed} 个哨兵全部命中（补丁确实落到 node_modules）`);
+    if (unregistered.length) skip(`未登记哨兵的补丁：${unregistered.join(', ')}（新增补丁请顺手登记，否则这道检查对它是空的）`);
 }
 
 // ── 附带：.patch.disabled 残留（不参与判定，只提醒） ──────────────

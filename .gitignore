@@ -88,3 +88,6 @@ id_ed25519*
 *secrets*.json
 config.local.js
 .mindserver-token
+# ⑤ R3 审查纠正：`.env.local` 其实已被上面的 `.env.*` 覆盖，真正漏的是**通配的 token 文件**
+# （原来只有 `.mindserver-token` 这一个精确项）。任何 `*.token` 一律不入库。
+*.token
