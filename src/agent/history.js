@@ -53,6 +53,37 @@ export class History {
         this.summary_chunk_size = 5; 
         // chunking reduces expensive calls to promptMemSaving and appendFullHistory
         // and improves the quality of the memory summary
+
+        /**
+         * ★ BOT-007（2026-11-06 深度检查）：摘要必须**串行**。
+         *
+         * 缺陷原貌：`add()` 里 `turns.length >= max_messages` 就 splice 一批去
+         * `await this.summarizeMemories(chunk)`，而 `summarizeMemories` 直接
+         * `this.memory = await promptMemSaving(turns)`。两条 `add()` 并发（聊天处理本身是异步的）
+         * 会各自 splice 一批、各自发一轮摘要请求 ⇒ **后发起的先返回就把 memory 覆盖成旧的**。
+         * 报告实测：后请求先返回 newer-summary、旧请求后返回 older-summary，
+         * 最终 memory=older-summary，而两批都已从 turns 删掉 ⇒ 新摘要永久丢失。
+         *
+         * 修法：把「摘要 + 归档」放进一条 promise 链（先到先跑），后一批一定基于
+         * 前一批写完的 memory 再摘要。splice 仍按入队顺序发生，turns 时间序不会乱。
+         */
+        this._summaryChain = Promise.resolve();
+    }
+
+    /**
+     * BOT-007：把一次「摘要 + 归档」排进串行队列。
+     * @param {Array<{role:string, content:string}>} chunk 已经从 turns 摘出来的一批
+     * @returns {Promise<void>}
+     */
+    _enqueueSummary(chunk) {
+        const run = async () => {
+            await this.summarizeMemories(chunk);
+            await this.appendFullHistory(chunk);
+        };
+        // 上一批抛错也不能让整条链断掉（否则之后所有摘要都排在不执行的 promise 上）
+        const next = this._summaryChain.then(run, run);
+        this._summaryChain = next.catch(() => {});
+        return next;
     }
 
     getHistory() { // expects an Examples object
@@ -125,8 +156,8 @@ export class History {
             while (this.turns.length > 0 && this.turns[0].role === 'assistant')
                 chunk.push(this.turns.shift()); // remove until turns starts with system/user message
 
-            await this.summarizeMemories(chunk);
-            await this.appendFullHistory(chunk);
+            // ★ BOT-007：走串行队列，不再让两轮摘要互相覆盖 memory。
+            await this._enqueueSummary(chunk);
         }
     }
 
@@ -165,35 +196,89 @@ export class History {
      * memory.json 的硬上限（方案 §B6：上限 20 KB，超了按时间淘汰，不靠模型自觉）。
      *
      * 之前只靠 max_messages 控制条数，但单条可以很长（她一次写进几百行代码），
-     * 实测 28 条就到 14 KB。这里按字符预算从旧到新丢弃，并给 memory 文本也设上限。
+     * 实测 28 条就到 14 KB。这里按预算从旧到新丢弃，并给 memory 文本也设上限。
+     *
+     * ★ BOT-010（2026-11-06 深度检查）修复 —— 三件事：
+     *
+     * ① **按字节，不按字符**。原来是 `JSON.stringify(...).length`（UTF-16 码元数），
+     *    而文件落盘是 UTF-8：一个汉字 3 字节、一个 emoji 4 字节，所以"20KB 的文件"
+     *    实际能到 59KB（报告实测 59494 字节；纯中文例 6890 字符 = 20490 字节，
+     *    明明超了 20480 却因为"字符数"没超而直接放行）。
+     *    现在统一用 `Buffer.byteLength(..., 'utf8')`，与 writeFileSync 真正写出的字节对齐。
+     *
+     * ② **每个可变字段都有独立预算**，不再只盯 turns：
+     *    memory（喂模型的摘要）、self_prompt（!goal 的文本，可任意长）、
+     *    memory_bank（地点/箱子，随使用无限增长）、last_sender 等都是变量。
+     *    只压 turns 的话，光 self_prompt 一条就能把文件顶爆。
+     *
+     * ③ **最后明确验证总量**：收尾再量一次，仍超限就继续退化（截断 → 丢最旧 turns →
+     *    必要时清空可再生的文本），并把结果打日志。不允许"算完就假设它合格"。
      */
     capSize(data) {
         const LIMIT = 20 * 1024;
+        /** 与落盘同一口径：UTF-8 字节数。 */
+        const byteLen = (obj) => Buffer.byteLength(JSON.stringify(obj, null, 2), 'utf8');
         const out = { ...data };
 
-        // 1) memory 文本先截到 4000 字符（保留开头：目标与地点通常在前半段）。
-        //    这条独立于总大小：memory 是喂给模型的摘要，太长既没用又贵。
+        // ── 1) 各可变字段的独立预算（先各自收口，再谈总量）──────────────
+        // memory：喂给模型的摘要，太长既没用又贵（保留开头：目标与地点通常在前半段）
         if (typeof out.memory === 'string' && out.memory.length > 4000) {
             out.memory = out.memory.slice(0, 4000) + '…（已截断）';
         }
-        if (JSON.stringify(out, null, 2).length <= LIMIT) return out;
+        // self_prompt：!goal 的原文，没有长度上限（BOT-010 的实测爆点之一）
+        if (typeof out.self_prompt === 'string' && out.self_prompt.length > 800) {
+            out.self_prompt = out.self_prompt.slice(0, 800) + '…（已截断）';
+        }
+        // memory_bank：地点/箱子这类"事实"，随使用无限增长；按条数额度收口
+        if (out.memory_bank && typeof out.memory_bank === 'object') {
+            const bank = {};
+            const keys = Object.keys(out.memory_bank);
+            const MAX_BANK = 120;
+            for (const k of keys.slice(0, MAX_BANK)) bank[k] = out.memory_bank[k];
+            out.memory_bank = bank;
+        }
+        if (byteLen(out) <= LIMIT) return out;
 
-        // 2) turns 从最旧的开始丢，直到进入预算（至少留 6 条，保证上下文连贯）
+        // ── 2) turns 从最旧的开始丢，直到进入预算（至少留 6 条，保证上下文连贯）──
         const turns = [...(out.turns || [])];
         const MIN_TURNS = 6;
-        while (turns.length > MIN_TURNS && JSON.stringify({ ...out, turns }, null, 2).length > LIMIT) {
+        while (turns.length > MIN_TURNS && byteLen({ ...out, turns }) > LIMIT) {
             turns.shift();
         }
-        // 3) 还超：把最旧的几条超长内容截断（只保留前 500 字符）
-        let i = 0;
-        while (JSON.stringify({ ...out, turns }, null, 2).length > LIMIT && i < turns.length) {
-            const t = turns[i];
-            if (typeof t.content === 'string' && t.content.length > 500) {
-                turns[i] = { ...t, content: t.content.slice(0, 500) + '…（已截断）' };
+        // ── 3) 还超：把最旧的几条超长内容截断（先 500 字符，再 120 字符）──────
+        for (const keep of [500, 120]) {
+            let i = 0;
+            while (byteLen({ ...out, turns }) > LIMIT && i < turns.length) {
+                const t = turns[i];
+                if (typeof t.content === 'string' && t.content.length > keep) {
+                    turns[i] = { ...t, content: t.content.slice(0, keep) + '…（已截断）' };
+                }
+                i++;
             }
-            i++;
+            if (byteLen({ ...out, turns }) <= LIMIT) break;
         }
         out.turns = turns;
+
+        // ── 4) 最后明确验证总量：仍超限就退化可再生的文本（memory → self_prompt）──
+        if (byteLen(out) > LIMIT && typeof out.memory === 'string' && out.memory.length > 0) {
+            out.memory = '';
+            console.warn('[memory] 预算仍超限：已清空 memory 文本（可从 turns/历史重建），保留地点与箱子等事实。');
+        }
+        if (byteLen(out) > LIMIT && typeof out.self_prompt === 'string' && out.self_prompt.length > 0) {
+            out.self_prompt = out.self_prompt.slice(0, 200);
+            console.warn('[memory] 预算仍超限：self_prompt 已截到 200 字符。');
+        }
+        // ── 5) 极端兜底：仍然超限就继续砍 turns，直到真的合格（不假设"应该够了"）
+        while (turns.length > 1 && byteLen(out) > LIMIT) {
+            turns.shift();
+            out.turns = turns;
+        }
+        const finalBytes = byteLen(out);
+        if (finalBytes > LIMIT) {
+            // 到这一步说明数据本身有异常（比如某字段是超大对象），明确报出来而不是静默超标。
+            console.error(`[memory] 无法压到 ${LIMIT} 字节以内：当前 ${finalBytes} 字节；`
+                + '请检查 memory_bank / turns 里是否有异常大的字段。');
+        }
         return out;
     }
 

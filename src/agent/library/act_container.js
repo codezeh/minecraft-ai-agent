@@ -19,7 +19,14 @@ import { windowSlots } from './atom_read.js';
 import { closeWindow } from './atom_input_inventory.js';
 import { GOAL_LOOK_AT_DEFAULT_REACH } from '../rules/rules.runtime.js';
 
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+/**
+ * 开窗操作的**代次**（BOT-006）。每次 `openContainer` 领一个新号，
+ * 只有"当前这一代"才有权留下窗口 —— 见 openContainer 里的说明。
+ *
+ * （原来这里有一个 `sleep()` 工具函数，只被"超时 race"用过；BOT-006 把超时改成
+ *   可清理的计时器之后它就没有调用方了，一并删掉，不留死代码。）
+ */
+const _openGen = new WeakMap();
 
 /** 名字 → 容器类别。用模式匹配，注册表里出现新变体也能覆盖。 */
 const CONTAINER_PATTERNS = [
@@ -131,22 +138,72 @@ export async function openContainer(bot, pos, opts = {}) {
     const USE_OPEN_CONTAINER = new Set(['chest', 'trapped_chest', 'ender_chest', 'barrel',
         'hopper', 'dropper', 'dispenser', 'shulker']);
     const t0 = Date.now();
+    // ★★ BOT-006（2026-11-06 深度检查）：**超时 / 取消必须真的结束这次开窗。**
+    //
+    //   缺陷原貌：这里原来是 `Promise.race([opener, sleep(timeout)])` —— race 结束后
+    //   **原始 opener 既没被取消也没人管**（包已经发出去了，取消不了），它的副作用照样
+    //   由 mineflayer 落地：
+    //     · 函数已经返回 TIMEOUT，几秒后窗口却突然打开 → 污染下一个任务的 `bot.currentWindow`
+    //       （下一个任务看到 BLOCKED / 错窗口）；
+    //     · 等待期间 `interrupt_code=true`，opener 回来后函数**仍然报 ok**。
+    //   报告验证：TIMEOUT 后 lateOpen=true；interrupt 时开窗结果仍 ok。
+    //
+    //   修法（报告给的最小修复：代次 + 取消清理 + 成功前复核 + 清计时器）：
+    //     · 每次开窗领一个**代次**；被更新的开窗操作顶掉（代次变了）就不再管窗口；
+    //     · 自己设的超时计时器自己清掉（原来 `sleep(timeout)` 会一直挂着）；
+    //     · 本次尝试**结束之后**才到的窗口，只清"自己拥有"的那个
+    //       （当前窗口已经是别人的 → 一律不碰）；
+    //     · **成功之前复核取消**：取消了就不许再报 ok。
+    const gen = (_openGen.get(bot) ?? 0) + 1;
+    _openGen.set(bot, gen);
+    const stale = () => (_openGen.get(bot) ?? 0) !== gen;
+    let finished = false;
+    /** 迟到结果的清理：只关"我们开的、且没被后来的开窗操作接盘"的那个窗口。 */
+    const closeLateIfOwned = (w) => {
+        if (!w) return;
+        if (stale()) return;                       // 更新的开窗操作已经接盘 → 别碰它的窗
+        const cur = bot.currentWindow;
+        if (cur && cur !== w) return;              // 当前窗口不是我们开的那个 → 别碰
+        try { bot.closeWindow?.(cur ?? w); } catch { /* ignore */ }
+    };
+
     let win = null;
+    let timer = null;
     try {
         const opener = USE_OPEN_CONTAINER.has(kind)
             ? bot.openContainer(block)
             : bot.openBlock(block);
-        win = await Promise.race([
-            opener,
-            sleep(timeout).then(() => { throw new Error('open-timeout'); }),
-        ]);
+        // 结局自己接管：opener 晚到（超时之后才 resolve）时按"迟到结果"清理
+        const settled = Promise.resolve(opener).then(
+            (w) => { if (finished) closeLateIfOwned(w); return { okWin: true, w }; },
+            (e) => ({ okWin: false, e }),
+        );
+        const timeoutP = new Promise((_, reject) => {
+            // ★ 不用 unref：这里**必须**由这一个计时器兜住"开窗一直没有回音"的情况，
+            //   而它在 finally 里一定会被 clearTimeout（BOT-006 的"清掉超时计时器"）。
+            timer = setTimeout(() => reject(new Error('open-timeout')), timeout);
+        });
+        const r = await Promise.race([settled, timeoutP]);
+        finished = true;                            // 从这里起，迟到的窗口归 closeLateIfOwned 收拾
+        if (!r.okWin) throw r.e;
+        win = r.w;
+
+        // ★ BOT-006：等待期间被取消 —— 开窗结果回来了也不许报 ok
+        if (bot.interrupt_code) {
+            closeLateIfOwned(win ?? bot.currentWindow);
+            return fail('INTERRUPTED', '被取消了', { block: block.name });
+        }
     } catch (e) {
+        finished = true;
         const msg = String(e?.message ?? e);
-        try { if (bot.currentWindow) bot.closeWindow(bot.currentWindow); } catch { /* ignore */ }
+        closeLateIfOwned(bot.currentWindow);
         if (/timeout/.test(msg)) {
             return fail('TIMEOUT', `开了 ${Date.now() - t0}ms 还没开`, { block: block.name, costMs: Date.now() - t0 });
         }
         return fail('INTERNAL', msg, { error: msg, block: block.name });
+    } finally {
+        // ★ BOT-006：超时计时器必须清掉（原来它会在后台一直跑到底）
+        if (timer) { clearTimeout(timer); timer = null; }
     }
 
     // ---- 后置校验：窗口真的开了吗（读 bot 状态，不信返回值）----
@@ -376,7 +433,30 @@ export async function deposit(bot, item, n = 1) {
     } catch (e) {
         const msg = String(e?.message ?? e);
         if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item });
-        return fail('INTERNAL', msg, { error: msg, item });
+        // ★★ BOT-009（2026-11-06 深度检查）：**异常之后必须重新核对真实差值。**
+        //
+        //   缺陷原貌：mineflayer 的 `win.deposit` 是"逐次点击"实现的（inventory.js 的
+        //   transferOne 递归），箱子中途满 / 窗口被关 / 交易被拒时**前面的点击已经搬进去了**，
+        //   而这里原来直接 `return fail('INTERNAL')` —— 连 stored 都不带。
+        //   流程只好按"一件都没存"处理：跳过共享库存更新、账本按零进度、重试时**重复搬运**。
+        //   报告验证：请求存 10，实际已进箱 3（背包 10→7），完整流程却返回 INTERNAL/stored:0。
+        //
+        //   修法：等计数落定，按**背包真实减少量**（并用箱子真实增加量兜底）算出已搬数量；
+        //   有进展 → INVENTORY_FULL + 真实 stored（= "只搬了一部分，剩下的换箱/记账"），
+        //   真一件没动 → 才是 INTERNAL。
+        await waitCountsSettled(() => invCount(bot, item) < invBefore || winCount(bot, item) > winBefore);
+        const invAfter = invCount(bot, item);
+        const winAfter = winCount(bot, item);
+        const moved = Math.max(invBefore - invAfter, winAfter - winBefore, 0);
+        if (moved > 0) {
+            return fail('INVENTORY_FULL', `只存进去 ${moved}/${take}（${msg}）`, {
+                item, want, stored: moved, invBefore, invAfter, winBefore, winAfter,
+                partial: true, error: msg,
+            });
+        }
+        return fail('INTERNAL', msg, {
+            error: msg, item, want, stored: 0, invBefore, invAfter, winBefore, winAfter,
+        });
     }
 
     // ★ 先等计数落定（否则读到旧值 → 假失败）
@@ -441,7 +521,21 @@ export async function withdraw(bot, item, n = 1) {
     } catch (e) {
         const msg = String(e?.message ?? e);
         if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item });
-        return fail('INTERNAL', msg, { error: msg, item });
+        // ★ BOT-009（与 deposit 同一个坑的另一半）：取物抛错时按真实差值报部分进度 ——
+        //   原来同样直接 INTERNAL，已经取到手的那几件被当成"一件没取"。
+        await waitCountsSettled(() => winCount(bot, item) < winBefore || invCount(bot, item) > invBefore);
+        const invAfter = invCount(bot, item);
+        const winAfter = winCount(bot, item);
+        const moved = Math.max(winBefore - winAfter, invAfter - invBefore, 0);
+        if (moved > 0) {
+            return fail('INVENTORY_FULL', `只取出 ${moved}/${take}（${msg}）`, {
+                item, want, taken: moved, invBefore, invAfter, winBefore, winAfter,
+                partial: true, error: msg,
+            });
+        }
+        return fail('INTERNAL', msg, {
+            error: msg, item, want, taken: 0, invBefore, invAfter, winBefore, winAfter,
+        });
     }
 
     // ★ 同样先等计数落定

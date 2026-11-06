@@ -23,7 +23,7 @@
  *   流程把 `OCCUPIED` 当作**换一个熔炉**（可恢复），不是 abort —— 为别人的料让路是正常协作。
  */
 import { ok, fail } from './contract.js';
-import { furnaceLoad, furnaceCollect, craftOnce } from './act_craft.js';
+import { furnaceLoad, furnaceCollect, craftOnce, fuelNeededFor } from './act_craft.js';
 import { placeBlockAt } from './act_place.js';
 import { findItem } from './act_items.js';
 import { countItem, blockAt } from './query_perceive.js';
@@ -126,6 +126,23 @@ export async function smelt(bot, input, count = 1, opts = {}) {
         });
     }
 
+    // ★★ BOT-003（2026-11-06 深度检查）：**燃料够不够要在这里先算清楚。**
+    //
+    //   缺陷原貌：燃料只按"有就行"判 —— `furnaceLoad` 又固定只投 1 份，
+    //   于是 1 煤只烧 8 个，剩下的原料在炉里干等，流程一路空转到 10 分钟 deadline
+    //   才报"只炼出 8/16"（报告复现：虚拟 costMs=600000，剩 8 原料 / 63 煤）。
+    //   这是**注定失败却先占住任务 10 分钟**——最坏的一种浪费。
+    //
+    //   修法（报告的最小修复后半句）：按燃烧时长算需要几份燃料，缺口**早报 missing**，
+    //   让上层去补燃料（strat_obtain / flow_store），而不是在这里耗到超时。
+    const needFuel = fuelNeededFor(fuel, want);
+    const haveFuel = countItem(bot, fuel);
+    if (haveFuel < needFuel) {
+        return fail('NO_ITEM', `燃料不够：烧 ${want} 个 ${input} 要 ${needFuel} 个 ${fuel}，只有 ${haveFuel}`, {
+            input, count: 0, want, fuel, missing: { fuel: needFuel - haveFuel },
+        });
+    }
+
     const before = countItem(bot, outputOf(bot, input));
 
     // ── 找熔炉；没有就放一个（背包没有熔炉就先合，8 圆石）──
@@ -175,7 +192,9 @@ export async function smelt(bot, input, count = 1, opts = {}) {
             }
         }
 
-        const loaded = await furnaceLoad(bot, f, input, fuel);
+        // ★ BOT-003：把"本次要炼几个"传给动作层 —— 装料量与 want 对齐
+        //   （原来 count 传不到动作层，`furnaceLoad` 只能"有多少塞多少"）。
+        const loaded = await furnaceLoad(bot, f, input, fuel, { count: want });
         if (loaded.ok) {
             furnace = f;
             break;

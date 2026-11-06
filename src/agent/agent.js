@@ -76,12 +76,26 @@ export class Agent {
     /**
      * B4 一次性迁移：本 bot 的旧 memory 分域文件 → 任务板库（06 §9.3）。
      *
-     * 幂等：板库里已有该 kind 的任何行就跳过。**不会**因为多启动几次而重复搬。
-     * 旧文件不删（留作事故取证），但**代码路径不再读它** —— 见 flow_store 的注释。
+     * 幂等：**按 (kind, key) 逐来源**跳过 —— 板库里已经有这条就不再搬。
+     *
+     * ★★ BOT-004（2026-11-06 深度检查）：这里原来有两个缺陷。
+     *
+     *   缺陷原貌①「迁移读错目录」：`_migrateSharedOnce()` 是在 `this.bot` 创建**之前**
+     *     调用的（start() 里板一连上就迁移，`initBot()` 还在几百行之后），而这里用
+     *     `mem.readStore(this.bot, ns)` → `memoryDir(undefined)` → 用户名回落成 `'agent'`
+     *     → **每只机器人都在读 `bots/agent/memory/*`**。
+     *     报告验证：夹具里 `deepseek/sites.x=22`、`agent/sites.x=11`，真实迁移只导入了 11。
+     *   缺陷原貌②「幂等判据按全局 kind」：原来是 `sharedList(kind)` 有**任意一条**就
+     *     `continue` 整个 kind。第一个机器人搬完后，后面启动的机器人**永远不会再迁移自己的**
+     *     旧数据（漏迁）；迁移失败也照样算完成（`_sharedMigrated` 在开头就置 true）。
+     *
+     *   修法（报告的最小修复：显式以确定的登录名读旧目录 + 按机器人/版本标记、成功后写）：
+     *     · 读旧目录用**确定的登录名**（`login_name`）而不是还没建出来的 `this.bot`；
+     *     · 幂等按 (kind, key) 逐条判，不再一票否决整个 kind；
+     *     · 只有**全部搬完**才置 `_sharedMigrated`，中途抛错下次启动还能重试。
      */
-    async _migrateSharedOnce() {
+    async _migrateSharedOnce(loginName = null) {
         if (!this.board || this._sharedMigrated) return;
-        this._sharedMigrated = true;
         try {
             const [store, mem, botPaths] = await Promise.all([
                 import('./library/board_store.js'),
@@ -92,34 +106,53 @@ export class Agent {
             // 小数据量，为了不让 agent 直连库（那会变成第二个写者），
             // 这里只上报"我有旧数据待迁"，实际写库由 board:shared-put 完成。
             const reader = { readStore: (b, ns) => mem.readStore(b, ns) };
+            // ★ BOT-004：读旧目录的身份 = **确定的登录名**（与 initBot 用的是同一个表达式），
+            //   不再依赖"此刻 this.bot 已经建好了"这个并不成立的假设。
+            const storeBot = this.bot ?? { username: loginName || this.name || 'agent' };
+            const pull = (ns) => { try { return mem.readStore(storeBot, ns) ?? null; } catch { return null; } };
+            // ★ BOT-004：幂等判据改成 (kind, key) 逐条 —— 别再"有任意一条就跳过整个 kind"
+            const existing = new Set();
+            const rememberExisting = (kind, items) => {
+                for (const it of (items ?? [])) {
+                    if (it && typeof it.key === 'string') existing.add(`${it.kind ?? kind}\u0000${it.key}`);
+                }
+            };
             const pending = ['landmark', 'danger', 'chest'];
             for (const kind of pending) {
-                // 先问板库有没有；有就跳过（幂等）
                 const cur = await this.board.sharedList?.(kind);
-                if (cur?.ok && (cur.data?.items ?? []).length > 0) continue;
-                // 把本地旧数据经 board 写进去
-                const pull = (ns) => { try { return mem.readStore(this.bot, ns) ?? null; } catch { return null; } };
+                if (cur?.ok) rememberExisting(kind, cur.data?.items ?? []);
+            }
+            const need = (kind, key) => !existing.has(`${kind}\u0000${key}`);
+            for (const kind of pending) {
                 if (kind === 'landmark') {
                     for (const s of (pull('sites') ?? [])) {
-                        if (Number.isFinite(s?.x)) await this.board.sharedPut('landmark', s.name ?? `site_${s.x}_${s.z}`, s);
+                        if (!Number.isFinite(s?.x)) continue;
+                        const key = s.name ?? `site_${s.x}_${s.z}`;
+                        if (need('landmark', key)) await this.board.sharedPut('landmark', key, s);
                     }
                     const st = pull('storage');
-                    if (Number.isFinite(st?.x)) await this.board.sharedPut('landmark', 'storage', st);
+                    const stKey = 'storage';
+                    if (Number.isFinite(st?.x) && need('landmark', stKey)) await this.board.sharedPut('landmark', stKey, st);
                 } else if (kind === 'danger') {
                     for (const d of (pull('dangers') ?? [])) {
-                        if (Number.isFinite(d?.x)) await this.board.sharedPut('danger', `${Math.floor(d.x)},${Math.floor(d.z)}`, d);
+                        if (!Number.isFinite(d?.x)) continue;
+                        const key = `${Math.floor(d.x)},${Math.floor(d.z)}`;
+                        if (need('danger', key)) await this.board.sharedPut('danger', key, d);
                     }
                 } else if (kind === 'chest') {
                     // 只搬 landmarks 形状（数组）；flow_store 的 map 形状是历史噪音，不搬
                     for (const c of (pull('chests') ?? [])) {
                         if (!Number.isFinite(c?.x)) continue;
                         const key = `${Math.floor(c.x)},${Math.floor(c.y)},${Math.floor(c.z)}`;
+                        if (!need('chest', key)) continue;
                         await this.board.sharedPut('chest', key, {
                             pos: { x: c.x, y: c.y, z: c.z }, items: c.contents ?? {}, category: c.category ?? null, note: c.note ?? '',
                         });
                     }
                 }
             }
+            // ★ BOT-004：**成功之后**才写标记（原来在 try 之前就置 true，一次失败永不重试）
+            this._sharedMigrated = true;
         } catch (e) {
             console.log(`[共享数据] 迁移跳过：${String(e?.message ?? e).slice(0, 120)}`);
         }
@@ -164,6 +197,13 @@ export class Agent {
         // 已经写好了完整降级（`applyStop()` 空操作、`reserve/release` 恒成功），
         // 行为与加板之前**逐行一致**。不维护"有板/无板"两条业务路径（06 §9.2）。
         this.board = null;
+        // ★ BOT-004（2026-11-06 深度检查）：**登录名要在板连上之前就算好。**
+        //   迁移读的旧目录是按 bot 名字分目录的（bots/<登录名>/memory/*），
+        //   而登录名原来在 `initBot()` 那一段才第一次出现 —— 迁移跑在那之前，
+        //   于是 `readStore(this.bot=undefined)` 一路回落到 `bots/agent/memory/`。
+        //   提前算出来并显式传给迁移，两条路径就用同一个身份。
+        //   （下面 `initBot` 那一段仍用这个变量，保证"迁移读的目录"和"实际登录名"是同一个值。）
+        const login_name = settings.profile?.username || this.name;
         try {
             const skills = await this._registeredSkills();
             const client = new BoardClient({
@@ -181,7 +221,8 @@ export class Agent {
                 // ★ B4：把这只 bot 旧的地标/危险/箱子分域文件**一次性**搬进板库。
                 //   搬完代码路径就只读板库（旧文件保留作取证，但不再读）。
                 //   放在板连上之后、调度器之后：搬不动也不该阻止 agent 干活。
-                try { await this._migrateSharedOnce(); } catch { /* 迁移失败不影响启动 */ }
+                // ★ BOT-004：显式传登录名 —— 此刻 this.bot 还没创建（见上面的说明）
+                try { await this._migrateSharedOnce(login_name); } catch { /* 迁移失败不影响启动 */ }
             } else {
                 console.log(`[任务板] 未连接（${hello.code} ${hello.message ?? ''}），控制层降级为"没有单要动"`);
             }
@@ -251,7 +292,7 @@ export class Agent {
 
         // Minecraft only allows ASCII usernames ([a-zA-Z0-9_], 3-16 chars), so the
         // agent name (used in the UI and the prompt) can differ from the login name.
-        const login_name = settings.profile?.username || this.name;
+        // ★ BOT-004：`login_name` 已在板接线之前算好（迁移要用同一个身份），这里直接用。
         console.log(this.name, 'logging into minecraft as', login_name, '...');
         this.bot = initBot(login_name);
 

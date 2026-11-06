@@ -640,7 +640,10 @@ export async function smeltItem(bot, itemName, num=1) {
     };
 
     // ---- 第 2 步：放料 + 燃料 ----
-    const load = await furnaceLoad(bot, furnaceBlock, itemName, null);
+    // ★ BOT-003（2026-11-06 深度检查）：把 `num` 传给动作层。
+    //   原样不传时 `furnaceLoad` 只会"有多少塞多少、燃料 1 份" —— `!smeltItem raw_iron 16`
+    //   会塞进最多 64 份料、1 煤（= 8 个）就断火，最后报"只炼出 8/16"。
+    const load = await furnaceLoad(bot, furnaceBlock, itemName, null, { count: num });
     if (!load.ok) {
         log(bot, `填料失败：${load.code} ${load.message ?? ''}。`);
         await closeOnly();

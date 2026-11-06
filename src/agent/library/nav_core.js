@@ -229,6 +229,9 @@ export async function goTo(bot, target, opts = {}) {
         mapDir = null,
         deadlineMs = 300000,
         arriveTol = null,
+        // ★ BOT-005：垂直到达容差（格）。只影响"给了 y"的目标；1 格吸收
+        //   方块坐标 y 与脚位 y 的差一（站在 y=64 的方块上，脚位是 y=65）。
+        arriveYTol = null,
         onEvent = () => { },
         rescan = true,
         // ★ t66：驱动者标识。有任务单时 `makeCtx` 会把 jobId 写到 `bot.__navJobId`，
@@ -249,7 +252,7 @@ export async function goTo(bot, target, opts = {}) {
     const nestedOwner = navCtxOwner();
     const useOwner = nestedOwner ?? (owner != null && String(owner) !== '' ? String(owner) : resolveNavOwner(bot));
     if (nestedOwner) {
-        return await _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent, rescan, owner: useOwner });
+        return await _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, arriveYTol, onEvent, rescan, owner: useOwner });
     }
 
     const lock = await acquireNav(String(useOwner), Math.min(NAV_LOCK_WAIT_MS, Math.max(1000, deadlineMs)));
@@ -260,13 +263,13 @@ export async function goTo(bot, target, opts = {}) {
     }
     try {
         return await _navAls.run({ owner: String(useOwner) }, () =>
-            _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent, rescan, owner: useOwner }));
+            _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, arriveYTol, onEvent, rescan, owner: useOwner }));
     } finally {
         lock.release();
     }
 }
 
-async function _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent, rescan }) {
+async function _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, arriveYTol, onEvent, rescan }) {
 
     const dest = normalizeDest(target);
     if (!dest) return fail('NO_TARGET', '目标坐标无效（需要 {x,z} 或 {kind:"point",pos:{x,y,z}}）');
@@ -278,11 +281,21 @@ async function _goToLocked(bot, target, { mapDir, deadlineMs, arriveTol, onEvent
 
     // ---- 引擎 1：有 3D 库 → walkTo（唯一能爬台阶 / 挖穿 / 垫方块的）----
     if (mapDir) {
-        const r = await walkTo(bot, { x: dest.x, z: dest.z }, {
+        // ★ BOT-005（2026-11-06 深度检查）修复：**目标 y 不许丢**。
+        //
+        // 缺陷原貌：这里只把 {x, z} 交给 walkTo，y 被丢掉；而 walkTo 的到达判据也只算
+        // 水平距离 `hypot(dx, dz)` ⇒ 她站在 y64、目标在 y120 时"零步返回 OK"。
+        // 报告实测：(0,64,0)→(0,120,0)，verticalDistance56 却 OK/steps0/moved0。
+        // 后果：跨楼层的箱子/熔炉/采集点接近流程会接着执行**够不到的交互**。
+        //
+        // 现在：y 一并传下去，由 walkTo 把垂直差纳入到达判定；只剩垂直差时明确报
+        // NEED_VERTICAL（而不是假装到了）。arriveYTol 给 1 格（台阶/半砖的正常误差）。
+        const r = await walkTo(bot, { x: dest.x, z: dest.z, y: dest.y }, {
             mapDir,
             onEvent: tracedOnEvent,
             deadlineMs,
             arriveTol: arriveTol ?? 5,
+            arriveYTol: arriveYTol ?? 1,
             rescan,
         });
         return withEngine(r, 'walk3d');

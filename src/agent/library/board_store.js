@@ -28,7 +28,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { boardDirOf } from './bot_paths.js';
-import { claimsConflict, normalizeClaimKeys, parseClaimKey } from './board_claims.js';
+// ★ BOARD-003：`attemptSeqOfJob` —— "这张单现在是第几次尝试"的**唯一口径**
+//   （收尾归属校验 attemptGuardSql / 保留序号 / 客户端都读它，避免各判一遍）。
+import { claimsConflict, normalizeClaimKeys, parseClaimKey, attemptSeqOfJob } from './board_claims.js';
 
 /** 任务单状态（06 §4 原表，别自造）。 */
 export const JOB_STATE = Object.freeze({
@@ -164,6 +166,12 @@ CREATE INDEX IF NOT EXISTS idx_claims_until ON claims(until);
  *   "缺列"当成库损坏、改名重建空库（见 `isCorruptError`）。于是**每次加字段都在丢单**，
  *   而且丢得"合理"（日志写着"库损坏已重建"）。
  *   有了版本号，"加列"变成一次**幂等迁移**：读版本 → 补列 → 写回。
+ *
+ * ★ 为什么 BOARD-003 **没有**新增 `attemptSeq` 列：`claimFor` 早就把当前尝试序号写在
+ *   `checkpoint.attemptSeq` 上，而 `checkpoint` 本来就是这张单的"进度/断点"载体。
+ *   再加一列等于**同一件事有两个真相**：要么两处都要在领单时写，要么迟早漂移。
+ *   所以收尾归属校验直接读 `checkpoint.attemptSeq`（见 `attemptGuardSql`），
+ *   不新增列、不做迁移、不回填老库。
  */
 export const BOARD_SCHEMA_VERSION = 2;
 
@@ -592,6 +600,33 @@ function convergeIfSatisfied(db, id, now, reason = 'satisfied') {
 }
 
 /**
+ * ★★★ BOARD-003（2026-11-06 深度检查）：**尝试标识守卫**。
+ *
+ * 病根：租约归属只核对**机器人名字**（`lease_owner = ?`）。于是
+ *   `claim(attemptSeq=1)` → 租约过期被回收 → **同名**再领（attemptSeq=2）
+ *   → 旧尝试的**迟到** finish 仍满足 `lease_owner = 我` → 被当成当前尝试的结果接受，
+ *   清掉新租约并把任务置 done。报告实测：staleAccepted=true、最终 done。
+ *   （`attemptSeq` 早就存在，只是从没用于收尾归属校验。）
+ *
+ * 修法：把「这次写入属不属于当前尝试」做成 **SQL 条件**（和租约守卫一样落在
+ *   `changes` 上，不能用"先读再写"的快照判断，那中间仍有窗口）。
+ *   老行没有 `attemptSeq`（json_extract → NULL）时**不加约束**，保持旧行为，
+ *   这样离线工具/历史数据不受影响。
+ *
+ * @param {number|string|null|undefined} attemptSeq 调用方带来的尝试序号
+ * @returns {{sql:string, params:Array}} 可直接拼进 `WHERE id=?` 之后
+ */
+function attemptGuardSql(attemptSeq) {
+    const n = Number(attemptSeq);
+    if (attemptSeq == null || attemptSeq === '' || !Number.isFinite(n)) return { sql: '', params: [] };
+    return {
+        sql: " AND (json_extract(checkpoint,'$.attemptSeq') IS NULL"
+            + " OR CAST(json_extract(checkpoint,'$.attemptSeq') AS INTEGER) = ?)",
+        params: [n],
+    };
+}
+
+/**
  * 领单（**原子**）。
  *
  * ★ 规则①：只用一条 `UPDATE ... WHERE state='ready'`，靠 **`changes`** 判断成败。
@@ -611,13 +646,27 @@ export function claimFor(db, bot, opts = {}) {
     const who = { roles: opts.roles ?? [], items: opts.items ?? [] };
 
     // 候选：ready 且（个人单是我的 或 多人单没指派）；notBefore 已到
+    //
+    // ★★★ BOARD-001（2026-11-06 深度检查）：**不能先截断再过滤**。
+    //
+    //   缺陷原貌：这里原来是 `LIMIT 16` —— 先把高优先级的前 16 张捞出来，再逐张做
+    //   `convergeIfSatisfied` / `meetsRequires` / `dependsSatisfied` 过滤。
+    //   于是"前 16 张都在等前置、真正可执行的前置单排在第 17 位"时：
+    //   16 张全部 `continue` → `return null` → 下一轮**捞到的还是同一批** → 调度停摆。
+    //   报告实测：16 张 priority=9 的单依赖一张 priority=5 的前置单，连续两次 claim
+    //   都是 null，而那张前置单一直是 ready —— 状态看着有活，实际一张都领不出。
+    //
+    //   修法：**去掉截断**，按同一顺序扫到底（只在找到可领的就 return，所以正常情况
+    //   第 1 张就结束）。`MAX_SCAN` 只是防御病态积压（10 万张单不该让一次 claim 卡住），
+    //   不是调度窗口 —— 它比原来的 16 大三个数量级，不会重新引入饿死。
+    const MAX_SCAN = 5000;
     const cands = db.prepare(`
         SELECT id FROM jobs
         WHERE state = 'ready'
           AND (assignee IS NULL OR assignee = ?)
           AND (notBefore IS NULL OR notBefore <= ?)
         ORDER BY (assignee = ?) DESC, priority DESC, createdAt ASC
-        LIMIT 16`).all(bot, now, bot);
+        LIMIT ?`).all(bot, now, bot, MAX_SCAN);
 
     for (const c of cands) {
         // ★ 先看"是不是已经跑够了"：跑够的直接收敛成 done，**不派发**（t20 修的就是这里）
@@ -674,8 +723,12 @@ export function heartbeat(db, id, bot, opts = {}) {
     const nextState = job.state === JOB_STATE.CLAIMED ? JOB_STATE.RUNNING : job.state;
     // ★ 进度单调：agent 报的原值比已有的小 → 取大的（06 §11「不倒退」）
     const merged = mergeProgress(job.progress, progress);
-    db.prepare(`UPDATE jobs SET lease_until=?, state=?, progress=?, updatedAt=? WHERE id=?`)
-        .run(now + leaseMs, nextState, j(merged.progress), now, id);
+    // ★★★ BOARD-003：心跳也要校验尝试标识 —— 否则"租约过期→同名重领"之后，
+    //   旧尝试还能继续给新尝试续租/写进度，把新租约的 until 往前推、把进度覆盖。
+    const hbGuard = attemptGuardSql(opts.attemptSeq);
+    const hb = db.prepare(`UPDATE jobs SET lease_until=?, state=?, progress=?, updatedAt=? WHERE id=?${hbGuard.sql}`)
+        .run(now + leaseMs, nextState, j(merged.progress), now, id, ...hbGuard.params);
+    if (hb.changes === 0) return { ok: false, code: 'LEASE_LOST' };
 
     // ★ 2026-11-02（t20，captain 要求）：心跳报到"已达标"就当场收敛成 done，**别等 finish**。
     //   理由：B1 真机里 A 在"已跑够 15/8"时被 kill，如果只能靠 finish 收敛，
@@ -920,6 +973,8 @@ export function finish(db, id, result = {}, opts = {}) {
         }
     }
     const leaseGuard = bot == null ? '' : ' AND (lease_owner IS NULL OR lease_owner = ?)';
+    // ★★★ BOARD-003：同名不同尝试也要能区分（租约只看名字是不够的）。
+    const aGuard = attemptGuardSql(opts.attemptSeq);
 
     // ★★★ 第15条：把产出账落盘（唯一持久的地方）。
     //   · `checkpoint.producedTotal`   —— 本单**累计**产出（单调不减，跨尝试累加）
@@ -933,19 +988,29 @@ export function finish(db, id, result = {}, opts = {}) {
         if (!progress) return { count: ledger.producedTotal, want: want > 0 ? want : null };
         return { ...progress, count: Math.max(Number(progress.count ?? 0) || 0, ledger.producedTotal) };
     })();
-    const checkpointForWrite = ledger
-        ? {
-            ...(result.checkpoint ?? job.checkpoint ?? {}),
-            producedTotal: ledger.producedTotal,
-            producedAttempt: ledger.attemptProduced,
-            countedSeq: ledger.countedSeq,
-        }
-        : (result.checkpoint ?? job.checkpoint);
+    const checkpointForWrite = (() => {
+        const base = ledger
+            ? {
+                ...(result.checkpoint ?? job.checkpoint ?? {}),
+                producedTotal: ledger.producedTotal,
+                producedAttempt: ledger.attemptProduced,
+                countedSeq: ledger.countedSeq,
+            }
+            : (result.checkpoint ?? job.checkpoint);
+        // ★★★ BOARD-003：**收尾写的 checkpoint 也必须带着"这是第几次尝试"。**
+        //   否则 `result.checkpoint` 一覆盖，序号就没了 → 下一次 `claimFor` 从 0 开始重新数，
+        //   于是"旧尝试 seq=1"和"新一轮的 seq=1"撞成同一个数 → 收尾守卫再也分不开新旧尝试
+        //   （BOARD-003 的防护被悄悄关掉，而且不报错）。序号在这里**原样保留**（不 +1）：
+        //   +1 的时机只有"领单"这一个入口。
+        const curSeq = attemptSeqOfJob(job);
+        if (curSeq == null) return base;
+        return { ...(base ?? {}), attemptSeq: curSeq };
+    })();
 
     const r = db.prepare(`UPDATE jobs
         SET state=?, attempts=?, lease_owner=NULL, lease_until=NULL,
             progress=?, checkpoint=?, result=?, interrupted=?, updatedAt=?
-        WHERE id=?${leaseGuard}`).run(
+        WHERE id=?${leaseGuard}${aGuard.sql}`).run(
         next, attempts,
         j(progressForWrite),
         j(checkpointForWrite),
@@ -969,16 +1034,23 @@ export function finish(db, id, result = {}, opts = {}) {
         // 回到 ready 时清掉 interrupted（与 control.js 的 requeue 语义一致）；
         // 其它状态保留（paused 时要留着"被打断的原因/时刻"）
         next === JOB_STATE.READY ? null : j(result.interrupted ?? job.interrupted),
-        now, id, ...(bot == null ? [] : [bot]),
+        now, id, ...(bot == null ? [] : [bot]), ...aGuard.params,
     );
 
     // ★★★ 第4条：`changes === 0` = **租约已不属于调用者** → 一字不写，直接拒。
     //   判据必须落在 UPDATE 的 `changes` 上，不能只靠上面那次 `getJob` 的读快照 ——
     //   两次调用之间可能被别人接手。那正是"先 SELECT 再 UPDATE"的老坑的 finish 版本。
+    //
+    //   ★ BOARD-003：`changes === 0` 现在有两种成因 —— 租约不属于我，**或**
+    //   我的 `attemptSeq` 已经不是当前尝试（同名重领之后旧尝试迟到写入）。
+    //   两者对调用方的处置完全一样：**立刻停手、不写结果**，所以统一返回
+    //   `LEASE_STALE`（稳定码，调用方不用分辨是哪种）。
     if (r.changes === 0) {
         return {
             ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
-            message: '租约已不属于调用者（被回收/别人接手），本次 finish 一个字段都没写',
+            message: opts.attemptSeq == null
+                ? '租约已不属于调用者（被回收/别人接手），本次 finish 一个字段都没写'
+                : '租约已不属于调用者，或这是**过期尝试**的迟到写入（attemptSeq 不匹配当前尝试）；本次 finish 一个字段都没写',
         };
     }
     return { ok: true, job: getJob(db, id), next, counted };
@@ -1055,8 +1127,22 @@ export function setState(db, id, state, opts = {}) {
         return { ok: false, code: 'INTERNAL', message: `非法转移 ${job.state} → ${state}` };
     }
     const clearLease = [JOB_STATE.READY, JOB_STATE.PAUSED, JOB_STATE.CANCELLED, JOB_STATE.BLOCKED].includes(state);
-    db.prepare(`UPDATE jobs SET state=?, updatedAt=?${clearLease ? ', lease_owner=NULL, lease_until=NULL' : ''} WHERE id=?`)
-        .run(state, now, id);
+    // ★★★ BOARD-003 补洞（2026-11-06 深度检查）：**setState 也要过尝试守卫**。
+    //
+    //   报告的回归项只列了 finish/heartbeat/checkpoint，但这一处同样会**放掉新尝试的租约**：
+    //   `clearLease` 四个状态里有 ready/paused/blocked，全都会把 lease 清成 NULL。
+    //   于是"同名重领之后，**旧尝试**调一次 board:set-state(paused/ready)"就能把
+    //   新尝试的租约摘掉 —— 与"旧 finish 结束新尝试"是同一个洞的另一扇门。
+    //   兼容：不传 attemptSeq（老客户端/控制层离线工具）时行为完全不变。
+    const stGuard = attemptGuardSql(opts.attemptSeq);
+    const st = db.prepare(`UPDATE jobs SET state=?, updatedAt=?${clearLease ? ', lease_owner=NULL, lease_until=NULL' : ''} WHERE id=?${stGuard.sql}`)
+        .run(state, now, id, ...stGuard.params);
+    if (st.changes === 0) {
+        return {
+            ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
+            message: '这不是当前尝试（attemptSeq 不匹配）：本次改状态一个字段都没落库',
+        };
+    }
     return { ok: true, job: getJob(db, id) };
 }
 
@@ -1102,13 +1188,43 @@ export function updateJob(db, id, patch = {}, opts = {}) {
             params.push(j(m.progress));
             continue;
         }
+        // ★★★ BOARD-003（回归用例 board003 ⑦）：**租约归属不能存在"会被业务覆盖的地方"。**
+        //
+        //   `checkpoint` 是"进度/断点"的**整体载体**，`board:checkpoint` 就是整份替换它。
+        //   而"第几次尝试"（`attemptSeq`）也存在里面 —— 于是新尝试只写一次普通断点，
+        //   就把自己的尝试序号**抹掉**了 → 收尾守卫读成 NULL（`attemptGuardSql` 的
+        //   "老行不加约束"分支）→ **fail open** → 旧尝试的迟到 finish 又能结束新尝试，
+        //   正好是 BOARD-003 要防的那件事（离线用例实测：staleAccepted 又变回 true）。
+        //
+        //   修法：写 `checkpoint` 时**自动保留当前行的 attemptSeq**（本次显式给了就用给的）。
+        //   只保留这一个字段，不碰业务字段、不碰产出账 —— 改动面最小。
+        //   ★ 为什么不是另加一列：`claimFor` 早就把序号写在 checkpoint 上，
+        //     另建一列会让"同一件事有两个写入路径"（见 BOARD_SCHEMA_VERSION 处的注释）。
+        if (k === 'checkpoint') {
+            const curSeq = attemptSeqOfJob(job);
+            const incoming = (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+            if (curSeq != null && (incoming == null || incoming.attemptSeq == null)) {
+                sets.push('checkpoint=?');
+                params.push(j({ ...(incoming ?? {}), attemptSeq: curSeq }));
+                continue;
+            }
+        }
         sets.push(`${k}=?`);
         params.push(JSON_COLS.has(k) ? j(v) : v);
     }
     if (!sets.length) return { ok: true, job };
     sets.push('updatedAt=?');
     params.push(now, id);
-    db.prepare(`UPDATE jobs SET ${sets.join(', ')} WHERE id=?`).run(...params);
+    // ★★★ BOARD-003：断点写入同样要落在"同一次尝试"上。
+    //   报告回归验收明确要求"迟到 checkpoint 不得修改新尝试字段"。
+    const ujGuard = attemptGuardSql(opts.attemptSeq);
+    const uj = db.prepare(`UPDATE jobs SET ${sets.join(', ')} WHERE id=?${ujGuard.sql}`).run(...params, ...ujGuard.params);
+    if (uj.changes === 0) {
+        return {
+            ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
+            message: '这不是当前尝试（attemptSeq 不匹配）：本次写入一个字段都没落库',
+        };
+    }
     return { ok: true, job: getJob(db, id) };
 }
 

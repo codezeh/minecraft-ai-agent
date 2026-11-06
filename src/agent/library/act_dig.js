@@ -229,27 +229,49 @@ export function canDigReason(bot, block) {
     if (Number(bot?.health ?? 20) <= 0) return { can: false, why: 'unreadable' };
 
     const items = raw;
-    // Pickaxe covers stone-family blocks (the common case when digging down).
+
+    // ★★ BOT-008（2026-11-06 深度检查）：**预检必须和方块真值一致，不能只看工具名。**
     //
-    // ★ 2026-11-02 真机验收抓到的 bug：原来只取**第一把**镐 `.find()`，
-    //   那把磨损了就判定"挖不动"——哪怕背包里还有 5 把全新的。
-    //   实测症状：同一个 bot 名反复重启后背包里堆了 6 把镐（有的磨秃了），
-    //   第一把恰好是旧的 → `canDigWithInventory` 返回 false → `flow_mine` 报
-    //   NO_TOOL「没有合适的镐」→ 单子被正确判 blocked，但**其实她完全挖得动**。
-    //   （这和本项目反复踩的"只看第一个"是同一类错。）
-    //   改成"**任意一把**还能用就算有工具"。
-    const picks = items.filter(i => /_pickaxe$/.test(i.name));
-    for (const pick of picks) {
-        // A pickaxe with almost no durability left is as good as none.
-        const max = pick.maxDurability ?? 0;
-        const used = pick.durabilityUsed ?? 0;
-        if (!max || max - used > 2) return { can: true, why: 'ok' };
+    //   缺陷原貌：这里原来是「任意 `*_pickaxe` 就判 `can:true`，认不出再退到
+    //   **任意** `*_shovel` / `*_axe`」。报告用真实 minecraft-data/prismarine-block
+    //   1.21.8 数据实测：
+    //     diamond_ore + wooden_pickaxe → 预检 can:true，真实 `canHarvest=false`
+    //     diamond_ore + diamond_shovel → 预检 can:true，真实 `canHarvest=false`
+    //     diamond_ore + iron_pickaxe   → 两边都 true（正例）
+    //   后果：采集/导航前置放行一个**根本挖不出来**的方块，走到跟前才被 `digBlock`
+    //   里那道 `block.canHarvest` 拒绝（NO_TOOL）—— 白走一趟，上层的"补工具"决策
+    //   也因此不稳定。
+    //
+    //   修法（报告给的最小修复）：**逐件问方块自己** —— `block.canHarvest(item.type)`
+    //   就是 `harvestTools` 的权威判据（digBlock 里用的也是它）。顺带保留
+    //   "快磨秃的工具不算"（上一轮修过：不能只看第一把），铲/斧**不再无条件后备**
+    //   —— 它们只有真出现在这个方块的 harvestTools 里才算数。
+    const idOf = (it) => {
+        if (Number.isFinite(it?.type)) return it.type;
+        // 假件/旧形状可能只给名字 → 用注册表补一次
+        const def = bot?.registry?.itemsByName?.[it?.name];
+        const id = def?.id ?? def?.type;
+        return Number.isFinite(id) ? id : null;
+    };
+    /** 这件工具真的能收获这个方块吗；认不出物品 id 时返回 null（"不知道"，不是"能"）。 */
+    const harvestableBy = (it) => {
+        const id = idOf(it);
+        if (id == null) return null;
+        try {
+            if (typeof block.canHarvest === 'function') return !!block.canHarvest(id);
+        } catch { /* 读不到就按 harvestTools 表判 */ }
+        try { return !!ht[id]; } catch { return false; }
+    };
+
+    for (const it of items) {
+        if (!it || !it.name) continue;
+        // A tool with almost no durability left is as good as none.
+        const max = it.maxDurability ?? 0;
+        const used = it.durabilityUsed ?? 0;
+        if (max && !(max - used > 2)) continue;
+        // 任意一件真能收获它就算有工具（"第一把磨秃了"那条修复不能回退）
+        if (harvestableBy(it) === true) return { can: true, why: 'ok' };
     }
-    // Shovel covers dirt/sand; axe covers wood. Accept either as a fallback so we
-    // do not refuse a route the bot could actually dig.
-    const shovel = items.find(i => /_shovel$/.test(i.name));
-    const axe = items.find(i => /_axe$/.test(i.name));
-    if (shovel || axe) return { can: true, why: 'ok' };
 
     // 背包读得到、但确实（含磨损到不能用）没有合适工具 → 这才是真的 no-tool
     return { can: false, why: 'no-tool' };

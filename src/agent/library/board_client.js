@@ -26,7 +26,10 @@
  *   服务端 ack 为准（失败就不改缓存），读操作有 `refresh()` 强制拉一次。
  * ═══════════════════════════════════════════════════════════════════════════
  */
-import { ok, fail } from './contract.js';
+import { ok, fail, CODES } from './contract.js';
+// ★ BOARD-002 / BOARD-003：与**服务端同一份**纯函数（去重限长的物品名归一化、尝试序号口径）。
+//   从 board_claims 取而不是各写一份：那个文件不碰 node:sqlite，agent 侧引用是安全的。
+import { normalizeReportedItems, attemptSeqOfJob } from './board_claims.js';
 
 /** socket ack 超时（06 §14：5 秒没回算失败）。 */
 export const ACK_TIMEOUT_MS = 5000;
@@ -75,6 +78,13 @@ export class BoardClient {
         /** 本地镜像：服务端最近一次告诉我们的事（读缓存，不是第二份真相）。 */
         this._jobs = [];
         this._byId = new Map();
+        /**
+         * ★ BOARD-003：本客户端**当前尝试**的序号（jobId → attemptSeq）。
+         *   来源是 store 在领单时写进 `checkpoint.attemptSeq` 的那一个数。
+         *   收尾（heartbeat/finish/checkpoint）带上它，服务端才能区分
+         *   "同名机器人的新尝试"和"同一次尝试重复写入"。
+         */
+        this._attempts = new Map();
         this._connected = false;
         this._autoClaim = true;
 
@@ -122,10 +132,23 @@ export class BoardClient {
                     try { clearTimeout(timer); } catch { /* ignore */ }
                     if (!ackPayload || ackPayload.ok === false) {
                         // 服务端明确拒绝：**不可重试**（重试也是同一个回答）
+                        //
+                        // ★★★ BOARD-003（2026-11-06 深度检查，连带修）：**不能把服务端的码
+                        //   直接喂给 `fail()`**。本仓有两套词汇表（见 board_store 的
+                        //   BOARD_RESULT_CODES 注释）：任务板自己的码里 `LEASE_STALE` **不在**
+                        //   contract 的 CODES 里，而 `fail()` 遇到未注册码**直接抛异常**。
+                        //   抛异常发生在 ack 回调里（此时 `settled` 已经是 true）→ 异常被外层
+                        //   catch 吞掉（它只防"发送失败"）→ **promise 永不 settle** →
+                        //   调用方表现为 "unsettled top-level await"（离线用例实测到这里挂死）。
+                        //   于是"租约失效"这个必须立刻停手的信号，反而变成了"永远等不到回答"。
+                        //   修法：在 agent 侧边界做**一次**显式映射（任务板码 → contract 码），
+                        //   未知码兜底 INTERNAL 而不抛；服务端的原始码留在 data.boardCode 里
+                        //   供诊断（不丢信息）。
+                        const rawCode = ackPayload?.code ?? null;
                         return resolve(fail(
-                            ackPayload?.code ?? 'INTERNAL',
-                            ackPayload?.reason ?? ackPayload?.message ?? '服务端拒绝',
-                            { event, ...(ackPayload ?? {}) },
+                            contractCodeOf(rawCode),
+                            ackPayload?.reason ?? ackPayload?.message ?? `服务端拒绝（code=${rawCode ?? 'null'}）`,
+                            { event, ...(ackPayload ?? {}), boardCode: rawCode },
                         ));
                     }
                     this._connected = true;
@@ -337,23 +360,75 @@ export class BoardClient {
         return r;
     }
 
-    /** 原子领单。 */
-    async claim() {
-        const r = await this._call('board:claim', { bot: this.name });
-        if (r.ok && r.data?.job) this._byId.set(r.data.job.id, r.data.job);
+    /**
+     * 原子领单。
+     *
+     * ★★★ BOARD-002（2026-11-06 深度检查）：**必须把真实库存随领单一起报上去**。
+     *
+     *   缺陷原貌：这里原来只发 `{ bot: this.name }`，服务端 `payload.items ?? []` →
+     *   `meetsRequires` 面对"需要 stone_pickaxe"的单**先按空背包拒绝**，而调度器
+     *   领到之后那次真实背包复核**根本没机会执行** ⇒ 物品资格的任务永远领不出来。
+     *   报告实测：client 发 `{bot:'worker'}` 拿到 null；同一库直接传
+     *   `items:['stone_pickaxe']` 就能领到同一张单。
+     *
+     *   说明（照报告要求写明边界）：这是**合作机器人之间的能力判断**，
+     *   不是防恶意客户端的身份保证 —— socket 外部可达，谁都能报自己带了什么。
+     *   真正的防护在服务端（roles 用服务端注册的，不采信 agent 自报）。
+     *
+     * @param {{items?:Array<string|{name:string}>}} [who] 能力快照（调度器每次现读真实背包）
+     */
+    async claim(who = null) {
+        const payload = { bot: this.name };
+        // ★ BOARD-002（任务书第 7 条：只报最小必要字段）：**只发物品名**，并去重/限长。
+        //   调度器传进来的是 `inventory.items()` 的原始条目（含 count/durability/nbt），
+        //   直接透传等于"每次轮询把整个背包过一遍网络"——资格判断只需要"有没有"。
+        //   归一化函数与**服务端同一份**（board_claims.normalizeReportedItems），
+        //   两边不会漂移；老调用方传 undefined/非数组 → 空数组（服务端当没报，不崩）。
+        if (who != null) payload.items = normalizeReportedItems(who?.items);
+        const r = await this._call('board:claim', payload);
+        if (r.ok && r.data?.job) this._rememberAttempt(r.data.job);
         return r;
+    }
+
+    /**
+     * ★ BOARD-003：记住"这张单当前是哪一次尝试"（领单时由 store 打在 checkpoint 上）。
+     * 之后 heartbeat / finish / checkpoint 都要带上它 —— 否则同名重领后，
+     * 旧尝试的迟到写入会被当成新尝试的结果。
+     */
+    _rememberAttempt(job) {
+        const id = job?.id;
+        if (id == null) return;
+        this._byId.set(id, job);
+        // 序号口径与服务端/store 同一份实现（`attemptSeqOfJob`），不在客户端另判一遍
+        const seq = attemptSeqOfJob(job);
+        if (seq != null) this._attempts.set(String(id), seq);
+        else this._attempts.delete(String(id));
+    }
+
+    /** 取这张单本次尝试的序号（没有就返回 undefined，服务端按老行为处理）。 */
+    _attemptOf(id) {
+        const seq = this._attempts.get(String(id));
+        return Number.isFinite(seq) ? seq : undefined;
     }
 
     /** 续租 + 进度。LEASE_LOST 要立刻停手（06 §6）。 */
     async heartbeat(id, progress = null) {
-        const r = await this._call('board:heartbeat', { id: String(id), bot: this.name, progress });
-        if (r.ok && r.data?.job) this._byId.set(r.data.job.id, r.data.job);
+        const payload = { id: String(id), bot: this.name, progress };
+        // ★ BOARD-003：带尝试标识，同名重领后旧尝试不能再续租/写进度
+        const seq = this._attemptOf(id);
+        if (seq !== undefined) payload.attemptSeq = seq;
+        const r = await this._call('board:heartbeat', payload);
+        if (r.ok && r.data?.job) this._rememberAttempt(r.data.job);
         return r;
     }
 
     /** 存断点。 */
     async checkpoint(id, checkpoint) {
-        return this._call('board:checkpoint', { id: String(id), checkpoint });
+        const payload = { id: String(id), checkpoint };
+        // ★ BOARD-003：迟到 checkpoint 不得修改新尝试字段
+        const seq = this._attemptOf(id);
+        if (seq !== undefined) payload.attemptSeq = seq;
+        return this._call('board:checkpoint', payload);
     }
 
     /** 回报结果（完成与否由 store 判）。 */
@@ -361,14 +436,25 @@ export class BoardClient {
         // ★★★ T30 第4条：**带上自己的名字**。服务端要用它校验租约归属：
         //   不传 → 服务端无法判断"你还是不是这张单的主人" → 租约过期的旧持有者
         //   能把别人正在跑的单写回 ready。`LEASE_STALE` = 立刻停手（与 LEASE_LOST 同义）。
-        const r = await this._call('board:finish', { id: String(id), result, bot: this.name });
-        if (r.ok && r.data?.job) this._byId.set(r.data.job.id, r.data.job);
+        //
+        //   ★ BOARD-003：名字不够（同名重领分不开），再带上**本次尝试序号**。
+        const payload = { id: String(id), result, bot: this.name };
+        const seq = this._attemptOf(id);
+        if (seq !== undefined) payload.attemptSeq = seq;
+        const r = await this._call('board:finish', payload);
+        if (r.ok && r.data?.job) this._rememberAttempt(r.data.job);
+        else if (!r.ok) this._attempts.delete(String(id));   // 收尾失败/失效 → 忘掉，避免复用旧序号
         return r;
     }
 
     /** 设状态（cancel / pause / resume）。 */
     async setState(id, state, reason = '') {
-        const r = await this._call('board:set-state', { id: String(id), state, reason });
+        const payload = { id: String(id), state, reason };
+        // ★ BOARD-003 补洞：带尝试标识 —— 否则同名重领后旧尝试一句 set-state(paused/ready)
+        //   就能清掉新尝试的租约（`clearLease` 会把 lease_owner/until 置空）。
+        const seq = this._attemptOf(id);
+        if (seq !== undefined) payload.attemptSeq = seq;
+        const r = await this._call('board:set-state', payload);
         if (r.ok && r.data?.job) this._byId.set(r.data.job.id, r.data.job);
         return r;
     }
@@ -449,6 +535,31 @@ export class BoardClient {
 
     /** 是否连上过（诊断用）。 */
     get connected() { return this._connected; }
+}
+
+/**
+ * 任务板结果码 → contract 的 ActionResult 码（**agent 侧唯一的转换点**）。
+ *
+ * ★ 为什么需要它（BOARD-003 连带修）：本仓有两套词汇表（见 board_store 的
+ *   `BOARD_RESULT_CODES` 注释）—— 任务板自己的码（`LEASE_STALE` 等）**不在**
+ *   `contract.CODES` 里，而 `fail()` 遇到未注册码**直接抛异常**。在 ack 回调里抛
+ *   就等于"这个 promise 永远不 settle"（外层 catch 只防发送失败，且此时 settled 已 true）
+ *   → 调用方看到的是"永远等不到回答"，而不是"租约失效，立刻停手"。
+ *
+ * 映射规则：
+ *   · `LEASE_STALE` → `LEASE_LOST`：语义相同（"租约已不属于你，立刻停手、不写结果"），
+ *     且 `LEASE_LOST` 是 CODES 里早就为这件事注册的码（调度器也在判它）。
+ *   · 其它已注册码 → 原样保留。
+ *   · 未注册码/空 → `INTERNAL`（**兜底不抛**：宁可给一个笼统的失败，也不能挂死调用方）。
+ *   原始码始终留在 `data.boardCode` 里，诊断时不丢信息。
+ */
+const BOARD_CODE_TO_CONTRACT = Object.freeze({ LEASE_STALE: 'LEASE_LOST' });
+
+function contractCodeOf(rawCode) {
+    const code = String(rawCode ?? '').trim();
+    const mapped = BOARD_CODE_TO_CONTRACT[code] ?? code;
+    if (mapped && mapped !== 'OK' && CODES.includes(mapped)) return mapped;
+    return 'INTERNAL';
 }
 
 /** patch 里的 `lease` 是嵌套对象，展开进本地镜像时不能直接当字段用。 */

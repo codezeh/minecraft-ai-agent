@@ -199,3 +199,64 @@ export function deriveClaims(job) {
     }
     return out;
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// 领单协议的两个共用纯函数（2026-11-06 深度检查 BOARD-002 / BOARD-003）
+//
+// ★ 为什么放在这个文件：`board_client.js`（agent 侧）与 `board_server.js`
+//   （mindserver 侧）**都要用同样的规则**，而这里已经是"纯函数、不碰数据库"的
+//   共用模块 —— 让 agent 侧 import 它不会把 `node:sqlite` 拖进子进程。
+//   两边各写一份的实现迟早漂移（全仓反复出现的"两处都以为自己在管同一件事"）。
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * 领单请求里最多上报多少个物品名（BOARD-002）。
+ *
+ * ★ 为什么要上限：`board:claim` 是 agent → mindserver 的**每条轮询**都会发的包，
+ *   背包（尤其开了大箱子/创造模式）可能有几百个格子。我们只需要名字、且只需要
+ *   "有没有某几样东西"，没有理由让无界的数组反复过网络。256 远大于任何
+ *   `requires.items` 的规模，正常玩家背包也够用。
+ */
+export const MAX_REPORTED_ITEMS = 256;
+
+/**
+ * 归一化"我身上有什么"（BOARD-002）。
+ *
+ * 只保留**物品名**：`requires.items` 判的是"有没有"，不判数量 —— 这也是报告要求的
+ * "取最小必要字段"（不把整个背包（含 count/durability/nbt）塞进每次领单请求）。
+ *
+ * 兼容：非数组 / 含非字符串 / 空串 → 安静丢弃（老客户端不带这个字段时不崩）。
+ *
+ * @param {any} raw agent 上报的物品名数组（也接受 `{name}` 对象数组）
+ * @returns {string[]} 去重后的物品名（保持上报顺序，便于断言）
+ */
+export function normalizeReportedItems(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const it of raw) {
+        const name = typeof it === 'string' ? it : (it && typeof it.name === 'string' ? it.name : null);
+        if (!name || name === '' || seen.has(name)) continue;
+        seen.add(name);
+        out.push(name);
+        if (out.length >= MAX_REPORTED_ITEMS) break;
+    }
+    return out;
+}
+
+/**
+ * 这张单现在是"第几次尝试"（BOARD-003）。
+ *
+ * ★ 唯一真相：`checkpoint.attemptSeq` —— `claimFor` 领单时 +1 写进去的那一个数。
+ *   （2026-11-06 收敛：不要为它另建一列，否则同一件事有两个写入路径。）
+ *
+ * 没有这个字段（老行 / 还没被领过的单）→ `null`，表示"不知道是哪次尝试"，
+ * 调用方**不要**据此拒绝任何人（拒绝只该发生在"明确不匹配"时）。
+ *
+ * @param {object} job
+ * @returns {number|null}
+ */
+export function attemptSeqOfJob(job) {
+    const m = Number(job?.checkpoint?.attemptSeq);
+    return Number.isFinite(m) ? m : null;
+}

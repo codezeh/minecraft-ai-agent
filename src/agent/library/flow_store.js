@@ -161,10 +161,25 @@ export async function store(bot, item, count = 1, opts = {}) {
 
     let lastCode = null;
     let storefull = 0;
+    // ★★ BOT-009（2026-11-06 深度检查）：**跨箱累计已搬数量。**
+    //
+    //   缺陷原貌：`deposit` 抛错时动作层直接 INTERNAL、不带 stored，这里又把
+    //   `r.data.stored ?? 0` 一律当 0 —— 实际存进去的几件既没进共享库存
+    //   （`rememberChest` 只在 ok 分支调用），也没进返回账本；上层按零进度重试 → 重复搬运。
+    //   报告验证：请求存 10、实际进箱 3，完整流程返回 INTERNAL/stored:0。
+    //
+    //   修法：每搬成一部分就**记账 + 累计**，按剩余数量接着存；收尾如实报 partial。
+    let storedTotal = 0;
+    const remember = async (chest, n) => {
+        if (!(n > 0)) return;
+        storedTotal += n;
+        await rememberChest(bot, chest.position, { [item]: n });
+    };
 
     for (const chest of chests) {
         if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
         if (Date.now() >= (ctx.deadline ?? Infinity)) break;
+        if (storedTotal >= target) break;              // 已经存够了（上一箱只收了一部分）
 
         // 打开（WINDOW_CLOSED / OUT_OF_REACH → 换下一个箱子）
         let win = null;
@@ -177,14 +192,18 @@ export async function store(bot, item, count = 1, opts = {}) {
         if (!win) continue;
 
         try {
-            const r = await deposit(bot, item, target);
+            const r = await deposit(bot, item, target - storedTotal);   // ★ 只补剩下的
             if (r.ok) {
-                await rememberChest(bot, chest.position, { [item]: Number(r.data?.stored ?? 0) });
-                return ok({ item, want, stored: Number(r.data?.stored ?? 0), chest: chest.position });
+                await remember(chest, Number(r.data?.stored ?? 0));
+                return ok({ item, want, stored: storedTotal, chest: chest.position });
             }
             if (r.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
             if (r.code === 'INVENTORY_FULL') {
-                // 这个箱子满了 → replan 换下一个（可恢复）
+                // 这个箱子满了（或者只收了一部分）→ 先记下真的搬进去的那几件，再换下一个
+                await remember(chest, Number(r.data?.stored ?? 0));
+                if (storedTotal >= target) {
+                    return ok({ item, want, stored: storedTotal, chest: chest.position });
+                }
                 storefull++;
                 lastCode = 'INVENTORY_FULL';
                 continue;                              // finally 会关窗
@@ -197,7 +216,11 @@ export async function store(bot, item, count = 1, opts = {}) {
         }
     }
 
-    // 全都试过了：箱子满 → INVENTORY_FULL（abort）；否则报最后那个码
+    // 全都试过了：有部分进度就如实报（partial），一件没搬才算彻底失败
+    if (storedTotal > 0) {
+        return fail(storefull > 0 ? 'INVENTORY_FULL' : (lastCode ?? 'INVENTORY_FULL'),
+            `只存进去 ${storedTotal}/${target}`, { item, want, stored: storedTotal, partial: true });
+    }
     if (storefull > 0) {
         return fail('INVENTORY_FULL', `箱子都存不下了（试了 ${storefull} 个）`, { item, want, stored: 0 });
     }
@@ -224,10 +247,18 @@ export async function fetch(bot, item, count = 1, opts = {}) {
     if (!chests.length) return fail('NO_TARGET', '附近没有箱子', { item });
 
     let lastCode = null;
+    // ★ BOT-009 的另一半：取物也要跨箱累计（原来取到一半抛错，已到手的那几件被当零进度）
+    let takenTotal = 0;
+    const remember = async (chest, n) => {
+        if (!(n > 0)) return;
+        takenTotal += n;
+        await rememberChest(bot, chest.position, { [item]: -n });
+    };
 
     for (const chest of chests) {
         if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
         if (Date.now() >= (ctx.deadline ?? Infinity)) break;
+        if (takenTotal >= want) break;
 
         let win = null;
         for (let attempt = 0; attempt < 2 && !win; attempt++) {
@@ -239,16 +270,22 @@ export async function fetch(bot, item, count = 1, opts = {}) {
         if (!win) continue;
 
         try {
-            const r = await withdraw(bot, item, want);
+            const r = await withdraw(bot, item, want - takenTotal);
             if (r.ok) {
-                await rememberChest(bot, chest.position, { [item]: -Number(r.data?.taken ?? 0) });
-                return ok({ item, want, taken: Number(r.data?.taken ?? 0), chest: chest.position });
+                await remember(chest, Number(r.data?.taken ?? 0));
+                return ok({ item, want, taken: takenTotal, chest: chest.position });
             }
             if (r.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
             if (r.code === 'INVENTORY_FULL') {
-                // ★ 与 store 不同：取的时候背包满，换箱子也没用 → 直接 abort
+                // ★ 与 store 不同：取的时候**背包真的满**（一件都没取到）→ 换箱子没用，直接 abort。
+                //   但 BOT-009：已经取到手的那几件必须记账；而且"取了一部分"说明不是背包满
+                //   （是这个箱子给不全了）→ 换下一个箱子接着取，别把进度丢掉。
+                const moved = Number(r.data?.taken ?? 0);
+                await remember(chest, moved);
+                if (takenTotal >= want) return ok({ item, want, taken: takenTotal, chest: chest.position });
+                if (moved > 0) { lastCode = 'INVENTORY_FULL'; continue; }
                 return fail('INVENTORY_FULL', '背包满了，取出来没地方放（先腾背包）', {
-                    item, want, taken: 0,
+                    item, want, taken: takenTotal, partial: takenTotal > 0,
                 });
             }
             if (r.code === 'NO_ITEM') {
@@ -263,6 +300,10 @@ export async function fetch(bot, item, count = 1, opts = {}) {
         }
     }
 
+    if (takenTotal > 0) {
+        return fail(lastCode === 'WINDOW_CLOSED' ? 'WINDOW_CLOSED' : 'NO_ITEM',
+            `只取到 ${takenTotal}/${want} 个 ${item}`, { item, want, taken: takenTotal, partial: true });
+    }
     return fail(lastCode === 'WINDOW_CLOSED' ? 'WINDOW_CLOSED' : 'NO_ITEM',
         `箱子里没找到 ${want} 个 ${item}`, { item, want, taken: 0 });
 }

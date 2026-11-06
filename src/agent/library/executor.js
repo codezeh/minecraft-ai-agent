@@ -801,8 +801,8 @@ async function stepUp(bot, opts = {}) {
  * 走到目标（唯一入口）。
  *
  * @param {object} bot
- * @param {{x:number,z:number}} dest
- * @param {{mapDir:string, onEvent?:Function, deadlineMs?:number, arriveTol?:number, rescan?:boolean}} opts
+ * @param {{x:number,z:number,y?:number}} dest 给了 y 就参与到达判定（BOT-005）
+ * @param {{mapDir:string, onEvent?:Function, deadlineMs?:number, arriveTol?:number, arriveYTol?:number, rescan?:boolean}} opts
  */
 export async function walkTo(bot, dest, opts = {}) {
     const {
@@ -810,6 +810,9 @@ export async function walkTo(bot, dest, opts = {}) {
         onEvent: userOnEvent = () => { },
         deadlineMs = 300000,
         arriveTol = 5,
+        // ★ BOT-005：垂直到达容差。只在 dest.y 有值时才生效；1 格吸收
+        //   方块坐标 y 与脚位 y 的差一（站在 y=64 的方块上，脚位是 y=65）。
+        arriveYTol = 1,
         rescan = true,
     } = opts;
 
@@ -885,6 +888,11 @@ export async function walkTo(bot, dest, opts = {}) {
 
         const p = bot.entity.position;
         const remain = Math.hypot(dest.x - p.x, dest.z - p.z);
+        // ★ BOT-005：目标带 y 时，垂直差必须一起算。
+        //   原来只算 hypot(dx,dz) ⇒ 站在 y64、目标 y120 也判"到了"（零步 OK）。
+        //   walkTo 的规划器只管水平走廊，"上楼"要靠调用方另派垂直动作（垫高/挖上去），
+        //   所以这里不该假装成功，而应明确报 NEED_VERTICAL 交给上层。
+        const vertRemain = Number.isFinite(dest.y) ? Math.abs(dest.y - p.y) : 0;
 
         // 振荡检测：同一片区域反复回来 ≥3 次 → 换策略（记失败点并放开一次）
         {
@@ -923,9 +931,24 @@ export async function walkTo(bot, dest, opts = {}) {
         }
 
         if (remain <= arriveTol) {
+            // ★ BOT-005：水平到了还不算到 —— 垂直差超容差就如实报 NEED_VERTICAL。
+            //   上层（nav_core 的调用方）据此决定垫高/挖穿，而不是接着去"够不到的交互"。
+            if (vertRemain > arriveYTol) {
+                // 复用 HEIGHT_MISS（契约里就是"垂直没到位"，且 code_hints 已给出
+                // "先调好站位或垫一下"的处理指引），不为这一处新造错误码。
+                return fail('HEIGHT_MISS',
+                    `水平已到（剩 ${remain.toFixed(1)} 格），但垂直还差 ${vertRemain.toFixed(0)} 格`
+                    + `（目标 y=${dest.y}，当前 y=${p.y.toFixed(1)}）；walkTo 只能水平行走`,
+                    {
+                        rounds, steps: stepsDone, moved: +distMoved.toFixed(1), costMs: Date.now() - t0,
+                        distRemaining: +remain.toFixed(1), verticalDistance: +vertRemain.toFixed(1),
+                        targetY: dest.y, atY: +p.y.toFixed(1),
+                    });
+            }
             return ok({
                 rounds, scans, steps: stepsDone, moved: +distMoved.toFixed(1),
                 distRemaining: +remain.toFixed(1), costMs: Date.now() - t0,
+                ...(Number.isFinite(dest.y) ? { verticalDistance: +vertRemain.toFixed(1) } : {}),
             });
         }
 

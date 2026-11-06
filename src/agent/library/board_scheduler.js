@@ -567,7 +567,11 @@ export class BoardScheduler {
     async _claimNext() {
         const board = this.boardClient;
         try {
-            const r = await board.claim?.();
+            // ★★★ BOARD-002：把**现读的真实背包**随领单请求报上去。
+            //   原来这里只 `board.claim()`（客户端只发 bot 名字），服务端 `meetsRequires`
+            //   面对"需要 stone_pickaxe"的单先按空背包拒绝 ⇒ 物品资格任务永远领不出来，
+            //   而下面那次真实背包复核（job-skipped-requires）根本没机会执行。
+            const r = await board.claim?.(this._who());
             if (!r?.ok || !r.data?.job) return null;
             const job = r.data.job;
             // requires 过滤：不合格就退回 ready，别占着

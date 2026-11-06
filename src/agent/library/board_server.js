@@ -34,6 +34,8 @@ import {
     // ★ T31 第16条：箱子内容的**原子合并**（读-改-写在服务端一次做完）
     mergeSharedChest, SHARED_CHEST_KIND,
 } from './board_store.js';
+// ★ BOARD-002：归一化 agent 随 claim 上报的"我身上有什么"（跨 client/server 共用的纯函数）
+import { normalizeReportedItems } from './board_claims.js';
 
 /** 单个 bot 上报的能力（`board:hello` 记下来，用于校验 add 的 skill）。 */
 const botRegistry = new Map();   // bot -> { skills:Set, roles:[], at }
@@ -221,7 +223,10 @@ export function attachBoardServer(deps = {}) {
                 const job = claimFor(db, bot, {
                     now: now(),
                     roles: reg?.roles ?? [],
-                    items: Array.isArray(payload?.items) ? payload.items : [],
+                    // ★ BOARD-002：agent 现在会随 claim 上报"我身上有什么"（只报物品名）。
+                    //   归一化放在这里：非数组/非字符串/重复/超长一律安静丢弃，
+                    //   老客户端不带这个字段时退化成空数组（不崩）。
+                    items: normalizeReportedItems(payload?.items),
                 });
                 if (job) changed(job, 'claimed');
                 ack(cb, { ok: true, job });
@@ -235,6 +240,8 @@ export function attachBoardServer(deps = {}) {
             try {
                 const r = heartbeat(db, String(payload?.id ?? ''), String(payload?.bot ?? ''), {
                     now: now(), progress: payload?.progress ?? null,
+                    // ★ BOARD-003：带着尝试标识续租，同名重领后旧尝试的心跳必须失效
+                    attemptSeq: payload?.attemptSeq ?? null,
                 });
                 if (!r.ok) return ack(cb, { ok: false, code: r.code ?? 'LEASE_LOST' });
                 // ★ B3：心跳同时也是**预约续期**的时刻（06 §9.2 "跟着 heartbeat 续期"）
@@ -248,7 +255,11 @@ export function attachBoardServer(deps = {}) {
         // ── checkpoint：存断点（不动状态）─────────────────────────────
         socket.on('board:checkpoint', (payload, cb) => {
             try {
-                const r = updateJob(db, String(payload?.id ?? ''), { checkpoint: payload?.checkpoint ?? null }, { now: now() });
+                const r = updateJob(db, String(payload?.id ?? ''), { checkpoint: payload?.checkpoint ?? null }, {
+                    now: now(),
+                    // ★ BOARD-003：迟到的 checkpoint 不得写进新尝试
+                    attemptSeq: payload?.attemptSeq ?? null,
+                });
                 ack(cb, r.ok ? { ok: true } : { ok: false, reason: r.message ?? r.code });
             } catch (e) {
                 ack(cb, { ok: false, reason: String(e?.message ?? e) });
@@ -263,8 +274,18 @@ export function attachBoardServer(deps = {}) {
                 //   正在跑的单写回 ready（两个 bot 抢同一张单）。
                 const r = finish(db, String(payload?.id ?? ''), payload?.result ?? {}, {
                     now: now(), bot: payload?.bot ?? null,
+                    // ★ BOARD-003：带上尝试标识 —— 租约只看名字时，"同名重领"之后
+                    //   旧尝试的迟到 finish 会被当成当前尝试的结果接受（报告实测的 staleAccepted）。
+                    attemptSeq: payload?.attemptSeq ?? null,
                 });
-                if (!r.ok) return ack(cb, { ok: false, reason: r.message ?? r.code });
+                // ★★★ BOARD-003：**把稳定码带回给调用方**（不能只回 reason）。
+                //   原来只回 `{ok:false, reason}` → `BoardClient._call` 拿不到 code，统一折成
+                //   `INTERNAL` → agent 侧分不清"租约/尝试已失效（必须立刻停手）"和"内部错误
+                //   （可以重试）"。报告要求"旧请求返回**稳定的租约失效结果**"指的就是这个码
+                //   要一路传到 agent 侧（离线用例 board003 ⑧ 断言的就是它）。
+                if (!r.ok) {
+                    return ack(cb, { ok: false, code: r.code ?? 'INTERNAL', reason: r.message ?? r.code });
+                }
                 changed(r.job, `finish:${r.next}`);
                 // ★ B3：单结束了就放掉它的预约（失败/完成都不该再占着资源）
                 try { release(db, r.job.id, r.job.lease?.owner ?? String(payload?.bot ?? ''), null); } catch { /* ignore */ }
@@ -291,8 +312,12 @@ export function attachBoardServer(deps = {}) {
         // ── set-state：cancel / pause / resume / 被抢占退回 ─────────────
         socket.on('board:set-state', (payload, cb) => {
             try {
-                const r = setState(db, String(payload?.id ?? ''), String(payload?.state ?? ''), { now: now() });
-                if (!r.ok) return ack(cb, { ok: false, reason: r.message ?? r.code });
+                const r = setState(db, String(payload?.id ?? ''), String(payload?.state ?? ''), {
+                    now: now(),
+                    // ★ BOARD-003 补洞：带尝试标识，旧尝试不能把新尝试的单置 ready/paused（会清掉新租约）
+                    attemptSeq: payload?.attemptSeq ?? null,
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message ?? r.code });
                 changed(r.job, payload?.reason ?? 'set-state');
                 ack(cb, { ok: true, job: r.job });
             } catch (e) {

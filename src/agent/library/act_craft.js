@@ -501,15 +501,54 @@ function furnaceBusyWith(win, myInput) {
 }
 
 /**
+ * 一份燃料能烧几个物品（原版燃烧时长 ÷ 每个 10 秒）。
+ *
+ * ★★ BOT-003（2026-11-06 深度检查）：这张表原来**不存在**。
+ *   `furnaceLoad` 固定 `putFuel(..., 1)`，`putInput` 又总是塞满最多 64 个 ——
+ *   于是「16 份原料 + 64 煤」只烧出 8 个（1 煤 = 8 个），剩下 8 份原料在炉里干等，
+ *   流程空转到 10 分钟 deadline 才报"只炼出 8/16"；只要求 1 个时也会把 64 份料塞进炉子。
+ *   报告验证：只加 1 煤，产 8/16，虚拟 costMs=600000，剩 8 原料/63 煤。
+ *
+ *   修法（报告给的最小修复）：按燃烧时长算燃料数量 —— 表只覆盖 `flow_smelt`
+ *   会挑的那几样（`FUEL_ORDER`）+ 常见几种，其余按原版默认 15 秒 = 1.5 个。
+ */
+const FUEL_BURN = {
+    coal: 8, charcoal: 8, coal_block: 80, blaze_rod: 12, dried_kelp_block: 20,
+    lava_bucket: 100, stick: 0.5, bamboo: 0.25,
+};
+
+/** 一份燃料能烧几个（见上面 BOT-003 的说明）。 */
+export function fuelBurnOf(fuel) {
+    const name = String(fuel ?? '');
+    const hit = FUEL_BURN[name];
+    if (Number.isFinite(hit)) return hit;
+    // 任意木板 / 原木 / 木头（oak_planks / oak_log / stripped_oak_log / crimson_stem …）
+    if (/(_planks|_log|_wood|_stem|_hyphae|_fence|_slab|_stairs)$/.test(name)) return 1.5;
+    return 1.5;                                  // 原版默认 15 秒
+}
+
+/** 烧 n 个物品需要几份燃料（向上取整；至少 1 份）。 */
+export function fuelNeededFor(fuel, n) {
+    const want = Math.max(0, Math.floor(Number(n) || 0));
+    const burn = fuelBurnOf(fuel);
+    if (!(burn > 0)) return Math.max(1, want);
+    return Math.max(1, Math.ceil(want / burn));
+}
+
+/**
  * 往熔炉放一次料（上格放 input，下格放 fuel）。**不等烧完**。
  *
+ * ★ BOT-003：加了 `opts.count` —— **只放本次任务要炼的数量**（原来塞满最多 64），
+ *   燃料也按燃烧时长配足（原来固定 1 份，烧完 8 个就断火）。
+ *
+ * @param {{count?:number}} [opts] count = 这次要炼几个（不传 = 有多少放多少，保持老行为）
  * @returns ActionResult
- *   ok           → data: { input, inputCount, fuel, costMs }
+ *   ok           → data: { input, inputCount, fuel, fuelCount, costMs }
  *   NO_ITEM      料或燃料不够
  *   OUT_OF_REACH 熔炉太远 —— 走近就能解决，所以不是 NO_WORKSTATION（那是"根本没有熔炉"）
  *   OCCUPIED     熔炉里正在炼别的东西 —— 不抢，上层换一个熔炉（"那格本身有东西"正是这个码的语义）
  */
-export async function furnaceLoad(bot, furnace, input, fuel) {
+export async function furnaceLoad(bot, furnace, input, fuel, opts = {}) {
     const t0 = Date.now();
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!furnace || !furnace.position) return fail('NO_TARGET', '没给熔炉');
@@ -532,6 +571,14 @@ export async function furnaceLoad(bot, furnace, input, fuel) {
         return fail('NO_ITEM', '没有燃料', { input, fuel: fuelItem });
     }
 
+    // ★ BOT-003：装料量 = min(背包里有的, 本次要炼的, 炉子一格的上限)。
+    //   老行为是 `Math.min(have, 64)` —— 只要 1 个也会把 64 份原料塞进炉子。
+    const wantLoad = Number(opts?.count);
+    const putCount = Math.min(have, Number.isFinite(wantLoad) && wantLoad > 0 ? Math.floor(wantLoad) : have, 64);
+    // ★ BOT-003：燃料按"要烧几个"配足（1 煤 = 8 个），不再固定 1 份。
+    const fuelHave = countItem(bot, fuelItem);
+    const fuelPut = Math.min(fuelHave, fuelNeededFor(fuelItem, putCount));
+
     let win = null;
     try {
         win = await bot.openFurnace(furnace);
@@ -553,8 +600,8 @@ export async function furnaceLoad(bot, furnace, input, fuel) {
             });
         }
 
-        await win.putInput(mc.getItemId(input), null, Math.min(have, 64));
-        await win.putFuel(mc.getItemId(fuelItem), null, 1);
+        await win.putInput(mc.getItemId(input), null, putCount);
+        await win.putFuel(mc.getItemId(fuelItem), null, fuelPut);
     } catch (e) {
         const msg = String(e?.message ?? e);
         try { win?.close?.(); } catch { /* ignore */ }
@@ -563,7 +610,7 @@ export async function furnaceLoad(bot, furnace, input, fuel) {
     }
     try { win.close?.(); } catch { /* 关不上不影响结果 */ }
 
-    return ok({ input, inputCount: Math.min(have, 64), fuel: fuelItem, costMs: Date.now() - t0 });
+    return ok({ input, inputCount: putCount, fuel: fuelItem, fuelCount: fuelPut, costMs: Date.now() - t0 });
 }
 
 /**
