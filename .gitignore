@@ -135,3 +135,15 @@ config.local.js
 # 注意：移出跟踪不等于从历史里消失（未改写历史，见 commit body）。
 /server/ops.json
 /server/whitelist.json
+
+# ---------- 大小写变体显式声明（2026-11-06 复核席实测）----------
+# 为什么必须显式写：git 的 glob **区分大小写**。`.ENV` 在本机显示"已忽略"，
+# 只是因为 Windows 上 core.ignorecase=true 让 ignore 匹配变成不区分大小写 ——
+# 那是**平台假绿**，换到 Linux/macOS 立刻漏。
+# 实测：git config --local core.ignorecase false 后，.ENV 不再被忽略。
+.env
+.env.*
+.ENV
+.ENV.*
+.Env
+.Env.*
