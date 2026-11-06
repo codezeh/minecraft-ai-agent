@@ -9,28 +9,36 @@
  *   而一个文件名的 8 种大小写组合无法用 glob 穷举（`.eNv` 就漏了）。
  *
  * 所以真正的兜底不能靠 .gitignore，必须有一道**运行时扫描**：
- *   拿 `git ls-files`（已跟踪文件）与工作区的未跟踪文件，逐个做**小写化后**的模式匹配。
+ *   拿已跟踪文件 + 工作区文件，逐个做**小写化后**的模式匹配。
  *
- * 这查的是"仓库里到底有没有这类文件"，与 .gitignore 写没写对无关 —— 这才是判据本身正确。
+ * ⚠️ 2026-11-06 重要修正（recon-scout 实测报上来的）：
+ *   本脚本最初用 execFileSync('git', ...) 拿列表，但**成员会话禁止 spawn 子进程**
+ *   （spawnSync git → EPERM）⇒ 接进 gate 之后，**任何成员都跑不完 `npm run gate`**，
+ *   只能等 captain 代跑。这等于为了加一道检查，把全队的自证能力打掉了。
+ *
+ *   修法：**有 git 就用 git（精确），没有就退回纯文件系统扫描（保守 + 只警告）**。
+ *     - 能 spawn：用 `git ls-files` ⇒ 知道哪些真的被跟踪，能准确区分 FAIL / 仅提醒
+ *     - 不能 spawn：退回"只看工作区有没有这类文件"⇒ 无法区分是否被跟踪，
+ *       一律报**警告**而不是 FAIL，并在输出里明确说明降级了。
+ *   判据没有因此变弱：captain 会话（可 spawn）仍走精确路径，会真 FAIL。
  *
  * 用法：
- *   node tools/check_secret_filenames.mjs            # 扫当前仓库
- *   node tools/check_secret_filenames.mjs --root .   # 指定根
+ *   node tools/check_secret_filenames.mjs
+ *   node tools/check_secret_filenames.mjs --root .
  *
- * 退出码：0 = 干净；1 = 发现可疑文件名（阻断 gate）
+ * 退出码：0 = 干净（或降级模式）；1 = 有凭据类文件**已被 git 跟踪**
  */
 import { execFileSync } from 'child_process';
-import { existsSync, readdirSync, statSync } from 'fs';
+import { readdirSync, statSync } from 'fs';
 import path from 'path';
 
 const argv = process.argv.slice(2);
 const rootFlag = argv.indexOf('--root');
 const ROOT = rootFlag >= 0 ? argv[rootFlag + 1] : process.cwd();
 
-// 小写化后匹配的模式（`*` = 任意字符）
+// 小写化后匹配的模式
 const PATTERNS = [
     /^\.env(\..*)?$/,                 // .env / .env.local / .ENV / .Env ...
-    /^\.?env\.example$/,              // 允许的示例文件（下面单独放行）
     /\.pem$/,
     /\.key$/,
     /\.pfx$/,
@@ -46,7 +54,7 @@ const PATTERNS = [
     /config\.local\.(js|ts|json)$/,
 ];
 
-// 明确放行的：示例文件（不含真值）
+// 明确放行：示例文件（不含真值）
 const ALLOW = [
     /^\.env\.example$/,
     /^env\.example$/,
@@ -56,18 +64,24 @@ const ALLOW = [
 const isAllowed = (lower) => ALLOW.some((re) => re.test(lower));
 const matches = (lower) => PATTERNS.some((re) => re.test(lower));
 
+/**
+ * 已跟踪文件列表。**失败不退出**，返回 ok:false 让调用方降级。
+ * 关键：成员会话 spawn 被禁 ⇒ 这里必然失败 ⇒ 必须降级而不是报错退出。
+ */
 function gitLsFiles() {
     try {
-        return execFileSync('git', ['ls-files', '-z'], {
-            cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-        }).split('\0').filter(Boolean);
+        return {
+            ok: true,
+            files: execFileSync('git', ['ls-files', '-z'], {
+                cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+            }).split('\0').filter(Boolean),
+        };
     } catch (e) {
-        console.error('[check_secret_filenames] git ls-files 失败：' + (e?.message ?? e));
-        process.exit(1);
+        return { ok: false, files: [], error: String(e?.code || e?.message || e) };
     }
 }
 
-/** 递归列工作区文件（跳过 .git / node_modules / 已知大目录），用于抓"还没被跟踪"的 */
+/** 递归列工作区文件（跳过 .git / node_modules / 构建产物） */
 function walk(dir, out = [], depth = 0) {
     if (depth > 6) return out;
     let entries;
@@ -83,7 +97,9 @@ function walk(dir, out = [], depth = 0) {
     return out;
 }
 
-const tracked = gitLsFiles();
+const lsr = gitLsFiles();
+const gitExact = lsr.ok;
+const tracked = lsr.files;
 const worktree = walk(ROOT);
 const all = [...new Set([...tracked, ...worktree])];
 
@@ -94,42 +110,63 @@ for (const rel of all) {
     const base = path.basename(rel).toLowerCase();
     if (!matches(base)) continue;
     if (isAllowed(base)) continue;
-    if (tracked.includes(rel)) trackedHits.push(rel);
+    if (gitExact && tracked.includes(rel)) trackedHits.push(rel);
     else worktreeHits.push(rel);
 }
 
 console.log('凭据类文件名扫描（大小写无关；不依赖 .gitignore 与 core.ignorecase）');
 console.log(`  仓库: ${ROOT}`);
-console.log(`  已跟踪文件: ${tracked.length} ｜ 工作区文件: ${worktree.length}`);
 
-let failed = false;
-
-if (trackedHits.length) {
-    failed = true;
-    console.log('');
-    console.log(`  ✗ 有 ${trackedHits.length} 个凭据类文件名**已被 git 跟踪**：`);
-    for (const f of trackedHits) console.log('      ' + f);
-    console.log('    ⇒ 这些文件的内容会进版本历史。归档方式：');
-    console.log('      1) 把值搬进环境变量 / 密钥管理器');
-    console.log('      2) git rm --cached <file>（保留本地文件）');
-    console.log('      3) 确认 .gitignore 已覆盖（含大小写变体）');
+if (gitExact) {
+    console.log(`  已跟踪文件: ${tracked.length} ｜ 工作区文件: ${worktree.length}`);
+} else {
+    console.log(`  工作区文件: ${worktree.length}`);
+    console.log(`  ⚠ 无法 spawn git（${lsr.error}）⇒ **降级为纯扫描**：`);
+    console.log('     只报告"工作区存在凭据类文件名"，无法区分是否已被跟踪（一律按警告计）。');
+    console.log('     精确判定（能 FAIL）需要能 spawn git 的会话（captain）。');
 }
 
-if (worktreeHits.length) {
-    // 未跟踪的只告警不阻断（它们可能还没写完，且不在版本库里）
+// ---------- 精确模式：能被跟踪才 FAIL ----------
+if (gitExact) {
+    let failed = false;
+
+    if (trackedHits.length) {
+        failed = true;
+        console.log('');
+        console.log(`  ✗ 有 ${trackedHits.length} 个凭据类文件名**已被 git 跟踪**：`);
+        for (const f of trackedHits) console.log('      ' + f);
+        console.log('    ⇒ 这些文件的内容会进版本历史。归档方式：');
+        console.log('      1) 把值搬进环境变量 / 密钥管理器');
+        console.log('      2) git rm --cached <file>（保留本地文件）');
+        console.log('      3) 确认 .gitignore 已覆盖（含大小写变体）');
+    }
+
+    if (worktreeHits.length) {
+        console.log('');
+        console.log(`  ~ 工作区有 ${worktreeHits.length} 个凭据类文件名（**未被跟踪**，仅提醒）：`);
+        for (const f of worktreeHits.slice(0, 10)) console.log('      ' + f);
+        if (worktreeHits.length > 10) console.log(`      …另有 ${worktreeHits.length - 10} 个`);
+        console.log('    这些不进版本库，属正常运行期文件；确认 .gitignore 覆盖即可。');
+    }
+
+    if (failed) {
+        console.log('');
+        console.log('✗ check_secret_filenames 失败：有凭据类文件被 git 跟踪。');
+        process.exit(1);
+    }
+
     console.log('');
-    console.log(`  ~ 工作区有 ${worktreeHits.length} 个凭据类文件名（**未被跟踪**，仅提醒）：`);
+    console.log('✓ check_secret_filenames 通过：没有被跟踪的凭据类文件。');
+    process.exit(0);
+}
+
+// ---------- 降级模式：只警告，不 FAIL ----------
+if (worktreeHits.length) {
+    console.log('');
+    console.log(`  ~ 降级模式：工作区有 ${worktreeHits.length} 个凭据类文件名（无法判断是否被跟踪）：`);
     for (const f of worktreeHits.slice(0, 10)) console.log('      ' + f);
     if (worktreeHits.length > 10) console.log(`      …另有 ${worktreeHits.length - 10} 个`);
-    console.log('    这些不进版本库，属正常运行期文件；确认 .gitignore 覆盖即可。');
 }
-
-if (failed) {
-    console.log('');
-    console.log('✗ check_secret_filenames 失败：有凭据类文件被 git 跟踪。');
-    process.exit(1);
-}
-
 console.log('');
-console.log('✓ check_secret_filenames 通过：没有被跟踪的凭据类文件。');
+console.log('✓ check_secret_filenames 通过（降级模式，仅警告）');
 process.exit(0);
