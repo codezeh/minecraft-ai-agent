@@ -161,8 +161,16 @@ export function createMindServer(host_public = false, port = 8080) {
             }
             // ★ F-RT-003（2026-11-06，红队复测）：`?token=…` 会留在**地址栏 → 浏览器历史/书签同步**里，
             // 等于把 token 抄到另一个持久化位置。种完 cookie 就 302 到不带 token 的同一路径。
-            // 只对 GET 做（POST 不能这么重定向）；非 GET 请求照旧放行给下面的门判断。
-            if (req.method === 'GET') {
+            //
+            // ⚠️ 2026-11-06 真机验证修正（captain）：原实现对**任何**带 ?token= 的 GET 都 302 ——
+            // 包括 /settings_spec.json 这类**数据接口**和 curl/脚本调用。它们不跟随重定向，
+            // 直接拿 302 就失败了（实测：带 token 请求 settings_spec.json 得到 302 而非 200，
+            // 且因为提前 return，连安全响应头都没设上）。
+            // 正确边界：**只在"浏览器页面导航"时做这次重定向**（Accept 含 text/html），
+            // 目的是把地址栏里的 token 抹掉；数据接口拿到 cookie 就够了，不需要也不应该被重定向。
+            const isPageNavigation = req.method === 'GET'
+                && String(req.headers.accept || '').includes('text/html');
+            if (isPageNavigation) {
                 const rest = { ...req.query };
                 delete rest.token;
                 const qs = new URLSearchParams(rest).toString();
