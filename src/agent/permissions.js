@@ -100,8 +100,26 @@ const TRUSTED = new Set(TRUSTED_COMMANDS);
 /** 任务单最高的「级」。信任级按 08 §5 最多下 6 级。 */
 export const MAX_JOB_LEVEL = Object.freeze({ owner: 9, trusted: 6, other: 0 });
 
-/** 内部触发（代码自己发起的命令）不算「谁说的话」。 */
-const INTERNAL_AUTHORS = new Set(['system', 'internal', 'self']);
+/**
+ * BOT-001（2026-11-06 深度检查）修复 —— **名字不再当身份用**。
+ *
+ * 缺陷原貌：这里原来有一张
+ *   ```js
+ *   const INTERNAL_AUTHORS = new Set(['system', 'internal', 'self']);
+ * ```
+ * `resolveLevel` 靠「author 这个名字在不在表里」判断「是不是代码自己触发的回合」，
+ * 再叠加 agent.js 的 `self_prompt = source === 'system' || source === this.name`，
+ * 结论就是：**玩家把游戏名起成 `system`/`internal`/`self`（或用 bot 自己的名字）后，
+ * 他的一句聊天会被当成"内部触发"** —— 先拿信任级；如果当时 self_prompter 正在跑，
+ * perm_author 会被换成 `self_prompter.author`（= 设 !goal 的那个主人）⇒ 直接主人级。
+ *
+ * 修法：内部来源改为**调用点显式声明**的布尔标记（`handleMessage(src, msg, max, {internal:true})`
+ * 与 `executeCommand(..., {internal:true})`）—— 它来自代码，不来自网络字符串，玩家伪造不了；
+ * 名字只用于与 profile 名单（owner/trusted）比对，不再有任何"特殊名字"分支。
+ *
+ * 诚实边界：这条修的是"名字借身份"。离线服务器（online-mode=false）本身不校验
+ * "你是不是真的叫这个名字"，那是独立的部署层问题（见 OPS-003），两者不互相替代。
+ */
 
 /**
  * 这条命令属于哪个等级的门槛。
@@ -119,15 +137,18 @@ export function commandLevel(commandName) {
 /**
  * 由**发言人**定级。模型说了什么不参与计算。
  *
+ * ★ BOT-001：这里**没有任何**"特殊名字"分支了（原来 `INTERNAL_AUTHORS` 会
+ * 把 `system`/`internal`/`self` 当内部来源，`internalNames` 会放过与 bot 同名的玩家）。
+ * 内部来源只能由调用方用 `internal: true` 显式声明。
+ *
  * @param {object} p
- * @param {string|null|undefined} p.author 发言人（游戏名 / 'system' / null）
+ * @param {string|null|undefined} p.author 发言人（游戏名；代码路径可传 null）
  * @param {{owner?:string, trusted?:string[]}|null|undefined} p.permissions profile 里的名单
  * @param {boolean} [p.isOtherBot] 发言人是同一 mindserver 下的另一个 agent
- * @param {boolean} [p.internal] 代码自己发起的命令（不是玩家发言）
- * @param {string[]} [p.internalNames] 本 bot 自己的名字（她自己的回合也算内部触发）
+ * @param {boolean} [p.internal] 代码自己发起的命令（不是玩家发言）——**唯一**的内部来源判据
  * @returns {'owner'|'trusted'|'other'}
  */
-export function resolveLevel({ author, permissions, isOtherBot = false, internal = false, internalNames = [] } = {}) {
+export function resolveLevel({ author, permissions, isOtherBot = false, internal = false } = {}) {
     const perms = permissions && typeof permissions === 'object' ? permissions : {};
     const owner = typeof perms.owner === 'string' ? perms.owner.trim() : '';
     const trusted = Array.isArray(perms.trusted) ? perms.trusted.filter(n => typeof n === 'string') : [];
@@ -136,10 +157,11 @@ export function resolveLevel({ author, permissions, isOtherBot = false, internal
     // 1) 代码自己发起的命令（!goal 由 NPCController 设置之类）：不是外部输入
     if (internal) return LEVEL.OWNER;
 
-    // 2) 模型自主回合 / 系统状态消息：给「信任」，不给主人权。
-    //    为什么不给主人权：这些回合读的是对话历史，而历史里可能已经混进了玩家
-    //    诱导出来的内容；真主人的意图一定伴随真主人的 author 传进来。
-    if (!name || INTERNAL_AUTHORS.has(name) || internalNames.includes(name)) return LEVEL.TRUSTED;
+    // 2) 没有发言人（代码路径漏传 author）：给「信任」，不给主人权。
+    //    为什么不给主人权：主人级必须伴随真主人的 author；空 author 只可能是内部漏传。
+    //    注意：玩家聊天一定带非空 username，所以这一条**不可能**被玩家命中
+    //    （BOT-001 之前它同时命中 'system'/'internal'/'self' 和同名玩家，那是漏洞）。
+    if (!name) return LEVEL.TRUSTED;
 
     // 3) 别的 bot：只聊天（08 §5）。判在 owner 之前，免得同名 bot 混过去
     if (isOtherBot) return LEVEL.OTHER;

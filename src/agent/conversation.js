@@ -78,7 +78,7 @@ class ConversationManager {
             if (this.awaiting_response && agent.isIdle()) {
                 wait_time += delta;
                 if (wait_time > this.wait_time_limit) {
-                    agent.handleMessage('system', `${convo_partner} hasn't responded in ${this.wait_time_limit/1000} seconds, respond with a message to them or your own action.`);
+                    agent.handleMessage('system', `${convo_partner} hasn't responded in ${this.wait_time_limit/1000} seconds, respond with a message to them or your own action.`, null, { internal: true });
                     wait_time = 0;
                     this.wait_time_limit*=2;
                 }
@@ -96,7 +96,7 @@ class ConversationManager {
                     }
                     if (!agent.self_prompter.isPaused()) {
                         this.endConversation(convo_partner);
-                        agent.handleMessage('system', `${convo_partner} disconnected, conversation has ended.`);
+                        agent.handleMessage('system', `${convo_partner} disconnected, conversation has ended.`, null, { internal: true });
                     }
                     else {
                         this.endConversation(convo_partner);
@@ -340,15 +340,19 @@ function _handleFullInMessage(sender, received) {
     convo.active = true;
 
     let message = _tagMessage(received.message);
+    // BOT-001：这里 sender 被换成 'system' 后，必须由**代码**声明 internal，
+    // 不能再指望"名字叫 system 就算内部"（玩家可以叫 system）。
+    let from_system = false;
     if (received.end) {
         convoManager.endConversation(sender);
         message = `Conversation with ${sender} ended with message: "${message}"`;
         sender = 'system'; // bot will respond to system instead of the other bot
+        from_system = true;
     }
     else if (received.start)
         agent.shut_up = false;
     convo.inMessageTimer = null;
-    agent.handleMessage(sender, message);
+    agent.handleMessage(sender, message, null, from_system ? { internal: true } : {});
 }
 
 

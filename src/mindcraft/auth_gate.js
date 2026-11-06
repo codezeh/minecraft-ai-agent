@@ -55,14 +55,32 @@ export function tokenEquals(a, b) {
     }
 }
 
-/** 从 `Cookie:` 头里取某个 cookie 的值。 */
+/**
+ * 从 `Cookie:` 头里取某个 cookie 的值。
+ *
+ * SEC-001（2026-11-06 深度检查）修复：原来这里直接 `decodeURIComponent(raw)`。
+ * 客户端只要发 `Cookie: mindserver_token=%`，`decodeURIComponent` 就抛 URIError；
+ * 而这条链是**鉴权判定期间**执行的（tokenFromHandshake → cookieValue → decodeURIComponent），
+ * 异常穿过 Socket.IO 握手中间件逃出 Namespace.run，整个 mindserver 进程退出。
+ * 也就是说「一个不需要正确 token 的畸形请求」就能让控制面不可用。
+ *
+ * 现在的口径：**解码失败 = 没带这个 cookie**（返回 null），由上层按「未授权」正常拒绝。
+ * 鉴权路径上不允许任何客户端可控输入把进程带崩。
+ * 单测：tools/sec001_cookie_unit.mjs
+ */
 export function cookieValue(cookieHeader, name) {
     if (typeof cookieHeader !== 'string' || !cookieHeader) return null;
     for (const part of cookieHeader.split(';')) {
         const i = part.indexOf('=');
         if (i < 0) continue;
         if (part.slice(0, i).trim() !== name) continue;
-        return decodeURIComponent(part.slice(i + 1).trim());
+        const raw = part.slice(i + 1).trim();
+        try {
+            return decodeURIComponent(raw);
+        } catch {
+            // 无效百分号（"%"、"%" 后跟非法字节）或非法 UTF-8（%FF）：一律视为「没带这个 cookie」。
+            return null;
+        }
     }
     return null;
 }
@@ -101,17 +119,29 @@ export function makeHandshakeGate(expectedToken) {
     if (typeof expectedToken !== 'string' || !expectedToken) {
         throw new Error('makeHandshakeGate 需要 non-empty token');
     }
-    return function handshakeGate(socket, next) {
-        if (isAuthorizedHandshake(socket?.handshake, expectedToken)) return next();
+    const reject = (socket, reason) => {
         const hints = socket?.handshake?.headers || {};
         console.warn(
             `[mindserver] 拒绝未握手的连接 host=${JSON.stringify(hints.host ?? null)} ` +
-            `origin=${JSON.stringify(hints.origin ?? null)}（缺 token 或 token 不对；` +
+            `origin=${JSON.stringify(hints.origin ?? null)}（${reason}；` +
             `浏览器请用启动日志打印的 http://localhost:<port>/?token=… 打开控制台）`,
         );
         const err = new Error('unauthorized: mindserver 需要握手 token');
         err.data = { code: 'AUTH_REQUIRED' };
-        return next(err);
+        return err;
+    };
+    return function handshakeGate(socket, next) {
+        // SEC-001：判定本身也必须兜住。任何来自 handshake 的畸形数据（Cookie / query / header）
+        // 都只能变成一次「拒绝」，不能变成一次未捕获异常 —— 未捕获异常会带走整个进程。
+        let authorized = false;
+        try {
+            authorized = isAuthorizedHandshake(socket?.handshake, expectedToken);
+        } catch (err) {
+            console.warn('[mindserver] 握手判定异常（按未授权处理）:', err?.message ?? err);
+            return next(reject(socket, '握手数据畸形'));
+        }
+        if (authorized) return next();
+        return next(reject(socket, '缺 token 或 token 不对'));
     };
 }
 

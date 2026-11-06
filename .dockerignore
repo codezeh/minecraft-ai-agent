@@ -1,5 +1,64 @@
-.vscode
-node_modules
-bots/*/
-!bots/*
+# Docker 构建上下文排除表
+#
+# ★ OPS-005（2026-11-06 深度检查）修复。
+#
+# 缺陷原貌：这份文件原来只有 5 行（.vscode / node_modules / bots/*/ / keys.json），
+# 而 Dockerfile 是 `COPY . .` —— 于是 **.git 全历史、.mindserver-token、.env、
+# 私有 profiles、运行日志、临时目录** 全都会进构建上下文：
+#   · 谁拿到镜像层（或共享构建缓存）就等于拿到控制台令牌与模型 API Key；
+#   · 层一旦写进历史，之后删文件也删不掉。
+#
+# 现在的口径：**默认什么都不进**，只放行真正需要的源文件，靠 Dockerfile 的显式 COPY 清单兜底。
+# 语义提醒：docker 的 .dockerignore 是"后者覆盖前者"，`!` 是反向放行。
+# 改这里必须同步改 Dockerfile 的 COPY 清单 + tools/dockerignore_coverage_unit.mjs 的断言。
+
+# ── 版本控制（含历史）────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+.githooks
+
+# ── 凭据 / 私有配置：绝不出本机 ──────────────────────────────────
+# .mindserver-token：控制台令牌；keys.json：模型 API Key；
+# .env*：部署期注入的密钥；profiles：每个 bot 的人设 + permissions + 可能内嵌 key。
+.mindserver-token
+.mindserver-token.*
 keys.json
+.env
+.env.*
+*.pem
+*.key
+*.p12
+profiles
+
+# ── 运行期数据（挂载进来，不要烤进镜像）────────────────────────
+bots
+logs
+tmp
+tmp-*
+# 日志：两种写法都写上 —— `*.log` 在部分实现里只匹配顶层，`**/*.log` 才是"任意层级"。
+# 报告要求"日志不进上下文"，这里不留解释空间。
+*.log
+**/*.log
+run-live*
+
+# ── 依赖（镜像内 npm install 生成）──────────────────────────────
+node_modules
+npm-debug.log*
+
+# ── 开发/审计产物：不进镜像 ─────────────────────────────────────
+.vscode
+.idea
+docs
+tools
+coverage
+dist
+web
+.eslintcache
+t25_keys_probe.mjs
+t25_noboard_probe.mjs
+
+# ── 编辑器/系统垃圾 ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp

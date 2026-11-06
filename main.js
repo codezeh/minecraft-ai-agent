@@ -3,6 +3,7 @@ import settings from './settings.js';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { readFileSync } from 'fs';
+import { parseInsecureCoding, insecureCodingBanner } from './src/utils/env_flags.js';
 
 function parseArguments() {
     return yargs(hideBin(process.argv))
@@ -47,20 +48,17 @@ if (process.env.MINDSERVER_PORT) {
 if (process.env.PROFILES && JSON.parse(process.env.PROFILES).length > 0) {
     settings.profiles = JSON.parse(process.env.PROFILES);
 }
-if (process.env.INSECURE_CODING) {
-    // 第一轮审查 第1条 ③：保留这个开闸口（自动化/调试要用），但**不许静默**。
-    // 原来只要环境变量非空就开 —— 连 `INSECURE_CODING=0` / `=false` 都算开，这里一并收紧。
-    const raw = String(process.env.INSECURE_CODING).trim().toLowerCase();
-    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') {
-        console.warn(`[安全] INSECURE_CODING=${process.env.INSECURE_CODING} 按「关闭」处理（只认 1/true/yes/on）`);
-    } else {
+// SEC-002（2026-11-06 深度检查）：原来是「排除法」——只把 0/false/no/off 当关闭，
+// 其它**任何非空值**都开闸，于是 `INSECURE_CODING=disabled` 反而打开了本机代码执行。
+// 现在一律走白名单解析（只认 1/true/yes/on），未知值保持关闭并告警。
+{
+    const flag = parseInsecureCoding(process.env.INSECURE_CODING);
+    if (flag.enabled) {
         settings.allow_insecure_coding = true;
-        const bar = '='.repeat(72);
-        console.warn(bar);
-        console.warn('[安全] 代码执行已开启 = 本机 root 权限');
-        console.warn('[安全] INSECURE_CODING 生效：模型可以写并运行任意 JS（不是沙箱，逃逸已实测）。');
-        console.warn('[安全] 只有本机、可信输入、临时调试时才这么跑；用完删掉这个环境变量。');
-        console.warn(bar);
+        console.warn(insecureCodingBanner());
+    }
+    else if (flag.warn) {
+        console.warn(flag.warn);
     }
 }
 if (process.env.BLOCKED_ACTIONS) {

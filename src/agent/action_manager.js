@@ -32,6 +32,15 @@ export class ActionManager {
         this.stopWaitMs = 10000;
         /** 已经判定"停不下来、要重启进程"：之后不许再开新动作（D18）。 */
         this.killed = false;
+        /**
+         * BOT-002：启动票的序号与"当前未兑现的启动票"。
+         *
+         * 为什么要票：`executing` 的置位发生在 `await this.stop()` 之后，
+         * 两条并发动作都能在等待期间越过检查（实测 maxConcurrent=2）。
+         * 票在第一个 await 之前登记、由后来者作废，保证同一时刻只有一个动作能认领槽位。
+         */
+        this._launchSeq = 0;
+        this._pendingLaunch = null;
     }
 
     async resumeAction(actionFn, timeout) {
@@ -181,6 +190,23 @@ export class ActionManager {
 
     async _executeAction(actionLabel, actionFn, timeout = 10, stopReason = DEFAULT_STOP_REASON) {
         let TIMEOUT;
+        // ★ BOT-002（2026-11-06 深度检查）：**启动临界区必须串行**。
+        //
+        //   缺陷原貌：`this.executing = true` 写在 `await this.stop()` **之后**。
+        //   两条并发动作（两条聊天命令 / 聊天与反射 mode 相撞 / 调度器与主人同时开口）
+        //   会同时通过"没人在跑"的检查，一起走到这里 →
+        //   实测 maxConcurrent=2，顺序 start1/start2/end1/end2：两个流程同时控制视角/容器/挖掘，
+        //   而且**先完成者**还会把 executing 与中断状态清掉，槽位状态失真。
+        //
+        //   修法：在第一个 await 之前登记一张"启动票"，并把上一张未兑现的票作废。
+        //   规则是**后来者取代先来者**（不是排队）：最新的动作赢了才符合"打断=接管"的语义，
+        //   排队会让"跟着我"等在上一条 10 分钟的活后面 —— 那是另一个 bug。
+        //   认领动作槽（清票 + executing=true）在 await 返回后**同步**完成，中间没有 await 间隙，
+        //   所以同一时刻只可能有一个启动者真正开工。
+        const ticket = { seq: ++this._launchSeq, superseded: false };
+        const previous = this._pendingLaunch;
+        this._pendingLaunch = ticket;
+        if (previous) previous.superseded = true;
         try {
             // ★ D17（07 §5）：**每次开工前清掉 `timedout`**。
             // 原来这个标志置上之后再也不复位：一次超时之后，后面每一次
@@ -215,6 +241,22 @@ export class ActionManager {
                 console.log(`action "${actionLabel}" trying to interrupt current action "${this.currentActionLabel}"`);
             }
             await this.stop(stopReason);
+
+            // ★ BOT-002：我在这段时间里被后来的启动请求取代了吗？
+            //   是 ⇒ 不许开工（否则就是两个流程同时驱动身体，正是本条要消灭的现象）。
+            //   这里只做"不开工"，不去动 executing —— 槽位归赢家所有。
+            if (ticket.superseded || this._pendingLaunch !== ticket) {
+                console.warn(`action "${actionLabel}" not started: superseded by a newer action.`);
+                return {
+                    success: false,
+                    message: 'Superseded by a newer action; this one did not start.',
+                    interrupted: true,
+                    timedout: false,
+                };
+            }
+            // 认领动作槽：清票 + 置 executing 是**同步**完成的（往下到 await actionFn() 之间没有 await），
+            // 所以不存在"两个都以为自己在跑"的窗口。
+            this._pendingLaunch = null;
 
             // 上一条被判"停不下来、要重启进程"（07 §5 D18）：不许在它上面开新动作，
             // 否则就是两个流程同时驱动身体 —— 正是 D18 要消灭的现象。

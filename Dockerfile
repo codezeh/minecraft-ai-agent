@@ -32,6 +32,22 @@ COPY package*.json .
 COPY patches ./patches
 RUN npm install
 
-COPY . .
+# ★ OPS-005（2026-11-06 深度检查）：原来是 `COPY . .` —— 会把 .git 全历史、
+#   .mindserver-token、.env、私有 profiles、运行日志一并写进镜像层（写了删不掉）。
+#   现在改成**显式源文件清单**：只有这些路径会进镜像，其余靠 .dockerignore 兜底。
+#   凭据与私有配置一律运行时挂载（见下方 RUN 之后的注释），不打进层里。
+COPY main.js settings.js ./
+COPY src ./src
+COPY services ./services
+COPY tasks ./tasks
+COPY schematics ./schematics
+COPY README.md ./
+
+# 运行时需要挂载的两样东西（不要用 COPY 烤进来）：
+#   · profiles/           每个 bot 的人设 + permissions（可能内嵌 API Key）
+#   · keys.json          模型 API Key
+#   · bots/              每个 bot 的记忆/地形/任务板数据（持久化目录）
+#   · .mindserver-token  mindserver 每次启动自己生成，宿主脚本要用它对接
+# 例：docker run -v "$PWD/profiles:/app/profiles:ro" -v "$PWD/keys.json:/app/keys.json:ro" ...
 
 CMD ["npm", "start"]

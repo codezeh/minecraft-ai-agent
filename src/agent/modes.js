@@ -544,10 +544,13 @@ export async function execute(mode, agent, func, timeout=-1) {
 
     if (should_reprompt) {
         // auto prompt to respond to the interruption
-        let role = convoManager.inConversation() ? agent.last_sender : 'system';
+        // BOT-001：不在对话里时这条是**代码发起**的自动消息，必须显式 internal；
+        // 在对话里则沿用"归到对话对象"的原语义（那是个真实玩家名，不该借内部标记升权）。
+        const in_convo = convoManager.inConversation();
+        let role = in_convo ? agent.last_sender : 'system';
         let logs = agent.bot.modes.flushBehaviorLog();
         agent.handleMessage(role, `(AUTO MESSAGE)Your previous action '${interrupted_action}' was interrupted by ${mode.name}.
-        Your behavior log: ${logs}\nRespond accordingly.`);
+        Your behavior log: ${logs}\nRespond accordingly.`, null, in_convo ? {} : { internal: true });
     }
 }
 

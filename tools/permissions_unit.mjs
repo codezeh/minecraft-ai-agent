@@ -55,10 +55,14 @@ check('前面的空格会裁掉（不是另一个人）',
 
 // ── 3. 定级：内部触发 / 别的 bot ─────────────────────────
 check('internal=true（代码发起）= 主人级', resolveLevel({ author: null, internal: true }) === LEVEL.OWNER);
-check("author='system'（模型自主回合）只给信任，不给主人权",
-    resolveLevel({ author: 'system', permissions: perms }) === LEVEL.TRUSTED);
-check('author=自己名字（自己的回合）只给信任',
-    resolveLevel({ author: 'deepseek', permissions: perms, internalNames: ['deepseek'] }) === LEVEL.TRUSTED);
+// ★ BOT-001（2026-11-06 深度检查）改口径：名字不再具有任何"内部来源"语义。
+//   原来这里断言 author='system' → TRUSTED（"模型自主回合"），但那正是漏洞的另一半：
+//   玩家把游戏名改成 system 就能命中这条 ⇒ 白拿信任级。现在内部来源只能由调用点
+//   传 internal:true 声明，字符串 'system' 只是一个**普通玩家名**，落在 owner 名单外 ⇒ OTHER。
+check("author='system'（玩家真的可以叫这个名）→ 其他玩家，不是内部来源",
+    resolveLevel({ author: 'system', permissions: perms }) === LEVEL.OTHER);
+check('author=自己名字（同名玩家）→ 其他玩家，不再按"自己的回合"放宽',
+    resolveLevel({ author: 'deepseek', permissions: perms }) === LEVEL.OTHER);
 check('别的 bot 只聊天（哪怕名字和主人一样）',
     resolveLevel({ author: 'Zeh', permissions: perms, isOtherBot: true }) === LEVEL.OTHER);
 check('author 为空且非 internal → 信任（不因缺参数升到主人）',

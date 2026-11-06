@@ -13,6 +13,8 @@ import {
 } from './auth_gate.js';
 // 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
 import { validateNameFormat } from '../agent/connection_handler.js';
+// OPS-003（2026-11-06）：离线模式 + 监听所有网卡 ⇒ 名字可冒用为主人。启动时给出可见告警。
+import { assessFromProperties, renderOfflineIdentityWarning } from './offline_identity_risk.js';
 import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync, unlinkSync } from 'fs';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
 // 板放 agent 里别的 bot 看不见；放这里就只有一个写者，省掉多进程锁）。
@@ -873,6 +875,28 @@ export function createMindServer(host_public = false, port = 8080) {
                 console.log(`[mindserver] ★ 调试模式（MINDSERVER_PRINT_TOKEN=1）完整值: ${handshakeToken}`);
                 console.log(`[mindserver] ★ 可直接打开: http://${host}:${port}/?token=${handshakeToken}`);
             }
+        }
+        // ★ OPS-003（2026-11-06 深度检查）[P1]：把"离线模式 + 监听所有网卡 ⇒ 名字可冒用"
+        //   变成启动时的一条明确告警。这不是自动改配置（那会打断局域网/手机，
+        //   报告的处置是三选一、需用户拍板），而是**让风险在每次启动时可见**。
+        //   读不到配置就静默跳过 —— 这条告警不该成为启动失败的原因。
+        try {
+            const propsPath = path.join(__dirname, '..', '..', '..', 'server', 'server.properties');
+            if (existsSync(propsPath)) {
+                const txt = readFileSync(propsPath, 'utf8');
+                const owners = [];
+                // 主服白名单就是"会被按名字授予 owner 的那批名字"最贴近的近似（config/network.json）
+                try {
+                    const netCfg = JSON.parse(readFileSync(path.join(__dirname, '..', '..', '..', 'config', 'network.json'), 'utf8'));
+                    const players = netCfg?.servers?.main?.players;
+                    if (Array.isArray(players)) owners.push(...players.filter(x => typeof x === 'string'));
+                } catch { /* 没有 network.json 就只按通用口径告警 */ }
+                const risk = assessFromProperties(txt, owners);
+                const warn = renderOfflineIdentityWarning(risk);
+                if (warn) console.warn(warn);
+            }
+        } catch (e) {
+            console.warn('[mindserver] OPS-003 风险自检跳过（读配置失败）：', e?.message ?? e);
         }
     });
 

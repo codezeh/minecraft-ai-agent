@@ -75,7 +75,9 @@ export class SelfPrompter {
         while (!this.interrupt) {
             const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
             
-            let used_command = await this.agent.handleMessage('system', msg, -1);
+            // BOT-001：目标循环是**唯一**可以继承主人权限的内部回合
+            // （目标是人设的 !goal，「谁设的目标就是谁的意图」），所以显式带 selfPrompt。
+            let used_command = await this.agent.handleMessage('system', msg, -1, { internal: true, selfPrompt: true });
             if (!used_command) {
                 no_command_count++;
                 if (no_command_count >= MAX_NO_COMMAND) {

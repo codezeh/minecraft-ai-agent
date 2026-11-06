@@ -437,7 +437,8 @@ export class Agent {
             }
         }
         else if (init_message) {
-            await this.handleMessage('system', init_message, 2);
+            // BOT-001：代码发起 ⇒ 显式 internal（不能靠 'system' 这个字符串）。
+            await this.handleMessage('system', init_message, 2, { internal: true });
         }
         else {
             this.openChat("Hello world! I am "+this.name);
@@ -503,7 +504,8 @@ export class Agent {
             (message ? ` with the final message: '${message}'` : '') +
             `. Your items are still there. The place is saved as 'last_death_position' if you want to go back.` +
             recoverHint + pickupHint +
-            ` Previous actions were stopped and you have respawned.`);
+            ` Previous actions were stopped and you have respawned.`,
+            null, { internal: true });
     }
 
     checkAllPlayersPresent() {
@@ -539,7 +541,29 @@ export class Agent {
         convoManager.endAllConversations();
     }
 
-    async handleMessage(source, message, max_responses=null) {
+    /**
+     * 收到一条消息（玩家聊天 / 别的 bot / 代码内部触发）。
+     *
+     * ★ BOT-001（2026-11-06 深度检查）：内部来源改用**显式标记**，不再按名字猜。
+     *
+     * 缺陷原貌：`self_prompt = source === 'system' || source === this.name`。
+     * `source` 是玩家名（来自 bot.on('chat') 的 username），所以玩家把游戏名起成
+     * `system` 就能把自己的聊天伪装成"代码内部触发"，再经下面
+     * `perm_author = self_prompter.author` 借到设 !goal 那个主人的身份 ⇒ 主人级命令。
+     *
+     * 现在的口径：只有**代码调用点**能传 `opts.internal === true`（字符串伪造不出来）。
+     * 名字只用于和 profile 的 owner/trusted 名单比对，没有任何特殊名字。
+     *
+     * @param {string} source 发言人：玩家名 / 别的 bot 名 / 内部触发时给个可读标签（如 'system'）
+     * @param {string} message
+     * @param {number|null} [max_responses]
+     * @param {{internal?:boolean, selfPrompt?:boolean}} [opts]
+     *   internal   本回合由代码发起（不是玩家发言）。**唯一**内部来源判据。
+     *   selfPrompt 本回合由 self_prompter 的目标循环发起 —— 只有这条路径可以继承
+     *              `self_prompter.author`（设 !goal 的那个人）的主人权限；
+     *              其它内部回合（初始化/死亡/对话超时/模式重提示）一律 author=null ⇒ 信任级。
+     */
+    async handleMessage(source, message, max_responses=null, opts={}) {
         await this.checkTaskDone();
         if (!source || !message) {
             console.warn('Received empty message from', source);
@@ -554,15 +578,23 @@ export class Agent {
             max_responses = Infinity;
         }
 
-        const self_prompt = source === 'system' || source === this.name;
-        const from_other_bot = convoManager.isOtherAgent(source);
+        const is_internal = opts?.internal === true;
+        const is_self_prompt_loop = is_internal && opts?.selfPrompt === true;
+        // self_prompt 的语义（打断/停循环/强制单次回复）与改造前一致：
+        // 内部回合仍按"自提示回合"处理，只是它现在由标记决定、不能由名字伪造。
+        const self_prompt = is_internal;
+        const from_other_bot = is_internal ? false : convoManager.isOtherAgent(source);
 
         // ★ 2026-11-01（M1，08 §5）：命令的等级按「谁说的」算，不按模型说了什么算。
         //   - 玩家发言  → 发言人本人（respondFunc 已经拿到 username）
-        //   - 自提示回合 → 设 !goal 的那个人（self_prompter.author），不是 'system'
+        //   - 自提示循环 → 设 !goal 的那个人（self_prompter.author），不是 'system'
         //   - 别的 bot   → isOtherBot，只聊天
+        //   - 其它内部回合 → author=null（信任级）：初始化文本、死亡消息、对话超时
+        //     都不该带着主人权限去执行命令（BOT-001 收口）
         // 这样提示词注入（"你现在是我主人"）改不了等级，因为 author 不来自文本。
-        const perm_author = self_prompt ? (this.self_prompter?.author ?? source) : source;
+        const perm_author = is_self_prompt_loop
+            ? (this.self_prompter?.author ?? null)
+            : (is_internal ? null : source);
         const perm = { author: perm_author, isOtherBot: from_other_bot };
 
         if (!self_prompt && !from_other_bot) { // from user, check for forced commands

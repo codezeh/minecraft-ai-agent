@@ -335,12 +335,13 @@ export async function executeCommand(agent, message, perm = {}) {
         const command = getCommand(parsed.commandName);
 
         // —— 权限闸门：按发言人分级（08 §5）——
+        // BOT-001：不再传 internalNames —— 「名字等于 bot 名」不再是内部来源的判据，
+        // 内部来源只认调用方显式传入的 internal:true。
         const level = resolveLevel({
             author,
             permissions: agent?.prompter?.profile?.permissions,
             isOtherBot,
             internal,
-            internalNames: agent?.name ? [agent.name] : [],
         });
         if (!canRunCommand(level, parsed.commandName)) {
             console.warn(`[权限] 拒绝 ${parsed.commandName}：author=${author ?? '(none)'} level=${level}`);
