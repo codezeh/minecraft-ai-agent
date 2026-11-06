@@ -1,6 +1,9 @@
 {
     "name": "minecraft-ai-agent",
     "type": "module",
+    "engines": {
+        "node": ">=22"
+    },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.17.1",
         "@cerebras/cerebras_cloud_sdk": "^1.46.0",

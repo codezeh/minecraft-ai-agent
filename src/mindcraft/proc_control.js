@@ -36,6 +36,8 @@ const state = {
     port: 25565,
     rconPort: 25575,
     rconPassword: '',
+    /** ★ OPS-008：进行中的启动 Promise（并发启动闸；null = 当前没有启动在进行）。 */
+    startingPromise: null,
 };
 
 function pushLog(line) {
@@ -162,6 +164,33 @@ export async function getStatus() {
 }
 
 export async function startServer() {
+    if (state.proc) return { ok: false, reason: 'already_started_by_us', hint: '我已经管着一个服了，先停掉再启动' };
+    // ★★★ OPS-008（2026-11-06 深度检查）：**并发启动闸**。
+    //
+    //   缺陷原貌：这个函数的第一件事就是 `await isPortOpen()`。两个面板连接
+    //   （或用户快速重复点击）同时进来时，**两次调用都会在这里让出执行权**，
+    //   而 `state.proc` 要等 spawn 之后才被赋值 ⇒ 两个都通过检查、各 spawn 一个 Paper
+    //   ⇒ 抢同一个世界目录/端口、启动状态互相覆盖，还可能留下孤儿进程。
+    //   报告实测：两个 Promise.all 调用得到 spawnCount=2。
+    //
+    //   修法：**在第一个 await 之前**就同步登记"启动中"，并复用同一个启动 Promise。
+    //   第二个调用直接拿到进行中的那个 Promise（不是再起一份）。
+    //   释放放在 finally：失败也要放开，否则"启动失败一次 = 永远不能启动"。
+    if (state.startingPromise) {
+        console.log('[launcher] 已有一次启动在进行中，复用同一个启动流程（不重复 spawn）');
+        return await state.startingPromise;
+    }
+    state.status = 'starting';
+    state.startingPromise = _startServerOnce();
+    try {
+        return await state.startingPromise;
+    } finally {
+        state.startingPromise = null;
+    }
+}
+
+/** 真正的启动流程（**只由 startServer 的闸调用**，外部不要直接调）。 */
+async function _startServerOnce() {
     if (state.proc) return { ok: false, reason: 'already_started_by_us', hint: '我已经管着一个服了，先停掉再启动' };
     if (await isPortOpen()) {
         return {

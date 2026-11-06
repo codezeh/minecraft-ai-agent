@@ -50,6 +50,12 @@ const PATTERNS = [
     /credentials?.*\.json$/,
     /secrets?.*\.json$/,
     /\.token$/,
+    // ★ OPS-013（2026-11-06 深度检查）：**本项目的真实控制台令牌文件名**。
+    //   原来 .token 后缀只覆盖"xxx.token"，而实际落盘的是 `.mindserver-token`
+    //   （无后缀、以点开头）⇒ 报告实测：临时仓里跟踪着 .mindserver-token，
+    //   本扫描器却 exit 0 报"无凭据文件"，第二道防线形同虚设。
+    /^\.mindserver-token/,
+    /^mindserver-token/,
     /^keys\.json$/,
     /config\.local\.(js|ts|json)$/,
 ];

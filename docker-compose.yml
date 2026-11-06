@@ -4,6 +4,10 @@ services:
     environment:
       SETTINGS_JSON: |
         {"auto_open_ui": false}
+      # ★ OPS-010（2026-11-06 深度检查）：容器内必须监听 0.0.0.0，
+      #   否则发布出去的端口永远连不到（容器里的 localhost 是容器自己的回环）。
+      #   默认值保持不变（只绑 localhost），这里的放开只影响本容器。
+      MIND_SERVER_HOST: "0.0.0.0"
     volumes:
       - ./settings.js:/app/settings.js
       - ./keys.json:/app/keys.json
@@ -11,7 +15,11 @@ services:
       - ./bots:/app/bots
     ports:
       - "3000-3003:3000-3003" # see the view from the camera mounted on your bot head: http://localhost:3000/
-      - 8080 # Mindserver port
+      # ★ OPS-010：**固定**宿主端口并只绑回环。
+      #   原来写 `- 8080`（不指定宿主端口）⇒ 宿主随机映射，脚本里硬编码的 8080 对不上，
+      #   而且会绑到 0.0.0.0 让局域网都能访问控制台。
+      #   现在：宿主 127.0.0.1:8080 → 容器 8080，访问地址始终是 http://127.0.0.1:8080/?token=…
+      - "127.0.0.1:8080:8080" # Mindserver port (loopback only)
     extra_hosts:
     - "host.docker.internal:host-gateway"
 

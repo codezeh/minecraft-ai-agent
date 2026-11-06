@@ -828,7 +828,20 @@ export function createMindServer(host_public = false, port = 8080) {
     if (host_public) {
         console.log('Public hosting not supported yet. Using localhost.');
     }
-    const host = 'localhost';
+    // ★★★ OPS-010（2026-11-06 深度检查）：绑定地址必须**可显式配置**，否则容器里根本连不上。
+    //
+    //   缺陷原貌：这里硬编码 `'localhost'`，而 docker-compose 发布的是容器 8080 端口。
+    //   容器内的 localhost 是容器自己的回环 ⇒ 宿主机经发布端口**永远访问不到**控制台；
+    //   而 compose 里 `- 8080` 不指定宿主端口，宿主实际随机映射，脚本里硬编码的 8080 也对不上。
+    //
+    //   修法：默认**仍然只绑回环**（安全默认不变），需要时用 MIND_SERVER_HOST 显式放开
+    //   （容器里设 0.0.0.0）。安全边界没有松动 —— token + Host/Origin 校验照旧，
+    //   而宿主侧仍需显式把端口映射到 127.0.0.1:8080（见 docker-compose.yml 的注释与 README）。
+    const host = (process.env.MIND_SERVER_HOST || 'localhost').trim() || 'localhost';
+    if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
+        console.log(`[mindserver] ⚠ 监听 ${host}：控制台将对本机以外的来源可达。`
+            + '请确认已启用 token，并且只在可信网络里这样做。');
+    }
     // ★ F-EXEC-102（2026-11-06）：**唯一的关停入口**（socket 的 shutdown 事件 + SIGINT/SIGTERM 共用）。
     // 幂等：重复触发（例如连点两次"停止面板"，或 Ctrl-C 与 socket 同时来）只跑一次。
     // 走 mindcraft.shutdownAndWait：等每个子进程确认退出，超时则 SIGKILL，最后才 exit。

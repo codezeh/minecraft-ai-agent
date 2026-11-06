@@ -25,12 +25,35 @@ if not defined NODE (
 )
 if not defined NODE (
     echo [ERROR] Node.js not found.
-    echo         Install Node.js 18/20/22 LTS from https://nodejs.org/
+    echo         Install Node.js 22 LTS or newer from https://nodejs.org/
+    echo         ^(this project imports node:sqlite at top level, requires Node 22+^)
     echo         or place a portable copy at .tools\node\node.exe
     pause
     exit /b 1
 )
 echo   Node.js : %NODE%
+
+REM ---------- Node 版本闸（OPS-006）----------
+REM 本仓顶层导入 node:sqlite（Node 22+ 才内置），按旧文档装 18/20 会在加载阶段直接崩。
+REM 这里提前给出明确提示，而不是让用户看一段看不懂的 ERR_UNKNOWN_BUILTIN_MODULE。
+REM ★ 必须用延迟展开：NODE_MAJOR 是在 for 里赋值的，而 cmd 会在**整块解析时**
+REM   就把 %NODE_MAJOR% 展开（那时还是空）⇒ 直接语法错 "22 was unexpected"。
+REM ★ 用 `node -v` 而不是 `-p`：后者带引号嵌在 for /f 的单引号里会被 cmd 拆坏
+REM   （实测拿到的是 `' "node -p "process` 这种垃圾）。`v24.16.0` 按 v/. 切分后 token1 = 24。
+setlocal EnableDelayedExpansion
+set "NODE_MAJOR="
+for /f "tokens=1 delims=v." %%v in ('"%NODE%" -v 2^>nul') do set "NODE_MAJOR=%%v"
+if not defined NODE_MAJOR (
+    echo [WARN] Could not read Node version ^(continuing^).
+) else if !NODE_MAJOR! LSS 22 (
+    echo [ERROR] Node.js !NODE_MAJOR!.x is too old. This project requires Node.js 22 or newer.
+    echo         Why: src/agent/library/terrain3d.js and board_store.js import node:sqlite,
+    echo         which is only built into Node 22+. Using 18/20 fails at load time.
+    echo         Run "%NODE%" -v to see the current version.
+    pause
+    exit /b 1
+)
+endlocal
 
 REM ---------- 定位 Java ----------
 set "JAVA="

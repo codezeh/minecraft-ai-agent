@@ -50,7 +50,12 @@
 ### 环境要求
 
 - Minecraft Java 版（支持至 1.21.11，推荐 1.21.6）
-- Node.js 18 或 20 LTS（Node 24+ 可能与原生依赖冲突）
+- **Node.js ≥ 22（本机已实测 v24.16.0）**
+  - 说明（OPS-006，2026-11-06 深度检查）：旧文档写的是 "Node 18 或 20 LTS"，
+    但本仓在 `src/agent/library/terrain3d.js`、`board_store.js` **顶层导入 `node:sqlite`**
+    （Node 22 才内置），且实装依赖 `mineflayer` 已声明 `engines.node >= 22`。
+    按旧文档装 Node 18/20 会在**加载阶段直接失败**。
+  - `package.json` 的 `engines` 已同步为 `>=22`，`start.bat` / `start-panel.ps1` 启动前会检查并给出明确提示。
 - 至少一个模型 API Key（OpenAI / DeepSeek / Claude / Gemini 等）
 
 ### 安装
