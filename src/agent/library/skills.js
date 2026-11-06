@@ -4,6 +4,8 @@ import * as landmarks from "./landmarks.js";
 import * as store from "./memory_store.js";   // dangers / tasks 命名空间直读
 // 攀爬能力（原子层）与实体跟随（任务层）
 import { mapDirOf } from './bot_paths.js';
+// F-EXEC-108：垫脚清单的唯一真相源（本文件不再自己维护第五份正则）
+import { isScaffoldBlock } from './scaffold_blocks.js';
 import { climbUp, climbDown, isClimbable, climbableUp, climbableDown } from './act_climb.js';
 // 掘进与树体（2026-10-29 新增能力，要暴露给模型）
 // ★ 2026-10-31：原来 import 的是 tunnelAlong（循环长在原子层里）。
@@ -1371,26 +1373,36 @@ export async function equip(bot, itemName) {
             return false;
         }
     }
-    if (itemName.includes('leggings')) {
-        await bot.equip(item, 'legs');
+    // ★ F-EXEC-104（2026-11-06）：原来 7 支 `await bot.equip(...)` 全不看结果、也不查中断，
+    // 函数末尾无条件 `return true` ⇒ "没穿上"也报成功，且 `!stop` 期间照穿。
+    // 现在：① 先查中断；② 统一映射目标位；③ 捕获异常；④ **读回校验**（装备位/手上真的是这件）。
+    if (bot.interrupt_code) {
+        log(bot, `装备 ${itemName} 被取消（interrupt_code）`);
+        return false;
     }
-    else if (itemName.includes('boots')) {
-        await bot.equip(item, 'feet');
+    const dest = itemName.includes('leggings') ? 'legs'
+        : itemName.includes('boots') ? 'feet'
+            : itemName.includes('helmet') ? 'head'
+                : (itemName.includes('chestplate') || itemName.includes('elytra')) ? 'torso'
+                    : itemName.includes('shield') ? 'off-hand'
+                        : 'hand';
+    try {
+        await bot.equip(item, dest);
+    } catch (e) {
+        log(bot, `Could not equip ${itemName}（${dest}）：${e?.message ?? e}`);
+        log(bot, `FAILED`);
+        return false;
     }
-    else if (itemName.includes('helmet')) {
-        await bot.equip(item, 'head');
-    }
-    else if (itemName.includes('chestplate') || itemName.includes('elytra')) {
-        await bot.equip(item, 'torso');
-    }
-    else if (itemName.includes('shield')) {
-        await bot.equip(item, 'off-hand');
-    }
-    else {
-        await bot.equip(item, 'hand');
+    // 读回：手上（hand）或护甲位（mineflayer 的 inventory.slots 5..8）真的是它才算成功
+    const inHand = bot.heldItem?.name === itemName;
+    const onBody = (bot.inventory?.slots ?? []).slice(5, 9).some(s => s && s.name === itemName);
+    if (!inHand && !onBody) {
+        log(bot, `equip 之后读回不一致：${dest} 位上不是 ${itemName}（按失败处理）`);
+        log(bot, `FAILED`);
+        return false;
     }
     log(bot, `Equipped ${itemName}.`);
-        return true;
+    return true;
 }
 
 export async function discard(bot, itemName, num=-1) {
@@ -1497,8 +1509,19 @@ export async function putInChest(bot, itemName, num=-1) {
     }
     let to_put = num === -1 ? item.count : Math.min(num, item.count);
     try {
+        // ★ F-EXEC-103（2026-11-06）：**按实际差值判成功**，不看"我打算放几个"。
+        // 原来 deposit 不抛异常就 `return true` —— 哪怕容器满/窗口中途关闭只放进一部分。
+        const beforeHave = countInventoryItem(bot, itemName);
         await opened.container.deposit(item.type, null, to_put);
-        log(bot, `Successfully put ${to_put} ${itemName} in the chest at (${opened.pos.x},${opened.pos.y},${opened.pos.z}).`);
+        const afterHave = countInventoryItem(bot, itemName);
+        const moved = beforeHave - afterHave;          // 背包里真正少掉的数量
+        if (moved <= 0) {
+            log(bot, `没能真的放进箱子：背包里 ${itemName} 仍是 ${afterHave} 个（打算放 ${to_put} 个）`);
+            return false;
+        }
+        log(bot, moved === to_put
+            ? `Successfully put ${moved} ${itemName} in the chest at (${opened.pos.x},${opened.pos.y},${opened.pos.z}).`
+            : `Partially put ${moved}/${to_put} ${itemName} in the chest at (${opened.pos.x},${opened.pos.y},${opened.pos.z}).`);
         landmarks.touchChest(bot, opened.pos);
         return true;
     } catch (err) {
@@ -1773,8 +1796,9 @@ export function buildMovements(bot, opts = {}) {
     m.allow1by1towers = opts.towers !== false;
     const scaffoldIds = [];
     const had = bot.inventory ? bot.inventory.items() : [];
-    // 背包里真实存在、且适合当脚手架的实心方块
-    const goodScaffold = /^(dirt|grass_block|cobblestone|stone|andesite|diorite|granite|deepslate|sand|gravel|netherrack|_planks|_log|_slab)$|(_planks|_log)$/;
+    // ★ F-EXEC-108（2026-11-06）：垫脚清单**只有一份真相源**（library/scaffold_blocks.js）。
+    // 这里原来是第五份内联正则，还带一个永远匹配不到的死备选（`_slab` 钉在 `^(…)$` 里，
+    // 要求名字正好等于 "_slab"）。清单改一处忘另一处就会重新分叉 ⇒ 改用 isScaffoldBlock。
     // ★★ 2026-11-05（t8，活 bug）：`scafoldingBlocks` 要的是 **item id**，不是 block id。
     //   pathfinder 的计数判据是 `if (item.type === id) count += item.count`
     //   （movements.js:159）—— `item.type` 是 `itemsByName` 的 id。
@@ -1786,7 +1810,7 @@ export function buildMovements(bot, opts = {}) {
     //   "没这个物品"伪装成"清单写了却没生效"。
     const itemIdOf = (name) => bot.registry?.itemsByName?.[name]?.id ?? null;
     for (const it of had) {
-        if (goodScaffold.test(it.name)) {
+        if (isScaffoldBlock(it.name)) {
             const id = itemIdOf(it.name);
             if (id != null && !scaffoldIds.includes(id)) scaffoldIds.push(id);
         }
@@ -1798,7 +1822,7 @@ export function buildMovements(bot, opts = {}) {
     }
     // 关键：背包一个可放方块都没有时，必须把搭桥关掉 ——
     // 否则 A* 会规划一条它永远搭不出来的桥（pathfinder 不检查数量）。
-    const haveBlocks = had.some(it => goodScaffold.test(it.name) && it.count > 0);
+    const haveBlocks = had.some(it => isScaffoldBlock(it.name) && it.count > 0);
     if (haveBlocks) {
         m.scafoldingBlocks = scaffoldIds;
     } else {

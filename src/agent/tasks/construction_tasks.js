@@ -48,6 +48,12 @@ export function checkLevelBlueprint(agent, levelNum) {
     const blueprint = agent.task.blueprint;
     const bot = agent.bot;
     const result = blueprint.checkLevel(bot, levelNum);
+    // ★ F-EXEC-109（2026-11-06）：checkLevel 在异常/提前返回路径上可能给 false 或 undefined，
+    // 原来直接 `result.mismatches.length` ⇒ `TypeError: Cannot read properties of false`。
+    // 调用方是用户可直达的 `!checkBlueprintLevel`（commands/queries.js），一条命令就能打出来。
+    if (!result || typeof result !== 'object' || !Array.isArray(result.mismatches)) {
+        return `Level ${levelNum} 检查失败：checkLevel 返回了非预期值（${String(result)}）`;
+    }
     if (result.mismatches.length === 0) {
         return `Level ${levelNum} is correct`;
     } else {
@@ -735,10 +741,14 @@ export function proceduralGeneration(m = 20,
             case 0:
                 break;
             case 1:
-                addWindowsAsSquares(matrix, newZ, newY, newZ, newLength, newWidth, newDepth, material)
+                // ★ F-EXEC-110（2026-11-06）：第 2 个参数是 addWindowsAsSquares(matrix, x, y, z, …) 的 **x**，
+                // 原来传的是 newZ ⇒ 窗户被算到错误的轴上（表现为"程序化房子没有窗户"）。
+                // 对照同函数下方 addCarpet 的调用（正确传 newX）。
+                addWindowsAsSquares(matrix, newX, newY, newZ, newLength, newWidth, newDepth, material)
                 break;
             case 2:
-                addWindowsAsPlane(matrix, newZ, newY, newZ, newLength, newWidth, newDepth, material)
+                // 同上：addWindowsAsPlane(matrix, x, y, z, …) 的 x 也必须是 newX
+                addWindowsAsPlane(matrix, newX, newY, newZ, newLength, newWidth, newDepth, material)
         }
 
 

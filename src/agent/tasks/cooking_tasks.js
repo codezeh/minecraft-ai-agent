@@ -1,9 +1,15 @@
 import { getPosition } from "../library/world.js";
+// F-EXEC-101：sink 级斜杠闸（本类有 27 处裸 bot.chat('/…')）
+import { installTaskChatGuard } from './task_chat.js';
 
 export class CookingTaskInitiator {
     constructor(data, bot) {
         this.bot = bot;
         this.data = data;
+        // ★ F-EXEC-101：构造时就把 sink 级闸装上 —— 调用方不需要记得逐个改；
+        // 将来在本类里新增一处裸斜杠，也会自动过 permissions 的同一张白名单。
+        // 幂等：与 initBotTask 里那次安装不冲突（已装则跳过）。
+        installTaskChatGuard(bot);
     }
 
     async init() {

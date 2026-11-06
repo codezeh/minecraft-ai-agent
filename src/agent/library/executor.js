@@ -72,6 +72,22 @@ function blockAt(bot, x, y, z) {
 }
 
 const IS_AIR = new Set(['air', 'cave_air', 'void_air']);
+
+/**
+ * F-EXEC-106（2026-11-06）：这一格现在真的是空气吗？
+ *
+ * 用途：`digBlock` 返回失败时，判"是不是其实已经挖掉了"。
+ * **必须按方块状态判，不能按错误文本判** —— 原来用 `/air/i` 匹配 message，
+ * 而 message 是自由文本：`stair`、`repair`、`airborne`、`No air above` 都会误命中，
+ * 于是"真实挖掘失败"被当成成功，`dug++` 照加、terrain3d 照更新 ⇒ 库与现实分叉、规划撞墙。
+ *
+ * 读不到方块时返回 false（保守：读不到就不敢当成功）。
+ */
+function isAirNow(bot, x, y, z) {
+    const b = blockAt(bot, x, y, z);
+    return !!(b && IS_AIR.has(b.name));
+}
+
 // 液体：不需要"挖"，直接穿过去（游泳/下落）。classifyBlock 里是 T.WATER / T.LAVA
 const IS_LIQUID = /^(water|kelp|seagrass|bubble_column|lava)$/;
 
@@ -249,7 +265,10 @@ export async function execStep(bot, step, opts = {}) {
                     return { ok: false, code: 'NO_TOOL', message: `挖不动 ${above.name}（没有合适的工具）` };
                 }
                 const r = await digBlock(bot, { kind: 'block', pos: { x: bx, y: cellY, z: bz } });
-                if (!r.ok && !/air/i.test(String(r.message ?? ''))) {
+                // ★ F-EXEC-106（2026-11-06）：原来靠 `/air/i` 匹配**错误文本**判"其实已经挖掉了"，
+                // 而 message 是自由文本（`stair`/`repair`/`airborne`/`No air above` 全会误命中）。
+                // 改为读**实际方块状态**：只有"那一格现在真的是空气"才算成功。
+                if (!r.ok && !isAirNow(bot, bx, cellY, bz)) {
                     return { ok: false, code: r.code ?? 'DIG_FAIL', message: `挖 ${above.name} 失败` };
                 }
                 dug++;
@@ -351,7 +370,8 @@ export async function execStep(bot, step, opts = {}) {
                     return { ok: false, code: 'NO_TOOL', message: `挖不动 ${below.name}（没有合适的工具）` };
                 }
                 const r = await digBlock(bot, { kind: 'block', pos: { x: bx, y: y - 1, z: bz } });
-                if (!r.ok && !/air/i.test(String(r.message ?? ''))) {
+                // ★ F-EXEC-106：同上一处 —— 按实际方块状态判，不看错误文本
+                if (!r.ok && !isAirNow(bot, bx, y - 1, bz)) {
                     return { ok: false, code: r.code ?? 'DIG_FAIL', message: `向下挖 ${below.name} 失败` };
                 }
                 dug++;
@@ -685,9 +705,23 @@ export async function execStep(bot, step, opts = {}) {
     // D1：判据与循环都按脚位（targetFeetY），旧代码用裸 step.y 会少上一格
     if (r.ok && Math.floor(bot.entity.position.y) < targetFeetY - 1) {
         let guard = 0;
+        let lastErr = null;
         while (Math.floor(bot.entity.position.y) < targetFeetY && guard++ < 6) {
             const up = await stepUp(bot, { onEvent });
-            if (!up.ok) break;
+            if (!up.ok) { lastErr = up; break; }
+        }
+        // ★ F-EXEC-105（2026-11-06）：垫高失败后**不能**再 `return r`（r 是 moveToXZ 的 ok）。
+        // 原来这一支会把"没上去"当成功返回：上层据此认为已到达，下一步从错误的高度开始 ⇒ 连锁失败，
+        // 而错误点被推到很远（最典型是"没有可垫脚的方块"被埋掉）。
+        // 现在与上面"走过头（y 太高）"那支对称：没到目标高度就如实失败。
+        if (Math.floor(bot.entity.position.y) < targetFeetY - 1) {
+            const at = Math.floor(bot.entity.position.y);
+            return {
+                ok: false,
+                code: lastErr?.code ?? 'HEIGHT_MISS',
+                message: `该上到 y=${targetFeetY}，实际停在 y=${at}`
+                    + (lastErr ? `（垫高失败：${lastErr.message ?? lastErr.code}）` : ''),
+            };
         }
     }
     return r;
@@ -736,7 +770,8 @@ async function stepUp(bot, opts = {}) {
         }
         const hr = await digBlock(bot, { kind: 'block', pos: { x: feet.x, y: feet.y + dy, z: feet.z } });
         onEvent({ type: 'clear-head', y: feet.y + dy, name: hb.name, ok: hr.ok });
-        if (!hr.ok && !/air/i.test(String(hr.message ?? ''))) {
+        // ★ F-EXEC-106：同前两处 —— 按实际方块状态判，不看错误文本
+        if (!hr.ok && !isAirNow(bot, feet.x, feet.y + dy, feet.z)) {
             return fail(hr.code ?? 'DIG_FAIL', `挖头顶 ${hb.name} 失败`);
         }
         await sleep(200);

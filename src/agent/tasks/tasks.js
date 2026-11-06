@@ -3,6 +3,8 @@ import { executeCommand } from '../commands/index.js';
 import { getPosition } from '../library/world.js';
 import { ConstructionTaskValidator, Blueprint } from './construction_tasks.js';
 import { CookingTaskInitiator } from './cooking_tasks.js';
+// F-EXEC-101：sink 级斜杠闸（包住 bot.chat，新增调用点无法静默绕过）
+import { installTaskChatGuard } from './task_chat.js';
 
 const PROGRESS_FILE = './hells_kitchen_progress.json';
 
@@ -427,6 +429,14 @@ export class Task {
         //   Task.teleportBots() 等公开方法自身没有判据。今天没有第二调用点，但将来任何新调用
         //   都会静默绕过。彻底修法是 guardedChat 下沉到 sink —— 已单独立单，标"待真机环境"。
         const cheatsAllowed = process.env.ALLOW_TASK_CHEATS === '1';
+        // ★ F-EXEC-101（2026-11-06）：**把校验下沉到 sink**。
+        // 上面那段 `if (!cheatsAllowed)` 只是"跳过已知的几段"，绕过 whitelist 的本质没变
+        // （新增一处 `bot.chat('/op x')` 照样静默生效）。这里在 bot 上装 sink 级闸：
+        // 之后**任何**以 `/` 开头的 bot.chat 都要过 permissions 的同一张白名单，
+        // 作弊类还要 ALLOW_TASK_CHEATS=1。装一次即幂等，不重复套层。
+        installTaskChatGuard(this.agent.bot, {
+            onBlocked: (v, msg) => console.error(`[F-EXEC-101] 任务脚本斜杠命令被拦：${v.reason} | ${String(msg).slice(0, 80)}`),
+        });
         if (!cheatsAllowed) {
             console.error('[F-EXEC-202] ALLOW_TASK_CHEATS 未设为 1 ⇒ 跳过 cheat 段，其余流程照常。');
             console.error('  ✗ 跳过：`/clear <bot名>`（清空 bot 背包）');
