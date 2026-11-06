@@ -571,3 +571,51 @@ R3 那 4 份无 `## review` 的单子，我核实**属实**（纯 YAML front-mat
 
 ### 产出
 `docs/audit/night/review-r3-triage.md`
+
+---
+
+## R10 2026-11-06 12:1x–12:5x | t22 并发第三道流：快验 7 条 + 预审 F-EXEC-102 + 真机复跑
+
+### ① 快验：captain 认为"5 条已修完"，实测 **0 条成立**
+**先纠一处**：captain 的编号↔主题映射**三条全错位**（我按单子原文判）：
+`F-AI-101` 实为 `err.message.includes()` 裸用（gpt.js:83 等 5 处），**不是** `!goal`；
+`F-AI-102` 实为 `FAILED_REPLY` 魔法字符串（`_shared.js:25-35`），**不是** `console.log(err)`；
+`F-AI-103` 实为 skills 分叉（`skill_library.js:31-44`），**不是** `get-profile`。
+
+| 条目 | 判定 | 关键证据 |
+|---|---|---|
+| F-GATE-002 | ❌ 未修 | `unit_all.mjs:37-38` 仍在 EXCLUDE；两测试仍在；`chunk_map.js` 仍不存在 |
+| F-GATE-003 | ❌ 未修（但**无放宽先例** ✅） | `eslint.config.js:40-42` 仍 off；本晚 eslint 配置 **0 次改动** |
+| F-RT-004 | ⚠️ 部分 | `server.crt`/`keystore.jks`/`config.local.ts` 未覆盖；**`.ENV` 是 `core.ignorecase=true` 造成的平台假绿**（换 Linux 就漏） |
+| F-SEC-105 | ❌ 未修 | `prompter.js:435`(settings) 与 `hyperbolic.js:50`(env) 两套开关并存 |
+| F-AI-101 | ❌ 未修 | 5 处 `err.message.includes` 裸用（gpt83/claude54/groq67/mercury55/mistral63） |
+| F-AI-102 | ❌ 未修（结构债，当前无活 bug） | `_shared.js:25-35` 逐字未变 |
+| F-AI-103 | ❌ 未修 | `equip:1348`/`putInChest:1476`/`takeFromChest:1512` 仍独立实现 |
+
+**最有价值的一条附带发现**：`.ENV` 显示"已忽略"**不是因为规则覆盖了大小写变体**，
+而是这台 Windows 上 `core.ignorecase=true`（两仓实测均 true）让 git 的 ignore 匹配变成不区分大小写
+⇒ **换到 Linux/macOS 立刻漏**。这是"平台造成的假绿"，与整晚在抓的假绿同类。
+
+### ② F-EXEC-102 预审判据（patch-smith 未动手，我给了三枪验收）
+现状实测仍是最坏形态：`mindserver.js:665-675` 仍 `stopAgent 发信号 → setTimeout(2000) → process.exit(0)`，
+`grep process.on('SIGINT'|'SIGTERM'|'exit')` → **0 处**。
+**真回收三条判据**：①每个子进程真的 `exit` 过（`kill()` 返回成功只代表信号送达）②退出前不持 board 租约
+③父在子退出后才退且有超时兜底。
+**孤儿判定手段及副作用**：父存活检查（需子进程配合、Windows ppid 有坑）/ 租约过期（有延迟、且**心跳会续租**正是症结）/ 心跳超时（判不了进程是否还活着）。
+**建议三者叠加**，因为单项都有盲区。
+**三枪验收**：枪1 正常 shutdown｜枪2 **父被 SIGKILL**（最容易假修：只改父侧必挂）｜枪3 Ctrl-C（现 `process.on` 0 处 ⇒ 必挂）。**只过枪 1 不算修好。**
+
+### ③ 复跑 captain 的真机结论：**6/6 全部成立**
+本会话 `spawn` 仍 EPERM，但**监听端口不是 spawn** ⇒ 用"同进程 import createMindServer + 内置 fetch（redirect:'manual'）"
+在 **18099** 复跑（没占 8080），脚本留 `docs/audit/night/probe-http-gate.mjs`。实测：
+```
+A1 数据接口 无token 401（CSP/XFO/nosniff/Referrer 全 Y，X-Powered-By 已移除）
+A2 页面导航 无token 401   B1 数据接口 带token 200（不是 302 ⇒ b0e7ca7 有效）
+C1 页面导航 带token 302 → /   D1 index 带token 302   E1 socket.io 200（未误拦）
+```
+**唯一补充（captain 没提）**：**302 响应没有安全头** —— 302 在第一个中间件（换 cookie）里提前 return，
+而安全头是第二个中间件设的 ⇒ 没跑到。实际风险≈0（302 无响应体），但会让"四头齐全"在自动化验收里给出**假结论**。
+建议：安全头中间件前移，或 302 分支补一行。
+
+### 产出
+`docs/audit/night/review-concurrent.md` + `docs/audit/night/probe-http-gate.mjs`（可复现探针，未改业务代码）

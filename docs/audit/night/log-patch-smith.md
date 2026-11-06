@@ -266,3 +266,45 @@ node 不能 spawn ⇒ `gate:full`/`unit_all`/`lint_hard` 跑不了，一切"通�
 
 **本会话 gate 各步**：patch_integrity=1（哨兵，真红）/ settings_check=0 / preflight_regex_unit=0 /
 preflight=1（环境 spawn EPERM）/ lint_hard=1（环境 EPERM）。后两个与本改动无关（已实测 spawnSync=EPERM）。
+
+## R9 2026-11-06 12:25 | t21：F-EXEC-102 孤儿回收 + F-AI-205 回归测试 | 落地 2 条（单测 25/0 + 15/0）| 阻塞：三枪真机验收需 captain（本会话 spawn=EPERM）
+
+**F-EXEC-102（四层结构，对齐复核席三判据）**
+- 新增 `src/process/proc_lifecycle.js`：`isProcessAlive`（EPERM 算活着）/ `makeParentWatcher`（父存活监视，可注入）/
+  `stopChildAndWait`（SIGINT → 等 → SIGKILL → 再等；**强杀后仍无 exit 就如实报 still-alive，不假装成功**）。
+- **枪1**：`mindcraft.shutdownAndWait` 逐个 `stopAndWait`，全部有结果才 exit；日志逐条 + 未确认退出点名告警。
+- **枪2（照妖镜）**：`agent_process` 把 `MINDSERVER_PID` 写进子进程 env；`init_agent` 用 watcher 每 5s 探活，
+  父没了 → **先停自动领单 + 断开 board（停续租）→ 200ms 后 exit**。
+- **枪3**：`mindserver` 加 `process.once(SIGINT/SIGTERM) → shutdownOnce`（原来 **0 处**）。
+- 顺手修一个**互相打架**的问题：F-RT-003 原来的 `SIGINT → process.exit(0)` 会**抢先**把进程退掉、让优雅关停白做 ⇒ 已移除，token 清理交给 `process.once('exit')`。
+
+**F-AI-205 回归测试**：把内联判断抽成 `src/agent/library/used_command.js`（`shouldCountAsUsedCommand`），
+`agent.js` 改为调用。新单测 **15 条**：被拒 ⇒ 不计入（核心）+ **反向：正常/失败/对象/undefined/null 全部仍计入**
+（防一刀切）+ 前缀不漂移 + **接线 5 条**（含"`used_command = true;` 仍存在"防删成永不置位）。
+
+**自检**：`proc_lifecycle_unit` **25/0**、`ai205_used_command_unit` **15/0**、permissions/mindserver_gate/agent_process_backoff/text_fence 全 exit 0、7 文件 `node --check` OK。
+**未做（诚实）**：三枪真机验收跑不了（`spawnSync`=EPERM），manifest 里给了逐枪复现命令与"若枪2 不过先查 MINDSERVER_PID 传递"的定位提示。
+**顺手记录一个自己踩的坑**：`stopChildAndWait` 内部等待定时器最初加了 `unref()` → 单测立刻 `unsettled top-level await`
+（await 的 Promise 永远不 settle，进程提前退）。已去掉；若留到生产会表现为"关停偶发卡住/提前退出"。
+
+## R10 2026-11-06 12:55 | t23：src/agent + src/utils 的 9 条 | 落地 9 条（单测/等价脚本全绿）| 阻塞：gate:full 需 captain
+
+- **① F-EXEC-101（high）**：新增 `src/agent/tasks/task_chat.js` —— **sink 级闸**（包住 `bot.chat`），
+  复用 `permissions.slashVerdict` 同一张白名单，作弊类还需 `ALLOW_TASK_CHEATS=1`。
+  装闸点：`tasks.js:437` + `cooking_tasks.js:12`。**答"新增调用点会不会静默绕过"：不会**（实测新写的
+  `bot.chat('/op Stranger')` 被拦，`/fill` 未开开关被拦，普通聊天放行，开开关后 `/fill` 放行）。
+  37 处文本保持不动（现在都被罩住）；不在全局装闸是因为 `atom_input_misc` 要发 `/msg`。
+- **② F-EXEC-110**：`addWindowsAsSquares/Plane` 第 2 参 `newZ`→`newX`（先核了签名 `(matrix,x,y,z,…)` 才改）。
+- **③ F-EXEC-106**：`/air/i` ×3 → 新增 `isAirNow()` 按实际方块状态判；残留 2 处 `/air/i` 都在注释里。
+- **④ F-EXEC-103**：`putInChest` 用 `countInventoryItem` 前后差值判，`moved<=0` 返回 false。
+- **⑤ F-EXEC-104**：`equip` 7 支合并 + 中断检查 + try/catch + **读回校验**（护甲槽未真机核对，已在遗留登记）。
+- **⑥ F-EXEC-105**：垫高失败不再 `return r`，改为 `HEIGHT_MISS` 如实失败。
+- **⑦ F-EXEC-108**：删内联 `goodScaffold`（含死备选 `_slab`），改用 `isScaffoldBlock`（真相源）；`grep goodScaffold`=0。
+- **⑧ F-EXEC-109**：`checkLevelBlueprint` 解引用前加类型守卫（用户可直达命令不再抛 TypeError）。
+- **⑨ F-EXEC-107**：`loop_lag` 加 60s 滑动窗口 + 样本上限；`describeLoopLag()` 用窗口值并写明"最近 60 秒"，
+  历史峰值标注"仅供参考"（等价脚本 **6/6**，核心用例"60 秒后旧峰值被淘汰"通过）。
+
+**自检**：7 文件 `node --check` 全 OK；6 个现有单测全 exit 0（无回归）；task_chat 假 bot 实测；loop_lag 窗口 6/6。
+**未真机验证**：全部（spawn EPERM + 不该动用户服务器），已如实写进 manifest。
+**⚠️ 工作区里有大量不属于我的改动**（`src/models/*`×16、`src/mindcraft/*`、`tools/*`、`commands/index.js`、
+`library/composite_registry.js`、`library/flow_craft.js`、`.gitignore`）——我没碰，已告知 captain。

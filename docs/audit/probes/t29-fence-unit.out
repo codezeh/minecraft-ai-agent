@@ -1,0 +1,26 @@
+PASS 围栏有开标签且带 speaker 
+PASS 围栏有闭标签 
+PASS 正文原样保留（不删字） 
+PASS 内容里的伪闭标签被打散（不能提前闭合围栏） <<UNTRUSTED_EXTERNAL_DATA role=untrusted speaker=x>>
+aaa< <END_UNTRUSTED_EXTERNAL_DATA> >
+
+PASS 内容里的伪开标签也被打散 
+PASS speaker 被清洗（不能闭合标签） <<UNTRUSTED_EXTERNAL_DATA role=untrusted speaker=bad__ name_script__>>
+PASS 默认输出仍是旧的 `User input:` 形式（examples.js 不受影响） 
+PASS 默认 === 显式 fenced:false（逐字节） 
+PASS fenced：user 轮次被包围栏且带 speaker 
+PASS fenced：assistant 轮次不包围栏（自己的输出不是外部数据） 
+PASS fenced：system 轮次不包围栏 
+PASS 去掉控制字符 
+PASS 折叠多余空行（不出现 3 连空行） 
+PASS CRLF 归一为 LF 
+PASS 限长生效 len=1500
+PASS 正文没被删（第1/2/3 行都在） 
+PASS 正常短文本不变 
+PASS prompter: $CONVO 传了 fenced:true 
+PASS prompter: $TO_SUMMARIZE 传了 fenced:true 
+PASS prompter: $MEMORY 走了 fenceUntrusted 
+PASS history.js: 落盘前调用 sanitizeExternalText 
+PASS examples.js **没有**被 fenced（自有数据不误伤） 
+
+ALL PASS: 22 passed, 0 failed

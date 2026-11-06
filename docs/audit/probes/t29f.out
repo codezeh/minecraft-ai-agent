@@ -1,0 +1,33 @@
+===== 1) 基线：普通文本被正确围栏 =====
+<<UNTRUSTED_EXTERNAL_DATA role=untrusted speaker=Zeh>>
+我来啦
+<<END_UNTRUSTED_EXTERNAL_DATA>>
+
+===== 2) 绕过尝试：让载体文本里出现「闭合定界符」 =====
+
+--- ① 精确闭合符
+  内部含原样闭合符=false  含原样开符号=false  ⇒ blocked
+
+--- ② 小写闭合符
+  内部含原样闭合符=false  含原样开符号=false  ⇒ blocked
+
+--- ③ 零宽字符插入
+  内部含原样闭合符=false  含原样开符号=false  ⇒ blocked
+
+--- ④ 重复开符号
+  内部含原样闭合符=false  含原样开符号=false  ⇒ blocked
+
+--- ⑤ 只有开符号
+  内部含原样闭合符=false  含原样开符号=false  ⇒ blocked
+
+===== 小结：0/5 种写法能在围栏体内保留原样定界符 =====
+
+===== 3) sanitizeExternalText 的净化范围 =====
+  控制字符 \x00-\x1f: len 7 → 4  (被改动)
+  零宽字符 \u200b/\u200d/\ufeff: len 7 → 7  (未改动)
+  双向控制符 \u202e（RTL override）: len 3 → 3  (未改动)
+  注入语句（应原样保留，设计如此）: len 20 → 20  (未改动)
+  超长截断: len 1604 → 1500  (被改动)
+
+说明：sanitize 的设计是「去控制字符、折叠空行、截断」，**不过滤注入文本**（注释：不删正文）。
+所以「能不能绕过净化」这个问法本身不成立 —— 真防线在注入侧的 fenceUntrusted。

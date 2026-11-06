@@ -1,0 +1,11 @@
+total=197 | no-undef=0 | no-floating=0
+
+semi: 101
+require-await: 78
+no-empty: 8
+no-irregular-whitespace: 4
+no-prototype-builtins: 2
+no-ex-assign: 1
+no-fallthrough: 1
+no-useless-escape: 1
+no-dupe-keys: 1

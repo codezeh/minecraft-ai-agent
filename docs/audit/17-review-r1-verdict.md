@@ -552,3 +552,171 @@ t27 原文用的词是"无法证明被覆盖"，是准确的；是我在对话�
 成本约半天（158 条逐条填），收益是**此后每一轮终审不必再重做反向覆盖**，且"某条到底有没有被处理"永远可查。
 
 这比再补一轮审查便宜得多，也比继续用"无法证明"这种表述诚实得多。
+
+---
+
+# 附六：R3 队长亲验记录（2026-11-06 09:40）
+
+R3 审的是**夜班漏洞猎杀**（分支 `audit/night-20261106`，mindcraft 22 提交 + 外层 18 提交）。
+本节只记我亲手跑出来、或独立复现过的事实。
+
+## 一、`npm run gate:full` 是红的（夜班报告标"未证"的那一项）
+
+夜班 NIGHT-REPORT §三写：「`npm run gate:full` ⚠️ 未证 —— 本会话 spawn EPERM，由 captain 执行」。我跑了：
+
+```bash
+npm run gate:full > f 2>&1 ; echo $?     # → 1
+```
+
+唯一失败项：**`craft_diagnostic_reachability_unit` exit 1**，其余 97/98 脚本通过、4 个跳过。
+
+### 根因（定位到字节级）
+
+失败断言是测试自己的**变异检验**：
+```
+FAIL ①-反向验证：把 NO_ITEM 预检写回去 → 守卫报红   mutant first=false second=false
+```
+
+| 项 | 实测 |
+|---|---|
+| `tools/…:104` 拼锚点用的换行 | `String.fromCharCode(13,10)` = **CRLF** |
+| `src/agent/library/flow_craft.js` 实际换行 | **CRLF=0 / LF=382**（纯 LF） |
+| 锚点 `needTable = true;` | 仍在（`:188`，count=1）→ 不是锚点漂移 |
+| 结果 | `replace` 匹配不到 → 变异空转 → 守卫看不到注入 → 红 |
+
+同文件 `:103` 的注释写着「★ 关键：src/ 是 CRLF —— 用 LF 拼锚点永远匹配不到（今晚第 3 次栽在换行上）」——**方向写反了**，代码是照这条错注释写的。
+
+### 三条把它"从本轮问题上摘出去"的事实（我独立核实）
+1. **不是本轮引入**：`git diff --name-only main..HEAD -- src/agent/library/flow_craft.js` **为空**
+2. **从来没绿过**：`git show main:src/agent/library/flow_craft.js` 实测 **CRLF=0 / LF=382**；测试文件 `24f9d6b test(t127)`（11-05）就已入库
+3. **它不挡提交**：`.githooks/pre-commit` 跑 `npm run gate`（settings_check+regex_unit+preflight+lint_hard），**不含 unit_all**
+
+⇒ 我早先"门禁永久红=门禁不存在，倾向 BLOCK"的判断**部分收回**：它不该拦本轮合并（基线即红、非本轮引入），但**必须立刻修**——`gate:full` 永久红会让维护者习惯 `SKIP_GATE=1`，而它守的 t132 族保护目前**零信号**。
+
+**顺带**：`24f9d6b` 的 commit message 写「15/15」，实际当时只能 14/15 —— 这是"测试数字自报不实"的第二例（第一例是 R1 的 `unit_all 0/64`）。
+
+## 二、围栏转义有覆盖缺口（t29 发现，我独立复现）
+
+`src/utils/text.js`：
+- `:20-21` 的打散正则 `/<<END_UNTRUSTED_EXTERNAL_DATA>>/g` **无 `i` 标志**（大小写敏感）
+- `sanitizeExternalText` 只剥 `[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]`，**不剥 `\u200b-\u200d`/`\ufeff`**
+
+我实跑三种变体：
+
+| 输入 | 是否被打散 |
+|---|---|
+| `<<END_UNTRUSTED_EXTERNAL_DATA>>`（大写精确） | ✅ 变成 `< <END_UNTRUSTED_EXTERNAL_DATA> >` |
+| `<<end_untrusted_external_data>>`（小写） | ❌ **原样保留** |
+| `<<END_UNTRUSTED_\u200bEXTERNAL_DATA>>`（零宽插入） | ❌ **原样保留** |
+
+**定级 Should 非 BLOCK**：提示层是纵深防御，执行侧 fail-closed 未受影响；"模型是否会把变体读作闭合符"仍为推断。
+修法：正则加 `i` + 先剥 `[\u200b-\u200d\ufeff]` + 单测补 3 变体。
+
+## 三、F-WEB-202 的矛盾定案：**报告过时，提交标题属实**
+
+我早先注意到：NIGHT-REPORT(02:45) 说「缓存/同 key 合并**仍未做**，别标已修」，而最后一个提交 `bdba2e6` 标题写「同 key 合并」。两句必须有一句错。
+
+读码定案（`mindserver.js:286-351`）：
+```
+:289  const TEX_CACHE     = new Map();   // key -> Buffer|null
+:290  const TEX_INFLIGHT  = new Map();   // key -> Promise<Buffer|null>
+:327  if (TEX_INFLIGHT.has(key)) return TEX_INFLIGHT.get(key);   ← 同 key 返回同一 Promise
+:328  if (TEX_INFLIGHT.size >= TEX_INFLIGHT_MAX) { ... }         ← 在飞上限 4
+:341  await Promise.race([fetchTextureBuffer(...), timeout])     ← 8s 硬超时
+```
+**⇒ 同 key 合并（coalescing）确实做了，而且手法正确**（不是缓存结果，正是"第一波并发"要的那一招）。
+`bdba2e6` 标题属实；**NIGHT-REPORT 应改判"已解决"并撤掉"别标已修"**。
+
+## 四、限流 512 是"清理触发"不是"上限"（注释与行为不符）
+
+`mindserver.js:86-91`：
+```js
+// 容量上限：防 Map 长期累积（…这条是给"将来放开绑定"兜底）
+if (RATE_BUCKETS.size > 512) {
+    for (const [k, v] of RATE_BUCKETS) { if (now - v.ts > 60000) RATE_BUCKETS.delete(k); }
+}
+```
+`size > 512` 只是**触发清理的条件**，删的是"超过 60 秒的旧 key"。513 个**新鲜** key 时一个都删不掉，且之后每条消息都全表扫。
+注释自称"容量上限"与行为不符。实际风险低（只绑 localhost，key≈8），只在放开绑定时成立。修 3 行：`size>=512 && !has(key) → 删最旧`。
+
+## 五、这轮最重要的元观察
+
+夜班 NIGHT-REPORT 有 3 条判定（F-AI-201 死代码、F-WEB-202 未做、F-SEC-209 未同步）**全部是"报告快照早于最后提交"造成的误判**。
+
+**这不是撒谎，是版本快照纪律缺失。** t31 的建议是对的：**NIGHT-REPORT 必须带「截至 commit」标记**，否则下一轮还会重演同样的三方对账工作。
+
+我建议把这条写进规程：**任何报告声称的现状，必须绑定一个 commit sha**；读者按那个 sha 验，而不是按"当前 HEAD"验。
+
+---
+
+# 附七：R3 收尾 —— 队长全量核对与结论钉准（2026-11-06 09:50）
+
+## 一、`.gitignore` 敏感模式：t31 与 t33 各自只对一半，实际漏三处
+
+t31 说「`.env.local`、`*.token`、`config.local.ts` 三例中两漏」；t33 纠正说「`.env.local` 其实被覆盖，只漏 `*.token` 一处」。
+**两边都不完整。** 我做了全量 `git check-ignore` 核对：
+
+```
+.env                    ✅ 已忽略
+.env.local              ✅ 已忽略（.gitignore:116 的 .env.*）   ← t33 对，t31 误判
+.env.production         ✅ 已忽略
+foo.token               ❌ 未忽略                                ← t33 对
+secrets.token           ❌ 未忽略                                ← 两边都没提
+config/config.local.js  ✅ 已忽略（.gitignore:127）
+config/config.local.ts  ❌ 未忽略                                ← t31 对，t33 漏了
+config/config.local.json ❌ 未忽略                               ← 两边都漏
+id_rsa                  ✅ 已忽略
+credentials.json        ✅ 已忽略
+secrets.json            ✅ 已忽略
+```
+
+**准确结论：漏三处** —— `*.token`（通配缺失）、`config/config.local.ts`、`config/config.local.json`（`.gitignore:127` 只写了 `.js`）。
+修法：加 `*.token`、`config.local.*` 两条通配。
+
+**方法论教训**：t31 报"两漏"、t33 纠正成"一漏"，两个复核者互相纠错**结果都错**。
+说明"复核者纠正上一个"不等于"全量核对"——**必须回到被测对象做穷举**。这是本团队第五次栽在"抽查代替穷举"上。
+
+## 二、`R3-M1` 的放行条件（t33 提出，我采纳并加严）
+
+t33 说：`R3-M1` 在 HEAD 上仍是 `EXIT=1 / 14 PASS / 1 FAIL`，**未修**；不改 PASS，但放行须附一句「`R3-M1` 未修前不得宣称 `gate:full` 通过」。
+
+**我采纳，并加严为**：
+> 本轮 `PASS` 的含义是「**本轮 22 个提交的修复内容可以并入主支**」，
+> **不是**「项目的门禁全绿」。在 `R3-M1` 修好之前：
+> - 不许对外称"gate:full 通过"
+> - `npm run gate:full` 的失败**是已知的、可解释的**（一条睡眠的变异检验），不构成对本轮修复的否定
+> - 但也不许把它当"反正本来就红"而无限拖延——它守的 t132 族保护目前零信号
+
+## 三、`server/ops.json`：341 条 level-4 op 被 git 跟踪（我独立核实）
+
+```
+git ls-files server/ops.json server/whitelist.json   → 两个都被跟踪
+server/ops.json 条目数: 341   等级分布: {"4": 341}   字段: uuid,name,level,bypassesPlayerLimit
+.gitignore                                        → 未排除这两个文件
+```
+
+**讽刺的是**：`.gitignore` 已排除同类服务端文件 `banned-ips.json` / `banned-players.json` / `usercache.json`，**却漏了 `ops.json` 与 `whitelist.json`** —— 同类文件排了一半。
+
+**定级**：这是**已泄露的权限清单**（任何拿到仓库的人都能看到 341 个 bot 的 UUID + 名字 + 最高 op 等级）。
+
+**零代价修复**：
+```bash
+git rm --cached server/ops.json server/whitelist.json
+# 然后 .gitignore 补两行：
+#   server/ops.json
+#   server/whitelist.json
+```
+`--cached` 只停止跟踪，磁盘文件仍在，服务器照常跑。
+**历史里已有记录** —— 彻底清除需改写历史，这属于作者的判断（对本地仓库，停跟踪 + 以后不提交通常足够）。
+
+**为什么这条要升级**：t32 把它列为"需用户动作②"，理由是"团队写入范围只有 `docs/audit/`"。这个理由成立——**但我作为队长要把它标成最高优先级的用户动作**，因为它和其他五条不同：其他是"还没做"，这条是"**已经在仓库里了**"。
+
+## 四、R3 最终结论（三句读，不变）
+
+| 判定层 | 结论 |
+|---|---|
+| 本轮 22 个提交能否并入主支 | **能** |
+| 本轮改动是否安全 | **是**（修出新问题 0、6 组回归全绿、RCE 结构性堵死） |
+| 「夜班已完成」 | **不成立**（70 条只有 33 进 verified，其中 4 条连夜班自己的 review 都没有） |
+
+`PASS`，挡门清单为空。附 7 条放行后必做 + 6 条需用户动作（其中 ops.json 一条升级为最高优先）。
