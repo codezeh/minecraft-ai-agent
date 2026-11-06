@@ -119,6 +119,12 @@ logs/
 *.key
 *.pfx
 *.p12
+# ★ F-RT-004（2026-11-06）：证书 / 密钥库 / TS 侧本地覆盖配置。
+#   `*.crt` 只忽略证书文件本身；本仓实测 `git ls-files` 无任何已跟踪 .crt（两仓都查过），不会误伤公开证书。
+*.crt
+*.jks
+config.local.ts
+config.local.json
 id_rsa*
 id_ed25519*
 *credentials*.json
@@ -147,3 +153,13 @@ config.local.js
 .ENV.*
 .Env
 .Env.*
+
+# ★ 复核补丁（gate-keeper · 2026-11-06）：上面这组"大小写变体"规则在 **Windows**
+#   （`core.ignorecase=true`）下会把 `.env.example` 也匹配掉，而它们的位置在第 117 行
+#   的 `!.env.example` **之后** ⇒ gitignore 后规则覆盖前规则 ⇒ **示例文件再也进不了库**。
+#   （Linux 大小写敏感时不会触发，所以这是又一处"Windows 才现形"的坑。）
+#   例外必须放在**最后**才生效，故补在这里。
+!.env.example
+!.env.example.*
+!.Env.example
+!.ENV.example
