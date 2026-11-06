@@ -125,3 +125,11 @@ id_ed25519*
 *secrets*.json
 .mindserver-token
 config.local.js
+
+# ---------- 运行期状态文件，不入 git（2026-11-06 终审 R3 用户动作②）----------
+# 为什么：ops.json 里 341 条全是 lvl4 op（测试刷出来的 bot 账号），whitelist.json 同理；
+# 它们是**运行期状态**，不是源码。被 git 跟踪 = 任何拿到仓库的人都知道这 341 个可用 op 账号名，
+# 与 F-SEC-204（离线模式冒名登录）叠加时就是现成的目标清单。
+# 注意：移出跟踪不等于从历史里消失（未改写历史，见 commit body）。
+/server/ops.json
+/server/whitelist.json
