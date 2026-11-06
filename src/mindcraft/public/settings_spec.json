@@ -36,6 +36,11 @@
         "description": "Whether to load bot's previous memory",
         "default": false
     },
+    "companion_mode": {
+        "type": "boolean",
+        "description": "Whether the bot only exposes the 8 deterministic companion commands to the model (方案 §12). F-GATE-001/F-AI-204 (2026-11-06): this key is now DECLARED here, so panel-created agents no longer fall into 'key missing -> show all 70 commands'. Default true = converge to the 8-command whitelist. Set it to false ONLY if you deliberately want the model to see every command (the old pre-2026-11-06 behaviour).",
+        "default": true
+    },
     "init_message": {
         "type": "string",
         "description": "The initial message to send to the bot",

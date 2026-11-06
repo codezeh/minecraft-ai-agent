@@ -106,7 +106,12 @@ const ENTRIES = [
     // ── M7 P0：合成 / 熔炼 / 存取 ─────────────────────────────────────
     {
         manifest: manifestCraft,
-        run: (bot, args, ctx) => runCraft(bot, args.item, args.count),
+        // ★ F-EXEC-111（2026-11-06）：原来这里是 `runCraft(bot, args.item, args.count)` ——
+        //   **`ctx` 被丢掉**，而 `flow_craft.craft()` 那时也没有这个参数。
+        //   与相邻的 smelt/store 不一致（它们都传了 `{ ctx }`），本条就是补上这一处漏传。
+        //   `craft()` 现在真正消费两样：`ctx.deadline`（超时即 TIMEOUT，不再空转到 MAX_ROUNDS）
+        //   与 `ctx.jobId`（随结果回传，让任务板能把产出归到具体那张单）。
+        run: (bot, args, ctx) => runCraft(bot, args.item, args.count, { ctx }),
     },
     {
         manifest: manifestSmelt,

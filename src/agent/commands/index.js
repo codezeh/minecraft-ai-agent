@@ -26,10 +26,27 @@ export const COMPANION_COMMANDS = [
     '!stop',            // 停
 ];
 
-/** 该命令是否应该出现在给模型的文档里。 */
+/**
+ * 该命令是否应该出现在给模型的文档里。
+ *
+ * ★ F-GATE-001 + F-AI-204（2026-11-06）：**默认方向反转**。
+ *
+ * 原来是 `if (!settings.companion_mode) return true;` —— 配合"`companion_mode` 从未在
+ * `settings_spec.json` 声明"这个事实，后果是：**键恒缺失 ⇒ 恒 falsy ⇒ 恒 `return true`**
+ * ⇒ 面板创建的 agent 对模型暴露**全部**命令（实测 70 条），方案 §12 的"只给 8 条"从未生效。
+ *
+ * 现在改成 **fail-closed**：
+ *   · 显式 `companion_mode === false` ⇒ 全开（老行为，供想恢复的人用）
+ *   · 其它一切情况（`true` / 键缺失 / 类型不对）⇒ **收敛到白名单 8 条**
+ * 判据用 `=== false` 而不是 `!== true`，是为了让"键缺失"落到收敛侧而不是全开侧 ——
+ * 键缺失是**配置没写**，不该等价于"用户明确要求全开"。
+ *
+ * 配套：`settings_spec.json` 已正式声明该键（default `true` = 收敛），
+ * 它因此不再挂在 `tools/settings_check.mjs` 的 KNOWN_UNDECLARED 例外里。
+ */
 export function isVisibleToModel(commandName) {
-    if (!settings.companion_mode) return true;
-    return COMPANION_COMMANDS.includes(commandName);
+    if (settings.companion_mode === false) return true;   // 显式关闭收敛 ⇒ 全开
+    return COMPANION_COMMANDS.includes(commandName);      // 默认（含键缺失）⇒ 收敛
 }
 
 let suppressNoDomainWarning = true;

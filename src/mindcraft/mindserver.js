@@ -41,6 +41,78 @@ export function getHandshakeToken() {
 
 const settings_spec = JSON.parse(readFileSync(path.join(__dirname, 'public/settings_spec.json'), 'utf8'));
 
+/**
+ * F-EXEC-112（2026-11-06）：按 `settings_spec.json` 校验一份 settings，返回**可读的拒绝原因**（合法则返回 null）。
+ *
+ * 为什么需要：create-agent 原来只读 `required` / `default`，`type` 与 `options` **全仓零读取**
+ * ⇒ `port: "abc"`、`auth: "随便"`、`load_memory: "false"` 都会被收下并送进 agent 进程，
+ * 到了那边以莫名错误炸开。入口不校验 = 把排查成本推给最下游。
+ *
+ * 宽容策略（都带日志，不静默）：
+ *   · `number`：接受"有限数字的字符串"（面板输入框天然产出字符串）⇒ **就地转成 number 并 warn**；
+ *   · `boolean`：**只接受真布尔**。`"false"` 这种 truthy 字符串如果被静默转成 true，会埋雷，
+ *     所以明确拒绝并告诉调用方该传什么。
+ *   · `object` / `array`：按 `typeof` / `Array.isArray` 判（`null` 对 object 视为非法）。
+ *
+ * @param {object} settings 已经填过默认值、删过未知键的 settings
+ * @param {object} spec settings_spec.json 的内容
+ * @returns {string|null} 拒绝原因；合法返回 null
+ */
+function schemaViolation(settings, spec) {
+    for (const key of Object.keys(settings)) {
+        const def = spec[key];
+        if (!def || settings[key] === undefined) continue;
+        const val = settings[key];
+
+        // ── options 白名单（先判：比类型更具体）──
+        if (Array.isArray(def.options) && def.options.length) {
+            if (!def.options.includes(val)) {
+                return `Setting "${key}" 的值 ${JSON.stringify(val)} 不在允许范围内，`
+                    + `只能是 ${def.options.map((o) => JSON.stringify(o)).join(' / ')}`;
+            }
+        }
+
+        // ── type ──
+        switch (def.type) {
+            case 'boolean':
+                if (typeof val !== 'boolean') {
+                    return `Setting "${key}" 必须是布尔值（true / false），收到的是 ${JSON.stringify(val)}`
+                        + `（${typeof val}）。注意字符串 "false" 不算 false，请传 JSON 布尔。`;
+                }
+                break;
+            case 'number': {
+                if (typeof val === 'number' && Number.isFinite(val)) break;
+                const n = typeof val === 'string' && val.trim() !== '' ? Number(val) : NaN;
+                if (Number.isFinite(n)) {
+                    settings[key] = n;                       // 就地转正 + 下面的 warn（不静默）
+                    console.warn(`[mindserver] create-agent: Setting "${key}" 收到字符串 ${JSON.stringify(val)}，已按数字 ${n} 处理`);
+                    break;
+                }
+                return `Setting "${key}" 必须是数字，收到的是 ${JSON.stringify(val)}（${typeof val}）`;
+            }
+            case 'string':
+                if (typeof val !== 'string') {
+                    return `Setting "${key}" 必须是字符串，收到的是 ${JSON.stringify(val)}（${typeof val}）`;
+                }
+                break;
+            case 'array':
+                if (!Array.isArray(val)) {
+                    return `Setting "${key}" 必须是数组，收到的是 ${JSON.stringify(val)}（${typeof val}）`;
+                }
+                break;
+            case 'object':
+                if (val === null || typeof val !== 'object' || Array.isArray(val)) {
+                    return `Setting "${key}" 必须是对象，收到的是 ${JSON.stringify(val)}（${Array.isArray(val) ? 'array' : typeof val}）`;
+                }
+                break;
+            default:
+                // spec 里没写 type（或写了未知 type）⇒ 不做类型判断，保持向后兼容
+                break;
+        }
+    }
+    return null;
+}
+
 class AgentConnection {
     constructor(settings, viewer_port) {
         this.socket = null;
@@ -527,6 +599,24 @@ export function createMindServer(host_public = false, port = 8080) {
             for (let key in settings) {
                 if (!(key in settings_spec)) {
                     delete settings[key];
+                }
+            }
+            // ★ F-EXEC-112（2026-11-06）：**按 spec 校验 type / options**。
+            //
+            // 原来这段只读 `required` 与 `default`，`type` 与 `options` **全仓零读取**
+            // ⇒ 前端传什么类型都收（`port: "abc"`、`auth: "whatever"`、`load_memory: "false"` 都会进到 agent），
+            // 到了 agent 侧才以各种莫名错误炸开，排查时完全指不到"是面板传错了"。
+            // 现在在**入口**就拒，并且给出**可读原因**（不是静默丢弃、也不是静默接受）。
+            //
+            // 两条宽容规则（都有日志，不算静默）：
+            //   · `number` 接受"能表示成有限数字的字符串"（面板输入框天然产出字符串），**转成数字并 warn**；
+            //   · `boolean` 只接受真布尔（`"false"` 字符串**不接受** —— 它 truthy，静默转 true 会埋雷）。
+            {
+                const bad = schemaViolation(settings, settings_spec);
+                if (bad) {
+                    console.warn(`[mindserver] create-agent 拒绝非法 settings：${bad}`);
+                    try { callback({ success: false, error: bad }); } catch { }
+                    return;
                 }
             }
             if (settings.profile?.name) {

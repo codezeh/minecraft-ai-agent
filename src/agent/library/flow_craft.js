@@ -143,10 +143,33 @@ function missingFor(bot, itemName) {
  *   OUT_OF_REACH 工作台够不着（restep：走近再试）
  *   INVENTORY_FULL / OCCUPIED 放工作台失败
  */
-export async function craft(bot, itemName, count = 1) {
+export async function craft(bot, itemName, count = 1, opts = {}) {
+    // ★ F-EXEC-111（2026-11-06）：**接收并真正使用 ctx**。
+    //
+    // 原来 `composite_registry.js:109` 是 `(bot, args, ctx) => runCraft(bot, args.item, args.count)`
+    // —— `ctx` 被丢掉，而本函数签名里**根本没有这个参数**。后果（`act_craft.js:441-445`
+    // 当时就用注释记下来了）：`act_craft` 拿不到 `jobId`，也就没有"这是哪张单"的概念，
+    // 于是**跨尝试的 `producedTotal` 累计做不了**（强行在 bot 上攒计数器会把别的单的产出
+    // 算到这张单头上 ⇒ 账报大 ⇒ 单子提前 done ⇒ 少做活，比不记更危险）。
+    //
+    // 本函数用 ctx 做两件**当下真正需要**的事（不是"接了就扔"）：
+    //   ① `ctx.deadline` —— 单子的截止时刻。合成是长流程（找表/放表/多轮 craftOnce），
+    //      没有这道判据时，一张已超时的单仍会一直合下去。超时即 `fail('TIMEOUT')`，
+    //      让上层按"可重试失败"处理，而不是永远占着。
+    //   ② `ctx.jobId` —— 随结果回传，让任务板能把"本次产出"归到具体那张单上
+    //      （跨尝试累计仍由 `board_store.finish` 按 `producedTotal` 增量收敛，不在本函数里攒）。
+    const ctx = opts?.ctx ?? null;
+    const jobId = ctx?.jobId ?? null;
+    /** 单子超时了吗（没 ctx / 没 deadline 时恒 false，保持无单调用的老行为）。 */
+    const pastDeadline = () => {
+        const dl = Number(ctx?.deadline);
+        return Number.isFinite(dl) && dl > 0 && Date.now() > dl;
+    };
+
     const want = Math.max(1, Math.floor(Number(count) || 1));
     const t0 = Date.now();
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
+    if (pastDeadline()) return fail('TIMEOUT', '单子已超过截止时间，未开始合成', { item: itemName });
     if (!itemName) return fail('NO_TARGET', '没说要合成什么');
 
     // ── plan 第 1 步：有没有这个配方（牌子上写的是 recipesAll 为空 → NO_RECIPE）──
@@ -305,6 +328,14 @@ export async function craft(bot, itemName, count = 1) {
     const MAX_ROUNDS = 8;
     while (countItem(bot, itemName) - before < want && rounds++ < MAX_ROUNDS) {
         if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了', { craftedItem: itemName, got });
+        // ★ F-EXEC-111（2026-11-06）：单子超时就不再继续下一轮。
+        //   合成是多轮长流程（每轮 craftOnce 都要找表/走表/开窗），没有这道判据时
+        //   一张早已超过 deadline 的单会一直占着 worker 直到 MAX_ROUNDS 走完。
+        if (pastDeadline()) {
+            return fail('TIMEOUT', `单子已超过截止时间，已产出 ${got}/${want}`, {
+                craftedItem: itemName, want, got, jobId,
+            });
+        }
         // ★ t90：**必须把找到/放好的工作台传进去** —— 原来这里只传 3 个参数，
         //   整段"找表/合表/放表/走表"全白做，而 craftOnce 自己按 4 格又找不到 → NO_WORKSTATION。
         // ★★★ 2026-11-05（t136）：**每一轮 craftOnce 之前都确认离表够近。**
@@ -376,6 +407,10 @@ export async function craft(bot, itemName, count = 1) {
         usedTable: !!table,
         placedTable,
         costMs: Date.now() - t0,
+        // ★ F-EXEC-111（2026-11-06）：把 `ctx.jobId` 带回结果 —— 这是 `act_craft.js:441-445`
+        //   记录的"拿不到 jobId ⇒ 没有'哪张单'的概念"的补口。跨尝试累计仍由
+        //   `board_store.finish` 按 `producedTotal` 增量收敛，这里只负责**标明归属**。
+        jobId,
         ...(lastData ?? {}),           // ★ 保留底层诊断（invAfter / limitUsed / tableBlockUsed …）
         count: produced,               // 但本层的 count 语义（产出数）要压在最后，别被覆盖
     });
