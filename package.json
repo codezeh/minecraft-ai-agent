@@ -55,7 +55,7 @@
         "test:units": "node tools/unit_all.mjs",
         "gate": "node tools/patch_integrity.mjs && node tools/check_secret_filenames.mjs && node tools/settings_check.mjs && node tools/preflight_regex_unit.mjs && node tools/preflight.mjs && node tools/lint_hard.mjs",
         "gate:full": "npm run gate && node tools/unit_all.mjs",
-        "gate:audit": "node tools/dep_audit_brief.mjs && node tools/dep_audit_brief.mjs --web",
+        "gate:audit": "node tools/dep_audit_brief.mjs --registry=https://registry.npmjs.org && node tools/dep_audit_brief.mjs --web --registry=https://registry.npmjs.org",
         "gate:install": "git config core.hooksPath .githooks",
         "reinstall": "npm run clean:modules && npm ci",
         "clean:modules": "node -e \"const fs=require('fs');const p=require('path');['node_modules'].forEach(f=>{if(fs.existsSync(f)){if(fs.lstatSync(f).isDirectory()){fs.rmSync(f,{recursive:true,force:true});}else{fs.unlinkSync(f);}}});\"",

@@ -30,6 +30,13 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const argv = process.argv.slice(2);
 const forWeb = argv.includes('--web');
 const strict = argv.includes('--strict');
+// ★ 默认 registry 是 npmmirror，它**没有实现** audit 接口 ⇒ 这里必须能指定官方源，
+//   否则这个脚本在默认配置下永远只能 SKIP（那等于没有这个工具）。
+//   两种写法都认：`--registry <url>` 与 `--registry=<url>`（后者是单 token，别只按下标取）。
+const regEq = argv.find((a) => a.startsWith('--registry='));
+const regIdx = argv.indexOf('--registry');
+const registry = regEq ? String(regEq.slice('--registry='.length)).trim()
+    : (regIdx >= 0 ? String(argv[regIdx + 1] ?? '').trim() : '');
 const cwd = forWeb ? path.join(REPO_ROOT, '..', 'web') : REPO_ROOT;
 
 if (!existsSync(path.join(cwd, 'package.json'))) {
@@ -39,9 +46,15 @@ if (!existsSync(path.join(cwd, 'package.json'))) {
 
 let raw = null;
 try {
-    // ★ Windows 上 `npm` 是 .cmd 包装脚本：execFileSync('npm.cmd') 在部分环境直接 EINVAL/EINVAL，
-    //   所以这里用**固定命令字符串**走 shell（没有任何外部输入拼进来，不存在注入面）。
-    raw = execSync('npm audit --json', {
+    // ★ Windows 上 `npm` 是 .cmd 包装脚本：execFileSync('npm.cmd') 在部分环境直接 EINVAL，
+    //   所以这里用**固定命令字符串**走 shell（registry 只接受本脚本内联的白名单值，见下）。
+    // registry 值只允许 http(s) URL，避免把任意字符串拼进命令。
+    const regArg = /^https?:\/\/[^\s"'&|<>]+$/.test(registry) ? ` --registry=${registry}` : '';
+    if (registry && !regArg) {
+        console.log(`SKIP --registry 只接受 http(s) URL，收到：${registry}`);
+        process.exit(0);
+    }
+    raw = execSync(`npm audit --json${regArg}`, {
         cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     });
 } catch (e) {
