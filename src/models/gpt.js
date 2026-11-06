@@ -2,7 +2,29 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated } from './_shared.js';
+
+/**
+ * ★ MOD-002/003：给消息追加停止标记 —— **只加在字符串内容上，且返回新对象**。
+ *
+ * 缺陷原貌：`message.content += stop_seq` 直接改原对象：
+ *   · 内容是多模态数组时（视觉请求），数组被强制转成字符串 →
+ *     报告实测 `[object Object],[object Object]******`，图片 data URL 消失；
+ *   · 同一个 messages 数组被重试/复用时就重复追加（A → A*** → A******）。
+ *
+ * @param {Array<object>} messages
+ * @param {string} stopSeq
+ * @returns {Array<object>} 新数组 + 新消息对象（输入不被修改）
+ */
+function appendStopToTextOnly(messages, stopSeq) {
+    if (!Array.isArray(messages)) return messages;
+    return messages.map((m) => {
+        if (!m || typeof m !== 'object') return m;
+        if (typeof m.content === 'string') return { ...m, content: m.content + stopSeq };
+        // 数组内容（文本片段/图片）：一个字节都不动
+        return { ...m };
+    });
+}
 
 export class GPT {
     static prefix = 'openai';
@@ -24,22 +46,21 @@ export class GPT {
     }
 
     async sendRequest(turns, systemMessage, stop_seq='***') {
-        let messages = strictFormat(turns);
-        messages = messages.map(message => {
-            message.content += stop_seq;
-            return message;
-        });
-        let model = this.model_name || "gpt-5.4-mini";
-
         let res = null;
 
         try {
-            console.log('Awaiting openai api response from model', model);
+            console.log('Awaiting openai api response from model', this.model_name || "gpt-5.4-mini");
+            const model = this.model_name || "gpt-5.4-mini";
             // if a custom URL is set, use chat.completions
             // because custom "OpenAI-compatible" endpoints likely do not have responses endpoint
             if (this.url) {
                 let messages = [{'role': 'system', 'content': systemMessage}].concat(turns);
                 messages = strictFormat(messages);
+                // ★ MOD-002/003：停止标记**只追加到字符串内容**上，并且**产生新对象** ——
+                //   原来 `message.content += stop_seq` 直接改对象：对多模态数组会把
+                //   `[{type:'input_image',...}]` 拼成 "[object Object]"（MOD-003 图片直接丢），
+                //   也让同一批对象被反复追加（MOD-002 的"重试重复拼接"另一处来源）。
+                messages = appendStopToTextOnly(messages, stop_seq);
                 const pack = {
                     model: model,
                     messages,
@@ -51,18 +72,20 @@ export class GPT {
                 }
                 let completion = await this.openai.chat.completions.create(pack);
                 recordUsage(completion?.usage, model);
-                if (completion.choices[0].finish_reason == 'length')
-                    throw new Error('Context length exceeded'); 
+                // ★ MOD-001：`finish_reason==='length'` 是**输出额度**用完，不是上下文超限。
+                //   原来直接 throw 'Context length exceeded' → 裁历史重试（无效且多花钱）。
+                const finish = completion?.choices?.[0]?.finish_reason;
                 console.log('Received.');
                 res = completion.choices[0].message.content;
+                if (finish === 'length') {
+                    console.log('[llm] openai(chat) 输出被 max_tokens 截断：不裁历史、不重试，返回已得内容并打标记');
+                    res = markTruncated(res ?? '');
+                }
             } 
             // otherwise, use responses
             else {
                 let messages = strictFormat(turns);
-                messages = messages.map(message => {
-                    message.content += stop_seq;
-                    return message;
-                });
+                messages = appendStopToTextOnly(messages, stop_seq);
                 const response = await this.openai.responses.create({
                     model: model,
                     instructions: systemMessage,
@@ -74,10 +97,18 @@ export class GPT {
                 res = response.output_text;
                 let stop_seq_index = res.indexOf(stop_seq);
                 res = stop_seq_index !== -1 ? res.slice(0, stop_seq_index) : res;
+                // ★ MOD-001：Responses 接口把截断表达成 status/ incomplete_details
+                const incomplete = response?.status === 'incomplete'
+                    || response?.incomplete_details?.reason === 'max_output_tokens';
+                if (incomplete) {
+                    console.log('[llm] openai(responses) 输出被 max_output_tokens 截断：返回已得内容并打标记');
+                    res = markTruncated(res ?? '');
+                }
             }
         }
         catch (err) {
-            if ((errMessage(err) === 'Context length exceeded' || err?.code == 'context_length_exceeded') && turns.length > 1) {
+            // ★ MOD-001：只有真正的上下文超限才裁历史
+            if (isContextLengthError(err) && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else if (errMessage(err).includes('image_url')) {
@@ -85,7 +116,7 @@ export class GPT {
                 res = 'Vision is only supported by certain models.';
             } else {
                 console.log(safeErrText(err));
-                res = failedReply(`openai request failed: ${err?.message ?? err}`);
+                res = failedReply(`openai request failed: ${errMessage(err) || err}`);
             }
         }
         return res;

@@ -1,12 +1,15 @@
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, errMessage } from './_shared.js';
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, errMessage, isContextLengthError, markTruncated, fetchWithDeadline } from './_shared.js';
 
 export class Hyperbolic {
     static prefix = 'hyperbolic';
     constructor(modelName, apiUrl) {
         this.modelName = modelName || "deepseek-ai/DeepSeek-V3";
         this.apiUrl = apiUrl || "https://api.hyperbolic.xyz/v1/chat/completions";
+
+        // ★ MOD-006：一次模型请求的应用级总期限（未设置则用 _shared 的默认值）
+        this.timeoutMs = undefined;
 
         // Retrieve the Hyperbolic API key from keys.js
         this.apiKey = getKey('HYPERBOLIC_API_KEY');
@@ -52,13 +55,17 @@ export class Hyperbolic {
             let completionContent = null;
 
             try {
-                const response = await fetch(this.apiUrl, {
+                // ★ MOD-006：带总期限 + 取消信号的 fetch（原来裸 fetch 会一直挂住）
+                const response = await fetchWithDeadline(this.apiUrl, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${this.apiKey}`
                     },
                     body: JSON.stringify(payload)
+                }, {
+                    timeoutMs: this.timeoutMs,
+                    onAbort: (why) => console.warn(`[hyperbolic] 请求被终止：${why}`),
                 });
 
                 if (!response.ok) {
@@ -71,17 +78,19 @@ export class Hyperbolic {
 
                 const data = await response.json();
                 recordUsage(data?.usage, this.modelName);
+                // ★ MOD-001：`finish_reason === 'length'` 是**输出额度**用完，不是上下文超限。
+                //   原来这里 throw 'Context length exceeded' → 裁历史重试（无效且多花钱）。
                 if (data?.choices?.[0]?.finish_reason === 'length') {
-                    throw new Error('Context length exceeded');
+                    completionContent = markTruncated(data?.choices?.[0]?.message?.content || '');
+                    console.log('[llm] hyperbolic 输出被 max_tokens 截断：返回已得内容并打标记');
+                    console.log('Received response from Hyperbolic.');
+                    return completionContent;
                 }
 
                 completionContent = data?.choices?.[0]?.message?.content || '';
                 console.log('Received response from Hyperbolic.');
             } catch (err) {
-                if (
-                    (errMessage(err) === 'Context length exceeded' || err?.code === 'context_length_exceeded') &&
-                    turns.length > 1
-                ) {
+                if (isContextLengthError(err) && turns.length > 1) {
                     console.log('Context length exceeded, trying again with a shorter context...');
                     return await this.sendRequest(turns.slice(1), systemMessage, stopSeq);
                 } else if (isRateLimit(err) && attempt < maxAttempts) {

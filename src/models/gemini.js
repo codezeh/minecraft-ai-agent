@@ -121,13 +121,40 @@ export class Gemini {
         return res;
     }
 
+    /**
+     * 取嵌入向量。
+     *
+     * ★★★ MOD-004（2026-11-06 深度检查）：SDK 返回的是**对象数组** `[{values:[...]}]`，
+     *   而全仓消费者（`utils/examples.js` → `cosineSimilarity`）要的是 `number[]`。
+     *   原来这里 `return result.embeddings;` 把对象原样交出去 ⇒ `a[i] * b[i]`
+     *   得到 `undefined * undefined = NaN` ⇒ 余弦相似度 NaN ⇒ 示例/技能排序失效
+     *   **而且不报错**（最难查的那类）。
+     *
+     *   现在在**适配器边界**就把形状收敛：取出单条 `values`，校验成非空有限数值数组。
+     *   拿不到合法向量时返回 **null**（而不是抛）：`examples.js` 的 `getRelevant`
+     *   没有 try/catch，抛出去会把她整轮对话打崩；调用方按既有语义降级到词重叠。
+     *
+     * @returns {Promise<number[]|null>}
+     */
     async embed(text) {
         const result = await this.genAI.models.embedContent({
             model: this.model_name || "gemini-embedding-001",
             contents: text,
         });
 
-        return result.embeddings;
+        // 兼容两种形状：`{embeddings:[{values}]}` 与 `{embedding:{values}}`
+        const first = result?.embeddings?.[0] ?? result?.embedding ?? null;
+        const values = first?.values ?? (Array.isArray(first) ? first : null);
+        if (!Array.isArray(values) || values.length === 0) {
+            console.warn('[gemini] embed 没有返回可用的数值向量 → 返回 null（调用方降级为词重叠）');
+            return null;
+        }
+        const vec = values.map((v) => Number(v));
+        if (vec.some((v) => !Number.isFinite(v))) {
+            console.warn('[gemini] embed 向量里含非有限值 → 返回 null（调用方降级为词重叠）');
+            return null;
+        }
+        return vec;
     }
 }
 

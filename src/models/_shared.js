@@ -34,6 +34,45 @@ export function isFailedReply(text) {
     return typeof text === 'string' && text.startsWith(FAILED_REPLY);
 }
 
+// ── 输出截断 vs 上下文超限（MOD-001）───────────────────────────
+// 缺陷原貌（报告实测 6 次请求全失败）：适配器把 `finish_reason === 'length'`
+//   **当成"上下文超限"抛出去**，于是 catch 里 `turns.slice(1)` 递归 ——
+//   可"输出额度用完了"和"输入太长"是两件不同的事：
+//     · 输出被截断 → 缩短历史**完全无效**（错误不在输入侧），还会白删有用上下文；
+//     · 输入超限   → 才该裁历史。
+//   而且每递归一次就多花一次请求的钱（报告实测 6 次）。
+//
+// 这里只提供**可判别的标记**（不引入重试框架）：被截断的回复仍然交回给上层
+// （她写了一半的话还是有用的），但带上明确标记，让上层知道"这不是完整回答"。
+export const TRUNCATED_SUFFIX = '[LLM_TRUNCATED]';
+
+/** 这条回复是不是"被输出额度截断"的（内容仍可用，但可能不完整）。 */
+export function isTruncatedReply(text) {
+    return typeof text === 'string' && text.endsWith(TRUNCATED_SUFFIX);
+}
+
+/** 给被截断的内容打标记（幂等：已经带标记就不重复加）。 */
+export function markTruncated(text) {
+    const s = typeof text === 'string' ? text : String(text ?? '');
+    return isTruncatedReply(s) ? s : s + TRUNCATED_SUFFIX;
+}
+
+/**
+ * 这次失败是不是**真的**上下文超限（MOD-001）。
+ *
+ * 只认供应商/网关明确表达的那几种；**不要把 finish_reason='length' 算进来**
+ * （那是输出额度，不是输入超限）。判断顺序刻意从"结构化字段"到"文案"，
+ * 且全程走 `errMessage()`（F-AI-101：err 可能不是 Error）。
+ */
+export function isContextLengthError(err) {
+    if (!err) return false;
+    const code = (typeof err.code === 'string') ? err.code.toLowerCase() : '';
+    if (code === 'context_length_exceeded' || code === 'context_length_exceeded_error') return true;
+    if (typeof err.type === 'string' && /context.?length/i.test(err.type)) return true;
+    const msg = errMessage(err).toLowerCase();
+    return /context[_ ]length|maximum context|too many tokens|prompt is too long/.test(msg);
+}
+
 // ── usage sink ─────────────────────────────────────────────
 // 只有「取到 usage」才算得出成本；某些供应商/本地模型不回 usage，那就记 `-`，别假装是 0。
 const totals = { calls: 0, prompt: 0, completion: 0, missing: 0 };
@@ -92,6 +131,73 @@ export function isRateLimit(errOrResponse) {
 export function rateLimitDelayMs(attempt) {
     const base = Math.min(30000, 1000 * Math.pow(2, Math.max(0, (attempt || 1) - 1)));
     return base + Math.floor(Math.random() * 250);
+}
+
+/**
+ * ★★★ MOD-006（2026-11-06 深度检查）：给裸 fetch 加**应用级总期限 + 取消信号**。
+ *
+ * 缺陷原貌：`ollama.js` / `hyperbolic.js` 直接 `await fetch(...)`，既没有总期限、
+ *   也没有外部取消入口。请求或**响应体**卡住时调用方只能一直 await：
+ *   · action 侧的超时管不到模型请求（两套时钟）；
+ *   · 新消息丢弃旧结果时**并不会取消旧请求**（报告实测：仍需手动 reject 才结束）；
+ *   · 费用/连接继续占着，进程里还可能留下定时器。
+ *
+ * 这里只做最小的一件事：**一次调用 = 一个明确的总期限**，把 AbortSignal 传下去，
+ * 并在退出时**一定**清掉定时器（不留残留 timer）。不做重试抽象（那是另一层的事）。
+ *
+ * @param {string|URL|Request} input fetch 的第一个参数
+ * @param {object} [init] fetch 的第二个参数（可带外部 signal）
+ * @param {object} [opts]
+ *   timeoutMs 总期限（毫秒），默认 DEFAULT_LLM_TIMEOUT_MS；<=0 表示不限
+ *   onAbort   超时/取消时的回调（便于日志）
+ * @returns {Promise<Response>} 与 fetch 同形；超时抛 AbortError（带 code='LLM_TIMEOUT'）
+ */
+export const DEFAULT_LLM_TIMEOUT_MS = 120000;
+
+export async function fetchWithDeadline(input, init = {}, opts = {}) {
+    const timeoutMs = Number.isFinite(opts.timeoutMs) ? Number(opts.timeoutMs) : DEFAULT_LLM_TIMEOUT_MS;
+    const outer = init?.signal ?? null;
+    // 外部已经取消了就直接返回失败，不要白发请求
+    if (outer?.aborted) throw makeAbort('外部信号已取消');
+
+    const ctrl = new AbortController();
+    let timer = null;
+    let timedOut = false;
+    const onOuterAbort = () => { try { ctrl.abort(); } catch { /* ignore */ } };
+    if (outer) {
+        try { outer.addEventListener('abort', onOuterAbort, { once: true }); } catch { /* 老实现没有 addEventListener */ }
+    }
+    if (timeoutMs > 0) {
+        timer = setTimeout(() => { timedOut = true; try { ctrl.abort(); } catch { /* ignore */ } }, timeoutMs);
+    }
+    try {
+        return await fetch(input, { ...init, signal: ctrl.signal });
+    } catch (err) {
+        // 把"为什么被中断"讲清楚：超时 ≠ 用户取消 ≠ 网络错误
+        if (timedOut) {
+            try { opts.onAbort?.('timeout'); } catch { /* ignore */ }
+            throw makeAbort(`模型请求超过总期限 ${timeoutMs}ms`);
+        }
+        if (outer?.aborted) {
+            try { opts.onAbort?.('cancelled'); } catch { /* ignore */ }
+            throw makeAbort('模型请求被取消');
+        }
+        throw err;
+    } finally {
+        // ★ 关键：无论成功/失败/超时都要清掉定时器，否则进程里留着挂起的 timer
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (outer) {
+            try { outer.removeEventListener('abort', onOuterAbort); } catch { /* ignore */ }
+        }
+    }
+}
+
+/** 造一个"请求被期限/取消终止"的错误（`code=LLM_TIMEOUT` 便于上层判别）。 */
+function makeAbort(message) {
+    const err = new Error(message);
+    err.name = 'AbortError';
+    err.code = 'LLM_TIMEOUT';
+    return err;
 }
 
 // ── 错误日志的安全形状（F-SEC-102）─────────────────────────────

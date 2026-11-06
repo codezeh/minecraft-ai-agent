@@ -345,16 +345,29 @@ export class Prompter {
             return '```//no response```';
         }
         this.awaiting_coding = true;
-        await this.checkCooldown();
-        let prompt = this.profile.coding;
-        prompt = await this.replaceStrings(prompt, messages, this.coding_examples);
+        // ★★★ MOD-005（2026-11-06 深度检查）：标记的生命周期必须包在 try/finally 里。
+        //
+        //   缺陷原貌：`awaiting_coding = true` 之后，`checkCooldown()` / `replaceStrings()`
+        //   / `sendRequest()` 任何一处抛异常，都会跳过外面的 `awaiting_coding = false`
+        //   ⇒ 之后**每一次**请求都在第一行被拦住返回 `//no response`，
+        //   直到进程重启（报告实测：replaceStrings 抛错后第二次仍返回 no response、
+        //   awaiting_coding 仍是 true）。默认代码执行关闭时不触发，一旦开了代码生成就是"永久哑掉"。
+        //
+        //   修法：try/finally 保证标记一定被清；异常照原样抛给调用方（coder.js 有自己的失败分支），
+        //   不在这里吞掉 —— 吞掉会把"准备失败"伪装成"模型没写代码"。
+        try {
+            await this.checkCooldown();
+            let prompt = this.profile.coding;
+            prompt = await this.replaceStrings(prompt, messages, this.coding_examples);
 
-        let resp = await this.code_model.sendRequest(messages, prompt);
-        this.awaiting_coding = false;
-        await this._saveLog(prompt, messages, resp, isFailedReply(resp) ? 'coding-failed' : 'coding');
-        // 第31条：失败标记原样往上传（带 `[LLM_ERROR]` 前缀 ⇒ 不会被误当代码）。
-        // coder.js 那边 `res.indexOf('```') === -1` 会走既有的「没写代码→重试」分支，不会把它执行。
-        return resp;
+            let resp = await this.code_model.sendRequest(messages, prompt);
+            await this._saveLog(prompt, messages, resp, isFailedReply(resp) ? 'coding-failed' : 'coding');
+            // 第31条：失败标记原样往上传（带 `[LLM_ERROR]` 前缀 ⇒ 不会被误当代码）。
+            // coder.js 那边 `res.indexOf('```') === -1` 会走既有的「没写代码→重试」分支，不会把它执行。
+            return resp;
+        } finally {
+            this.awaiting_coding = false;
+        }
     }
 
     async promptMemSaving(to_summarize) {

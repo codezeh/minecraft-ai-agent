@@ -98,38 +98,71 @@ export function wordOverlapScore(text1, text2) {
 // - system messages are treated as user messages and prefixed with SYSTEM:
 // - combines repeated messages from users
 // - separates repeat assistant messages with filler user messages
+//
+// ★★★ MOD-002（2026-11-06 深度检查）：**不许改调用方的对象**。
+//
+//   缺陷原貌：这里直接对传进来的 turn 动手术 ——
+//     `msg.content = msg.content.trim()`、`msg.role = 'user'`、
+//     `messages[messages.length-1].content += '\n' + msg.content`
+//   而 `messages.push(msg)` 存的是**同一个引用** ⇒ 合并写回了**源对象**。
+//   于是一次 prompt 内的递归重试再格式化一遍，就变成 A → A\nB → A\nB\nB（报告实测），
+//   system 角色也被就地改成 user，调用方（和日志）看到的历史被悄悄改写。
+//   `getHistory()` 虽然深拷贝，但**同一个 prompt 内部会复用这批对象**，所以挡不住。
+//
+//   修法：只读输入、只写输出 —— 每条消息先复制成新对象，合并只改输出里的那个副本。
+//   输入是冻结对象（Object.freeze）时也必须能跑。
 export function strictFormat(turns) {
     let prev_role = null;
+    /** 填充用的分隔消息：**每次给新对象**，别让两处共用同一个可变引用。 */
+    const makeFiller = () => ({ role: 'user', content: '_' });
     let messages = [];
-    let filler = {role: 'user', content: '_'};
-    for (let msg of turns) {
-        if (typeof msg.content === 'string')  {
-            msg.content = msg.content.trim();
+    for (const msg of turns) {
+        // ── 复制：绝不改调用方传进来的对象 ──────────────────────────────
+        //   content 可能是字符串，也可能是多模态数组（图片/文本片段）；
+        //   数组按下标浅拷贝一份，保证"结构不变、引用不外泄"。
+        const content = Array.isArray(msg?.content)
+            ? msg.content.map((part) => (part && typeof part === 'object' ? { ...part } : part))
+            : (typeof msg?.content === 'string' ? msg.content.trim() : msg?.content);
+        let role = msg?.role;
+        let outContent = content;
+        if (role === 'system') {
+            role = 'user';
+            // 多模态数组不能拼字符串（会把图片对象拼成 [object Object]），只给纯文本加前缀
+            outContent = typeof content === 'string' ? 'SYSTEM: ' + content : content;
         }
-        if (msg.role === 'system') {
-            msg.role = 'user';
-            msg.content = 'SYSTEM: ' + msg.content;
-        }
-        if (msg.role === prev_role && msg.role === 'assistant') {
+        if (role === prev_role && role === 'assistant') {
             // insert empty user message to separate assistant messages
-            messages.push(filler);
-            messages.push(msg);
+            messages.push(makeFiller());
+            messages.push({ ...msg, role, content: outContent });
         }
-        else if (msg.role === prev_role) {
+        else if (role === prev_role && typeof outContent === 'string'
+            && typeof messages[messages.length - 1]?.content === 'string') {
             // combine new message with previous message instead of adding a new one
-            messages[messages.length-1].content += '\n' + msg.content;
+            //   ★ 只写**输出里的副本**
+            const last = messages[messages.length - 1];
+            messages[messages.length - 1] = { ...last, content: last.content + '\n' + outContent };
+        }
+        else if (role === prev_role && (Array.isArray(outContent)
+            || Array.isArray(messages[messages.length - 1]?.content))) {
+            // ★ MOD-003：**多模态内容不合并**。两边只要有一边是数组（图片/文本片段），
+            //   拼字符串就会把整段内容变成 "[object Object]"（报告实测图片 data URL 消失）。
+            //   语义上也不该合并：一条消息里的 parts 顺序就是发给模型的内容结构。
+            //   这里用一条空 user 分隔再单独成条，既保持 strictFormat 的"不出现连续同角色"约束，
+            //   又保住数组结构。
+            messages.push(makeFiller());
+            messages.push({ ...msg, role, content: outContent });
         }
         else {
-            messages.push(msg);
+            messages.push({ ...msg, role, content: outContent });
         }
-        prev_role = msg.role;
-        
+        prev_role = role;
+
     }
     if (messages.length > 0 && messages[0].role !== 'user') {
-        messages.unshift(filler); // anthropic requires user message to start
+        messages.unshift(makeFiller()); // anthropic requires user message to start
     }
     if (messages.length === 0) {
-        messages.push(filler);
+        messages.push(makeFiller());
     }
     return messages;
 }

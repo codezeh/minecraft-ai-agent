@@ -48,8 +48,11 @@ export class Examples {
             return [];
 
         let turn_text = this.turnsToText(turns);
-        if (this.model !== null) {
-            let embedding = await this.model.embed(turn_text);
+        // ★ MOD-004：适配器可能返回 null（拿不到合法向量）。这里**必须先判空再算相似度** ——
+        //   否则 cosineSimilarity(null, vec) 会直接 TypeError，把她整轮对话打崩；
+        //   而"没有向量"本来就该降级成词重叠，不该是错误。
+        const embedding = this.model !== null ? await this.model.embed(turn_text) : null;
+        if (this.model !== null && Array.isArray(embedding)) {
             this.examples.sort((a, b) => 
                 cosineSimilarity(embedding, this.embeddings[this.turnsToText(b)]) -
                 cosineSimilarity(embedding, this.embeddings[this.turnsToText(a)])

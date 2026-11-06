@@ -1,6 +1,6 @@
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, safeErrText, errMessage } from './_shared.js';
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, safeErrText, errMessage, fetchWithDeadline } from './_shared.js';
 
 export class Ollama {
     static prefix = 'ollama';
@@ -10,6 +10,9 @@ export class Ollama {
         this.url = url || 'http://127.0.0.1:11434';
         this.chat_endpoint = '/api/chat';
         this.embedding_endpoint = '/api/embeddings';
+        // ★ MOD-006：一次模型请求的应用级总期限（可被 params.timeoutMs 覆盖）。
+        //   注意这里是"整个请求"的期限，不是 TCP 层超时 —— 响应体卡住也能被打断。
+        this.timeoutMs = Number(params?.timeoutMs) > 0 ? Number(params.timeoutMs) : undefined;
     }
 
     async sendRequest(turns, systemMessage) {
@@ -91,7 +94,11 @@ export class Ollama {
         const request = new Request(url, { method, headers, body: JSON.stringify(body) });
         let data = null;
         try {
-            const res = await fetch(request);
+            // ★ MOD-006：走带**总期限 + 取消信号**的 fetch（原来裸 fetch 会一直挂住）
+            const res = await fetchWithDeadline(request, {}, {
+                timeoutMs: this.timeoutMs,
+                onAbort: (why) => console.warn(`[ollama] 请求被终止：${why}`),
+            });
             if (res.ok) {
                 data = await res.json();
             } else {
@@ -101,7 +108,8 @@ export class Ollama {
             // 第31条 第3点：**不许吞成 null**。吞掉之后上层只看到"没有数据"，永远不知道发生过网络错误，
             // 也永远不会重试。这里原样抛出，让 sendRequest 的 catch 去判 429 / 记失败标记。
             console.error('Failed to send Ollama request.');
-            console.error(err);
+            // ★ F-SEC-102：错误对象上可能挂着 request/headers，只打安全的标量形状
+            console.error(safeErrText(err, 'ollama'));
             throw err;
         }
         return data;
