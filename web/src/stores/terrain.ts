@@ -1,4 +1,4 @@
-import { reactive, computed } from 'vue'
+import { reactive, computed, watch } from 'vue'
 import { store, currentAgent, refreshTerrain } from './agents'
 import type { TerrainResult } from '../api/types'
 
@@ -12,6 +12,12 @@ export const terrain = reactive({
   yMax: 320,
   topOnly: false,
   showFails: true,
+  /**
+   * ★ WEB-007：这份地形**属于哪个 agent / 哪个维度**。
+   *   面板上显示的坐标必须和"当前选中的 bot 与它所在的世界"一致，否则导航诊断会被读反。
+   */
+  owner: '' as string,
+  dimension: '' as string,
   // 解码后的缓存
   decoded: null as null | {
     x: Float32Array
@@ -32,15 +38,58 @@ function b64ToBytes(b64: string): Uint8Array {
   return out
 }
 
-/** 后端给的是相对 origin 的整型三元组（int16 或 int32）+ Uint8 类型码，这里解回世界坐标 */
-// ★ F-WEB-102（2026-11-06）：参数类型放宽为 `TerrainResult | null`。
-//   依据：`refreshTerrain()` 的声明返回就是 `Promise<TerrainResult | null>`（agents.ts:135，
-//   无 agent 时 `return null`），而本函数**第 37 行本来就在用 `!res?.ok` 处理 null** ——
-//   也就是说运行时语义早就容许 null，只是类型签名写窄了。
-//   这是**纯类型修正**（签名对齐既有行为），不改任何运行逻辑。
-export function decodeTerrain(res: TerrainResult | null) {
+/**
+ * ★★★ WEB-007（2026-11-06 深度检查）：地形是**某一个 bot 在某一个维度**的世界的快照。
+ *
+ * 缺陷原貌：`decodeTerrain()` 无条件把结果写进全局 `terrain.decoded`，不带任何归属信息。于是：
+ *   · 请求 A 的地形 → 中途切到 B → A 的响应**迟到**回来，直接覆盖 B 的视图
+ *     （报告实测：请求 A、当前 B，屏幕上是 A 的坐标 101）；
+ *   · 同一个 bot 换维度后旧数据仍然显示，没有任何失效判据；
+ *   · `res` 不 ok / 没数据时只把 stats 写成原因，**旧 mesh 不清**（画面上留着上一张地图）。
+ *
+ * 修法：每次请求发出时记住"为谁、在哪个维度、第几次请求"，回来时三样都对得上才落盘；
+ *   对不上一律丢弃（并说明原因）。数据为空时把 decoded 显式清成 null，
+ *   让画布据此把实例数清 0（而不是继续画旧的）。
+ */
+let loadSeq = 0
+
+function dimensionOf(): string {
+  // 维度来自 1Hz 全量状态里的 gameplay.dimension（拿不到就当未知维度）
+  const a = currentAgent.value
+  const st = a ? store.states[a.name] : null
+  return (st?.gameplay as any)?.dimension ?? 'unknown'
+}
+
+// ★ F-WEB-102（批次1，2026-11-06）：参数类型放宽为 `TerrainResult | null`。
+//   依据：`refreshTerrain()` 的声明返回就是 `Promise<TerrainResult | null>`（agents.ts，无 agent 时 `return null`），
+//   而本函数本来就在用 `!res?.ok` 处理 null —— 运行时语义早就容许 null，只是签名写窄了。
+//   ★ WEB-007（批次2）：再增加可选的 `expected`，用于丢弃"属于别人/别的维度/过期"的响应。
+export function decodeTerrain(
+  res: TerrainResult | null,
+  expected?: { owner: string; dimension: string; seq: number },
+) {
+  // ★ 归属校验：迟到的响应不许覆盖当前视图
+  if (expected) {
+    const curOwner = currentAgent.value?.name ?? ''
+    const curDim = dimensionOf()
+    if (expected.seq !== loadSeq) {
+      terrain.stats = '已丢弃过期地形响应（期间又发起了新的加载）'
+      return null
+    }
+    if (expected.owner !== curOwner) {
+      terrain.stats = `已丢弃 ${expected.owner} 的地形响应（当前是 ${curOwner || '未选择'}）`
+      return null
+    }
+    if (expected.dimension !== curDim) {
+      terrain.stats = `已丢弃 ${expected.dimension} 的地形响应（当前维度是 ${curDim}）`
+      return null
+    }
+  }
   if (!res?.ok || !res.origin || !res.pos || !res.types) {
+    // ★ 数据无效时**连旧网格一起清掉**，否则画面上留着上一张地图，看起来像"加载成功了"
     terrain.decoded = null
+    terrain.owner = ''
+    terrain.dimension = ''
     terrain.stats = res?.reason || '无数据'
     return null
   }
@@ -72,6 +121,9 @@ export function decodeTerrain(res: TerrainResult | null) {
   }
 
   terrain.decoded = { x, y, z, t, count, bbox, fails: res.fails || [] }
+  // ★ WEB-007：记下这份数据的归属（画布/诊断可据此断言"显示的是谁的哪个世界"）
+  terrain.owner = currentAgent.value?.name ?? ''
+  terrain.dimension = dimensionOf()
   terrain.yMin = bbox.y0
   terrain.yMax = bbox.y1
 
@@ -82,12 +134,29 @@ export function decodeTerrain(res: TerrainResult | null) {
 }
 
 export async function loadTerrain() {
+  const a = currentAgent.value
+  if (!a) return null
+  // ★ WEB-007：请求发出时就锁定"这次是为谁、哪个维度、第几次"
+  const expected = { owner: a.name, dimension: dimensionOf(), seq: ++loadSeq }
   const res = await refreshTerrain({
     mode: terrain.mode,
     radius: terrain.radius,
     lod: terrain.lod,
   })
-  return decodeTerrain(res)
+  return decodeTerrain(res, expected)
 }
+
+/** 切 agent / 换维度时，旧地形立即失效（别让上一个 bot 或上一个世界的图留在屏幕上）。 */
+watch(
+  () => [currentAgent.value?.name ?? '', dimensionOf()].join('|'),
+  () => {
+    if (!terrain.decoded) return
+    terrain.decoded = null
+    terrain.owner = ''
+    terrain.dimension = ''
+    terrain.stats = '已切换 bot / 维度：旧地形已清空，请重新加载'
+    loadSeq++   // 让还在路上的旧请求全部作废
+  },
+)
 
 export const canLoad = computed(() => !!currentAgent.value?.in_game)

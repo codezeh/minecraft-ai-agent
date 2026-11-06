@@ -35,6 +35,47 @@ export const store = reactive({
 
 let seq = 0
 
+/**
+ * ★★★ WEB-002（2026-11-06 深度检查）：**状态入口必须先验协议**。
+ *
+ * 缺陷原貌：`state-update` 直接把收到的对象塞进 `store.states`。
+ *   而服务端在"**首次** get-full-state 超时、又没有旧状态可发"时会发
+ *   `{error: ...}` 这种**不是 FullState** 的载荷（报告 B 级证据确认了这条路径）。
+ *   于是 `currentState` 拿到一个只有 `error` 字段的对象 ⇒
+ *   `StatusCard` 的 `gameplay.health`、`InventoryGrid` 的 `inventory.counts` 取到 undefined
+ *   ⇒ **TypeError，状态卡与背包整个渲染失败**（报告实测 healthPct/items 都抛）。
+ *
+ * 修法：在**边界**做一次形状校验 —— 形状不对的条目不进 `states`，
+ *   把原因单独记到 `lastError`（界面能显示"状态还没拿到"），
+ *   组件侧再各自做可选链兜底。这样"协议缺口"变成一句可读的提示，而不是一段崩栈。
+ */
+function isFullState(v: any): v is FullState {
+  return !!v
+    && typeof v === 'object'
+    && v.gameplay && typeof v.gameplay === 'object'
+    && typeof v.gameplay.health === 'number'      // 状态卡读它
+    && v.inventory && typeof v.inventory === 'object'
+    && v.inventory.counts && typeof v.inventory.counts === 'object'   // 背包读它
+}
+
+function sanitizeStates(raw: any): Record<string, FullState> {
+  const out: Record<string, FullState> = {}
+  if (!raw || typeof raw !== 'object') return out
+  const bad: string[] = []
+  for (const [name, st] of Object.entries(raw)) {
+    if (isFullState(st)) out[name] = st
+    else bad.push(name)
+  }
+  // 服务端"没有旧状态"时会把错误放在顶层（不是某个 agent 的 state 里）
+  const topLevelError = (raw as any).error
+  if (topLevelError) {
+    store.lastError = '状态尚未就绪：' + String(topLevelError)
+  } else if (bad.length) {
+    store.lastError = `状态数据不完整（${bad.join(', ')}），已忽略；通常出现在首次 full_state 超时之后`
+  }
+  return out
+}
+
 export const currentAgent = computed(() => {
   const list = store.agents
   if (!list.length) return null
@@ -90,7 +131,7 @@ export function initStore() {
 
   socket.on('state-update', (states: Record<string, FullState>) => {
     // 1 Hz 全量推送；这里按 agent 覆盖，字段级 diff 交给 Vue 的响应式。
-    store.states = states || {}
+    store.states = sanitizeStates(states)
   })
 
   // 她的输出（agent.js 的 sendOutputToServer）与系统消息都走这条

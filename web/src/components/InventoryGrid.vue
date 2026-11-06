@@ -3,7 +3,9 @@ import { computed } from 'vue'
 import { currentAgent, currentState } from '../stores/agents'
 
 const agentName = computed(() => currentAgent.value?.name || '')
-const eq = computed(() => currentState.value?.inventory.equipment)
+// ★ WEB-002：`inventory` 可能整个缺失（首次 full_state 超时后服务端只发了错误对象），
+//   原来 `currentState.value?.inventory.equipment` 会在 inventory 为 undefined 时抛 TypeError。
+const eq = computed(() => currentState.value?.inventory?.equipment ?? null)
 
 // 装备槽显示顺序与图标来源（贴图走 mindserver 的 /assets/item/:agent/:name.png）
 const equipment = computed(() => [
@@ -15,7 +17,7 @@ const equipment = computed(() => [
 ])
 
 const items = computed(() => {
-  const counts = currentState.value?.inventory.counts || {}
+  const counts = currentState.value?.inventory?.counts || {}
   return Object.entries(counts)
     .filter(([, n]) => n > 0)
     .sort((a, b) => b[1] - a[1])

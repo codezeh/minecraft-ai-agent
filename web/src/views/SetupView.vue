@@ -39,6 +39,8 @@ const picked = ref<ProfileRow | null>(null)
 const profilesErr = ref('')
 const creating = ref(false)
 const createMsg = ref('')
+/** ★ WEB-009：create-agent 的 ack 超时（毫秒）。后端建 agent 要起子进程，给它 20 秒。 */
+const CREATE_ACK_TIMEOUT_MS = 20000
 
 // 只暴露真正常改的几项（其余走 settings_spec 默认值）
 const form = ref({
@@ -73,17 +75,44 @@ async function createAgent() {
   if (!picked.value) return
   creating.value = true
   createMsg.value = ''
+  // ★★★ WEB-009（2026-11-06 深度检查）：**create-agent 必须有 ack 超时**。
+  //
+  //   缺陷原貌：这里 `socket.emit('create-agent', settings, cb)` 然后 `new Promise(resolve)`，
+  //   resolve **只**在回调里被调用。断线 / 回调丢失 / 后端迟迟不回时：
+  //     · 这个 Promise 永远 pending ⇒ `finally` 不执行 ⇒ `creating` 永远是 true
+  //       （报告实测：creating=true 且 timeoutTimers=0）⇒ 按钮永久"创建中"，错误也不显示；
+  //     · 用户以为卡死，刷新后重试 → 可能**重复创建**同名 agent。
+  //
+  //   修法（照报告"走统一 ack 超时 helper、超时显示结果未知并查询状态"）：
+  //     · 给 ack 一个明确的超时；超时后如实告诉用户"结果未知"，并**主动查一次** agent 列表；
+  //     · 补上 catch，任何异常都在界面上可见（原来 request 的 rejection 没人接）；
+  //     · 无论如何都会走到 finally 把 creating 复位。
+  let ackTimer: ReturnType<typeof setTimeout> | null = null
   try {
     const pf = await request<{ ok: boolean; json?: any; reason?: string }>('get-profile', picked.value.file)
     if (!pf?.ok || !pf.json) { createMsg.value = '读 profile 失败：' + (pf?.reason || '?'); return }
     const settings = { ...form.value, profile: pf.json }
-    await new Promise<void>((resolve) => {
-      socket.emit('create-agent', settings, (res: any) => {
-        createMsg.value = res?.success ? `已创建 ${pf.json.name}` : `失败：${res?.error || '未知错误'}`
-        resolve()
-      })
+    const name = pf.json.name
+    const ack = await new Promise<{ timedOut: boolean; res?: any }>((resolve) => {
+      ackTimer = setTimeout(() => resolve({ timedOut: true }), CREATE_ACK_TIMEOUT_MS)
+      socket.emit('create-agent', settings, (res: any) => resolve({ timedOut: false, res }))
     })
+    if (ack.timedOut) {
+      createMsg.value = `创建请求 ${CREATE_ACK_TIMEOUT_MS / 1000} 秒没有回应 —— **结果未知**，`
+        + '正在重新读取 agent 列表确认（不要立刻重复创建）…'
+      await new Promise((r) => setTimeout(r, 800))
+      const seen = store.agents.some((a) => a.name === name)
+      createMsg.value = seen
+        ? `已确认 ${name} 创建成功（ack 丢了，但 agent 在列表里）`
+        : `仍未看到 ${name}：可能创建失败，也可能后端还在处理。请稍等再刷新列表，别急着重复点。`
+    } else {
+      createMsg.value = ack.res?.success ? `已创建 ${name}` : `失败：${ack.res?.error || '未知错误'}`
+    }
+  } catch (e: any) {
+    // 原来这里没有 catch：request 的 rejection 直接变成 unhandled，界面什么都不显示
+    createMsg.value = '创建过程出错：' + (e?.message || String(e))
   } finally {
+    if (ackTimer) clearTimeout(ackTimer)   // ★ 不留悬挂定时器
     creating.value = false
   }
 }
@@ -190,11 +219,19 @@ onMounted(() => {
       </div>
 
       <div class="cols">
-        <div class="col-profiles scroll">
-          <div
+        <div class="col-profiles scroll" role="radiogroup" aria-label="选择 profile">
+          <!-- ★★★ WEB-011（2026-11-06 深度检查）：原来是**不可聚焦的 div**（只有 @click）。
+               键盘用户 Tab 不到、Enter/空格也选不了 ⇒ 纯键盘与部分辅助技术用户
+               **无法完成创建 agent 这条主流程**（报告静态断言确认：无 tabindex/无键盘处理/无原生控件）。
+               修法：换成原生 `<button>`（天然可聚焦、Enter/空格可激活、可被读屏识别），
+               并用 role="radio" + aria-checked 让"单选一个 profile"的语义对辅助技术可见。 -->
+          <button
             v-for="p in profiles"
             :key="p.file"
+            type="button"
             class="prof"
+            role="radio"
+            :aria-checked="picked?.file === p.file"
             :class="{ on: picked?.file === p.file }"
             @click="pick(p)"
           >
@@ -205,7 +242,7 @@ onMounted(() => {
                 name={{ p.name }} · {{ p.api }} · {{ p.model }}
               </template>
             </div>
-          </div>
+          </button>
           <div v-if="profilesErr" class="bad small pad">{{ profilesErr }}</div>
         </div>
 
@@ -311,8 +348,15 @@ pre { margin: 0; padding: 8px 10px; font-size: 11px; line-height: 1.5; color: #a
 
 .cols { display: grid; grid-template-columns: 300px 1fr; gap: 12px; padding: 10px 12px; }
 .col-profiles { max-height: 240px; border: 1px solid var(--border-soft); border-radius: 6px; }
-.prof { padding: 6px 9px; border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+/* ★ WEB-011：现在是原生 button —— 必须清掉 button 的默认外观，否则和原来的 div 长得不一样；
+   同时保留可见的焦点环（键盘用户要看得出"现在停在哪一项"）。 */
+.prof {
+  display: block; width: 100%; text-align: left; font: inherit; color: inherit;
+  background: none; border: 0; border-bottom: 1px solid var(--border-soft);
+  padding: 6px 9px; cursor: pointer;
+}
 .prof:hover { background: var(--bg-hover); }
+.prof:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .prof.on { background: var(--bg-elev); box-shadow: inset 2px 0 0 var(--accent); }
 .pfile { font-size: 12px; }
 

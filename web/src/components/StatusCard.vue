@@ -6,15 +6,19 @@ const s = currentState
 const a = currentAgent
 
 const inGame = computed(() => !!a.value?.in_game)
-const healthPct = computed(() => Math.max(0, Math.min(100, ((s.value?.gameplay.health ?? 0) / 20) * 100)))
-const hungerPct = computed(() => Math.max(0, Math.min(100, ((s.value?.gameplay.hunger ?? 0) / 20) * 100)))
+// ★ WEB-002：`gameplay` 本身可能整个缺失（服务端首次 full_state 超时后只发了错误对象）。
+//   原来写 `s.value?.gameplay.health` —— 可选链只保护了 `s`，`gameplay` 是 undefined 时仍然抛。
+//   现在逐层可选，拿不到就按 0 显示，让卡片降级而不是崩掉整个面板。
+const g = computed(() => s.value?.gameplay ?? null)
+const healthPct = computed(() => { const v = g.value?.health; return typeof v === 'number' ? Math.max(0, Math.min(100, (v / 20) * 100)) : 0 })
+const hungerPct = computed(() => { const v = g.value?.hunger; return typeof v === 'number' ? Math.max(0, Math.min(100, (v / 20) * 100)) : 0 })
 
 const pos = computed(() => {
-  const p = s.value?.gameplay.position
-  return p ? `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}` : '-'
+  const p = g.value?.position
+  return p && typeof p.x === 'number' ? `${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}` : '-'
 })
 
-const actionKind = computed(() => s.value?.action.kind || 'idle')
+const actionKind = computed(() => s.value?.action?.kind || 'idle')
 const lastFailure = computed(() => {
   const f = s.value?.lastFailure
   if (!f) return ''

@@ -13,23 +13,69 @@ function send() {
   input.value = ''
 }
 
+/**
+ * ★ WEB-003（2026-11-06 深度检查）：中文/日文输入法组合期间的回车**不是发送**。
+ *
+ * 缺陷原貌：只判 `key === 'Enter'`。用中文输入法时，按回车是"确认候选词"，
+ *   浏览器仍会派发 Enter（Chrome/Edge 里 `keyCode` 常是 229，且 `isComposing` 为 true），
+ *   于是**消息在还没打完时就被发出去并清空输入框**，同时把 composition 的默认行为 preventDefault 掉。
+ *
+ * 修法：先看 "这次按键属于输入法组合吗" —— `isComposing` / `keyCode===229` /
+ *   `key === 'Process'` 任一命中就**直接放行**（不 send、不 preventDefault），
+ *   让 IME 自己处理；只有真正"组合已结束的 Enter"才发送。
+ */
+function isImeComposing(e: KeyboardEvent) {
+  // 兼容：老浏览器没有 isComposing，用 keyCode 229 兜底（IME 处理中的保留码）
+  return e.isComposing === true || e.keyCode === 229 || e.key === 'Process'
+}
+
 function onKey(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    send()
-  }
+  if (e.key !== 'Enter' || e.shiftKey) return
+  if (isImeComposing(e)) return   // ★ WEB-003：交给输入法，别抢
+  e.preventDefault()
+  send()
 }
 
 const kindClass: Record<string, string> = { me: 'me', her: 'her', system: 'sys' }
+
+/** 用户是不是"本来就贴着底部"（贴底才自动跟随，否则会抢走正在读的历史）。 */
+function isNearBottom(el: HTMLElement, slackPx = 80) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= slackPx
+}
+
+const pinnedToBottom = ref(true)
+const unseenCount = ref(0)
+
+function onScroll() {
+  const el = listEl.value
+  if (!el) return
+  pinnedToBottom.value = isNearBottom(el)
+  if (pinnedToBottom.value) unseenCount.value = 0
+}
 
 async function scrollToBottom() {
   await nextTick()
   const el = listEl.value
   if (el) el.scrollTop = el.scrollHeight
+  unseenCount.value = 0
 }
 
-// 只在新消息到达时滚到底，用户往回翻历史时不打扰
-watch(() => store.chat.length, scrollToBottom)
+/**
+ * ★ WEB-008（2026-11-06 深度检查）：不能用 `chat.length` 当"有新消息"的信号。
+ *
+ * 缺陷原貌：`watch(() => store.chat.length, scrollToBottom)`。
+ *   而 store 里聊天缓冲**上限 500 条**（先 push 再截断）⇒ 到上限后 length 恒为 500，
+ *   `watch` 回调**再也不会触发** ⇒ 长时间开着窗口就再也看不到新回复
+ *   （报告实测：第 501 条到达时 length 仍 500、watch 回调 0 次）。
+ *   另外它无条件滚到底，用户往上翻历史时会被抢回去。
+ *
+ * 修法：观察**最后一条的 seq**（单调递增，不受截断影响）；只在"原本贴底"时跟随，
+ *   否则记未读数并在界面上给一个"回到最新"的按钮 —— 不打断正在读历史的人。
+ */
+watch(() => store.chat.length ? store.chat[store.chat.length - 1]?.seq : 0, async () => {
+  if (pinnedToBottom.value) { await scrollToBottom(); return }
+  unseenCount.value++
+})
 onMounted(scrollToBottom)
 
 function time(t: number) {
@@ -52,7 +98,7 @@ function isNoise(text: string) {
       </label>
     </div>
 
-    <div ref="listEl" class="list scroll">
+    <div ref="listEl" class="list scroll" @scroll="onScroll">
       <div
         v-for="m in store.chat"
         :key="m.seq"
@@ -67,6 +113,11 @@ function isNoise(text: string) {
         还没有对话。先说点什么，她在地图里会出现。
       </div>
     </div>
+
+    <!-- ★ WEB-008：用户翻历史时新消息不抢滚动，改为提示 + 一键回到最新 -->
+    <button v-if="unseenCount > 0" class="jump-latest" @click="scrollToBottom">
+      ↓ {{ unseenCount }} 条新消息，回到最新
+    </button>
 
     <div class="composer">
       <input
@@ -93,6 +144,14 @@ function isNoise(text: string) {
 .toggle { font-size: 11px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
 
 .list { flex: 1; min-height: 0; padding: 10px 12px; display: flex; flex-direction: column; gap: 5px; }
+
+/* ★ WEB-008：新消息提示条（只有用户翻历史、又有新消息时才出现） */
+.jump-latest {
+  flex: none; margin: 0 12px 6px; padding: 5px 10px; font-size: 11px; cursor: pointer;
+  color: var(--accent); background: rgba(90, 160, 255, .12);
+  border: 1px solid rgba(90, 160, 255, .35); border-radius: 5px;
+}
+.jump-latest:hover { background: rgba(90, 160, 255, .2); }
 .line { display: flex; gap: 7px; font-size: 12px; line-height: 1.5; }
 .line .t { flex: none; font-size: 10px; padding-top: 2px; }
 .line .who { flex: none; width: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-dim); }

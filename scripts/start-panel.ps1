@@ -37,10 +37,28 @@ function Show-Tail([string]$file, [int]$n = 15) {
     }
 }
 
-# 有没有还在跑的 server.jar 进程
+# 有没有还在跑的**本项目** server.jar 进程
+#
+# ★★★ OPS-009（2026-11-06 深度检查）：原来只匹配 `'server\.jar'` —— 于是**任意目录**下
+#   别人的 Minecraft 服务器（另一套整合包、另一个项目）都会被当成本项目的服：
+#   报告实测：两个其他目录的 server.jar 都被 Get-ServerJava 匹配到 ⇒
+#   面板会一直等那个无关服务器退出（120 秒）然后拒绝启动，而本项目的服其实根本没跑。
+#
+#   现在按**本项目的 jar 绝对路径**匹配：先把路径规范化（统一分隔符、忽略大小写），
+#   再要求命令行里出现 `<root>\server\server.jar` 这个完整路径。
+#   参数：-Root 项目根目录（默认 `$root`，函数可能在建好 $root 之前被调用）。
 function Get-ServerJava {
+    param([string]$ProjectRoot)
+    if (-not $ProjectRoot) { $ProjectRoot = $root }
+    $jar = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot 'server\server.jar'))
+    # 命令行里的路径可能是 `/` 也可能是 `\`，统一成 `\` 再比（大小写不敏感由 -like 负责）
+    $needle = $jar.ToLowerInvariant().Replace('/', '\')
     Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -match 'server\.jar' }
+        Where-Object {
+            if (-not $_.CommandLine) { return $false }
+            $cmd = $_.CommandLine.ToLowerInvariant().Replace('/', '\')
+            return $cmd.Contains($needle)
+        }
 }
 
 function Wait-Port([int]$port, [int]$seconds, [string]$label) {
