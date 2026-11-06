@@ -112,10 +112,12 @@ if not exist "%ROOT%mindcraft\node_modules" (
     echo [WARN] mindcraft\node_modules missing. Installing dependencies ...
     pushd "%ROOT%mindcraft"
     REM ★ F-DEP-103 / F-REG-002（2026-11-06 终审 R3-3 指出；用户批准方案②）：
-    REM   package-lock.json 被 .gitignore 忽略且从未入库 => 全新 clone 必然没有 lock，
-    REM   而 npm ci 的硬性前提就是"存在 lock" => 在全新 clone 上必失败 =>
-    REM   F-DEP-005 那条"失败即中止"在 clone 场景反而变成负收益（能装变成装不上）。
-    REM   处置：有 lock 走 npm ci（可复现，首选）；无 lock 降级 npm install 并明确告警。
+    REM   原来 package-lock.json 被 .gitignore 忽略且从未入库 => 全新 clone 必然没有 lock，
+    REM   而 npm ci 的硬性前提就是"存在 lock" => 在全新 clone 上必失败。
+    REM   ★ OPS-007（2026-11-06 深度检查）：**锁已入库**（.gitignore 末尾加了 !package-lock.json，
+    REM   入库前比对过 lock 与 package.json 一致、且 548 个包条目零版本漂移）⇒
+    REM   正常 clone 都会带 lock，走下面的 npm ci 分支（可复现、且不会打掉 patches/）。
+    REM   降级分支仍保留：用户自己删了 lock、或从旧压缩包解压出来的目录，仍然能装上。
     REM   注意：%ERRORLEVEL% 在括号块内不即时更新，故用 if errorlevel 1（运行期求值）。
     if exist package-lock.json (
         echo [WARN] Running npm ci (strict, per lock) ...
@@ -128,9 +130,9 @@ if not exist "%ROOT%mindcraft\node_modules" (
             exit /b 1
         )
     ) else (
-        echo [WARN] package-lock.json NOT found (this repo does not track its lock - see F-DEP-103).
+        echo [WARN] package-lock.json NOT found - this checkout is missing the tracked lock.
         echo [WARN] Falling back to npm install: it works, but versions are NOT reproducible.
-        echo [WARN] For reproducibility: commit the lock, or drop a trusted lock into mindcraft\.
+        echo [WARN] For reproducibility: restore package-lock.json from git ^(git checkout -- package-lock.json^).
         call npm install
         if errorlevel 1 (
             echo [ERROR] npm install failed - do NOT use --ignore-scripts, it silently drops patches/.
