@@ -3,7 +3,7 @@ import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 export class Gemini {
     static prefix = 'google';
@@ -69,7 +69,7 @@ export class Gemini {
             // 但 prompter 的 promptCoding / promptMemSaving / promptShouldRespondToBot **都没有**
             // try/catch，抛出去就是真的崩（coder / history / conversation 三个调用方）。
             // 统一契约：sendRequest **永不抛**，失败一律返回 FAILED_REPLY 标记。
-            console.log(err);
+            console.log(safeErrText(err));
             return failedReply(`google request failed: ${err?.message ?? err}`);
         }
     }
@@ -111,8 +111,8 @@ export class Gemini {
             res = await result.text;
             console.log('Received.');
         } catch (err) {
-            console.log(err);
-            if (err.message.includes("Image input modality is not enabled for models/")) {
+            console.log(safeErrText(err, 'vision'));
+            if (errMessage(err).includes("Image input modality is not enabled for models/")) {
                 res = "Vision is only supported by certain models.";
             } else {
                 res = failedReply(`google vision request failed: ${err?.message ?? err}`);

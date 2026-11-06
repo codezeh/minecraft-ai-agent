@@ -1,6 +1,6 @@
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs } from './_shared.js';
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, safeErrText, errMessage } from './_shared.js';
 
 export class Ollama {
     static prefix = 'ollama';
@@ -39,7 +39,7 @@ export class Ollama {
                     res = failedReply('ollama returned no message content');
                 }
             } catch (err) {
-                if (err.message.toLowerCase().includes('context length') && turns.length > 1) {
+                if (errMessage(err).toLowerCase().includes('context length') && turns.length > 1) {
                     console.log('Context length exceeded, trying again with shorter context.');
                     return await this.sendRequest(turns.slice(1), systemMessage);
                 } else if (isRateLimit(err) && attempt < maxAttempts) {
@@ -48,7 +48,7 @@ export class Ollama {
                     await new Promise((r) => setTimeout(r, wait));
                     continue;
                 } else {
-                    console.log(err);
+                    console.log(safeErrText(err));
                     res = failedReply(`ollama request failed: ${err?.message ?? err}`);
                 }
             }

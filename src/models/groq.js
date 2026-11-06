@@ -1,7 +1,7 @@
 import Groq from 'groq-sdk';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 // THIS API IS NOT TO BE CONFUSED WITH GROK!
 // Go to grok.js for that. :)
@@ -64,12 +64,12 @@ export class GroqCloudAPI {
             res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         }
         catch(err) {
-            if (err.message.includes("content must be a string")) {
+            if (errMessage(err).includes("content must be a string")) {
                 res = "Vision is only supported by certain models.";
             } else {
                 res = failedReply(`groq request failed: ${err?.message ?? err}`);
             }
-            console.log(err);
+            console.log(safeErrText(err));
         }
         return res;
     }

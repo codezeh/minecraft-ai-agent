@@ -2,7 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 // llama, mistral
 export class Novita {
@@ -45,12 +45,12 @@ export class Novita {
           res = completion.choices[0].message.content;
       }
       catch (err) {
-          if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
+          if ((errMessage(err) === 'Context length exceeded' || err?.code == 'context_length_exceeded') && turns.length > 1) {
               console.log('Context length exceeded, trying again with shorter context.');
               // 第30条：缺 this. → 截断重试分支必抛 ReferenceError（对照 deepseek.js:44 的 this.sendRequest）
               return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
           } else {
-            console.log(err);
+            console.log(safeErrText(err));
               res = failedReply(`novita request failed: ${err?.message ?? err}`);
           }
       }

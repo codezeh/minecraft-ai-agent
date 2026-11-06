@@ -2,7 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 export class DeepSeek {
     static prefix = 'deepseek';
@@ -33,7 +33,6 @@ export class DeepSeek {
         let res = null;
         try {
             console.log('Awaiting deepseek api response...');
-            // console.log('Messages:', messages);
             let completion = await this.openai.chat.completions.create(pack);
             recordUsage(completion?.usage, this.model_name);
             if (completion.choices[0].finish_reason == 'length')
@@ -42,11 +41,11 @@ export class DeepSeek {
             res = completion.choices[0].message.content;
         }
         catch (err) {
-            if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
+            if ((errMessage(err) === 'Context length exceeded' || err?.code == 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
-                console.log(err);
+                console.log(safeErrText(err));
                 res = failedReply(`deepseek request failed: ${err?.message ?? err}`);
             }
         }

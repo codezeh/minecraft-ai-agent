@@ -94,3 +94,61 @@ export function rateLimitDelayMs(attempt) {
     return base + Math.floor(Math.random() * 250);
 }
 
+// ── 错误日志的安全形状（F-SEC-102）─────────────────────────────
+// why：原来 19 处直接把**整个 error 对象**交给日志，而 SDK 抛出的 error 上常挂着
+// request / response / config / headers（含 Authorization、中转站 key、完整 prompt）。
+// 而 `logs/` 正是"出问题发给别人看"的东西
+// （scripts/start-panel.ps1 把 mindcraft 的 stdout 重定向进 logs/mindcraft-console.log）。
+// 今晚已因日志/文件落凭据出过三次事故，所以这里**只允许打标量字段**。
+const MAX_ERR_MSG = 300;
+
+/**
+ * 把 error 收敛成**一行、只含标量、可安全写日志**的字符串。
+ *
+ * 绝不返回对象、绝不 JSON.stringify(error)：那两种都会把挂在 error 上的
+ * request/response/headers 一起带出去。
+ *
+ * 形状：`[llm-error] status=429 code=rate_limit tag=xxx <message 截断 300 字>`
+ * （没有对应字段就省略那一段；message 非字符串时安全转字符串）
+ *
+ * @param {unknown} err 抛出来的任何东西（Error / 字符串 / 对象 / null）
+ * @param {string} [tag] 可选标签，区分来源（如 'vision'）
+ * @returns {string}
+ */
+export function safeErrText(err, tag) {
+    if (err === null || err === undefined) return `[llm-error]${tag ? ' tag=' + tag : ''} <null>`;
+    // 只取标量：status / statusCode / code。**不要**碰 err.request / err.response / err.body / err.config。
+    const status = err.status ?? err.statusCode;
+    const code = (typeof err.code === 'string' || typeof err.code === 'number') ? err.code : null;
+    // message 依次退化：err 本身是字符串 → err.message → err.error.message → String(err)
+    // （对象 String() 得到 "[object Object]"，不泄漏字段内容）
+    const rawMsg = typeof err === 'string' ? err
+        : (typeof err.message === 'string' ? err.message
+            : (typeof err.error?.message === 'string' ? err.error.message : String(err)));
+    const msg = rawMsg.length > MAX_ERR_MSG ? rawMsg.slice(0, MAX_ERR_MSG) + '…' : rawMsg;
+    const parts = ['[llm-error]'];
+    if (status !== undefined && status !== null) parts.push(`status=${status}`);
+    if (code !== null) parts.push(`code=${code}`);
+    if (tag) parts.push(`tag=${tag}`);
+    parts.push(msg);
+    return parts.join(' ');
+}
+
+/**
+ * 安全取 error 的 message **字符串**（F-AI-101）。
+ *
+ * 为什么需要：8 处写成 `err.message.includes(...)` / `err.message.toLowerCase().includes(...)`，
+ * 而这段在**错误处理路径**上——`err` 是字符串 / 对象 / null 时（中转站、网关、裸 fetch 都可能）
+ * 直接 TypeError，把真正的错误掩盖成 TypeError。
+ *
+ * @param {unknown} err
+ * @returns {string} 永远是字符串（取不到就是 ''）
+ */
+export function errMessage(err) {
+    if (err === null || err === undefined) return '';
+    if (typeof err === 'string') return err;
+    if (typeof err.message === 'string') return err.message;
+    if (typeof err.error?.message === 'string') return err.error.message;
+    return String(err);
+}
+

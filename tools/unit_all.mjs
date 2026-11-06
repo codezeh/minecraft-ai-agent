@@ -32,10 +32,29 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
  * 再用两张表处理命名模式覆盖不到的例外 —— 例外必须写理由，否则它自己就会烂掉。
  * ========================================================================== */
 
-/** 名字像单测、但不能进默认集合的 —— 每条都要写清理由（不写理由的排除项等于藏红）。 */
+/**
+ * **已确认废弃、等待 `git rm` 的脚本**（F-GATE-002）
+ *
+ * 与 EXCLUDE 的区别（这是本条的关键）：
+ *  - EXCLUDE  = "这个测试不该进默认集合，但它**还活着**"（如需要在线 bot 的）；
+ *  - PENDING_DELETE = "这个测试**已经没有意义了**，它 import 的模块已被删除"。
+ *
+ * 原来的问题：两者混在一张 EXCLUDE 里 ⇒ 两个**永久必红**的死测试被静默排除，
+ * 等于"把红点藏起来"（同第26条那族）。现在把它们单独列出，并且：
+ *   ① 每次跑 unit_all 都**打印可见告警**（不再是看不见的排除）；
+ *   ② 告警里直接给**待执行的删除命令**，谁看到谁就能收掉；
+ *   ③ 若脚本文件已经不在了（已被 git rm），这条自动静默——不会留下永久噪音。
+ *
+ * 为什么本轮没有直接删：member 会话的 shell 沙箱**不允许删文件**（`rm` → Permission denied），
+ * 只能用 write/edit 改内容。所以删除动作登记给 captain 执行（命令见下）。
+ */
+const PENDING_DELETE = new Map([
+    ['test_mca_import', 'import 的 src/agent/library/chunk_map.js + tile_map.js 均已删除（实测 ERR_MODULE_NOT_FOUND）'],
+    ['test_tile_map', '同上：import 的 chunk_map.js / tile_map.js 均已删除（实测 ERR_MODULE_NOT_FOUND）'],
+]);
+
+/** 名字像单测、但**还活着**却不能进默认集合的 —— 每条都要写清理由（不写理由的排除项等于藏红）。 */
 const EXCLUDE = new Map([
-    ['test_mca_import', '引用已删除的 src/agent/library/chunk_map.js（ERR_MODULE_NOT_FOUND）；陈旧测试，删/重写不在 T03 范围'],
-    ['test_tile_map', '同上：引用已删除的 chunk_map.js；陈旧测试'],
     ['test_reconnect', '需要**在线 bot**（deepseek 不在线时 exit 2 SKIP），不是环境无关的单元测试'],
     ['test_s0_afk', '同上：需要在线 bot 才能开始 S0'],
 ]);
@@ -79,7 +98,7 @@ const UNITS = (() => {
     // ★ NEEDS_REAL_DATA 里的名字必须进 UNITS：它们要「被登记、然后跳过」，
     //   而不是「不在名单 → 默认集没有 → 也没人报它被跳过」—— 那就是静默不跑。
     const all = [...new Set([...discovered, ...EXTRA_OFFLINE, ...NEEDS_REAL_DATA])]
-        .filter((n) => !EXCLUDE.has(n));
+        .filter((n) => !EXCLUDE.has(n) && !PENDING_DELETE.has(n));
     return all.sort();
 })();
 
@@ -106,6 +125,14 @@ const UNITS = (() => {
         console.log(`  ✗ 名单里出现了被排除的脚本：${both.join(', ')}`);
         process.exit(1);
     }
+    // F-GATE-002：废弃脚本必须**看得见**，不能被静默跳过。
+    // 文件还在 = 还没 git rm ⇒ 每次跑都提醒一次，并给出可直接复制的删除命令。
+    const pending = [...PENDING_DELETE.keys()].filter((n) => existsSync(join(HERE, `${n}.mjs`)));
+    if (pending.length) {
+        console.log(`  ⚠ ${pending.length} 个**已废弃**的脚本仍未删除（它们依赖的模块已被删，跑必红，故不进默认集）：`);
+        for (const n of pending) console.log(`      · tools/${n}.mjs —— ${PENDING_DELETE.get(n)}`);
+        console.log(`    收掉方式：git rm ${pending.map((n) => `tools/${n}.mjs`).join(' ')}`);
+    }
 }
 
 const argv = process.argv.slice(2);
@@ -124,6 +151,8 @@ if (argv.includes('--list')) {
         units: UNITS,
         needsRealData: [...NEEDS_REAL_DATA],
         excluded: [...EXCLUDE.keys()],
+        // 与第 130 行的运行时告警保持一致：文件已删（git rm 完成）就不再列，避免永久噪音。
+        pendingDelete: [...PENDING_DELETE.keys()].filter((n) => existsSync(join(HERE, `${n}.mjs`))),
     };
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     process.exit(0);

@@ -1,7 +1,7 @@
 import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 export class LMStudio {
     static prefix = 'lmstudio';
@@ -38,11 +38,11 @@ export class LMStudio {
                 res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
             }
         } catch (err) {
-            if ((err.message === 'Context length exceeded' || err.code === 'context_length_exceeded') && turns.length > 1) {
+            if ((errMessage(err) === 'Context length exceeded' || err?.code === 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
-                console.log(err);
+                console.log(safeErrText(err));
                 res = failedReply(`lmstudio request failed: ${err?.message ?? err}`);
             }
         }

@@ -2,7 +2,7 @@ import { toSinglePrompt } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 import { HfInference } from "@huggingface/inference";
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText } from './_shared.js';
 
 export class HuggingFace {
   static prefix = 'huggingface';
@@ -47,7 +47,7 @@ export class HuggingFace {
           res += (chunk.choices[0]?.delta?.content || "");
         }
       } catch (err) {
-        console.log(err);
+        console.log(safeErrText(err));
         res = failedReply(`huggingface request failed: ${err?.message ?? err}`);
         // Break out immediately; we only retry when handling partial <think> tags.
         break;

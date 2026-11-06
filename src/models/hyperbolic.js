@@ -1,6 +1,6 @@
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs } from './_shared.js';
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, errMessage } from './_shared.js';
 
 export class Hyperbolic {
     static prefix = 'hyperbolic';
@@ -79,7 +79,7 @@ export class Hyperbolic {
                 console.log('Received response from Hyperbolic.');
             } catch (err) {
                 if (
-                    (err.message === 'Context length exceeded' || err.code === 'context_length_exceeded') &&
+                    (errMessage(err) === 'Context length exceeded' || err?.code === 'context_length_exceeded') &&
                     turns.length > 1
                 ) {
                     console.log('Context length exceeded, trying again with a shorter context...');

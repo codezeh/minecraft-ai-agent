@@ -2,7 +2,7 @@ import Replicate from 'replicate';
 import { toSinglePrompt } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs } from './_shared.js';
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, safeErrText } from './_shared.js';
 
 // llama, mistral, gemini
 export class ReplicateAPI {
@@ -91,7 +91,7 @@ export class ReplicateAPI {
 				await new Promise((r) => setTimeout(r, wait));
 				continue;
 			}
-			console.log(err);
+			console.log(safeErrText(err));
 			res = failedReply(`replicate request failed: ${err?.message ?? err}`);
 		}
 			break;

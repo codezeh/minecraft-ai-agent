@@ -2,7 +2,7 @@ import { Mistral as MistralClient } from '@mistralai/mistralai';
 import { getKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 export class Mistral {
     static prefix = 'mistral';
@@ -60,12 +60,12 @@ export class Mistral {
             recordUsage(response?.usage, model);
             result = response.choices[0].message.content;
         } catch (err) {
-            if (err.message.includes("A request containing images has been given to a model which does not have the 'vision' capability.")) {
+            if (errMessage(err).includes("A request containing images has been given to a model which does not have the 'vision' capability.")) {
                 result = "Vision is only supported by certain models.";
             } else {
                 result = failedReply(`mistral request failed: ${err?.message ?? err}`);
             }
-            console.log(err);
+            console.log(safeErrText(err));
         }
 
         return result;

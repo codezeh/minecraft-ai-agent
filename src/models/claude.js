@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 export class Claude {
     static prefix = 'anthropic';
@@ -51,12 +51,12 @@ export class Claude {
             }
         }
         catch (err) {
-            if (err.message.includes("does not support image input")) {
+            if (errMessage(err).includes("does not support image input")) {
                 res = "Vision is only supported by certain models.";
             } else {
                 res = failedReply(`claude request failed: ${err?.message ?? err}`);
             }
-            console.log(err);
+            console.log(safeErrText(err));
         }
         return res;
     }

@@ -1,7 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 // xAI doesn't supply a SDK for their models, but fully supports OpenAI and Anthropic SDKs
 export class Grok {
@@ -34,7 +34,6 @@ export class Grok {
         let res = null;
         try {
             console.log('Awaiting xai api response...');
-            ///console.log('Messages:', messages);
             let completion = await this.openai.chat.completions.create(pack);
             recordUsage(completion?.usage, this.model_name);
             if (completion.choices[0].finish_reason == 'length')
@@ -43,14 +42,14 @@ export class Grok {
             res = completion.choices[0].message.content;
         }
         catch (err) {
-            if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
+            if ((errMessage(err) === 'Context length exceeded' || err?.code == 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage);
-            } else if (err.message.includes('The model expects a single `text` element per message.')) {
-                console.log(err);
+            } else if (errMessage(err).includes('The model expects a single `text` element per message.')) {
+                console.log(safeErrText(err));
                 res = 'Vision is only supported by certain models.';
             } else {
-                console.log(err);
+                console.log(safeErrText(err));
                 res = failedReply(`xai request failed: ${err?.message ?? err}`);
             }
         }

@@ -10,7 +10,7 @@ import { strictFormat } from '../utils/text.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -48,7 +48,6 @@ export class VLLM {
         let res = null;
         try {
             console.log('Awaiting openai api response...');
-            // console.log('Messages:', messages);
             // todo set max_tokens, temperature, top_p, etc. in pack
             let completion = await this.vllm.chat.completions.create(pack);
             recordUsage(completion?.usage, model);
@@ -58,11 +57,11 @@ export class VLLM {
             res = completion.choices[0].message.content;
         }
         catch (err) {
-            if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
+            if ((errMessage(err) === 'Context length exceeded' || err?.code == 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else {
-                console.log(err);
+                console.log(safeErrText(err));
                 res = failedReply(`vllm request failed: ${err?.message ?? err}`);
             }
         }

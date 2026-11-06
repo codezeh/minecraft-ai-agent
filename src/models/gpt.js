@@ -2,7 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
 
 export class GPT {
     static prefix = 'openai';
@@ -77,14 +77,14 @@ export class GPT {
             }
         }
         catch (err) {
-            if ((err.message == 'Context length exceeded' || err.code == 'context_length_exceeded') && turns.length > 1) {
+            if ((errMessage(err) === 'Context length exceeded' || err?.code == 'context_length_exceeded') && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
-            } else if (err.message.includes('image_url')) {
-                console.log(err);
+            } else if (errMessage(err).includes('image_url')) {
+                console.log(safeErrText(err));
                 res = 'Vision is only supported by certain models.';
             } else {
-                console.log(err);
+                console.log(safeErrText(err));
                 res = failedReply(`openai request failed: ${err?.message ?? err}`);
             }
         }
