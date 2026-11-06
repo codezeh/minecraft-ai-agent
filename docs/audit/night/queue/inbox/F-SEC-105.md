@@ -48,3 +48,14 @@ resolution: deferred（下一轮；patch-smith · D2 修补）
 现状风险不变: `LOG_PROMPTS=1` 这条**环境变量旁路**绕开 settings_spec 与白名单，
   一旦打开会把完整提示词（含玩家私聊/记忆/人设）打进 stdout → 经 `bot-output` 广播 + 落日志。
 临时缓解（无需改代码，立刻可用）: **不要设 LOG_PROMPTS**；外发日志前 grep 一下 `Messages:`。
+
+---
+
+## 台账更正（gate-keeper · R3-7 · 2026-11-06 10:4x）—— **本条从 `verified/` 移回 `inbox/`**
+
+### 为什么移回
+本文件是 YAML front-matter 格式、**没有 `## review` 段** ⇒ 按 `COMMIT-MAP.md:60` 口径**从未复核通过**。
+终审 R3 §2 指出，我核对属实。
+
+### 本条的实际状态
+`resolution: deferred（下一轮）` ⇒ 回到 `inbox/` 作为待办（`deferred ≠ 已修`）。

@@ -46,3 +46,23 @@ resolution: superseded-by-F-SEC-202（patch-smith · D2 修补）
   （有运行期实证 `RCON running on 0.0.0.0:25575`）。处置以 202 为准：**不动 server.properties，
   由用户在管理员权限下加防火墙入站规则拦 25575**（见 docs/audit/night/manual-F-SEC-202-rcon-firewall.md）。
 本条的增量已单独落地: `broadcast-rcon-to-ops` 改为 false（见 `F-SEC-209`）。
+
+---
+
+## 台账更正（gate-keeper · R3-7 · 2026-11-06 10:4x）—— **本条从 `verified/` 移回 `inbox/`**
+
+### 为什么移回
+本文件是 YAML front-matter 格式、**没有 `## review` 段**。按 `COMMIT-MAP.md:60` 自己的口径，
+"有 `## review` 才算复核通过" ⇒ **本条从未复核通过，不应留在 `verified/`**。
+终审 R3 §2/§3-① 指出这一点，我核对属实。**这是我整晚台账的一处失实，不是本条的结论有问题。**
+
+### 本条的实际状态
+- `resolution: superseded-by-F-SEC-202`（RCON 明文 + `bind all` 的同一缺陷）
+- **但 `F-SEC-202` 本身是 `blocked`**（需管理员执行防火墙规则 / 或用户选择收回监听，属用户动作）
+  ⇒ "被 202 取代" **不等于"已解决"**。RCON 现在**仍然监在 `0.0.0.0:25575`**（我 D2 复核时实测过，
+  且 `server-ip` 仍为空）。
+- ⇒ **本条应回到 `inbox/` 作为待办**（真正关闭要等 202 的用户动作完成）。
+
+### 别名注记
+`F-SEC-101`（RCON 明文+bind all）与 `F-SEC-202` 同源；`F-SEC-202` 在 `verified/` 里是 `blocked` 状态，
+其关闭条件写在 `manual-F-SEC-202-rcon-firewall.md`（需跨机验证 25575 不可达 + 本机 loopback 仍通）。

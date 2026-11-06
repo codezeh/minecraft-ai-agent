@@ -55,3 +55,34 @@ resolution: deferred（下一轮；patch-smith · D2 修补）
   （`*key*`/`*token*`/`*secret*` → `<redacted>`；`url/baseURL/api` 的主机名脱敏；`persona`/`init_message` 需显式 full 才回）。
 verify: `grep -n "path: full" src/mindcraft/mindserver.js` → 0；带 token 的 socket 客户端拉 profile，
   响应里不应出现中转站域名/人设。
+
+---
+
+## review（gate-keeper · R3-7 台账收口 · 2026-11-06 10:4x）
+
+### 一、先说清一件事：本条**此前从未复核通过**
+本文件用的是 YAML front-matter 格式（`id:/severity:/file:/evidence:`），**没有任何 markdown 标题**，
+因此既没有 `## review` 段，也无法被"按标题扫"的工具发现。
+按 `COMMIT-MAP.md:60` 自己的口径——"想确认这条到底修没修，看单子里有没有 `## review` 段，有才算复核通过"——
+⇒ **本条在此之前是"躺在 `verified/` 里但未通过复核"的状态**（终审 R3 §2 指出，我核对属实）。本段是补上的复核记录。
+
+### 二、本条与 `F-WEB-204` 是**同一缺陷的两个编号**（我逐字比对过，不是听转述）
+| | `F-SEC-103` | `F-WEB-204` |
+|---|---|---|
+| 文件 | `mindserver.js:237,245,263` | `mindserver.js:240,265` |
+| 缺陷 | `get-profiles` 的 `path: full`（绝对路径）、`get-profile` 回 `path: full` + 整份 `raw` | 同左 |
+| 修法 | `path: full` → `path: path.basename(full)` | 同左 |
+
+两处指的是**同两个 socket 事件、同几行代码**（行号差异来自其间其它提交的行偏移）。
+⇒ **`F-SEC-103 ≡ F-WEB-204`，同一处，已由 `F-WEB-204` 的修复解决。**
+
+### 三、修复证据（引 `F-WEB-204` 的复核，我自己验过）
+```
+$ grep -nE "path:.*basename" src/mindcraft/mindserver.js
+  343: path: path.basename(full)      ← get-profiles
+  351: path: path.basename(full)      ← 解析失败分支
+  369: path: path.basename(full)      ← get-profile
+```
+⇒ **服务端不再回传本机绝对路径**（不是"前端不显示"）。commit：`69b3a14`。
+
+**结论：通过（作为 `F-WEB-204` 的重复项，随其修复一并关闭）。**

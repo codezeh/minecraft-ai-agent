@@ -51,3 +51,15 @@ resolution: deferred（下一轮；patch-smith · D2 修补）
   `export function logErrOnce(tag,e){console.warn('['+tag+'] '+errMessage(e));}`，
   19 处 `console.log(err)` → `logErrOnce('<name>', err)`；**绝不**打印 err 对象本体。
 verify: `grep -rn "console.log(err)" src/models/*.js | wc -l` → 期望 0；金丝雀见 finding。
+
+---
+
+## 台账更正（gate-keeper · R3-7 · 2026-11-06 10:4x）—— **本条从 `verified/` 移回 `inbox/`**
+
+### 为什么移回
+本文件是 YAML front-matter 格式、**没有 `## review` 段** ⇒ 按 `COMMIT-MAP.md:60` 口径**从未复核通过**。
+终审 R3 §2 指出，我核对属实。留在 `verified/` 会让"33 份已复核"这个数字不成立。
+
+### 本条的实际状态
+`resolution: deferred（下一轮）` —— **deferred ≠ 已修**（这一点当时就如实写了）。
+⇒ 回到 `inbox/` 作为待办，等下一轮处理。

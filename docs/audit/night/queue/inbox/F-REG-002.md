@@ -101,3 +101,6 @@ verify: |
   npm run gate:full
 discovered_by: recon-scout
 dept: REG
+
+---
+> **别名（R3-7 台账收口）**：`F-REG-002 ≡ F-DEP-103` —— 同一缺陷，**主号是 `F-DEP-103`**（在 `verified/`，状态 blocked）。

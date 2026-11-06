@@ -531,3 +531,43 @@ history.js:144-149  goal 跨重启存活（含 self_prompt_author）
 **加一份 `docs/audit/night/COMMIT-MAP.md`（finding → sha）**。建议把规则从"一个 finding 一个 commit"改成
 "**一个 commit 一个可独立回滚单元**"，body 按 finding 分节（captain 已在这么做且做得很好），
 只在**跨文件/跨子系统**时坚持拆开（那种情况拆开才便宜）。一句话：**归属清晰 = COMMIT-MAP + body 分节，不是一个 finding 一个 commit。**
+
+---
+
+## R9 2026-11-06 10:3x–11:1x | R3-7 台账收口 + 核实 ② 5 项交付状态 + 复核 a8fd019
+
+### ① 台账收口（R3-7）完成
+R3 那 4 份无 `## review` 的单子，我核实**属实**（纯 YAML front-matter、零 markdown 标题）。
+处理：
+- `F-SEC-103` **≡ `F-WEB-204`（我逐字比对确认：同两个 socket 事件、同 `path: full`、同修法）** → 补 `## review` → 留 `verified/`
+- `F-SEC-101/102/105` → 回 `inbox/`（写明 `superseded-by-202 ≠ 已解决`（202 仍 blocked、RCON 仍 0.0.0.0）、`deferred ≠ 已修`）
+- `F-AI-205` → `verified/` + 补 `## review`（我自己验的，不只引 t29）
+- `done/` **保留为空**（中间态，当前确无待复核项）
+- 三组别名**成对**写入：`EXEC-203≡SEC-104`、`SEC-103≡WEB-204`、`DEP-103≡REG-002`
+**收口后**：inbox 29 / claimed 10 / done 0 / verified **31**；**合规自检零命中**（31/31 都有 review 段）。
+
+### ② 5 项修复：**全部未交付**（逐项读码，非看转述）
+| 项 | 当前实际 | 判定 |
+|---|---|---|
+| R3-4 围栏转义 | `text.js:18-19` 正则**无 `i`**、`sanitizeExternalText` **不剥零宽** | ❌ 未修 |
+| R3-2 限流硬上界 | `mindserver.js:87-89` 仍 `size > 512` + 删 >60s（触发条件当上限） | ❌ 未修 |
+| R3-5 补丁哨兵 | `patch_integrity.mjs` 仍只有内容哈希+版本漂移，`grep 哨兵/sentinel/incorrect_for_wooden_tool` = 0 | ❌ 未修 |
+| R3-6 闸进 gate | `gate` 仍 4 步（无 patch_integrity） | ❌ 未修 |
+| F-SEC-206 `*.token` | 两仓 `.gitignore` 仍只有字面量 `.mindserver-token` | ❌ 未修 |
+
+已给出**每项一条可判的验收命令**（`review-r3-triage.md §2.1`），落地即验。
+特别为 R3-5（"变体病"）写了反例保护：**重装后必须转绿**，否则又成"恒红闸"；且哨兵须**从补丁内容解析**而非写死。
+
+### ③ `a8fd019`（R3-M1）复核：**通过**
+- 修法：`const NL = FLOW_SRC.includes('\r\n') ? '\r\n' : '\n'` —— 从被变异的源文件自身推断，不写死 ✅
+- 根因我独立核实：`flow_craft.js` **LF=382 / CR=0 ⇒ 纯 LF**，原注释"src/ 是 CRLF"**方向写反** ⇒ 锚点永不匹配 ⇒ 变异插不进 ⇒ 恒红 ⇒ 逼人 SKIP_GATE ⇒ 门失效
+- 实跑：`craft_diagnostic_reachability_unit` **15 PASS / 0 FAIL，EXIT=0** ✅
+- 独立确认"还有没有别处"：`grep fromCharCode(13` / `'\r\n'` / `0x0d` 于 `tools/*.mjs` → **均零命中** ⇒ 审查说法成立
+
+### 我的台账失实（不解释掉）
+那 4 份无 review 的单子，是我**唯一一处自己违反自己口径**的地方。根因不是"历史格式遗留"，
+而是**我的自检判据选窄了**：我扫的是 `## review`，没扫"有没有 markdown 标题"。
+已把自检固定为 `for f in verified/*.md; do grep -qiE '^#+ *review' "$f" || echo 无review "$f"; done`，每次收口必跑。
+
+### 产出
+`docs/audit/night/review-r3-triage.md`

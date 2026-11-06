@@ -250,3 +250,19 @@ node 不能 spawn ⇒ `gate:full`/`unit_all`/`lint_hard` 跑不了，一切"通�
 
 **自检**：`node --check`（mindserver/tool_prep）OK；`mindserver_gate_unit` 49/0；`text_fence_unit` 22/0；`permissions_unit` 68/0。
 **未做**：202 的并发压测与 8s 超时真机实测、icacls 执行、F-RT-004（未指派）。
+
+## R8 2026-11-06 10:35 | 终审 R3 修复项（R3-4/2/5/6 + ⑤）| 4 落地 + 1 真红待 npm ci | 阻塞：哨兵红是正确行为，需 captain 先 npm ci
+
+- **R3-4（安全）**：打散正则加 `i` + 先剥不可见字符（`\u200b-\u200f \u202a-\u202e \u2060-\u2064 \u2066-\u2069 \ufeff`）；
+  `sanitizeExternalText` 同剥。单测 22→**31 条**，新增 6 个变体（小写/混写/零宽/零宽+小写/零宽开标签/斜杠）+3 条 sanitize。
+  判据改成"体内不得出现 `<<` 紧跟标记名"（原断言只喂大写精确形态，证明面比声称的窄）。**31/0 真跑绿**。
+- **R3-2**：`if (size > 512) 删陈旧` 是清理触发条件不是上限。改为 `!has(key) && size>=512` → 清陈旧 → 仍满**淘汰最旧**。
+  等价实测：900 个新鲜 key → size=512。
+- **R3-5**：新增 **[3/3] 补丁哨兵** —— 每补丁登记"只有打了补丁才存在"的字符串，到 node_modules 实找。
+  **实测现在 exit 1**（mineflayer 的 `incorrect_for_wooden_tool` 与 `timeout: 500,` 都不在），
+  而旧版工具**报绿** —— 这正是审查说的"检查的不是那个东西"，现在它报红了。
+- **R3-6**：`patch_integrity` 接入 `gate` 第一步。**由此 npm ci 之前 gate 会红（正确）**，已告知 captain 顺序：先 npm ci 再跑 gate。
+- **⑤**：两仓各加 `*.token`（审查纠正：`.env.local` 已被 `.env.*` 覆盖，真正漏的是通配 token）。两仓 check-ignore 6/6 OK。
+
+**本会话 gate 各步**：patch_integrity=1（哨兵，真红）/ settings_check=0 / preflight_regex_unit=0 /
+preflight=1（环境 spawn EPERM）/ lint_hard=1（环境 EPERM）。后两个与本改动无关（已实测 spawnSync=EPERM）。

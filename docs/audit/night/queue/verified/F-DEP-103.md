@@ -81,3 +81,9 @@ ls -la mindcraft/package-lock.json → 286159 B（存在但无历史）
   package-lock.json 根本不出现"——修复只存在于磁盘，换机即丢。
 裁定：**blocked 正确**，属用户级决策（多一个 286KB 文件入库）。**通过**，并建议 captain 把它排到
 D1 收口前的第一位——否则 D1 有 3 条"修了但不算修好"。
+
+---
+> **别名（R3-7 台账收口）**：`F-DEP-103 ≡ F-REG-002` —— 同一缺陷（`mindcraft/package-lock.json` 被
+> `.gitignore:4` 排除且未追踪 ⇒ 全新 clone 上 `npm ci` 必失败）。本条为**主号**，状态仍是 **blocked（需用户拍板）**。
+> ⚠️ 注意：`F-DEP-005` 的"失败即中止"修复在 clone 场景是**负收益**（把"能装但不严格"换成"严格但装不上"），
+> 取舍见终审 R3 §3-⑥。

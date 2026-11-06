@@ -108,3 +108,7 @@ $ grep -nE "path:.*basename" src/mindcraft/mindserver.js
 ⇒ 三处全部改成 `path.basename`，**服务端不再回传本机绝对路径**（不是"前端隐藏"）。
 另外 4 个安全头与 `disable('x-powered-by')` 在 201 的同一条中间件里落地 ✅
 （本单提到的"get-settings 走白名单"未做 —— 已在 t10 交接里如实记账，属遗留项，不阻塞本条。）
+
+---
+> **别名（R3-7 台账收口）**：`F-WEB-204 ≡ F-SEC-103` —— 同一处代码（`get-profiles`/`get-profile` 回传绝对路径）、
+> 两个编号，本条为**主号**，已修（`path.basename`）。
