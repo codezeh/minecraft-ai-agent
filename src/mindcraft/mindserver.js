@@ -147,9 +147,9 @@ export function createMindServer(host_public = false, port = 8080) {
     // 注意：这只是"减少留存窗口"，不是权限边界（同机其他账户仍可能在运行期读到，见 F-RT-001 手册）。
     const cleanupTokenFile = () => { try { if (existsSync(TOKEN_FILE)) unlinkSync(TOKEN_FILE); } catch { /* ignore */ } };
     process.once('exit', cleanupTokenFile);
-    for (const sig of ['SIGINT', 'SIGTERM']) {
-        process.once(sig, () => { cleanupTokenFile(); process.exit(0); });
-    }
+    // ⚠️ F-EXEC-102：这里**不再**自己挂 SIGINT/SIGTERM → process.exit(0)。
+    //    原因：那会抢在 shutdownOnce()（下面的优雅关停入口）之前把进程退掉 ⇒ 子进程又变孤儿。
+    //    现在信号统一由 shutdownOnce 接管，它最后 process.exit → 触发上面的 'exit' → 清理 token 文件。
 
     // 浏览器控制台：把 ?token=… 换成 HttpOnly + SameSite=Strict 的 cookie，之后同源握手自动带上。
     // 不这么做的话，面板（web/dist 已构建，改前端源码要重打包）会直接连不上。
@@ -663,16 +663,10 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('shutdown', () => {
-            console.log('Shutting down');
-            for (let agentName in agent_connections) {
-                mindcraft.stopAgent(agentName);
-            }
-            // wait 2 seconds
-            setTimeout(() => {
-                console.log('Exiting MindServer');
-                globalThis.process.exit(0);
-            }, 2000);
-            
+            // ★ F-EXEC-102（2026-11-06）：不再"发信号 + 2 秒后硬退"。
+            // 原来那 2 秒是**赌**子进程会自己退；赌输就留下孤儿 agent（继续领单 + 续租，
+            // 面板看着正常但停不掉）。现在走 shutdownAndWait：逐个等确认，必要时 SIGKILL。
+            shutdownOnce('socket');
         });
 
 		socket.on('send-message', (agentName, data) => {
@@ -743,6 +737,27 @@ export function createMindServer(host_public = false, port = 8080) {
         console.log('Public hosting not supported yet. Using localhost.');
     }
     const host = 'localhost';
+    // ★ F-EXEC-102（2026-11-06）：**唯一的关停入口**（socket 的 shutdown 事件 + SIGINT/SIGTERM 共用）。
+    // 幂等：重复触发（例如连点两次"停止面板"，或 Ctrl-C 与 socket 同时来）只跑一次。
+    // 走 mindcraft.shutdownAndWait：等每个子进程确认退出，超时则 SIGKILL，最后才 exit。
+    let __shuttingDown = false;
+    function shutdownOnce(trigger = 'unknown') {
+        if (__shuttingDown) { console.log(`[shutdown] 已在关停中，忽略重复触发（${trigger}）`); return; }
+        __shuttingDown = true;
+        console.log(`[mindserver] 开始关停（触发源：${trigger}）`);
+        Promise.resolve()
+            .then(() => mindcraft.shutdownAndWait?.({ graceMs: 5000, killGraceMs: 3000, exitAfter: true }))
+            // shutdownAndWait 正常路径会自己 process.exit；走到这里说明它抛了 ⇒ 别把进程挂死
+            .catch((e) => {
+                console.error('[mindserver] 关停过程出错，直接退出：', e?.message ?? e);
+                globalThis.process.exit(1);
+            });
+    }
+    // 崩溃/正常退出前也要走同一条路（原来**一个信号处理器都没有**，Ctrl-C 直接死、子进程全成孤儿）
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+        try { globalThis.process.once(sig, () => shutdownOnce(`signal:${sig}`)); } catch { /* ignore */ }
+    }
+
     server.listen(port, host, () => {
         console.log(`MindServer running on port ${port} on host ${host}`);
         // 第1条 ①：token 必须让人拿得到 —— 否则正常用户会被自己的门挡在外面。

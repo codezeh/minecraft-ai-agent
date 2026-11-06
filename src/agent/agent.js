@@ -7,6 +7,8 @@ import { initBot } from '../utils/mcdata.js';
 import { containsCommand, commandExists, executeCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
 // 聊天输出安检 + 斜杠命令白名单（M1 安全，08 §5 / 09 §4）
 import { inspectChatText } from './permissions.js';
+// F-AI-205：这一轮是否算"用过命令"（被权限拒绝不算，否则自提示循环永不自停）
+import { isPermissionDeniedResult, shouldCountAsUsedCommand } from './used_command.js';
 import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
@@ -683,10 +685,10 @@ export class Agent {
                 // 修法：**被拒等价于没命令** —— 权限拒绝的回复以 permissionDeniedReply 的
                 // '[权限] 没执行 ' 开头（src/agent/permissions.js:227），据此判。
                 // 这样连续 max_no_command 轮后 self_prompter 会自己 STOPPED。
-                const __permDenied = typeof execute_res === 'string' && execute_res.startsWith('[权限] 没执行 ');
-                if (__permDenied) {
+                // 判断逻辑抽到 library/used_command.js（可单测 + 接线可断言，见 tools/ai205_used_command_unit.mjs）
+                if (isPermissionDeniedResult(execute_res)) {
                     console.warn('[权限] 本轮命令被拒，不计入"用过命令"（避免自提示循环无法停止）');
-                } else {
+                } else if (shouldCountAsUsedCommand(execute_res)) {
                     used_command = true;
                 }
 

@@ -107,12 +107,54 @@ export function destroyAgent(agentName) {
     }
 }
 
-export function shutdown() {
+/**
+ * ★ F-EXEC-102（2026-11-06）：关停必须**等子进程真的退出**，不能发完信号就 `process.exit`。
+ *
+ * 原来的实现是 `stop()` 循环 + `setTimeout(2000) → process.exit(0)`：
+ * 2 秒内没退干净的 agent 会变成**孤儿** —— 它仍持有 `board_client`，继续领单 + 续租，
+ * 面板看着"正常在干活"、`!stop` 到不了它、任务板第 4/6 条的防护在孤儿场景全部失效。
+ *
+ * 现在：逐个 `stopAndWait()`（SIGINT → 等 graceMs → SIGKILL → 再等），**全部有结果之后**才 exit。
+ * 返回值便于断言/日志：每个 agent 一条 {name, exited, escalated, reason}。
+ * 注意：这就是"崩溃退出"之外的"正常关停"路径；父进程被硬杀（SIGKILL/断电）那条由
+ * agent 子进程自己的**孤儿自杀**兜底（见 src/process/proc_lifecycle.js 的 makeParentWatcher）。
+ */
+export async function shutdownAndWait({ graceMs = 5000, killGraceMs = 3000, exitAfter = true } = {}) {
     console.log('Shutting down');
-    for (let agentName in agent_processes) {
-        agent_processes[agentName].stop();
+    const names = Object.keys(agent_processes);
+    const results = await Promise.all(names.map(async (name) => {
+        const ap = agent_processes[name];
+        try {
+            if (typeof ap.stopAndWait === 'function') {
+                const r = await ap.stopAndWait({ graceMs, killGraceMs });
+                return { name, ...r };
+            }
+            // 兜底：老对象只有 stop()（不该发生，但别因此卡住关停）
+            ap.stop?.();
+            return { name, exited: false, escalated: false, reason: 'no-stopAndWait' };
+        } catch (e) {
+            return { name, exited: false, escalated: false, reason: 'throw:' + (e?.message ?? e) };
+        }
+    }));
+
+    const bad = results.filter(r => !r.exited);
+    for (const r of results) {
+        const tag = r.exited ? (r.escalated ? '强杀后退了' : '自己退了') : '未确认退出';
+        console.log(`[shutdown] ${r.name}: ${tag}（${r.reason}）`);
     }
-    setTimeout(() => {
+    if (bad.length) {
+        console.error(`[shutdown] ${bad.length} 个 agent 未确认退出：${bad.map(b => b.name).join(', ')}` +
+            ` —— 它们可能成为孤儿（继续领单/续租），请检查进程表`);
+    }
+
+    if (exitAfter) {
+        console.log('Exiting MindServer');
         process.exit(0);
-    }, 2000);
+    }
+    return results;
+}
+
+export function shutdown() {
+    // 兼容旧调用点：语义不变（发信号并最终退出），但改成"等确认"的实现
+    return shutdownAndWait();
 }

@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+// F-EXEC-102：停子进程要"等 + 强杀 + 确认"，不是发个信号就返回
+import { stopChildAndWait } from './proc_lifecycle.js';
 import { fileURLToPath } from 'url';
 import { logoutAgent } from '../mindcraft/mindserver.js';
 
@@ -114,6 +116,10 @@ export class AgentProcess {
         const agentProcess = spawn(process.execPath, args, {
             stdio: 'inherit',
             stderr: 'inherit',
+            // ★ F-EXEC-102（2026-11-06）：把自己的 pid 告诉子进程，子进程据此做**孤儿自杀**。
+            // 为什么需要：agent 用 stdio:'inherit' 起，**没有 IPC**（拿不到 'disconnect'），
+            // 而 Windows 上父进程死掉后 process.ppid 不会变成 1 ⇒ 只能靠"定期问 pid 还活着吗"。
+            env: { ...process.env, MINDSERVER_PID: String(process.pid) },
         });
         this._spawnedAt = Date.now();
         
@@ -182,6 +188,35 @@ export class AgentProcess {
         this._restartTimer = null;
         if (!this.running) return;
         this.process.kill('SIGINT');
+    }
+
+    /**
+     * ★ F-EXEC-102（2026-11-06）：停掉并**等到它真的没了**。
+     *
+     * 为什么需要：原来的 `stop()` 只发 SIGINT 就返回，调用方（`mindcraft.shutdown`）
+     * 紧接着 `setTimeout(2000) → process.exit(0)` —— 子进程如果没在 2 秒内退干净，
+     * 它就成了孤儿：仍然持有 `board_client` 连接，**继续领单 + 续租**，
+     * 面板看着"还有人在干活"、`!stop` 也到不了它。这就是 F-EXEC-102/R2-1 的症状。
+     *
+     * 这里做完整的"礼貌 → 等 → 强杀 → 再等"，返回结果便于调用方记录/断言：
+     *   { exited: true, escalated: false, reason: 'exited' }   ← 自己退了
+     *   { exited: true, escalated: true,  reason: 'killed' }   ← 强杀后退了
+     *   { exited: false, escalated: true, reason: 'still-alive' } ← 强杀后仍没收到 exit（如实上报，不假装成功）
+     */
+    async stopAndWait(opts = {}) {
+        this._stoppedByUser = true;               // 连"退避中的重启"一起取消
+        try { clearTimeout(this._restartTimer); } catch { /* ignore */ }
+        this._restartTimer = null;
+        if (!this.running || !this.process) {
+            return { exited: true, escalated: false, reason: 'no-child' };
+        }
+        const r = await stopChildAndWait(this.process, opts);
+        // 无论结果如何，这个句柄都不该再被当成"在跑"
+        this.running = false;
+        if (!r.exited) {
+            console.error(`[agent:${this.name}] 强杀后仍未确认退出（${r.reason}）—— 可能残留孤儿，请检查进程表`);
+        }
+        return r;
     }
 
     forceRestart() {
