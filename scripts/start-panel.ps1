@@ -183,9 +183,48 @@ Write-Step '2/4' 'mindserver + bot'
 if (Test-Port 8080) {
     Write-Ok '已在运行（8080 已监听），跳过'
 } else {
+    # ★ F-REG-004（2026-11-06）：**启动前预检 mindcraft\node_modules**。
+    #
+    # 原来 0/4 那段只检查了 web/node_modules，对 **mindcraft/node_modules 零预检**。
+    # 缺依赖时的实际行为：`node main.js` 立刻因 ERR_MODULE_NOT_FOUND 死掉，
+    # 而脚本还傻等 `Wait-Port 8080` **空耗 90 秒**再 exit 1，日志只会说"mindserver 没起来"，
+    # 把人往"端口冲突/服务异常"方向带 —— 真正原因是"依赖没装"。
+    # 现在：先探；缺了就按与 start.bat 一致的策略兜底（有 lock 走 npm ci，无 lock 明确告警不硬装）。
+    $mcDir = Join-Path $root 'mindcraft'
+    $mcModules = Join-Path $mcDir 'node_modules'
+    if (-not (Test-Path $mcModules)) {
+        Write-Warn2 '[预检] mindcraft\node_modules 不存在 —— mindserver 起不来（否则会空等 90 秒后失败）。'
+        $mcLock = Join-Path $mcDir 'package-lock.json'
+        if (Test-Path $mcLock) {
+            $npmCli = Join-Path (Split-Path -Parent $node) 'node_modules\npm\bin\npm-cli.js'
+            if (-not (Test-Path $npmCli)) {
+                Write-Bad "[错误] 找不到 npm CLI：$npmCli"
+                Write-Bad '        请到 mindcraft 目录手动执行：npm ci（不要加 --ignore-scripts，会静默丢掉 patches/）'
+                Read-Host '按回车退出'
+                exit 1
+            }
+            Write-Ok '检测到 package-lock.json，正在 npm ci（严格按 lock，可能需要几分钟）...'
+            Push-Location $mcDir
+            try { & $node $npmCli ci 2>&1 | Out-Null; $ciCode = $LASTEXITCODE }
+            catch { $ciCode = 1 }
+            finally { Pop-Location }
+            if ($ciCode -ne 0) {
+                Write-Bad '[错误] npm ci 失败。请到 mindcraft 目录手动执行：npm ci'
+                Write-Bad '        然后重跑本脚本。不要用 --ignore-scripts，它会静默丢掉 patches/。'
+                Read-Host '按回车退出'
+                exit 1
+            }
+            Write-Ok 'npm ci 完成'
+        } else {
+            Write-Bad '[错误] mindcraft\node_modules 缺失，且没有 package-lock.json，无法按 lock 严格安装。'
+            Write-Bad '        请到 mindcraft 目录手动执行 npm install，并确认 patches/ 已套用后再重跑。'
+            Read-Host '按回车退出'
+            exit 1
+        }
+    }
     Write-Ok '正在启动'
     Start-Process -FilePath $node -ArgumentList 'main.js' `
-        -WorkingDirectory (Join-Path $root 'mindcraft') `
+        -WorkingDirectory $mcDir `
         -RedirectStandardOutput $mcOut `
         -RedirectStandardError (Join-Path $logDir 'mindcraft-console.err.log') `
         -WindowStyle Hidden | Out-Null
