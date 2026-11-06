@@ -72,6 +72,6 @@ Write-Host '  ⚠️ 不要用 netstat 判断这条修复：防火墙拦的是**
 Write-Host '     所以 0.0.0.0:25575 仍会显示 LISTENING —— 那是正常的。'
 Write-Host ''
 Write-Host '  ── 回滚 ──────────────────────────────────────────────' -ForegroundColor DarkGray
-Write-Host "  netsh advfirewall firewall delete rule name=\"$ruleName\"" -ForegroundColor DarkGray
+Write-Host ("  netsh advfirewall firewall delete rule name=" + [char]34 + $ruleName + [char]34) -ForegroundColor DarkGray
 Write-Host ''
 Read-Host '按回车退出'
