@@ -100,8 +100,12 @@ const sliceFrom = (src, anchor, len = 400) => {
         g.second === false, `second=${g.second}`);
 
     // 反向验证：把预检写回去 → 守卫必须报红
-    // ★ 关键：src/ 是 CRLF —— 用 LF 拼锚点永远匹配不到（今晚第 3 次栽在换行上）。
-    const NL = String.fromCharCode(13, 10);
+    // ★ R3-M1（终审 R3 必修项）：原注释断言"src/ 是 CRLF"，**方向写反了** ——
+    //   flow_craft.js 实测是纯 LF（382 LF / 0 CRLF），于是硬编码 CRLF 拼出的锚点
+    //   永远匹配不到 ⇒ replace 不生效 ⇒ 变异没插进去 ⇒ 守卫仍 false ⇒ 本用例恒红
+    //   ⇒ gate:full 永久 EXIT=1 ⇒ 维护者会习惯性 SKIP_GATE=1 ⇒ 整道门真失效。
+    //   修法：从源文件自身推断换行符，不写死。
+    const NL = FLOW_SRC.includes('\r\n') ? '\r\n' : '\n';
     const reintroduced = FLOW_SRC.replace(
         '        needTable = true;' + NL + '    }',
         "        if (!withTable.length) { return fail('NO_ITEM', 'x', {}); }" + NL + '        needTable = true;' + NL + '    }',
