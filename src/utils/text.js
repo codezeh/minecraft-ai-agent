@@ -11,18 +11,41 @@
 const UNTRUSTED_OPEN = '<<UNTRUSTED_EXTERNAL_DATA role=untrusted speaker=';
 const UNTRUSTED_CLOSE = '<<END_UNTRUSTED_EXTERNAL_DATA>>';
 
-/** 把一段外部文本打成围栏块；内容里出现的定界符会被打散，防止提前闭合围栏。 */
+/**
+ * R3-4（终审实测）：**不可见字符必须单独剥掉**，否则打散规则会被绕过。
+ * 覆盖：零宽空格/连接符（\u200b-\u200f）、bidi 覆盖与控制（\u202a-\u202e）、
+ * 词连接符/不可见运算符（\u2060-\u2064）、bidi 隔离（\u2066-\u2069）、BOM（\ufeff）。
+ * 为什么关键：`<<END_UNTRUSTED_EXTERNAL_DATA>>` 中间插一个 \u200b，人眼看不出区别，
+ * 但"逐字精确匹配"的正则匹配不到 ⇒ 围栏能被提前闭合。
+ */
+const INVISIBLE_CHARS = /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+
+/**
+ * 把内容里的定界符打散。**两件事缺一不可**（R3-4）：
+ *   ① `i` 标志 —— 小写 `<<end_untrusted_external_data>>` 同样能闭合围栏；
+ *   ② 先剥不可见字符 —— 否则零宽插入的变体匹配不到。
+ */
+function defangFenceMarkers(s) {
+    return String(s)
+        .replace(INVISIBLE_CHARS, '')
+        .replace(/<<\s*\/?\s*END_UNTRUSTED_EXTERNAL_DATA\s*>>/gi, '< <END_UNTRUSTED_EXTERNAL_DATA> >')
+        .replace(/<<\s*\/?\s*UNTRUSTED_EXTERNAL_DATA/gi, '< <UNTRUSTED_EXTERNAL_DATA');
+}
+
+/** 把一段外部文本打成围栏块；内容里出现的定界符（含大小写/零宽变体）会被打散。 */
 export function fenceUntrusted(text, speaker = 'unknown') {
-    const safeSpeaker = String(speaker ?? 'unknown').replace(/[^\w .:@-]/g, '_').slice(0, 40);
-    const body = String(text ?? '')
-        .replace(/<<END_UNTRUSTED_EXTERNAL_DATA>>/g, '< <END_UNTRUSTED_EXTERNAL_DATA> >')
-        .replace(/<<UNTRUSTED_EXTERNAL_DATA/g, '< <UNTRUSTED_EXTERNAL_DATA');
+    const safeSpeaker = String(speaker ?? 'unknown').replace(INVISIBLE_CHARS, '').replace(/[^\w .:@-]/g, '_').slice(0, 40);
+    const body = defangFenceMarkers(text);
     return `${UNTRUSTED_OPEN}${safeSpeaker}>>\n${body}\n${UNTRUSTED_CLOSE}`;
 }
 
-/** 记忆落盘/注入前的净化：去控制字符、折叠多余空行；不改语义、不删正文。 */
+/**
+ * 记忆落盘/注入前的净化：剥不可见与控制字符、折叠多余空行、限长；**不删正文**。
+ * R3-4：不可见字符在这里也剥一遍 —— 否则它们能"穿净化再过转义"，让围栏体内的定界符变体存活。
+ */
 export function sanitizeExternalText(text, maxLen = 1500) {
     let s = String(text ?? '')
+        .replace(INVISIBLE_CHARS, '')
         .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
         .replace(/\r\n?/g, '\n')
         .replace(/\n{3,}/g, '\n\n');
