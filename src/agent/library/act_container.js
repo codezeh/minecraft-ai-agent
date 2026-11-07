@@ -405,6 +405,150 @@ export function assertUsableWindow(bot, win) {
     return { ok: true };
 }
 
+/**
+ * 当前窗口**光标**（玩家手上"拎着"的那一叠）有多少个某物。
+ *
+ * ★★ BOT-009 残留（2026-11-07 真机验收）：**在途物品既不在背包、也不在容器格子里。**
+ *   mineflayer 的 `deposit` 是逐次点击：`取起源格 → 放进目标格`。
+ *   当目标容器满、最后一次点击被服务端拒绝时，**那一叠已经"取起到光标上"**：
+ *     · 它已从 `win.slots` 的背包区间消失（`invCount` 变小）；
+ *     · 它还没进容器的任何格子（`winCount` 不变）；
+ *     · 它躺在 `win.selectedItem` 上 —— 只有这里能看见它。
+ *   真机实测（`docs/真机-20261106/T2/result-B2-deposit-attribution.json`）：
+ *     `invBefore=10, invAfter=6, winBefore=0, winAfter=3`，光标上 `{iron_sword×1, slot 56}`。
+ *   所以「背包减少量」不能直接当"已存数"，必须**扣掉光标上的在途件**。
+ *
+ * @returns {number} 光标上该物品的件数（没有光标 / 不是这件 → 0）
+ */
+function cursorCount(bot, name) {
+    const win = bot.currentWindow;
+    const held = win?.selectedItem;
+    if (!held || held.name !== name) return 0;
+    return held.count ?? 0;
+}
+
+/**
+ * 等这次搬运的计数**收敛**（不是"动了一下"就返回），并且**必须先看到过变化**。
+ *
+ * ★★ BOT-009 残留（2026-11-06 真机验收）：原来两处谓词都是
+ *      `waitCountsSettled(() => invCount < invBefore || winCount > winBefore)`
+ *    —— 只要**任一边**变了就立刻返回，于是常常停在"背包已减 4 / 箱子只增 3 / 1 件在光标"
+ *   这个中间态上，再拿它去算差就多报 1 件。
+ *
+ * ★★★ 2026-11-07 复审（第1条）：只加"连续两次相同 + 光标为空"**还不够**。
+ *   服务端槽位更新是异步的：如果更新还没到，**两个旧快照也满足条件**，
+ *   于是动作在 ~66ms 就返回、把"还没刷新"误判成"零进度"（复审用受控延迟复现：
+ *   槽位 180ms 后才更新，函数 66ms 就返回 INVENTORY_FULL/stored:0，随后箱子实际 +3、背包 -3）。
+ *
+ *   现在的判据分两段：
+ *     ① **完成信号**：本次转移相关的计数相对基线发生了变化（`inv`/`win` 相对 `baseline` 变了），
+ *        或光标上出现过东西（说明点击已经开始）。没看到任何变化 = 还**没有证据**说明转移发生过；
+ *     ② **稳定**：在①成立之后，再要求连续两次读数完全相同且光标为空。
+ *   ⇒ 超时且**从未**看到变化时返回 `settled:false, sawChange:false`，
+ *     调用方必须把它当"**未确认**"（TIMEOUT），**不许**静默折算成零进度。
+ *
+ * @param {object} opts.baseline `{inv, win}` 本次转移开始前的读数（必传才能做①判定）
+ * @returns {{inv:number, win:number, cursor:number, settled:boolean, sawChange:boolean, waitedMs:number}}
+ */
+async function settleTransferCounts(bot, name, { baseline = null, timeoutMs = 1200, intervalMs = 50 } = {}) {
+    const t0 = Date.now();
+    const snap = () => ({
+        inv: invCount(bot, name),
+        win: winCount(bot, name),
+        cursor: cursorCount(bot, name),
+    });
+    let prev = null;
+    let sawChange = false;
+    for (;;) {
+        const cur = snap();
+        // ① 完成信号：相对基线动过，或光标上出现过东西（已开始点击）
+        if (baseline && (cur.inv !== baseline.inv || cur.win !== baseline.win)) sawChange = true;
+        if (cur.cursor > 0) sawChange = true;
+
+        const sameAsPrev = prev && prev.inv === cur.inv && prev.win === cur.win && prev.cursor === cur.cursor;
+        if (sameAsPrev && cur.cursor === 0 && sawChange) {
+            return { ...cur, settled: true, sawChange, waitedMs: Date.now() - t0 };
+        }
+        prev = cur;
+        if (Date.now() - t0 >= timeoutMs) {
+            // 超时：settled=false。sawChange 决定调用方能否据此下"零进度"的结论。
+            return { ...cur, settled: false, sawChange, waitedMs: Date.now() - t0 };
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+    }
+}
+
+/**
+ * 算"这次真的存进去几件"。**只数真正落进容器格子的物品。**
+ *
+ * 口径（为什么不是简单的 `invBefore - invAfter`）：
+ *   1. **首选直接证据**：`winAfter - winBefore` —— 容器的格子是唯一"东西真的到货"的地方；
+ *   2. **扣除在途**：`invBefore - invAfter - cursor` —— 光标上的那叠既不在背包也不算已存，
+ *      扣掉它之后背包口径才不会多报；
+ *   3. **只在容器计数明显没刷新时**才回退背包口径（`winMoved === 0 && invMoved > 0`），
+ *      否则一律以容器增量为准 —— 这样既不会多报（原缺陷），也不会少报（满成功场景）；
+ *   4. 最后用 `take` 封顶，防御任何窗口数据异常。
+ *
+ * 真机判据（同一场景，改前 → 改后）：
+ *   改前 `Math.max(invBefore-invAfter, winAfter-winBefore)` = `max(4, 3)` = **4（多报 1）**
+ *   改后 `winMoved` = **3**，且 `invMoved`（扣光标后）= `10-6-1` = **3**，两者一致。
+ */
+function measureStored(bot, item, invBefore, winBefore, take, after) {
+    const invMoved = Math.max(0, invBefore - after.inv - after.cursor);
+    const winMoved = Math.max(0, after.win - winBefore);
+    const rawStored = winMoved > 0 ? winMoved : invMoved;
+    const stored = Math.min(take, rawStored);
+    return {
+        stored,
+        invAfter: after.inv,
+        winAfter: after.win,
+        cursorAfter: after.cursor,
+        invMoved,
+        winMoved,
+        // 两个口径是否一致 —— 不一致时把两边都带回去，便于上层/真机排查，不靠猜
+        consistent: invMoved === winMoved,
+        settled: after.settled === true,
+        settleWaitedMs: after.waitedMs ?? null,
+    };
+}
+
+/**
+ * 把**光标上的在途件**送回它来的那一侧（尽力而为，失败不影响返回结果）。
+ *
+ * 为什么必须做：`win.selectedItem` 上的那叠东西不属于任何格子。窗口一关，
+ * 服务端按"关窗时光标里的物品退回背包、背包满了就掉地上"处理 ——
+ * 真机实测（T7 场景③：箱 10 把、背包只剩 3 格、取 10）：
+ *   取出 3 件成功、第 4 件停在光标上 → 关窗后背包只有 3 件、箱子少了 4 件、**1 件掉地上**，
+ *   守恒从 10 变成 9（`docs/真机-20261106/T7/result-matrix.json` 的 `conservationAfterClose: 9`）。
+ * 这不是"账报错"，而是**真丢东西**，而且就发生在本函数刚测完账的那一瞬间。
+ *
+ * 方向：
+ *   · `deposit` 的在途件是从**背包**取起的 → 送回背包（`win.withdraw`）；
+ *   · `withdraw` 的在途件是从**容器**取起的 → 送回容器（`win.deposit`）。
+ * 送回之后再关窗，光标就是空的，不会掉东西。
+ *
+ * 只在 `after.cursor > 0` 时调用；任何异常都吞掉（读不到/放不回就保持原行为，不放大问题）。
+ *
+ * @returns {Promise<boolean>} 真的送回去了没有
+ */
+async function returnCursorToOrigin(bot, item, cursorCountNow, origin, itemType) {
+    if (!(cursorCountNow > 0)) return false;
+    const win = bot.currentWindow;
+    if (!win) return false;
+    try {
+        if (origin === 'inventory' && typeof win.withdraw === 'function') {
+            await win.withdraw(itemType, null, cursorCountNow);   // deposit 的在途件 → 送回背包
+        } else if (origin === 'container' && typeof win.deposit === 'function') {
+            await win.deposit(itemType, null, cursorCountNow);    // withdraw 的在途件 → 送回容器
+        } else {
+            return false;
+        }
+        return cursorCount(bot, item) < cursorCountNow;
+    } catch {
+        return false;   // 放不回（对侧也满了）→ 保持原行为，别把异常盖到主流程上
+    }
+}
+
 export async function deposit(bot, item, n = 1) {
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!item) return fail('NO_TARGET', '没说要存什么');
@@ -432,7 +576,14 @@ export async function deposit(bot, item, n = 1) {
         await win.deposit(itemType, null, take);
     } catch (e) {
         const msg = String(e?.message ?? e);
-        if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item });
+        if (/interrupt/i.test(msg)) {
+            // ★★ 2026-11-07 复审（第1条·附）：**中断时也要把光标上的东西放回去。**
+            //   否则关窗时那叠物品会掉在地上/消失（复审独立复现：底层转移抛 interrupt 后光标残留）。
+            //   存款的在途件来自背包 ⇒ 送回背包。
+            const cursorNow = cursorCount(bot, item);
+            const cursorReturned = await returnCursorToOrigin(bot, item, cursorNow, 'inventory', itemType);
+            return fail('INTERRUPTED', '被取消了', { item, cursorAfter: cursorNow, cursorReturned });
+        }
         // ★★ BOT-009（2026-11-06 深度检查）：**异常之后必须重新核对真实差值。**
         //
         //   缺陷原貌：mineflayer 的 `win.deposit` 是"逐次点击"实现的（inventory.js 的
@@ -444,44 +595,84 @@ export async function deposit(bot, item, n = 1) {
         //   修法：等计数落定，按**背包真实减少量**（并用箱子真实增加量兜底）算出已搬数量；
         //   有进展 → INVENTORY_FULL + 真实 stored（= "只搬了一部分，剩下的换箱/记账"），
         //   真一件没动 → 才是 INTERNAL。
-        await waitCountsSettled(() => invCount(bot, item) < invBefore || winCount(bot, item) > winBefore);
-        const invAfter = invCount(bot, item);
-        const winAfter = winCount(bot, item);
-        const moved = Math.max(invBefore - invAfter, winAfter - winBefore, 0);
-        if (moved > 0) {
-            return fail('INVENTORY_FULL', `只存进去 ${moved}/${take}（${msg}）`, {
-                item, want, stored: moved, invBefore, invAfter, winBefore, winAfter,
-                partial: true, error: msg,
+        //
+        // ★★★ BOT-009 残留（2026-11-07 真机验收）：上面的"背包减少量"仍会**多报在途件**。
+        //   真机 3/3 复现：请求存 10 把铁剑进只剩 3 空格的箱子 →
+        //     旧口径 `Math.max(10-6, 3-0)` = **4**，但真实只进了 **3**（背包 10→7、箱子 +3）；
+        //     差的 1 件当时**躺在容器光标上**（`selectedItem = {iron_sword×1, slot 56}`），
+        //     关窗后它才回到背包（守恒 7+3=10）。
+        //   ⇒ 现在改用 `settleTransferCounts`（等收敛且光标为空）+ `measureStored`
+        //     （以容器增量为准、背包口径扣除光标在途件），stored 只数**真的落进格子**的。
+        const after = await settleTransferCounts(bot, item, { baseline: { inv: invBefore, win: winBefore } });
+        const m = measureStored(bot, item, invBefore, winBefore, take, after);
+        // ★ 在途件送回原侧（deposit 的来路是背包），避免关窗时掉地上（见 returnCursorToOrigin）
+        const cursorReturned = await returnCursorToOrigin(bot, item, m.cursorAfter, 'inventory', itemType);
+        // ★★ 2026-11-07 复审（第1条）：**从未看到任何变化** ⇒ 快照是"未确认"的。
+        //   注意：真正的修复是上面"必须看到变化才收敛"（异步更新会在 timeout 内被等到）；
+        //   这里只负责**不静默**——把 unconfirmed 显式带给上层，绝不谎称 verified。
+        const unconfirmed = !after.settled && !after.sawChange;
+        if (unconfirmed) {
+            console.warn(`[container] deposit 计数未确认：${after.waitedMs}ms 内无任何变化（保留最后快照，标记 unconfirmed）`);
+        }
+        if (m.stored > 0) {
+            return fail('INVENTORY_FULL', `只存进去 ${m.stored}/${take}（${msg}）`, {
+                item, want, stored: m.stored,
+                invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+                cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+                partial: true, error: msg, unconfirmed, settled: after.settled,
             });
         }
         return fail('INTERNAL', msg, {
-            error: msg, item, want, stored: 0, invBefore, invAfter, winBefore, winAfter,
+            error: msg, item, want, stored: 0,
+            invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+            cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+            unconfirmed, settled: after.settled,
         });
     }
 
     // ★ 先等计数落定（否则读到旧值 → 假失败）
-    await waitCountsSettled(() => invCount(bot, item) < invBefore || winCount(bot, item) > winBefore);
-    const invAfter = invCount(bot, item);
-    const winAfter = winCount(bot, item);
-    const stored = invBefore - invAfter;
+    // ★★★ BOT-009 残留（2026-11-07）：同上 —— 必须等"收敛 + 光标为空"，且用容器增量口径，
+    //   否则满成功场景下若最后一件还在光标上，`invBefore-invAfter` 也会多报。
+    const after = await settleTransferCounts(bot, item, { baseline: { inv: invBefore, win: winBefore } });
+    const m = measureStored(bot, item, invBefore, winBefore, take, after);
+    // ★ 在途件送回原侧（deposit 的来路是背包），避免关窗时掉地上（见 returnCursorToOrigin）
+    const cursorReturned = await returnCursorToOrigin(bot, item, m.cursorAfter, 'inventory', itemType);
+    const stored = m.stored;
 
     // 两边计数必须对上（存了多少，背包就少多少、箱子就多多少）
+    // ★★ 2026-11-07 复审（第1条）：如果**从未看到任何变化**，快照就是未确认的 ——
+    //   显式标出来（`unconfirmed`），并**不许**再谎称 `verified: true`。
+    const unconfirmed = !after.settled && !after.sawChange;
+    if (unconfirmed) {
+        console.warn(`[container] deposit 计数未确认：${after.waitedMs}ms 内无任何变化（保留最后快照，标记 unconfirmed）`);
+    }
     if (stored <= 0) {
         // 一个都没动：这时候才可能是"真的满"。但要区分"到点还没刷新"——
-        // 已经等过 settle，所以这里按真实读数下结论，并标 verified 便于上层判断。
-        const chestGrew = winAfter > winBefore;
+        // 已经等过 settle（且**必须看到变化才算收敛**），所以这里按真实读数下结论。
+        const chestGrew = m.winAfter > winBefore;
         return fail('INVENTORY_FULL',
-            chestGrew ? `只进了 ${winAfter - winBefore} 个（背包计数没同步）` : `没能存进去（容器可能满了）`, {
-                item, want, stored: 0, invBefore, invAfter, winBefore, winAfter,
-                verified: chestGrew ? false : true,
+            chestGrew ? `只进了 ${m.winAfter - winBefore} 个（背包计数没同步）` : `没能存进去（容器可能满了）`, {
+                item, want, stored: 0,
+                invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+                cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+                verified: unconfirmed ? false : (chestGrew ? false : true),
+                unconfirmed, settled: after.settled,
             });
     }
     if (stored < take) {
         return fail('INVENTORY_FULL', `只存进去 ${stored}/${take}（容器满了）`, {
-            item, want, stored, invBefore, invAfter, winBefore, winAfter,
+            item, want, stored,
+            invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+            cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+            partial: true, unconfirmed, settled: after.settled,
         });
     }
-    return ok({ item, want, stored, invBefore, invAfter, winBefore, winAfter });
+    return ok({
+        item, want, stored,
+        invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+        cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+        unconfirmed, settled: after.settled,
+    });
 }
 
 /**
@@ -493,6 +684,49 @@ export async function deposit(bot, item, n = 1) {
  *   NO_ITEM       容器里没有这件东西
  *   INVENTORY_FULL 背包放不下（取出来的比要取的少）
  */
+/**
+ * 算"这次真的取出来几件"（`deposit`/`measureStored` 的**镜像**口径）。
+ *
+ * 为什么不能直接 `winBefore - winAfter`（原 `:652` 的写法）：
+ *   取物时物品流是 `容器格子 → 光标 → 背包格子`。最后一次点击把物品从容器取起到光标上、
+ *   却因为背包满了**放不进背包**时：
+ *     · 容器格已经减了（`winCount` 变小）；
+ *     · 背包还没增（`invCount` 不变）；
+ *     · 那叠东西在光标上（`win.selectedItem`）。
+ *   ⇒ 用 `winBefore - winAfter` 会把"停在光标上、其实没进背包"的 1 件算成已取出（**多报**）；
+ *   ⇒ 用 `invAfter - invBefore` 又会在"容器计数刷新慢"时**少报**（`taken=0`，但玩家手里已经拿到了）。
+ *
+ * 口径（对称于 `measureStored`）：
+ *   1. **首选直接证据是"目的地"**：取物的目的地是**玩家背包** ⇒ `invAfter - invBefore`；
+ *   2. **在途处理**：光标上的件「已离开容器、还没进背包」，既不该算"已取出到背包"，
+ *      也不能算"还在容器里" ⇒ 只在用容器口径兜底时把它扣掉：`winMoved - cursor`；
+ *   3. **只有背包计数明显没刷新时**（`invMoved === 0 && winMovedNet > 0`）才回退容器口径；
+ *   4. `take` 封顶。
+ *
+ * 真机判据（箱子 10 件、背包只剩 3 格、请求取 10）：
+ *   改前 `taken = winBefore - winAfter` = **4（多报 1）**；改后 `invMoved` = **3**，
+ *   且 `winMovedNet = 4 - 1(光标) = 3` —— 两个口径一致。
+ */
+function measureTaken(bot, item, invBefore, winBefore, take, after) {
+    const invMoved = Math.max(0, after.inv - invBefore);
+    const winMoved = Math.max(0, winBefore - after.win);
+    const winMovedNet = Math.max(0, winMoved - after.cursor);   // 扣掉停在光标上的在途件
+    const rawTaken = invMoved > 0 ? invMoved : winMovedNet;
+    const taken = Math.min(take, rawTaken);
+    return {
+        taken,
+        invAfter: after.inv,
+        winAfter: after.win,
+        cursorAfter: after.cursor,
+        invMoved,
+        winMoved,
+        winMovedNet,
+        consistent: invMoved === winMovedNet,
+        settled: after.settled === true,
+        settleWaitedMs: after.waitedMs ?? null,
+    };
+}
+
 export async function withdraw(bot, item, n = 1) {
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!item) return fail('NO_TARGET', '没说要取什么');
@@ -520,42 +754,83 @@ export async function withdraw(bot, item, n = 1) {
         await win.withdraw(itemType, null, take);
     } catch (e) {
         const msg = String(e?.message ?? e);
-        if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了', { item });
+        if (/interrupt/i.test(msg)) {
+            // ★★ 2026-11-07 复审（第1条·附）：中断时把光标上的在途件送回**容器**（取物的来路）。
+            const cursorNow = cursorCount(bot, item);
+            const cursorReturned = await returnCursorToOrigin(bot, item, cursorNow, 'container', itemType);
+            return fail('INTERRUPTED', '被取消了', { item, cursorAfter: cursorNow, cursorReturned });
+        }
         // ★ BOT-009（与 deposit 同一个坑的另一半）：取物抛错时按真实差值报部分进度 ——
         //   原来同样直接 INTERNAL，已经取到手的那几件被当成"一件没取"。
-        await waitCountsSettled(() => winCount(bot, item) < winBefore || invCount(bot, item) > invBefore);
-        const invAfter = invCount(bot, item);
-        const winAfter = winCount(bot, item);
-        const moved = Math.max(winBefore - winAfter, invAfter - invBefore, 0);
-        if (moved > 0) {
-            return fail('INVENTORY_FULL', `只取出 ${moved}/${take}（${msg}）`, {
-                item, want, taken: moved, invBefore, invAfter, winBefore, winAfter,
-                partial: true, error: msg,
+        //
+        // ★★★ BOT-009 残留（2026-11-07 中途评审指出的镜像面）：上面这句"真实差值"原来取的是
+        //   `Math.max(winBefore-winAfter, invAfter-invBefore)` —— 会把**停在光标上、还没进背包**
+        //   的那 1 件算成已取出（多报）。现在与 deposit 对称：等收敛且光标为空，
+        //   以**背包增量（目的地）**为准，容器口径只在背包计数没刷新时兜底并扣掉在途件。
+        const after = await settleTransferCounts(bot, item, { baseline: { inv: invBefore, win: winBefore } });
+        const m = measureTaken(bot, item, invBefore, winBefore, take, after);
+        // ★ 在途件送回原侧（withdraw 的来路是容器），避免关窗时掉地上（见 returnCursorToOrigin）
+        const cursorReturned = await returnCursorToOrigin(bot, item, m.cursorAfter, 'container', itemType);
+        // ★★ 2026-11-07 复审（第1条）：从未看到变化 ⇒ 快照未确认，显式标记（不静默）。
+        const unconfirmed = !after.settled && !after.sawChange;
+        if (unconfirmed) {
+            console.warn(`[container] withdraw 计数未确认：${after.waitedMs}ms 内无任何变化（保留最后快照，标记 unconfirmed）`);
+        }
+        if (m.taken > 0) {
+            return fail('INVENTORY_FULL', `只取出 ${m.taken}/${take}（${msg}）`, {
+                item, want, taken: m.taken,
+                invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+                cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+                partial: true, error: msg, unconfirmed, settled: after.settled,
             });
         }
         return fail('INTERNAL', msg, {
-            error: msg, item, want, taken: 0, invBefore, invAfter, winBefore, winAfter,
+            error: msg, item, want, taken: 0,
+            invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+            cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+            unconfirmed, settled: after.settled,
         });
     }
 
-    // ★ 同样先等计数落定
-    await waitCountsSettled(() => winCount(bot, item) < winBefore || invCount(bot, item) > invBefore);
-    const invAfter = invCount(bot, item);
-    const winAfter = winCount(bot, item);
-    const taken = winBefore - winAfter;
+    // ★ 同样先等计数落定（收敛 + 光标为空，见 settleTransferCounts）
+    // ★★★ BOT-009 残留（2026-11-07）：原 `taken = winBefore - winAfter` 会在
+    //   "容器已减、背包未增（1 件在光标上）"时多报；改用 measureTaken 的目的地口径。
+    const after = await settleTransferCounts(bot, item, { baseline: { inv: invBefore, win: winBefore } });
+    const m = measureTaken(bot, item, invBefore, winBefore, take, after);
+    // ★ 在途件送回原侧（withdraw 的来路是容器），避免关窗时掉地上（见 returnCursorToOrigin）
+    const cursorReturned = await returnCursorToOrigin(bot, item, m.cursorAfter, 'container', itemType);
+    const taken = m.taken;
+
+    // ★★ 2026-11-07 复审（第1条）：从未看到变化 ⇒ 快照未确认，显式标记（不静默）。
+    const unconfirmed = !after.settled && !after.sawChange;
+    if (unconfirmed) {
+        console.warn(`[container] withdraw 计数未确认：${after.waitedMs}ms 内无任何变化（保留最后快照，标记 unconfirmed）`);
+    }
 
     if (taken <= 0) {
-        const invGrew = invAfter > invBefore;
+        const invGrew = m.invAfter > invBefore;
         return fail('INVENTORY_FULL',
-            invGrew ? `只取出 ${invAfter - invBefore} 个（箱子计数没同步）` : `没能取出来（背包可能满了）`, {
-                item, want, taken: 0, invBefore, invAfter, winBefore, winAfter,
-                verified: invGrew ? false : true,
+            invGrew ? `只取出 ${m.invAfter - invBefore} 个（箱子计数没同步）` : `没能取出来（背包可能满了）`, {
+                item, want, taken: 0,
+                invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+                cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+                // ★ 复审第1条：未确认时不许谎称 verified
+                verified: unconfirmed ? false : (invGrew ? false : true),
+                unconfirmed, settled: after.settled,
             });
     }
     if (taken < take) {
         return fail('INVENTORY_FULL', `只取出来 ${taken}/${take}（背包满了）`, {
-            item, want, taken, invBefore, invAfter, winBefore, winAfter,
+            item, want, taken,
+            invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+            cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+            unconfirmed, settled: after.settled,
         });
     }
-    return ok({ item, want, taken, invBefore, invAfter, winBefore, winAfter });
+    return ok({
+        item, want, taken,
+        invBefore, invAfter: m.invAfter, winBefore, winAfter: m.winAfter,
+        cursorAfter: m.cursorAfter, cursorReturned, invMoved: m.invMoved, winMoved: m.winMoved,
+        unconfirmed, settled: after.settled,
+    });
 }
