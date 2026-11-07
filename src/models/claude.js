@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, markTruncated } from './_shared.js';
 
 export class Claude {
     static prefix = 'anthropic';
@@ -45,6 +45,15 @@ export class Claude {
             const textContent = resp.content.find(content => content.type === 'text');
             if (textContent) {
                 res = textContent.text;
+                // ★ MOD-001：`stop_reason === 'max_tokens'` 是**输出额度**用完，不是上下文超限。
+                //   原来这里**完全不看 stop_reason** ⇒ 被切一半的回答会被当成"说完了"写进 history、
+                //   甚至直接说给玩家（静默截断，上层无法区分"她讲完了"和"她被切断了"）。
+                //   Claude 是当前项目实际在用的通路，优先级最高。
+                //   现在：内容照常返回（半句话仍有用），但打 [LLM_TRUNCATED] 标记。
+                if (resp.stop_reason === 'max_tokens') {
+                    console.log('[llm] claude 输出被 max_tokens 截断（stop_reason=max_tokens）：返回已得内容并打标记');
+                    res = markTruncated(res ?? '');
+                }
             } else {
                 console.warn('No text content found in the response.');
                 res = failedReply('claude returned no text content');

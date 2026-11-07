@@ -2,7 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated } from './_shared.js';
 
 export class Mercury {
     static prefix = 'mercury';
@@ -37,18 +37,27 @@ export class Mercury {
 
 
         let res = null;
+        let truncatedByLength = false;   // 输出额度截断 ≠ 上下文超限（MOD-001）
 
         try {
             console.log('Awaiting mercury api response from model', this.model_name);
             let completion = await this.openai.chat.completions.create(pack);
             recordUsage(completion?.usage, this.model_name);
-            if (completion.choices[0].finish_reason == 'length')
-                throw new Error('Context length exceeded'); 
+            // ★ MOD-001：finish_reason==='length' 是**输出额度**用完，不是上下文超限。
+            //   原来这里直接 throw 'Context length exceeded' → catch 里裁历史重发：缩短输入对
+            //   "输出写不下"毫无作用，还会白删有用上下文，并且每试一次多花一次钱
+            //   （T9 实测：turns=4 时一次调用被放大成 4 次请求）。
+            //   现在：内容照常返回（她写了一半的话仍然有用），只打 [LLM_TRUNCATED] 标记。
+            const finish = completion?.choices?.[0]?.finish_reason;
+            if (finish === 'length') {
+                console.log('[llm] mercury 输出被 max_tokens 截断（finish_reason=length）：不裁历史、不重试；返回已得内容并打标记');
+                truncatedByLength = true;
+            }
             console.log('Received.');
             res = completion.choices[0].message.content;
         }
         catch (err) {
-            if ((errMessage(err) === 'Context length exceeded' || err?.code == 'context_length_exceeded') && turns.length > 1) {
+            if (isContextLengthError(err) && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
                 return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
             } else if (errMessage(err).includes('image_url')) {
@@ -59,6 +68,8 @@ export class Mercury {
                 res = failedReply(`mercury request failed: ${err?.message ?? err}`);
             }
         }
+        if (truncatedByLength) res = markTruncated(res ?? '');
+
         return res;
     }
 
