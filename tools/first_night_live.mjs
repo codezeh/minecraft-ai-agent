@@ -20,8 +20,11 @@ const { createMindServer } = await import('../src/mindcraft/mindserver.js');
 createMindServer(false, MS_PORT);
 await sleep(2500);
 const { io: ioc } = await import('socket.io-client');
-const sock = ioc(`http://localhost:${MS_PORT}`, { transports: ['websocket'] });
-await new Promise((res, rej) => { sock.on('connect', res); sock.on('connect_error', rej); });
+// t23：握手 token 门之后，裸 io(...) 会被 mindserver 拒绝（AUTH_REQUIRED），
+// 而这里的 await 会在 connect_error 上 reject —— 补 token 并显式失败。
+const { connectMindserver, awaitConnect } = await import('./lib/ms_token.mjs');
+const sock = connectMindserver(ioc, MS_PORT);
+if (!await awaitConnect(sock, { label: 'first_night_live' })) process.exit(1);
 
 const bot = mineflayer.createBot({ host: '127.0.0.1', port: 25566, username: NAME, auth: 'offline', version: '1.21.8' });
 bot.loadPlugin(pf.pathfinder);

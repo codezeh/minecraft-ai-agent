@@ -63,7 +63,10 @@ await RC(`fill ${bx - 6} ${by} ${bz - 6} ${bx + 6} ${by + 4} ${bz + 6} air`).cat
 await sleep(400);
 
 // 3) 真 BoardClient + 真调度器（照搬 agent.js 节奏）
-const sock = ioClient(`http://localhost:${MS_PORT}`, { transports: ['websocket'] });
+// t23：握手 token 门之后裸连会被拒（AUTH_REQUIRED）；取 token 走统一的 tools/lib/ms_token.mjs
+const { connectMindserver, awaitConnect } = await import('./lib/ms_token.mjs');
+const sock = connectMindserver(ioClient, MS_PORT);
+if (!await awaitConnect(sock, { label: 't37-idle' })) process.exit(1);
 const board = new BoardClient({ name: NAME, skills: ['mine', 'collect', 'store'], socket: sock });
 try { await board.hello(); } catch { }
 await sleep(800);

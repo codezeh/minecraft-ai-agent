@@ -70,3 +70,48 @@ export function connectMindserver(ioClient, port, opts = {}) {
     });
     return sock;
 }
+
+/**
+ * 等 socket 真正连上；连不上就**明确失败**（返回 false + 置退出码）。
+ *
+ * 为什么单独有这一条（t23，2026-11-08）：
+ *   握手 token 门上线后，直连 socket 的脚本如果只写 `io(url, {transports})`，
+ *   会拿到 `connect_error: unauthorized`，但**很多脚本并不检查它** ——
+ *   后面的 `await board.hello()` / `emit` 全部无声失败，脚本照样 exit 0。
+ *   于是同一族故障反复出现："断言数变少 / 全是 0 条 / 看着绿其实什么都没跑"。
+ *
+ * 用法：
+ *   const sock = connectMindserver(io, MS_PORT);
+ *   if (!await awaitConnect(sock, { label: 't37 claims' })) process.exit(1);
+ *
+ * @param {import('socket.io-client').Socket} sock
+ * @param {{label?: string, timeoutMs?: number}} [opts]
+ * @returns {Promise<boolean>} 是否连上
+ */
+export function awaitConnect(sock, { label = '', timeoutMs = 15000 } = {}) {
+    const who = label ? `[${label}] ` : '';
+    if (sock?.connected) return Promise.resolve(true);
+    return new Promise((resolve) => {
+        const done = (ok, why) => {
+            clearTimeout(timer);
+            try { sock.off?.('connect', onConnect); sock.off?.('connect_error', onError); } catch { /* 老版本没有 off */ }
+            if (!ok) {
+                console.error(`${who}连接 mindserver 失败：${why}`);
+                console.error(`${who}⇒ 本脚本的后续断言不会执行，按失败退出（不再"看起来跑了其实没跑"）`);
+                process.exitCode = 1;
+            }
+            resolve(ok);
+        };
+        const onConnect = () => done(true);
+        const onError = (err) => {
+            const code = err?.data?.code || err?.message || 'connect_error';
+            const hint = code === 'AUTH_REQUIRED'
+                ? '（token 门拒绝：缺 token 或 token 不对；服务端没起来时也会走到这里）'
+                : '';
+            done(false, `${code}${hint}`);
+        };
+        const timer = setTimeout(() => done(false, `${timeoutMs}ms 内没有连上`), timeoutMs);
+        sock.once('connect', onConnect);
+        sock.once('connect_error', onError);
+    });
+}

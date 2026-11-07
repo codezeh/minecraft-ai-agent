@@ -100,7 +100,10 @@ const inv = () => (bot.inventory.items() || []).reduce((m2, i) => { m2[i.name] =
 console.log(`  落地位置: ${JSON.stringify(bot.entity.position)}`);
 console.log(`  周围树: ${JSON.stringify(Object.values(bot.registry?.blocksByName ?? {}).filter((b) => /_log$/.test(b.name)).slice(0, 3).map((b) => b.name))}`);
 
-const sock = ioClient(`http://localhost:${MS_PORT}`, { transports: ['websocket'] });
+// t23：握手 token 门之后裸连会被拒（AUTH_REQUIRED）；取 token 走统一的 tools/lib/ms_token.mjs
+const { connectMindserver, awaitConnect } = await import('./lib/ms_token.mjs');
+const sock = connectMindserver(ioClient, MS_PORT);
+if (!await awaitConnect(sock, { label: 't37-firstnight' })) process.exit(1);
 // ★ 2026-11-03 修：必须把**注册表里的全部技能**都上报给 board:hello ——
 //   板子会校验"这个 bot 有没有上报过该技能"，漏一个就 `父单没下进去：没上报过技能 X`。
 //   第一版我只写了 obtain/craft/shelter/sleep/eat/store，**漏了 first_night** → 父单压根下不进去。

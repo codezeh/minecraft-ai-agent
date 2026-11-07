@@ -43,7 +43,12 @@ console.log('═══════════════════');
 
 // ── 主流程 ────────────────────────────────────────────────────────
     const results = [];
-    const push = (n, pass, d) => { results.push({ n, pass, d }); log(`${pass ? 'PASS' : 'FAIL'} ${n} —— ${d}`); };
+    const push = (n, pass, d) => {
+        results.push({ n, pass, d });
+        // d 可能是对象；直接插值会打 [object Object]，把真实原因（ok/code/conflicts）盖掉
+        const shown = typeof d === 'string' ? d : JSON.stringify(d);
+        log(`${pass ? 'PASS' : 'FAIL'} ${n} —— ${shown}`);
+    };
 
     // 1) 起 mindserver（**父进程内**启动，与 board_b4_live 同法）
     log('启动 mindserver…');
@@ -96,14 +101,22 @@ console.log('═══════════════════');
     }
 
     // 3) 两个 BoardClient（真 socket 连真 server）
+    // ★ t23（2026-11-08）：**必须带握手 token**。① 身份门（auth_gate 的 io.use）之后，
+    //   裸 `io(url,{transports})` 一律被拒（AUTH_REQUIRED），于是下面 12 条断言全红、
+    //   而脚本仍可能 exit 0 —— 这就是"看起来跑了、其实没跑"。
+    //   取 token 走仓库统一的 tools/lib/ms_token.mjs（env → .mindserver-token），不另写一套。
     const { io } = await import('socket.io-client');
     const { BoardClient } = await import('../src/agent/library/board_client.js');
+    const { connectMindserver, awaitConnect } = await import('./lib/ms_token.mjs');
     const mk = (name) => {
-        const sock = io(`http://localhost:${MS_PORT}`, { transports: ['websocket'] });
-        return new BoardClient({ name, skills: ['mine'], socket: sock });
+        const sock = connectMindserver(io, MS_PORT);
+        return { sock, client: new BoardClient({ name, skills: ['mine'], socket: sock }) };
     };
-    const A = mk('claimA');
-    const B = mk('claimB');
+    const { sock: sockA, client: A } = mk('claimA');
+    const { sock: sockB, client: B } = mk('claimB');
+    // 连不上就**明确失败**：否则 12 条断言全红、脚本还可能 exit 0
+    if (!await awaitConnect(sockA, { label: 't37-claims/A' })) process.exit(1);
+    if (!await awaitConnect(sockB, { label: 't37-claims/B' })) process.exit(1);
     for (const c of [A, B]) { try { await c.hello(); } catch { } }
     await sleep(800);
 
