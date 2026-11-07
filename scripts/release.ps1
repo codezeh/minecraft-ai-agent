@@ -129,6 +129,11 @@ function Invoke-Tool {
     if ($Command.Count -gt 1) { $pre = $Command[1..($Command.Count - 1)] }
     $all = @($pre) + @($Arguments)
 
+    # Windows PowerShell 5.1 会把原生命令写到 stderr 的内容变成 **终止性错误**
+    # （"NativeCommandError"），而 docker/npm 正常工作时也会往 stderr 写进度。
+    # 所以这一小段把 ErrorActionPreference 降成 Continue，成败一律看退出码。
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $saved = $null
     if ($WorkDir) { $saved = Get-Location; Set-Location -LiteralPath $WorkDir }
     try {
@@ -137,6 +142,7 @@ function Invoke-Tool {
     }
     finally {
         if ($saved) { Set-Location -LiteralPath $saved }
+        $ErrorActionPreference = $prevEap
     }
     if (-not $AllowFailure -and $code -ne 0) {
         Stop-Release ("命令失败（退出码 {0}）：{1}" -f $code, ($all -join ' '))
@@ -187,7 +193,10 @@ function Get-HttpProbe {
     if ($cmd.Count -gt 1) { $pre = $cmd[1..($cmd.Count - 1)] }
 
     $probeArgs = @('-s', '-L', '-o', '/dev/null', '-w', '%{http_code}', $Url)
-    $raw = & $exe @pre @probeArgs 2>&1
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $raw = & $exe @pre @probeArgs 2>&1 }
+    finally { $ErrorActionPreference = $prevEap }
     $codeText = ($raw | Out-String).Trim()
     $code = 0
     if ($codeText -match '(\d{3})\s*$') { $code = [int]$Matches[1] }
@@ -205,7 +214,10 @@ function Save-HttpBody {
 
     $target = $OutPath
     if ($cmd[0] -eq 'wsl') { $target = Convert-ToWslPath $OutPath }
-    & $exe @pre @('-s', '-L', '-o', $target, $Url) *> $null
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $exe @pre @('-s', '-L', '-o', $target, $Url) *> $null }
+    finally { $ErrorActionPreference = $prevEap }
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -505,10 +517,9 @@ Write-Step ("构建镜像：docker build -t {0}" -f $ImageTag)
 
 $dockerCmd = Split-CommandPrefix $DockerExe
 $contextPath = $DockerContextPath
-if (-not $contextPath) {
-    $contextPath = $MindDir
-    if ($dockerCmd[0] -eq 'wsl') { $contextPath = Convert-ToWslPath $MindDir }
-}
+if (-not $contextPath) { $contextPath = $MindDir }
+# wsl 里的 docker 看不到 Windows 路径：无论路径是显式给还是默认来的，都翻成 /mnt/<drive>/...
+if ($dockerCmd[0] -eq 'wsl' -and $contextPath -match '^[A-Za-z]:') { $contextPath = Convert-ToWslPath $contextPath }
 Write-Host ("  构建上下文: " + $contextPath)
 
 $buildCode = Invoke-Tool -Command $dockerCmd -Arguments @('build', '-t', $ImageTag, $contextPath) -WorkDir $MindDir -AllowFailure
@@ -592,7 +603,9 @@ try {
     Write-Ok ("GET /console → 200（跟随 301 到 /console/）")
 
     # 首个 asset：从刚刚生成的清单里取（与镜像内清单同源），避免"猜文件名"
-    $manifestJson = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+    # ⚠️ -Encoding UTF8 不能省：MANIFEST.json 里有中文 note 字段，
+    #    Windows PowerShell 5.1 默认按 ANSI 读，会把多字节字符读坏，ConvertFrom-Json 直接抛异常。
+    $manifestJson = Get-Content -LiteralPath $Manifest -Raw -Encoding UTF8 | ConvertFrom-Json
     $firstAsset = $null
     if ($manifestJson.PSObject.Properties.Name -contains 'entryAssets' -and $manifestJson.entryAssets.Count -gt 0) {
         $firstAsset = @($manifestJson.entryAssets | Where-Object { $_ -like 'assets/*.js' })[0]
@@ -615,7 +628,7 @@ try {
     $body = ''
     try {
         Save-HttpBody -Url $consoleUrl -OutPath $bodyPath
-        if (Test-Path -LiteralPath $bodyPath) { $body = Get-Content -LiteralPath $bodyPath -Raw }
+        if (Test-Path -LiteralPath $bodyPath) { $body = Get-Content -LiteralPath $bodyPath -Raw -Encoding UTF8 }
     }
     finally {
         if (Test-Path -LiteralPath $bodyPath) { Remove-Item -LiteralPath $bodyPath -Force -ErrorAction SilentlyContinue }
