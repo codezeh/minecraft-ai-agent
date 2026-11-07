@@ -264,11 +264,11 @@ function Invoke-ClaimsScenario {
     param([string]$RunDir)
 
     $env:MC_BOTS_ROOT = Join-Path $RunDir 'bots'
-    # 注意：用**新增**的 e2e_claims_live.mjs，而不是既有 tools/t37_claims_contention_live.mjs。
-    # 原因：① 身份门上线后，t37 自建 socket 不带握手 token，会被 mindserver 直接拒绝
-    # （实测日志「拒绝未握手的连接 … 缺 token 或 token 不对」，12 条断言全红）。
-    # 新脚本判据与 t37 逐条对齐，只是握手带 token；t37 保持原样不动（本轮不改既有工具）。
-    $script = Join-Path $MindDir 'tools/e2e_claims_live.mjs'
+    # 直接驱动既有 tools/t37_claims_contention_live.mjs。
+    # t11 期间它曾被 ① 身份门打死（自建 socket 不带握手 token），当时的临时替代
+    # e2e_claims_live.mjs 已删除：t23 给 t37 补了 token（走 tools/lib/ms_token.mjs），
+    # 判据只有这一份，不再各写一遍防止漂移。
+    $script = Join-Path $MindDir 'tools/t37_claims_contention_live.mjs'
     if (-not (Test-Path -LiteralPath $script)) { Stop-E2E "找不到 $script" 'mindcraft 仓库不完整。' }
 
     Push-Location $MindDir
