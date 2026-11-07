@@ -12,14 +12,48 @@
 
 ## 必须与 web/ 源码保持一致
 
-改过 `web/` 的任何源码/样式/依赖之后，**必须**重新生成，否则镜像里的控制台与源码不一致：
+改过 `web/` 的任何源码/样式/依赖之后，**必须**重新生成，否则镜像里的控制台与源码不一致。
+
+**推荐（一条命令，构建 + 同步 + 校验 + 清单）**，在仓库根执行：
+
+```powershell
+pwsh scripts/release.ps1 -SkipDocker     # 只刷新产物并校验（不加 -SkipDocker 会连镜像一起验证）
+```
+
+等价的手工步骤（只有在 release.ps1 不可用时才用）：
 
 ```sh
 cd web && npm ci && npm run build && rm -rf ../mindcraft/web-dist && cp -r dist ../mindcraft/web-dist
+node ../mindcraft/tools/sync_web_dist.mjs   # 重写 MANIFEST.json 的 files 表
 ```
 
-生成后请确认 `index.html` 里的资源前缀是 `/console/assets/...`（`web/vite.config.ts` 在 build 时把
-`base` 设成 `/console/`，mindserver 也把静态目录挂在 `/console`），否则页面会白屏。
+⚠️ 注意 `tools/sync_web_dist.mjs` 只写 `files`（逐文件 sha256）。
+`source` / `artifact` / `generatedAt` / `entryAssets`（见下）由 `scripts/release.ps1` 写入 ——
+**只跑 sync 会让清单退回旧格式**，随后 `release.ps1 -VerifyOnly` 会明确报错。
+
+## MANIFEST.json 的字段（T10，2026-11-08）
+
+```jsonc
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-08T02:44:31Z",          // 生成时间（UTC）
+  "source":    { "hash": "sha256:…", "files": 24,
+                 "inputs": ["src", "index.html", "vite.config.ts", "tsconfig.json",
+                            "package.json", "package-lock.json"] },   // 源码指纹
+  "artifact":  { "hash": "sha256:…", "files": 9 },                   // 产物指纹
+  "entryAssets": ["assets/index-….js", "assets/index-….css"],        // index.html 实际引用的入口
+  "files": { "assets/index-….js": "…sha256…" }                       // 逐文件 sha256
+}
+```
+
+- `source.hash`：对这 24 个输入文件按 `相对路径\0文件sha256` 排序后整体 sha256 ⇒ **产物绑定到"哪一版源码"**。
+- `artifact.hash`：对 9 个产物文件同样算法 ⇒ **产物内容指纹**。
+- 三者关系由 `scripts/release.ps1 -VerifyOnly` 与 `tools/web_dist_manifest_unit.mjs` 共同守着：
+  **改了 web/ 却没重新生成产物 = 门禁红**（这正是审计说的"属侥幸"的那条缺口）。
+- 容器构建期还有一道同源校验（`Dockerfile` 里 `COPY web-dist` 之后的 `RUN`）：
+  缺 `index.html`/`MANIFEST.json`、文件与清单不符、`index.html` 引用了不存在的 chunk、
+  或产物里有清单未记录的野文件 ⇒ **docker build 直接失败**，而不是起个 `/console` 404 的镜像。
+
 
 ## 运行时如何被找到
 

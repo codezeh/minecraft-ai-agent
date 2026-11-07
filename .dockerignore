@@ -86,6 +86,15 @@ t25_noboard_probe.mjs
 
 # 注意：`dist` 只匹配顶层的 dist/，**不影响** `web-dist/`（控制台 UI 的固化产物，
 # 必须进镜像，见 Dockerfile 的 `COPY web-dist ./web-dist`）。
+#
+# ★ T10（2026-11-08 发布可复现）：上面那句是**靠模式语义侥幸成立**的（`dist` 不跨 `-`），
+#   一旦有人把规则写成 `*dist*` 或 `**/dist/**`，web-dist 就会被静默排除 →
+#   `COPY web-dist ./web-dist` 报「file not found in build context or excluded by .dockerignore」，
+#   而报错文本里同时提到"excluded by .dockerignore"，很容易被误判成"目录真的不存在"。
+#   所以这里用**显式反向放行**把意图钉死：即使上面的规则将来变宽，web-dist 也一定进上下文。
+#   代价：docker 对"本来就未排除的路径"再写 `!` 是无操作，不会改变现有行为。
+!web-dist
+!web-dist/**
 
 # ── 编辑器/系统垃圾 ────────────────────────────────────────────
 .DS_Store

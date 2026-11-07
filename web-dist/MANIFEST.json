@@ -1,15 +1,38 @@
 {
+  "schemaVersion": 2,
   "generatedFrom": "web/dist (Vue3 + Vite console)",
+  "generatedAt": "2026-11-07T18:44:31Z",
+  "source": {
+    "root": "web/",
+    "files": 24,
+    "hash": "sha256:9cc25c064556478a5db0d5533275888c61370dd0b46dbc496a6798705adf7d24",
+    "inputs": [
+      "src",
+      "index.html",
+      "vite.config.ts",
+      "tsconfig.json",
+      "package.json",
+      "package-lock.json"
+    ]
+  },
+  "artifact": {
+    "files": 9,
+    "hash": "sha256:9f3fb849d2e71f1ad84b3111ecad55c32ae42c3a2a5995940c7a800366cedceb"
+  },
+  "entryAssets": [
+    "assets/index-DM8l7HNO.js",
+    "assets/index-Wa3kEFxm.css"
+  ],
   "note": "镜像用的固化产物。改过 web/ 之后必须重新生成；本清单供 web_dist_manifest_unit 做漂移检测。",
   "files": {
-    "assets/DebugView-DQ6P_wRO.js": "dd9ea6c1d417a60a1466d0a7254eff73f0fa6a22477b5d7c0dda5bcdb14ba1ee",
-    "assets/DebugView-Pp-4MEq7.css": "eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087",
-    "assets/index-Bh1enPsf.js": "69775d40b11f8510f1698b8ecbe2cf07ba6c7179177ec5d9f338a54d358cf9b8",
-    "assets/index-BTuIIv9S.css": "04ae0cbfb2a71a9541b1ff29b332cff8d1c72988b9130de566074100bf7c6184",
+    "assets/DebugView-BJW1kAil.js": "4758fe3d9b90057aa44a95348657799e81afeba9229451c216b31233c97a6773",
+    "assets/DebugView-MXH06MZy.css": "dc7b01a72fcf4bef68ada08f037a460787aeb860c002c29f896438a2c159eb07",
+    "assets/index-DM8l7HNO.js": "a79fbb025aaec361e35c3843f7c93969d70cde99924d2b8801e0f88c8d9c2efb",
+    "assets/index-Wa3kEFxm.css": "ad0fb114fae9e87841147f19d0fba3fc376efa75ea727dccd164f5928bd7992a",
     "assets/SetupView-B6mvS54m.css": "99a654b65b3f294869a8a127e71796b264b255785371995145b81360e0d53a01",
-    "assets/SetupView-Dvv-yG95.js": "4d711d6aba9a7487b4233b285605e30ee12c6815af82071c3779d32f2faaa43c",
-    "assets/TerrainView-Dc9bwTkz.css": "14ea2dce090163293fd77bd008a64eb0d2745f67283e36373780ca25a9163171",
-    "assets/TerrainView-wus22e5k.js": "0a9088ad9cd82d7b3ba7f058b1c530050d681fc0713bb93b4745ca48551a2e60",
-    "index.html": "2c2827f81ed565cbb0c60f37fd9918d6f7fbd3ce2943891ee885c72b1f86d324"
+    "assets/SetupView-CxL97QyA.js": "c82b25722891faf18d29c72a1f06da764d904e87cd07ccd984f6f443f342a6d3",
+    "assets/TerrainView-BMBmwkik.js": "960597d94ea9d9690d98af0bb6ceb2f9e04d9c9842c665d0f76f26b511c56551",
+    "assets/TerrainView-D6YbOr25.css": "195e7681acbbc81e03aa6b29ed229ca7b4232ce46e2b68a3303e4b5ae9b19550",
+    "index.html": "aa03588ced923304a73e76688a5739c2e1e02a38b912e27a46e2d915d936df1e"
   }
 }

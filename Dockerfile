@@ -76,6 +76,58 @@ COPY ./bots/execTemplate.js ./bots/lintTemplate.js ./bots/
 #   运行时由 mindserver 按候选目录查找：/app/web-dist ← 本项；本机开发仍走仓库根的 web/dist。
 COPY web-dist ./web-dist
 
+# ★ T10（2026-11-08 发布可复现）：**构建期硬校验** —— 缺产物要「构建失败」，
+#   不许「镜像构建成功、运行时 /console 404 或白屏」。第四轮审计 ④ 的原始状态正是后者。
+#
+#   两层防线（互补，缺一不可）：
+#     A. 目录整个不存在（干净克隆里没生成过产物）
+#        → 上面那行 `COPY web-dist ./web-dist` 直接失败，构建非零退出，docker 报
+#          「COPY failed: ... web-dist: not found in build context or excluded by .dockerignore」。
+#          这是 docker 自己的语义，指名了缺哪个路径，已经足够明确。
+#     B. 目录在，但**空的 / 半残 / 与清单不符 / 引用了不存在的 chunk**
+#        → COPY 会「成功」，镜像也构建得出来，问题要到运行期才暴露（404/白屏），这就是审计点名的
+#          「静默失败」。下面这段 RUN 把它提前到构建期，并给出可照做的修复命令：
+#          ① index.html 必须在（控制台入口）
+#          ② MANIFEST.json 必须在，且逐文件 sha256 与磁盘一致（防手改 / 防漏拷）
+#          ③ index.html 引用的每个 /console/... 资源都必须在产物里（防 base 配错、防旧 chunk）
+#          ④ 产物目录里不许有清单未记录的野文件（防上一版残留混进镜像）
+#   重新生成（改过 web/ 之后必须跑，在**仓库根**执行）：`pwsh scripts/release.ps1`
+#   ⚠️ 本段的单引号内不得再出现单引号（JS 源码整体被 sh 的单引号包住）。
+RUN set -eu; \
+    cd /app/web-dist; \
+    node --input-type=commonjs -e '
+const fs = require("fs"), path = require("path"), crypto = require("crypto");
+const bad = (m) => { console.error("ERROR[T10] " + m); process.exit(1); };
+const sha = (p) => crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+if (!fs.existsSync("index.html")) bad("/app/web-dist/index.html 缺失：镜像里没有控制台入口。请在仓库根运行 scripts/release.ps1 生成产物后重新 docker build。");
+if (!fs.existsSync("MANIFEST.json")) bad("/app/web-dist/MANIFEST.json 缺失：产物没有清单，无法证明它与 web/ 源码一致。请在仓库根运行 scripts/release.ps1。");
+const m = JSON.parse(fs.readFileSync("MANIFEST.json", "utf8"));
+const files = m.files || {};
+const names = Object.keys(files);
+if (names.length === 0) bad("MANIFEST.json 的 files 为空：产物目录是个空壳。");
+for (const f of names) {
+  if (!fs.existsSync(f)) bad("清单里有、镜像里没有的文件: " + f);
+  const g = sha(f);
+  if (g !== files[f]) bad("产物内容与清单不一致（被手改或漏拷）: " + f);
+}
+const html = fs.readFileSync("index.html", "utf8");
+const refs = [...new Set([...html.matchAll(/\/console\/[A-Za-z0-9._\/-]+/g)].map((x) => x[0].slice(9)))];
+if (refs.length === 0) bad("index.html 里没有任何 /console/ 资源引用：vite base 配错时页面会白屏。");
+for (const r of refs) { if (!fs.existsSync(r)) bad("index.html 引用了产物里不存在的资源: " + r); }
+const extra = [];
+const walk = (d, b) => {
+  for (const n of fs.readdirSync(d)) {
+    const a = path.join(d, n), r = b ? b + "/" + n : n;
+    if (fs.statSync(a).isDirectory()) walk(a, r); else extra.push(r);
+  }
+};
+walk(".", "");
+for (const f of extra) {
+  if (!names.includes(f) && f !== "MANIFEST.json" && f !== "README.md") bad("产物里有清单未记录的野文件（多半是上一版残留）: " + f);
+}
+console.log("[T10] web-dist 构建期校验通过: " + names.length + " 个文件、" + refs.length + " 个入口引用均一致");
+'
+
 # 运行时需要挂载的两样东西（不要用 COPY 烤进来）：
 #   · profiles/           每个 bot 的人设 + permissions（可能内嵌 API Key）
 #   · keys.json           模型 API Key
