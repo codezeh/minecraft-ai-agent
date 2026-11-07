@@ -1,5 +1,5 @@
 import { reactive, computed } from 'vue'
-import { socket, connect, emitControl } from '../api/socket'
+import { socket, connect, emitControl, isOnline } from '../api/socket'
 import type { AgentInfo, FullState, TerrainResult } from '../api/types'
 
 export interface ChatLine {
@@ -191,6 +191,24 @@ export async function refreshTerrain(opts: {
 } = {}): Promise<TerrainResult | null> {
   const a = currentAgent.value
   if (!a) return null
+  /**
+   * ★ WEB-001 同类残留（R4 §7-⑦，2026-11-07 第四轮审计）：**这条路径原来绕过了离线闸**。
+   *
+   * 缺陷原貌：`say()` / `agentAction()` 都改走 `emitControl()`（没连接就拒发），
+   *   但 `refreshTerrain()` 里还是裸的 `socket.emit('request-terrain', …)`。
+   *   `autoConnect:false` + 断线期间 socket.io 会把 emit **缓存**在 `socket.sendBuffer`：
+   *   界面显示"超时(30s)"失败，重连那一刻这个请求会被真发出去 ——
+   *   于是用户重连后地形被一条"早就失败了的旧请求"覆盖（和 WEB-001 的启停迟到执行同源）。
+   *
+   * 口径与 `emitControl` 一致：没连接 ⇒ **不发**，把"没发出去"如实告诉界面。
+   * 为什么这里单独判而不是直接调 `emitControl()`：这里需要 ack + 自定义超时，
+   * 而 `emitControl` 是"发了就不管"的语义（且它不接受 ack 回调）。
+   */
+  if (!isOnline()) {
+    const reason = '未连接到 mindserver，地形请求没有发出'
+    store.lastError = reason
+    return { ok: false, reason }
+  }
   store.terrainLoading = true
   try {
     const res = await new Promise<TerrainResult>((resolve) => {
