@@ -1,0 +1,20 @@
+{
+  "globalProps": [
+    "$router",
+    "$route"
+  ],
+  "hasRouter": true,
+  "path": "/",
+  "matched": [
+    {
+      "path": "/",
+      "hasInstances": true,
+      "instKeys": [
+        "default"
+      ]
+    }
+  ],
+  "hasConsoleInst": true,
+  "setupKeys": [],
+  "storeKey": null
+}

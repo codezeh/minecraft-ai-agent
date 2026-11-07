@@ -1,0 +1,260 @@
+{
+  "tool": "T6/probe-mod001-stub.mjs",
+  "generatedAt": "2026-11-07T07:43:15.908Z",
+  "repo": "E:\\我的世界ai\\mindcraft",
+  "method": "真实适配器 sendRequest + 假 SDK client（请求计数桩）；零付费请求",
+  "truncatedMarker": "[LLM_TRUNCATED]",
+  "adapterResults": [
+    {
+      "adapter": "qwen.js",
+      "class": "Qwen",
+      "scenario": "finish_reason='length'",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 4,
+          "model": "test-model",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK（单次请求 + 已打截断标记）",
+      "category": "truncation"
+    },
+    {
+      "adapter": "vllm.js",
+      "class": "VLLM",
+      "scenario": "finish_reason='length'",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 5,
+          "model": "test-model"
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK（单次请求 + 已打截断标记）",
+      "category": "truncation"
+    },
+    {
+      "adapter": "grok.js",
+      "class": "Grok",
+      "scenario": "finish_reason='length'",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 5,
+          "model": "test-model",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK（单次请求 + 已打截断标记）",
+      "category": "truncation"
+    },
+    {
+      "adapter": "mercury.js",
+      "class": "Mercury",
+      "scenario": "finish_reason='length'",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 4,
+          "model": "test-model",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK（单次请求 + 已打截断标记）",
+      "category": "truncation"
+    },
+    {
+      "adapter": "novita.js",
+      "class": "Novita",
+      "scenario": "finish_reason='length'",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 4,
+          "model": "test-model",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK（单次请求 + 已打截断标记）",
+      "category": "truncation"
+    },
+    {
+      "adapter": "lmstudio.js",
+      "class": "LMStudio",
+      "scenario": "finish_reason='length'",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 5,
+          "model": "test-model",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK（单次请求 + 已打截断标记）",
+      "category": "truncation"
+    },
+    {
+      "adapter": "deepseek.js",
+      "class": "DeepSeek",
+      "scenario": "finish_reason='length'",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 4,
+          "model": "test-model",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK（单次请求 + 已打截断标记）",
+      "category": "truncation"
+    },
+    {
+      "adapter": "gpt.js",
+      "class": "GPT",
+      "scenario": "finish_reason='length'（已修对照）",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 4,
+          "model": "test-model",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK（单次请求 + 已打截断标记）",
+      "category": "truncation"
+    },
+    {
+      "adapter": "gpt.js",
+      "class": "GPT",
+      "scenario": "真正的 context_length_exceeded（反向对照：应当裁历史重试）",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "requestsDetail": [
+        {
+          "len": 4,
+          "model": "test-model",
+          "max_tokens": 16
+        },
+        {
+          "len": 4,
+          "model": "test-model",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "ok",
+      "markedTruncated": false,
+      "threw": null,
+      "verdict": "OK（正确识别为上下文超限 → 裁历史重试 1 次）",
+      "category": "real-context-error"
+    },
+    {
+      "adapter": "claude.js",
+      "class": "Claude",
+      "scenario": "stop_reason='max_tokens'（本项目在用的通路）",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "requestsDetail": [
+        {
+          "len": 4,
+          "model": "deepseek-v4.1-flash",
+          "max_tokens": 16
+        }
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "verdict": "OK",
+      "category": "truncation"
+    }
+  ],
+  "isContextLengthErrorCases": [
+    {
+      "label": "finish_reason='length' 被包装成 Error('Context length exceeded')",
+      "err": {},
+      "isContextLengthError": true
+    },
+    {
+      "label": "code=context_length_exceeded",
+      "err": {
+        "code": "context_length_exceeded"
+      },
+      "isContextLengthError": true
+    },
+    {
+      "label": "message 含 maximum context",
+      "err": {},
+      "isContextLengthError": true
+    },
+    {
+      "label": "message 含 prompt is too long",
+      "err": {},
+      "isContextLengthError": true
+    },
+    {
+      "label": "message 含 'max_tokens'（输出截断的常见措辞）",
+      "err": {},
+      "isContextLengthError": false
+    },
+    {
+      "label": "普通网络错误",
+      "err": {},
+      "isContextLengthError": false
+    }
+  ],
+  "summary": {
+    "dupRequestAdapters": [],
+    "maxRequestsMultiplier": 1,
+    "silentTruncationAdapters": [],
+    "okAdapters": [
+      "qwen.js",
+      "vllm.js",
+      "grok.js",
+      "mercury.js",
+      "novita.js",
+      "lmstudio.js",
+      "deepseek.js",
+      "gpt.js",
+      "claude.js"
+    ],
+    "reverseControl": [
+      {
+        "adapter": "gpt.js",
+        "requestsIssued": 2,
+        "verdict": "OK（正确识别为上下文超限 → 裁历史重试 1 次）"
+      }
+    ]
+  }
+}

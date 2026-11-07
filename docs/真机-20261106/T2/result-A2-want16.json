@@ -1,0 +1,127 @@
+{
+  "probe": "A2-want16-fuel-budget",
+  "startedAt": "2026-11-06T12:02:08.342Z",
+  "want": 16,
+  "fuelMath": {
+    "fuelBurnOfCoal": 8,
+    "fuelNeededFor16": 2
+  },
+  "invBefore": {
+    "raw_iron": 16,
+    "coal": 8,
+    "iron_ingot": 0
+  },
+  "furnaceBefore": {
+    "input": null,
+    "fuel": null,
+    "output": null,
+    "all": [],
+    "raw": "202, 71, 200 has the following block data: []"
+  },
+  "loadSnapshot": null,
+  "tpsDuring": [
+    {
+      "at": "2026-11-06T12:02:55.165Z",
+      "elapsedMs": 36291,
+      "tps": "§6TPS from last 1m, 5m, 15m: §a20.0§r, §a20.0§r, §a20.0",
+      "furnace": [
+        {
+          "slot": 0,
+          "id": "raw_iron",
+          "count": 13
+        }
+      ]
+    },
+    {
+      "at": "2026-11-06T12:03:25.176Z",
+      "elapsedMs": 66302,
+      "tps": "§6TPS from last 1m, 5m, 15m: §a20.0§r, §a20.0§r, §a20.0",
+      "furnace": [
+        {
+          "slot": 0,
+          "id": "raw_iron",
+          "count": 10
+        }
+      ]
+    },
+    {
+      "at": "2026-11-06T12:03:55.180Z",
+      "elapsedMs": 96307,
+      "tps": "§6TPS from last 1m, 5m, 15m: §a20.0§r, §a20.0§r, §a20.0",
+      "furnace": [
+        {
+          "slot": 0,
+          "id": "raw_iron",
+          "count": 7
+        }
+      ]
+    },
+    {
+      "at": "2026-11-06T12:04:25.195Z",
+      "elapsedMs": 126321,
+      "tps": "§6TPS from last 1m, 5m, 15m: §a20.0§r, §a20.0§r, §a20.0",
+      "furnace": [
+        {
+          "slot": 0,
+          "id": "raw_iron",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "at": "2026-11-06T12:04:55.208Z",
+      "elapsedMs": 156334,
+      "tps": "§6TPS from last 1m, 5m, 15m: §a20.0§r, §a20.0§r, §a20.0",
+      "furnace": [
+        {
+          "slot": 0,
+          "id": "raw_iron",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "result": {
+    "ok": true,
+    "code": "OK",
+    "message": "",
+    "data": {
+      "input": "raw_iron",
+      "count": 16,
+      "want": 16,
+      "got": 16,
+      "fuel": "coal",
+      "placedFurnace": false,
+      "costMs": 168614
+    }
+  },
+  "wallMs": 186337,
+  "wallSeconds": 186.337,
+  "expectedWallSeconds": 160,
+  "invAfter": {
+    "raw_iron": 0,
+    "coal": 6,
+    "iron_ingot": 16
+  },
+  "furnaceAfter": {
+    "input": null,
+    "fuel": null,
+    "output": null,
+    "all": [],
+    "raw": "202, 71, 200 has the following block data: []"
+  },
+  "tpsAfter": "§6TPS from last 1m, 5m, 15m: §a20.0§r, §a20.0§r, §a20.0",
+  "verdict": {
+    "got16": true,
+    "okTrue": true,
+    "fuelNeededIs2": true,
+    "fuelPutInFurnaceIs2": false,
+    "inputPutInFurnaceIs16": false,
+    "coalLeftInInv6": true,
+    "ingotDelta16": true,
+    "gotMatchesRealDelta": true,
+    "wallNear160s": false,
+    "wallSeconds": 186.337,
+    "notTheOld8": true
+  }
+}

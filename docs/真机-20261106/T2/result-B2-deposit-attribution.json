@@ -1,0 +1,162 @@
+{
+  "probe": "B2-deposit-attribution",
+  "startedAt": "2026-11-06T12:18:31.589Z",
+  "storeRuns": [
+    {
+      "run": 1,
+      "invBefore": 10,
+      "chestFreeBefore": 3,
+      "code": "INVENTORY_FULL",
+      "reportedStored": 4,
+      "message": "只存进去 4/10",
+      "realInvDropped": 3,
+      "realChestGained": 3,
+      "wallMs": 93,
+      "overreportBy": 1
+    },
+    {
+      "run": 2,
+      "invBefore": 10,
+      "chestFreeBefore": 3,
+      "code": "INVENTORY_FULL",
+      "reportedStored": 4,
+      "message": "只存进去 4/10",
+      "realInvDropped": 3,
+      "realChestGained": 3,
+      "wallMs": 73,
+      "overreportBy": 1
+    }
+  ],
+  "chestBefore": {
+    "freeSlots": 3,
+    "usedSlots": 24
+  },
+  "openResult": {
+    "ok": true,
+    "code": "OK",
+    "costMs": 111
+  },
+  "invBeforeDeposit": {
+    "raw": "Found 10 matching item(s) on player probe2",
+    "count": 10
+  },
+  "depositInstant": {
+    "depositReturn": {
+      "ok": false,
+      "code": "INVENTORY_FULL",
+      "message": "只存进去 4/10（destination full）",
+      "data": {
+        "item": "iron_sword",
+        "want": 10,
+        "stored": 4,
+        "invBefore": 10,
+        "invAfter": 6,
+        "winBefore": 0,
+        "winAfter": 3,
+        "partial": true,
+        "error": "destination full"
+      }
+    },
+    "serverInv": {
+      "raw": "Found 10 matching item(s) on player probe2",
+      "count": 10
+    },
+    "chest": {
+      "swords": 3,
+      "swordSlots": [
+        {
+          "slot": 24,
+          "id": "iron_sword",
+          "count": 1
+        },
+        {
+          "slot": 25,
+          "id": "iron_sword",
+          "count": 1
+        },
+        {
+          "slot": 26,
+          "id": "iron_sword",
+          "count": 1
+        }
+      ],
+      "free": 0,
+      "used": 27
+    },
+    "cursor": {
+      "name": "iron_sword",
+      "count": 1,
+      "slot": 56
+    },
+    "windowType": "minecraft:generic_9x3",
+    "conservation": {
+      "invPlusChest": 13,
+      "expected10": 10,
+      "lostOrInTransit": -3
+    }
+  },
+  "afterClose": {
+    "serverInv": {
+      "raw": "Found 7 matching item(s) on player probe2",
+      "count": 7
+    },
+    "chest": {
+      "swords": 3,
+      "swordSlots": [
+        {
+          "slot": 24,
+          "id": "iron_sword",
+          "count": 1
+        },
+        {
+          "slot": 25,
+          "id": "iron_sword",
+          "count": 1
+        },
+        {
+          "slot": 26,
+          "id": "iron_sword",
+          "count": 1
+        }
+      ],
+      "free": 0,
+      "used": 27
+    },
+    "cursor": null,
+    "conservation": 10
+  },
+  "verdict": {
+    "depositCode": "INVENTORY_FULL",
+    "depositReportedStored": 4,
+    "depositOwnInvoice": {
+      "invBefore": 10,
+      "invAfter": 6,
+      "winBefore": 0,
+      "winAfter": 3
+    },
+    "cursorHeldTheMissingItem": {
+      "name": "iron_sword",
+      "count": 1,
+      "slot": 56
+    },
+    "conservationAtDecision": {
+      "invPlusChest": 13,
+      "expected10": 10,
+      "lostOrInTransit": -3
+    },
+    "conservationAfterClose": 10,
+    "storeReportedStored": [
+      4,
+      4
+    ],
+    "storeRealChestGained": [
+      3,
+      3
+    ],
+    "storeRealInvDropped": [
+      3,
+      3
+    ],
+    "deterministicOverreport": true
+  }
+}

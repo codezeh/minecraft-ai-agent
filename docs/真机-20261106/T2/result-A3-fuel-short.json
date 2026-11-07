@@ -1,0 +1,61 @@
+{
+  "probe": "A3-fuel-short-early-fail",
+  "startedAt": "2026-11-06T12:01:19.532Z",
+  "invBefore": {
+    "raw_iron": 16,
+    "coal": 1
+  },
+  "furnaceBefore": {
+    "input": null,
+    "fuel": null,
+    "output": null,
+    "all": [],
+    "raw": "202, 71, 200 has the following block data: []"
+  },
+  "result": {
+    "ok": false,
+    "code": "NO_ITEM",
+    "message": "燃料不够：烧 16 个 raw_iron 要 2 个 coal，只有 1",
+    "data": {
+      "input": "raw_iron",
+      "count": 0,
+      "want": 16,
+      "fuel": "coal",
+      "missing": {
+        "fuel": 1
+      }
+    }
+  },
+  "wallMs": 1,
+  "wallSeconds": 0.001,
+  "furnaceAfter": {
+    "input": null,
+    "fuel": null,
+    "output": null,
+    "all": [],
+    "raw": "202, 71, 200 has the following block data: []"
+  },
+  "invAfter": {
+    "raw_iron": 16,
+    "coal": 1,
+    "iron_ingot": 0
+  },
+  "expected": {
+    "code": "NO_ITEM",
+    "missing": {
+      "fuel": 1
+    },
+    "fuelNeeded": 2,
+    "furnaceInputCount": 0,
+    "wallBudgetMs": "< 2000（\"立刻\"），绝不允许接近 600000"
+  },
+  "verdict": {
+    "returnedNotOk": true,
+    "codeIsNoItem": true,
+    "missingFuelIs1": true,
+    "furnaceInputEmpty": true,
+    "noMaterialEntered": true,
+    "fast": true,
+    "farFrom600s": true
+  }
+}

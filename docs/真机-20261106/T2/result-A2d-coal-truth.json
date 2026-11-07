@@ -1,0 +1,112 @@
+{
+  "probe": "A2d-server-side-coal-truth",
+  "startedAt": "2026-11-06T12:11:48.834Z",
+  "samples": [
+    {
+      "atMs": 0,
+      "serverCoal": {
+        "raw": "Found 6 matching item(s) on player probe2",
+        "count": 6
+      },
+      "furnaceInput": {
+        "id": "minecraft:raw_iron",
+        "count": 16
+      },
+      "furnaceFuel": {
+        "id": "minecraft:coal",
+        "count": 1
+      },
+      "mineflayerCoal": 6,
+      "mineflayerHeld": null
+    },
+    {
+      "atMs": 500,
+      "serverCoal": {
+        "raw": "Found 6 matching item(s) on player probe2",
+        "count": 6
+      },
+      "furnaceInput": {
+        "id": "minecraft:raw_iron",
+        "count": 16
+      },
+      "furnaceFuel": {
+        "id": "minecraft:coal",
+        "count": 1
+      },
+      "mineflayerCoal": 6,
+      "mineflayerHeld": null
+    },
+    {
+      "atMs": 2000,
+      "serverCoal": {
+        "raw": "Found 6 matching item(s) on player probe2",
+        "count": 6
+      },
+      "furnaceInput": {
+        "id": "minecraft:raw_iron",
+        "count": 16
+      },
+      "furnaceFuel": {
+        "id": "minecraft:coal",
+        "count": 1
+      },
+      "mineflayerCoal": 6,
+      "mineflayerHeld": null
+    },
+    {
+      "atMs": 5000,
+      "serverCoal": {
+        "raw": "Found 6 matching item(s) on player probe2",
+        "count": 6
+      },
+      "furnaceInput": {
+        "id": "minecraft:raw_iron",
+        "count": 16
+      },
+      "furnaceFuel": {
+        "id": "minecraft:coal",
+        "count": 1
+      },
+      "mineflayerCoal": 6,
+      "mineflayerHeld": null
+    }
+  ],
+  "before": {
+    "serverCoal": {
+      "raw": "Found 8 matching item(s) on player probe2",
+      "count": 8
+    },
+    "serverRawIron": {
+      "raw": "Found 16 matching item(s) on player probe2",
+      "count": 16
+    }
+  },
+  "furnaceLoadReturn": {
+    "ok": true,
+    "code": "OK",
+    "message": "",
+    "data": {
+      "input": "raw_iron",
+      "inputCount": 16,
+      "fuel": "coal",
+      "fuelCount": 2,
+      "costMs": 329
+    }
+  },
+  "verdict": {
+    "productSaidFuelCount2": true,
+    "productSaidInputCount16": true,
+    "serverCoalLeftAfterLoad": 6,
+    "expectedServerCoalAfterLoad": 6,
+    "coalNotLost": true,
+    "furnaceFuelSlot": {
+      "id": "minecraft:coal",
+      "count": 1
+    },
+    "furnaceInputSlot": {
+      "id": "minecraft:raw_iron",
+      "count": 16
+    },
+    "note": "若服务端最终仍是 6 份煤 + 炉内 1-2 份，则\"2 份一次投够\"成立，mineflayer 中途读到 0 只是窗口/背包视图的暂态"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "结论": "面板进程（PID 4392，静态挂 ./web/dist）发出的入口 bundle 里没有 isImeComposing 的三项判定；它的 keydown 处理器与修复前源码（git 22c41e8）同构 ⇒ WEB-003 的修复没有进入部署产物。",
+  "入口chunk": {
+    "文件": "web/dist/assets/index-BfjaJXlW.js",
+    "字节": 155370,
+    "sha256": "e9056410d20e1a94e067ea56365cced7c14810bde0e1b63c7d7a0a7eb77174b9",
+    "mtime": "2026-11-06T05:05:03.585Z"
+  },
+  "源码": {
+    "文件": "web/src/components/ChatStream.vue",
+    "mtime": "2026-11-06T10:37:53.799Z",
+    "字节": 7064
+  },
+  "关键串计数": {
+    "229": 0,
+    "isComposing": 0,
+    "Process": 0
+  },
+  "部署bundle里的keydown处理器": "function i(a){a.key===\"Enter\"&&!a.shiftKey&&(a.preventDefault(),r())}",
+  "修复前源码对应片段": "function onKey(e) { if (e.key === \"Enter\" && !e.shiftKey) { e.preventDefault(); send() } }",
+  "时间线": {
+    "部署bundle_mtime": "2026-11-06T05:05:03.585Z",
+    "源码mtime": "2026-11-06T10:37:53.799Z",
+    "修复提交": "57499b738db68db5a6af5e8c8934556e8382de1f 2026-11-06 18:42:22 +0800",
+    "gitHEAD": "be1d6a48ef8823e2a5aeda39d32514963b918d1a 2026-11-06 18:52:35 +0800"
+  },
+  "服务端挂载点": "mindcraft/src/mindcraft/mindserver.js:496-501 —— webDist = ../../../web/dist，存在即 app.use(\"/console\", express.static(webDist))"
+}

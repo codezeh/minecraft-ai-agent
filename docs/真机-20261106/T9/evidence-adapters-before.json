@@ -1,0 +1,574 @@
+{
+  "tool": "T9/probe-t9-adapters.mjs",
+  "generatedAt": "2026-11-07T07:25:28.067Z",
+  "suffix": "before",
+  "repo": "E:\\我的世界ai\\mindcraft",
+  "method": "真实适配器 sendRequest + 假 SDK client（计数桩）；零付费请求",
+  "truncatedMarker": "[LLM_TRUNCATED]",
+  "scenarioA": [
+    {
+      "adapter": "claude.js",
+      "isTarget": true,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "messagesLenTrace": [
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "markedTruncated": false,
+      "threw": null,
+      "ok": false,
+      "verdict": "SILENT-TRUNCATION（1 次请求，但截断没被标记）"
+    },
+    {
+      "adapter": "qwen.js",
+      "isTarget": true,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 4,
+      "messagesLenTrace": [
+        4,
+        4,
+        2,
+        2
+      ],
+      "returned": "[LLM_ERROR] qwen request failed: Context length exceeded",
+      "markedTruncated": false,
+      "threw": null,
+      "ok": false,
+      "verdict": "DUP-REQUEST（4 次，历史被白删重发：4→4→2→2）"
+    },
+    {
+      "adapter": "vllm.js",
+      "isTarget": true,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 4,
+      "messagesLenTrace": [
+        5,
+        4,
+        3,
+        2
+      ],
+      "returned": "[LLM_ERROR] vllm request failed: Context length exceeded",
+      "markedTruncated": false,
+      "threw": null,
+      "ok": false,
+      "verdict": "DUP-REQUEST（4 次，历史被白删重发：5→4→3→2）"
+    },
+    {
+      "adapter": "grok.js",
+      "isTarget": true,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 4,
+      "messagesLenTrace": [
+        5,
+        4,
+        3,
+        2
+      ],
+      "returned": "[LLM_ERROR] xai request failed: Context length exceeded",
+      "markedTruncated": false,
+      "threw": null,
+      "ok": false,
+      "verdict": "DUP-REQUEST（4 次，历史被白删重发：5→4→3→2）"
+    },
+    {
+      "adapter": "mercury.js",
+      "isTarget": true,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 4,
+      "messagesLenTrace": [
+        4,
+        4,
+        2,
+        2
+      ],
+      "returned": "[LLM_ERROR] mercury request failed: Context length exceeded",
+      "markedTruncated": false,
+      "threw": null,
+      "ok": false,
+      "verdict": "DUP-REQUEST（4 次，历史被白删重发：4→4→2→2）"
+    },
+    {
+      "adapter": "novita.js",
+      "isTarget": true,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 4,
+      "messagesLenTrace": [
+        4,
+        4,
+        2,
+        2
+      ],
+      "returned": "[LLM_ERROR] novita request failed: Context length exceeded",
+      "markedTruncated": false,
+      "threw": null,
+      "ok": false,
+      "verdict": "DUP-REQUEST（4 次，历史被白删重发：4→4→2→2）"
+    },
+    {
+      "adapter": "lmstudio.js",
+      "isTarget": true,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 4,
+      "messagesLenTrace": [
+        5,
+        5,
+        3,
+        3
+      ],
+      "returned": "[LLM_ERROR] lmstudio request failed: Context length exceeded",
+      "markedTruncated": false,
+      "threw": null,
+      "ok": false,
+      "verdict": "DUP-REQUEST（4 次，历史被白删重发：5→5→3→3）"
+    },
+    {
+      "adapter": "deepseek.js",
+      "isTarget": false,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "messagesLenTrace": [
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "ok": true,
+      "verdict": "OK（1 次请求 + 已打截断标记）"
+    },
+    {
+      "adapter": "gpt.js",
+      "isTarget": false,
+      "scenario": "A: 输出被 max_tokens 截断（finish_reason=length / stop_reason=max_tokens）",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "messagesLenTrace": [
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9[LLM_TRUNCATED]",
+      "markedTruncated": true,
+      "threw": null,
+      "ok": true,
+      "verdict": "OK（1 次请求 + 已打截断标记）"
+    }
+  ],
+  "scenarioB": [
+    {
+      "adapter": "claude.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "messagesLenTrace": [
+        4
+      ],
+      "returned": "[LLM_ERROR] claude request failed: request rejected",
+      "threw": null,
+      "retried": false,
+      "ok": true,
+      "note": "claude.js 原本就没有裁历史重试分支（既有行为=失败回复），本任务不新增",
+      "verdict": "AS-BEFORE（1 次请求 + 失败回复，claude 从无裁历史逻辑）"
+    },
+    {
+      "adapter": "qwen.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "vllm.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        5,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 5→4）"
+    },
+    {
+      "adapter": "grok.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        5,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 5→4）"
+    },
+    {
+      "adapter": "mercury.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "novita.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "lmstudio.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        5,
+        5
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 5→5）"
+    },
+    {
+      "adapter": "deepseek.js",
+      "isTarget": false,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "gpt.js",
+      "isTarget": false,
+      "scenario": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "claude.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 1,
+      "messagesLenTrace": [
+        4
+      ],
+      "returned": "[LLM_ERROR] claude request failed: Context length exceeded",
+      "threw": null,
+      "retried": false,
+      "ok": true,
+      "note": "claude.js 原本就没有裁历史重试分支（既有行为=失败回复），本任务不新增",
+      "verdict": "AS-BEFORE（1 次请求 + 失败回复，claude 从无裁历史逻辑）"
+    },
+    {
+      "adapter": "qwen.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "vllm.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        5,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 5→4）"
+    },
+    {
+      "adapter": "grok.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        5,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 5→4）"
+    },
+    {
+      "adapter": "mercury.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "novita.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "lmstudio.js",
+      "isTarget": true,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        5,
+        5
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 5→5）"
+    },
+    {
+      "adapter": "deepseek.js",
+      "isTarget": false,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    },
+    {
+      "adapter": "gpt.js",
+      "isTarget": false,
+      "scenario": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+      "turnsIn": 4,
+      "requestsIssued": 2,
+      "messagesLenTrace": [
+        4,
+        4
+      ],
+      "returned": "好的，我来数：1,2,3,4,5,6,7,8,9",
+      "threw": null,
+      "retried": true,
+      "ok": true,
+      "note": null,
+      "verdict": "OK（真超限 → 裁历史重试 1 次；messages 4→4）"
+    }
+  ],
+  "isContextLengthErrorCases": [
+    {
+      "label": "Error('Context length exceeded')",
+      "err": {},
+      "isContextLengthError": true
+    },
+    {
+      "label": "code=context_length_exceeded",
+      "err": {
+        "code": "context_length_exceeded"
+      },
+      "isContextLengthError": true
+    },
+    {
+      "label": "message 含 maximum context",
+      "err": {},
+      "isContextLengthError": true
+    },
+    {
+      "label": "message 含 max_tokens（输出截断措辞，不该算上下文超限）",
+      "err": {},
+      "isContextLengthError": false
+    },
+    {
+      "label": "普通网络错误",
+      "err": {},
+      "isContextLengthError": false
+    }
+  ],
+  "summary": {
+    "truncationTargetsOk": [],
+    "truncationTargetsBad": [
+      {
+        "adapter": "claude.js",
+        "verdict": "SILENT-TRUNCATION（1 次请求，但截断没被标记）",
+        "requests": 1
+      },
+      {
+        "adapter": "qwen.js",
+        "verdict": "DUP-REQUEST（4 次，历史被白删重发：4→4→2→2）",
+        "requests": 4
+      },
+      {
+        "adapter": "vllm.js",
+        "verdict": "DUP-REQUEST（4 次，历史被白删重发：5→4→3→2）",
+        "requests": 4
+      },
+      {
+        "adapter": "grok.js",
+        "verdict": "DUP-REQUEST（4 次，历史被白删重发：5→4→3→2）",
+        "requests": 4
+      },
+      {
+        "adapter": "mercury.js",
+        "verdict": "DUP-REQUEST（4 次，历史被白删重发：4→4→2→2）",
+        "requests": 4
+      },
+      {
+        "adapter": "novita.js",
+        "verdict": "DUP-REQUEST（4 次，历史被白删重发：4→4→2→2）",
+        "requests": 4
+      },
+      {
+        "adapter": "lmstudio.js",
+        "verdict": "DUP-REQUEST（4 次，历史被白删重发：5→5→3→3）",
+        "requests": 4
+      }
+    ],
+    "regressionOk": [
+      "deepseek.js",
+      "gpt.js"
+    ],
+    "regressionBad": [],
+    "reverseControlOk": [
+      "qwen.js:code",
+      "vllm.js:code",
+      "grok.js:code",
+      "mercury.js:code",
+      "novita.js:code",
+      "lmstudio.js:code",
+      "deepseek.js:code",
+      "gpt.js:code",
+      "qwen.js:msg",
+      "vllm.js:msg",
+      "grok.js:msg",
+      "mercury.js:msg",
+      "novita.js:msg",
+      "lmstudio.js:msg",
+      "deepseek.js:msg",
+      "gpt.js:msg"
+    ],
+    "reverseControlBad": [],
+    "claudeReverse": [
+      {
+        "v": "B: 真上下文超限（variant=code）→ 期望裁历史重试 1 次",
+        "requests": 1,
+        "verdict": "AS-BEFORE（1 次请求 + 失败回复，claude 从无裁历史逻辑）"
+      },
+      {
+        "v": "B: 真上下文超限（variant=msg）→ 期望裁历史重试 1 次",
+        "requests": 1,
+        "verdict": "AS-BEFORE（1 次请求 + 失败回复，claude 从无裁历史逻辑）"
+      }
+    ]
+  }
+}

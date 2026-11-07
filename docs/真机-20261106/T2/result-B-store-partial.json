@@ -1,0 +1,211 @@
+{
+  "probe": "B-store-partial",
+  "startedAt": "2026-11-06T12:13:21.906Z",
+  "fillCommandSample": [
+    "Replaced a slot at 303, 71, 300 with [Dirt]",
+    "Replaced a slot at 303, 71, 300 with [Dirt]",
+    "Replaced a slot at 303, 71, 300 with [Dirt]"
+  ],
+  "chestBefore": {
+    "pos": {
+      "x": 303,
+      "y": 71,
+      "z": 300
+    },
+    "usedSlots": 24,
+    "freeSlots": 3,
+    "slots": [
+      {
+        "slot": 0,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 1,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 2,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 3,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 4,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 5,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 6,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 7,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 8,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 9,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 10,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 11,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 12,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 13,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 14,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 15,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 16,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 17,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 18,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 19,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 20,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 21,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 22,
+        "id": "dirt",
+        "count": 64
+      },
+      {
+        "slot": 23,
+        "id": "dirt",
+        "count": 64
+      }
+    ]
+  },
+  "invBefore": {
+    "mineflayer": 10,
+    "server": {
+      "raw": "Found 10 matching item(s) on player probe2",
+      "count": 10
+    }
+  },
+  "result": {
+    "ok": false,
+    "code": "INVENTORY_FULL",
+    "message": "只存进去 4/10",
+    "data": {
+      "item": "iron_sword",
+      "want": 10,
+      "stored": 4,
+      "partial": true
+    }
+  },
+  "wallMs": 252,
+  "invAfter": {
+    "mineflayer": 7,
+    "server": {
+      "raw": "Found 7 matching item(s) on player probe2",
+      "count": 7
+    }
+  },
+  "chestAfter": {
+    "usedSlots": 27,
+    "freeSlots": 0,
+    "swordsInChest": 3,
+    "slotDetail": [
+      {
+        "slot": 24,
+        "id": "iron_sword",
+        "count": 1
+      },
+      {
+        "slot": 25,
+        "id": "iron_sword",
+        "count": 1
+      },
+      {
+        "slot": 26,
+        "id": "iron_sword",
+        "count": 1
+      }
+    ]
+  },
+  "realDelta": {
+    "serverInvDropped": 3,
+    "chestSwords": 3
+  },
+  "expected": {
+    "reportedStored": 3,
+    "invAfter": 7,
+    "chestSwords": 3,
+    "notStoredZero": true,
+    "notInternal": true,
+    "why": "3 个空位 × 不可堆叠 = 最多 3 把；老缺陷会报 INTERNAL/stored:0 让上层按零进度重试"
+  },
+  "verdict": {
+    "code": "INVENTORY_FULL",
+    "reportedStored": 4,
+    "reportedStoredIs3": false,
+    "serverInv10to7": true,
+    "chestReallyGained3": true,
+    "notStoredZero": true,
+    "notInternal": true,
+    "partialFlagged": true,
+    "storedMatchesRealDelta": false
+  }
+}

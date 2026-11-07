@@ -1,0 +1,4318 @@
+{
+  "tool": "T5/make-context-manifest.mjs",
+  "generatedAt": "2026-11-06T11:51:06.288Z",
+  "host": {
+    "platform": "win32",
+    "arch": "x64",
+    "node": "v24.16.0"
+  },
+  "repo": "E:\\我的世界ai\\mindcraft",
+  "inputs": {
+    "dockerignore": {
+      "path": ".dockerignore",
+      "bytes": 2469,
+      "sha256": null
+    },
+    "dockerfile": {
+      "path": "Dockerfile",
+      "bytes": 1666
+    }
+  },
+  "matchingSemantics": {
+    "description": "按 moby/patternmatcher：后规则覆盖前规则；`!` 反向放行；`*` 不跨 `/`；`**` 跨 `/`；命中\"路径本身或其任一祖先目录\"即算命中。",
+    "ruleCount": 35,
+    "negationRuleCount": 0,
+    "directoryPruningUsed": true,
+    "pruningNote": "无 `!` 反向规则 ⇒ 排除目录可整体剪枝，剪枝不会漏掉被放行的子文件。"
+  },
+  "ruleSet": [
+    {
+      "line": 16,
+      "negate": false,
+      "pattern": ".git",
+      "raw": ".git"
+    },
+    {
+      "line": 17,
+      "negate": false,
+      "pattern": ".gitignore",
+      "raw": ".gitignore"
+    },
+    {
+      "line": 18,
+      "negate": false,
+      "pattern": ".gitattributes",
+      "raw": ".gitattributes"
+    },
+    {
+      "line": 19,
+      "negate": false,
+      "pattern": ".githooks",
+      "raw": ".githooks"
+    },
+    {
+      "line": 24,
+      "negate": false,
+      "pattern": ".mindserver-token",
+      "raw": ".mindserver-token"
+    },
+    {
+      "line": 25,
+      "negate": false,
+      "pattern": ".mindserver-token.*",
+      "raw": ".mindserver-token.*"
+    },
+    {
+      "line": 26,
+      "negate": false,
+      "pattern": "keys.json",
+      "raw": "keys.json"
+    },
+    {
+      "line": 27,
+      "negate": false,
+      "pattern": ".env",
+      "raw": ".env"
+    },
+    {
+      "line": 28,
+      "negate": false,
+      "pattern": ".env.*",
+      "raw": ".env.*"
+    },
+    {
+      "line": 29,
+      "negate": false,
+      "pattern": "*.pem",
+      "raw": "*.pem"
+    },
+    {
+      "line": 30,
+      "negate": false,
+      "pattern": "*.key",
+      "raw": "*.key"
+    },
+    {
+      "line": 31,
+      "negate": false,
+      "pattern": "*.p12",
+      "raw": "*.p12"
+    },
+    {
+      "line": 32,
+      "negate": false,
+      "pattern": "profiles",
+      "raw": "profiles"
+    },
+    {
+      "line": 35,
+      "negate": false,
+      "pattern": "bots",
+      "raw": "bots"
+    },
+    {
+      "line": 36,
+      "negate": false,
+      "pattern": "logs",
+      "raw": "logs"
+    },
+    {
+      "line": 37,
+      "negate": false,
+      "pattern": "tmp",
+      "raw": "tmp"
+    },
+    {
+      "line": 38,
+      "negate": false,
+      "pattern": "tmp-*",
+      "raw": "tmp-*"
+    },
+    {
+      "line": 41,
+      "negate": false,
+      "pattern": "*.log",
+      "raw": "*.log"
+    },
+    {
+      "line": 42,
+      "negate": false,
+      "pattern": "**/*.log",
+      "raw": "**/*.log"
+    },
+    {
+      "line": 43,
+      "negate": false,
+      "pattern": "run-live*",
+      "raw": "run-live*"
+    },
+    {
+      "line": 46,
+      "negate": false,
+      "pattern": "node_modules",
+      "raw": "node_modules"
+    },
+    {
+      "line": 47,
+      "negate": false,
+      "pattern": "npm-debug.log*",
+      "raw": "npm-debug.log*"
+    },
+    {
+      "line": 50,
+      "negate": false,
+      "pattern": ".vscode",
+      "raw": ".vscode"
+    },
+    {
+      "line": 51,
+      "negate": false,
+      "pattern": ".idea",
+      "raw": ".idea"
+    },
+    {
+      "line": 52,
+      "negate": false,
+      "pattern": "docs",
+      "raw": "docs"
+    },
+    {
+      "line": 53,
+      "negate": false,
+      "pattern": "tools",
+      "raw": "tools"
+    },
+    {
+      "line": 54,
+      "negate": false,
+      "pattern": "coverage",
+      "raw": "coverage"
+    },
+    {
+      "line": 55,
+      "negate": false,
+      "pattern": "dist",
+      "raw": "dist"
+    },
+    {
+      "line": 56,
+      "negate": false,
+      "pattern": "web",
+      "raw": "web"
+    },
+    {
+      "line": 57,
+      "negate": false,
+      "pattern": ".eslintcache",
+      "raw": ".eslintcache"
+    },
+    {
+      "line": 58,
+      "negate": false,
+      "pattern": "t25_keys_probe.mjs",
+      "raw": "t25_keys_probe.mjs"
+    },
+    {
+      "line": 59,
+      "negate": false,
+      "pattern": "t25_noboard_probe.mjs",
+      "raw": "t25_noboard_probe.mjs"
+    },
+    {
+      "line": 62,
+      "negate": false,
+      "pattern": ".DS_Store",
+      "raw": ".DS_Store"
+    },
+    {
+      "line": 63,
+      "negate": false,
+      "pattern": "Thumbs.db",
+      "raw": "Thumbs.db"
+    },
+    {
+      "line": 64,
+      "negate": false,
+      "pattern": "*.swp",
+      "raw": "*.swp"
+    }
+  ],
+  "walkStats": {
+    "dirsVisited": 35,
+    "dirsPruned": 8,
+    "filesSeen": 288,
+    "contextFiles": 280,
+    "prunedSample": [
+      ".git",
+      ".githooks",
+      "bots",
+      "docs",
+      "node_modules",
+      "profiles",
+      "tmp",
+      "tools"
+    ]
+  },
+  "dockerfileAnalysis": {
+    "bulkCopyPresent": false,
+    "bulkCopyNote": "已改为显式 COPY 清单（OPS-005 修复点之一）",
+    "copyInstructionCount": 8,
+    "copyInstructions": [
+      {
+        "line": 31,
+        "op": "COPY",
+        "srcs": [
+          "package*.json"
+        ],
+        "dest": ".",
+        "raw": "COPY package*.json ."
+      },
+      {
+        "line": 32,
+        "op": "COPY",
+        "srcs": [
+          "patches"
+        ],
+        "dest": "./patches",
+        "raw": "COPY patches ./patches"
+      },
+      {
+        "line": 39,
+        "op": "COPY",
+        "srcs": [
+          "main.js",
+          "settings.js"
+        ],
+        "dest": "./",
+        "raw": "COPY main.js settings.js ./"
+      },
+      {
+        "line": 40,
+        "op": "COPY",
+        "srcs": [
+          "src"
+        ],
+        "dest": "./src",
+        "raw": "COPY src ./src"
+      },
+      {
+        "line": 41,
+        "op": "COPY",
+        "srcs": [
+          "services"
+        ],
+        "dest": "./services",
+        "raw": "COPY services ./services"
+      },
+      {
+        "line": 42,
+        "op": "COPY",
+        "srcs": [
+          "tasks"
+        ],
+        "dest": "./tasks",
+        "raw": "COPY tasks ./tasks"
+      },
+      {
+        "line": 43,
+        "op": "COPY",
+        "srcs": [
+          "schematics"
+        ],
+        "dest": "./schematics",
+        "raw": "COPY schematics ./schematics"
+      },
+      {
+        "line": 44,
+        "op": "COPY",
+        "srcs": [
+          "README.md"
+        ],
+        "dest": "./",
+        "raw": "COPY README.md ./"
+      }
+    ],
+    "npmInstallPresent": true,
+    "npmCiPresent": false,
+    "ops007Note": "★ OPS-007 未同步：Dockerfile 仍是 `npm install`（package-lock.json 已在上下文内，可改 `npm ci` 做可复现安装）"
+  },
+  "contextSet": {
+    "description": "通过 .dockerignore 过滤后仍会送进 docker daemon 构建上下文的文件集合（= `COPY . .` 的后果）",
+    "fileCount": 280,
+    "totalBytes": 4583006,
+    "files": [
+      {
+        "path": ".dockerignore",
+        "size": 2469,
+        "mtime": "2026-11-06T07:54:15.909Z",
+        "lastRule": null
+      },
+      {
+        "path": "andy.json",
+        "size": 53,
+        "mtime": "2026-11-05T17:27:21.830Z",
+        "lastRule": null
+      },
+      {
+        "path": "docker-compose.yml",
+        "size": 1508,
+        "mtime": "2026-11-06T10:25:52.397Z",
+        "lastRule": null
+      },
+      {
+        "path": "Dockerfile",
+        "size": 1666,
+        "mtime": "2026-11-06T07:53:41.045Z",
+        "lastRule": null
+      },
+      {
+        "path": "eslint.config.js",
+        "size": 2550,
+        "mtime": "2026-11-05T17:27:21.840Z",
+        "lastRule": null
+      },
+      {
+        "path": "FAQ.md",
+        "size": 2759,
+        "mtime": "2026-11-05T17:27:21.826Z",
+        "lastRule": null
+      },
+      {
+        "path": "keys.example.json",
+        "size": 440,
+        "mtime": "2026-11-05T17:27:21.840Z",
+        "lastRule": null
+      },
+      {
+        "path": "LICENSE",
+        "size": 1073,
+        "mtime": "2026-11-05T17:27:21.828Z",
+        "lastRule": null
+      },
+      {
+        "path": "main.js",
+        "size": 2972,
+        "mtime": "2026-11-06T07:38:55.608Z",
+        "lastRule": null
+      },
+      {
+        "path": "minecollab.md",
+        "size": 14099,
+        "mtime": "2026-11-05T17:27:21.842Z",
+        "lastRule": null
+      },
+      {
+        "path": "package-lock.json",
+        "size": 281586,
+        "mtime": "2026-11-06T10:48:17.802Z",
+        "lastRule": null
+      },
+      {
+        "path": "package.json",
+        "size": 2968,
+        "mtime": "2026-11-06T10:54:52.541Z",
+        "lastRule": null
+      },
+      {
+        "path": "patches/minecraft-data+3.97.0.patch.disabled",
+        "size": 529,
+        "mtime": "2026-11-05T17:27:21.843Z",
+        "lastRule": null
+      },
+      {
+        "path": "patches/mineflayer-pathfinder+2.4.5.patch",
+        "size": 12412,
+        "mtime": "2026-11-05T17:27:21.845Z",
+        "lastRule": null
+      },
+      {
+        "path": "patches/mineflayer-pvp+1.3.2.patch",
+        "size": 665,
+        "mtime": "2026-11-05T18:06:39.808Z",
+        "lastRule": null
+      },
+      {
+        "path": "patches/mineflayer+4.39.0.patch",
+        "size": 1585,
+        "mtime": "2026-11-05T17:58:56.944Z",
+        "lastRule": null
+      },
+      {
+        "path": "patches/prismarine-viewer+1.33.0.patch",
+        "size": 666,
+        "mtime": "2026-11-05T17:27:21.845Z",
+        "lastRule": null
+      },
+      {
+        "path": "patches/protodef+1.19.0.patch",
+        "size": 890,
+        "mtime": "2026-11-05T17:27:21.846Z",
+        "lastRule": null
+      },
+      {
+        "path": "patches/SHA256SUMS",
+        "size": 468,
+        "mtime": "2026-11-05T17:59:31.667Z",
+        "lastRule": null
+      },
+      {
+        "path": "README.md",
+        "size": 10698,
+        "mtime": "2026-11-06T10:22:16.763Z",
+        "lastRule": null
+      },
+      {
+        "path": "requirements.txt",
+        "size": 104,
+        "mtime": "2026-11-05T17:27:21.866Z",
+        "lastRule": null
+      },
+      {
+        "path": "schematics/house.litematic",
+        "size": 5628,
+        "mtime": "2026-10-20T08:30:35.638Z",
+        "lastRule": null
+      },
+      {
+        "path": "services/viaproxy/README.md",
+        "size": 1721,
+        "mtime": "2026-11-05T17:27:21.867Z",
+        "lastRule": null
+      },
+      {
+        "path": "settings.js",
+        "size": 3927,
+        "mtime": "2026-11-05T17:27:21.869Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/action_manager.js",
+        "size": 19806,
+        "mtime": "2026-11-06T07:43:56.306Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/agent.js",
+        "size": 51083,
+        "mtime": "2026-11-06T10:15:47.391Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/coder.js",
+        "size": 10166,
+        "mtime": "2026-11-05T17:27:21.873Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/commands/actions.js",
+        "size": 51401,
+        "mtime": "2026-11-03T10:58:52.209Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/commands/index.js",
+        "size": 17622,
+        "mtime": "2026-11-06T07:40:29.992Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/commands/queries.js",
+        "size": 27197,
+        "mtime": "2026-11-01T16:11:50.188Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/connection_handler.js",
+        "size": 3531,
+        "mtime": "2026-11-05T17:27:21.874Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/conversation.js",
+        "size": 12600,
+        "mtime": "2026-11-06T07:41:47.266Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/history.js",
+        "size": 16801,
+        "mtime": "2026-11-06T08:07:34.282Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_attack.js",
+        "size": 12577,
+        "mtime": "2026-11-02T05:28:10.949Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_blockuse.js",
+        "size": 9102,
+        "mtime": "2026-11-05T17:27:21.875Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_climb.js",
+        "size": 13574,
+        "mtime": "2026-11-05T17:27:21.876Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_container.js",
+        "size": 28506,
+        "mtime": "2026-11-06T10:23:06.407Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_craft.js",
+        "size": 39194,
+        "mtime": "2026-11-06T10:13:40.170Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_dig.js",
+        "size": 15306,
+        "mtime": "2026-11-06T10:13:09.606Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_entity.js",
+        "size": 6144,
+        "mtime": "2026-11-05T17:27:21.877Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_farm.js",
+        "size": 9499,
+        "mtime": "2026-11-04T09:04:42.758Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_fish.js",
+        "size": 3704,
+        "mtime": "2026-11-05T17:27:21.877Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_items.js",
+        "size": 6216,
+        "mtime": "2026-11-01T17:08:49.182Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_pillar.js",
+        "size": 5861,
+        "mtime": "2026-11-05T17:27:21.878Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_place.js",
+        "size": 10073,
+        "mtime": "2026-11-02T20:40:20.177Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_rest.js",
+        "size": 4624,
+        "mtime": "2026-11-05T17:27:21.878Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_step.js",
+        "size": 8169,
+        "mtime": "2026-11-05T17:27:21.878Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/act_swim.js",
+        "size": 5983,
+        "mtime": "2026-11-05T17:27:21.883Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_input_inventory.js",
+        "size": 5024,
+        "mtime": "2026-11-03T06:29:44.782Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_input_misc.js",
+        "size": 7384,
+        "mtime": "2026-11-01T14:44:28.102Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_input_mouse.js",
+        "size": 20833,
+        "mtime": "2026-11-05T17:27:21.884Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_input_move.js",
+        "size": 7083,
+        "mtime": "2026-11-01T14:44:28.102Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_look.js",
+        "size": 5464,
+        "mtime": "2026-11-05T17:27:21.884Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_read.js",
+        "size": 9167,
+        "mtime": "2026-11-03T05:58:00.292Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_tunnel.js",
+        "size": 18774,
+        "mtime": "2026-11-05T17:27:21.884Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_wait_item.js",
+        "size": 4103,
+        "mtime": "2026-11-05T17:27:21.885Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/atom_wait.js",
+        "size": 3278,
+        "mtime": "2026-11-05T17:27:21.884Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/board_claims.js",
+        "size": 12030,
+        "mtime": "2026-11-06T10:15:35.997Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/board_client.js",
+        "size": 31642,
+        "mtime": "2026-11-06T10:24:52.350Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/board_scheduler.js",
+        "size": 51222,
+        "mtime": "2026-11-06T10:13:55.948Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/board_server.js",
+        "size": 29730,
+        "mtime": "2026-11-06T10:24:36.982Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/board_store.js",
+        "size": 113609,
+        "mtime": "2026-11-06T10:24:32.724Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/bot_paths.js",
+        "size": 4123,
+        "mtime": "2026-11-05T17:27:21.887Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/code_hints.js",
+        "size": 6926,
+        "mtime": "2026-11-02T17:59:53.892Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/collect_planner.js",
+        "size": 5503,
+        "mtime": "2026-11-05T17:27:21.887Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/collect_targets.js",
+        "size": 3956,
+        "mtime": "2026-11-05T17:27:21.888Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/composite_registry.js",
+        "size": 32280,
+        "mtime": "2026-11-06T04:41:37.115Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/contract.js",
+        "size": 10586,
+        "mtime": "2026-11-05T12:14:43.817Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/control.js",
+        "size": 21844,
+        "mtime": "2026-11-05T17:27:21.889Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/executor.js",
+        "size": 68784,
+        "mtime": "2026-11-06T10:08:15.761Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_build.js",
+        "size": 15597,
+        "mtime": "2026-11-02T20:07:23.792Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_clear.js",
+        "size": 6459,
+        "mtime": "2026-11-05T17:27:21.889Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_collect_plan.js",
+        "size": 24241,
+        "mtime": "2026-11-05T17:27:21.890Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_collect.js",
+        "size": 11807,
+        "mtime": "2026-11-05T17:27:21.890Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_craft.js",
+        "size": 23257,
+        "mtime": "2026-11-06T04:41:20.087Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_eat.js",
+        "size": 6920,
+        "mtime": "2026-11-02T04:57:50.258Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_escape.js",
+        "size": 12732,
+        "mtime": "2026-11-01T16:09:08.625Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_farm.js",
+        "size": 9031,
+        "mtime": "2026-11-03T05:13:19.158Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_fight.js",
+        "size": 13059,
+        "mtime": "2026-11-02T05:26:20.755Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_follow.js",
+        "size": 29395,
+        "mtime": "2026-11-05T17:27:21.892Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_mine.js",
+        "size": 29115,
+        "mtime": "2026-11-05T17:27:21.893Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_pickup.js",
+        "size": 10865,
+        "mtime": "2026-11-05T17:27:21.894Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_platform.js",
+        "size": 6050,
+        "mtime": "2026-11-05T17:27:21.894Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_shelter.js",
+        "size": 27495,
+        "mtime": "2026-11-03T05:18:17.968Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_smelt.js",
+        "size": 13636,
+        "mtime": "2026-11-06T10:13:53.622Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/flow_store.js",
+        "size": 15199,
+        "mtime": "2026-11-06T10:18:23.264Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/full_state.js",
+        "size": 4825,
+        "mtime": "2026-11-05T17:27:21.896Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/heartbeat_loop.js",
+        "size": 3639,
+        "mtime": "2026-11-05T17:27:21.896Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/idle_planner.js",
+        "size": 9184,
+        "mtime": "2026-11-05T17:27:21.896Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/index.js",
+        "size": 1608,
+        "mtime": "2026-11-05T17:27:21.896Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/landmarks.js",
+        "size": 9550,
+        "mtime": "2026-11-05T17:27:21.896Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/lockdown.js",
+        "size": 5501,
+        "mtime": "2026-11-05T17:27:21.898Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/map_query.js",
+        "size": 9720,
+        "mtime": "2026-11-05T17:27:21.898Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/mca_import.js",
+        "size": 6755,
+        "mtime": "2026-11-05T17:27:21.899Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/memory_store.js",
+        "size": 8814,
+        "mtime": "2026-11-05T17:27:21.899Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/modes.js",
+        "size": 2852,
+        "mtime": "2026-11-05T17:27:21.899Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/nav_core.js",
+        "size": 17112,
+        "mtime": "2026-11-06T10:07:04.795Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/nav_hop.js",
+        "size": 1927,
+        "mtime": "2026-11-01T14:44:28.115Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/nav_pathfinder.js",
+        "size": 26584,
+        "mtime": "2026-11-05T17:27:21.901Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/outcome.js",
+        "size": 1032,
+        "mtime": "2026-10-22T01:31:02.822Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/path_3d.js",
+        "size": 35334,
+        "mtime": "2026-11-03T06:33:55.555Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/protect_owner.js",
+        "size": 4288,
+        "mtime": "2026-11-02T18:07:59.487Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/query_classify.js",
+        "size": 5971,
+        "mtime": "2026-11-05T17:27:21.902Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/query_drops.js",
+        "size": 4122,
+        "mtime": "2026-11-05T17:27:21.902Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/query_perceive.js",
+        "size": 4300,
+        "mtime": "2026-11-05T17:27:21.902Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/query_safe.js",
+        "size": 13823,
+        "mtime": "2026-11-05T17:27:21.903Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/query_stand.js",
+        "size": 8200,
+        "mtime": "2026-11-05T17:27:21.903Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/query_stuck.js",
+        "size": 10571,
+        "mtime": "2026-11-01T14:47:37.556Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/query_target.js",
+        "size": 11870,
+        "mtime": "2026-11-05T17:27:21.906Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/query_tree.js",
+        "size": 10794,
+        "mtime": "2026-11-05T17:27:21.907Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/rcon_client.js",
+        "size": 7537,
+        "mtime": "2026-11-05T17:27:21.908Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/scaffold_blocks.js",
+        "size": 4976,
+        "mtime": "2026-11-05T17:27:21.908Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/scaffold_cleanup.js",
+        "size": 5698,
+        "mtime": "2026-11-05T17:27:21.908Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/schematic.js",
+        "size": 11185,
+        "mtime": "2026-11-05T17:27:21.909Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/skill_library.js",
+        "size": 10339,
+        "mtime": "2026-11-05T17:27:21.909Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/skills.js",
+        "size": 289943,
+        "mtime": "2026-11-06T10:23:54.070Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/step_runner.js",
+        "size": 7988,
+        "mtime": "2026-11-05T17:27:21.912Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/storage.js",
+        "size": 5286,
+        "mtime": "2026-10-20T08:58:55.322Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/strat_first_night.js",
+        "size": 17401,
+        "mtime": "2026-11-03T14:49:56.893Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/strat_obtain.js",
+        "size": 49176,
+        "mtime": "2026-11-05T17:27:21.913Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/strat_tool_tier.js",
+        "size": 6829,
+        "mtime": "2026-11-05T17:27:21.914Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/terrain_view.js",
+        "size": 10530,
+        "mtime": "2026-11-05T17:27:21.916Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/terrain3d.js",
+        "size": 28581,
+        "mtime": "2026-11-05T17:27:21.914Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/tool_prep.js",
+        "size": 17190,
+        "mtime": "2026-11-05T18:43:20.589Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/trace_bus.js",
+        "size": 4107,
+        "mtime": "2026-11-05T17:27:21.917Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/world_model.js",
+        "size": 13324,
+        "mtime": "2026-11-05T17:27:21.918Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/library/world.js",
+        "size": 16482,
+        "mtime": "2026-11-05T17:27:21.918Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/memory_bank.js",
+        "size": 333,
+        "mtime": "2026-11-05T17:27:21.919Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/mindserver_proxy.js",
+        "size": 19755,
+        "mtime": "2026-11-05T18:04:24.709Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/modes.js",
+        "size": 29463,
+        "mtime": "2026-11-06T07:41:59.141Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/build_goal.js",
+        "size": 3380,
+        "mtime": "2026-11-05T17:27:21.921Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/construction/dirt_shelter.json",
+        "size": 1335,
+        "mtime": "2026-11-05T17:27:21.921Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/construction/large_house.json",
+        "size": 17895,
+        "mtime": "2026-11-05T17:27:21.922Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/construction/small_stone_house.json",
+        "size": 1894,
+        "mtime": "2026-11-05T17:27:21.922Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/construction/small_wood_house.json",
+        "size": 1619,
+        "mtime": "2026-11-05T17:27:21.922Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/controller.js",
+        "size": 12224,
+        "mtime": "2026-11-02T19:12:25.677Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/data.js",
+        "size": 1468,
+        "mtime": "2026-11-05T17:27:21.923Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/item_goal.js",
+        "size": 11942,
+        "mtime": "2026-11-05T17:27:21.923Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/npc/utils.js",
+        "size": 4234,
+        "mtime": "2026-11-05T17:27:21.924Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/permissions.js",
+        "size": 21165,
+        "mtime": "2026-11-06T07:40:19.635Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/rules/audit_baseline.json",
+        "size": 2524,
+        "mtime": "2026-11-05T17:27:21.925Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/rules/game_rules.json",
+        "size": 11739,
+        "mtime": "2026-11-05T17:27:21.926Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/rules/rules.runtime.js",
+        "size": 5681,
+        "mtime": "2026-11-05T17:27:21.926Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/self_prompter.js",
+        "size": 5950,
+        "mtime": "2026-11-06T07:42:06.478Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/server_props.js",
+        "size": 6354,
+        "mtime": "2026-11-01T10:03:42.758Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/settings.js",
+        "size": 268,
+        "mtime": "2026-11-05T17:27:21.928Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/speak.js",
+        "size": 7643,
+        "mtime": "2026-11-05T18:13:18.865Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/tasks/construction_tasks.js",
+        "size": 43879,
+        "mtime": "2026-11-06T04:41:13.845Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/tasks/cooking_tasks.js",
+        "size": 16319,
+        "mtime": "2026-11-06T04:39:52.525Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/tasks/task_chat.js",
+        "size": 4540,
+        "mtime": "2026-11-06T04:37:51.001Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/tasks/tasks.js",
+        "size": 29305,
+        "mtime": "2026-11-06T04:39:12.924Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/used_command.js",
+        "size": 2052,
+        "mtime": "2026-11-06T04:11:22.630Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/vision/browser_viewer.js",
+        "size": 723,
+        "mtime": "2026-10-18T09:44:02.151Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/vision/camera.js",
+        "size": 3865,
+        "mtime": "2026-10-18T09:44:08.548Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/agent/vision/vision_interpreter.js",
+        "size": 3390,
+        "mtime": "2026-11-01T12:37:50.994Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/infra/log_prefix.js",
+        "size": 4634,
+        "mtime": "2026-11-05T17:27:21.931Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft-py/example.py",
+        "size": 785,
+        "mtime": "2026-11-05T17:27:21.931Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft-py/init-mindcraft.js",
+        "size": 683,
+        "mtime": "2026-11-05T17:27:21.932Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft-py/mindcraft.py",
+        "size": 2976,
+        "mtime": "2026-11-05T17:27:21.932Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/auth_gate.js",
+        "size": 10423,
+        "mtime": "2026-11-06T07:37:51.905Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/local_only.js",
+        "size": 2093,
+        "mtime": "2026-11-01T06:22:17.631Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/mcserver.js",
+        "size": 5639,
+        "mtime": "2026-11-05T17:27:21.933Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/mindcraft.js",
+        "size": 6231,
+        "mtime": "2026-11-06T04:13:35.755Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/mindserver.js",
+        "size": 60264,
+        "mtime": "2026-11-06T10:25:45.992Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/offline_identity_risk.js",
+        "size": 5931,
+        "mtime": "2026-11-06T07:57:19.393Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/proc_control.js",
+        "size": 11168,
+        "mtime": "2026-11-06T10:21:37.037Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/public/index.html",
+        "size": 58752,
+        "mtime": "2026-11-05T17:27:21.935Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/mindcraft/public/settings_spec.json",
+        "size": 5743,
+        "mtime": "2026-11-06T04:38:03.256Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/_model_map.js",
+        "size": 4547,
+        "mtime": "2026-11-05T17:27:21.936Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/_shared.js",
+        "size": 13740,
+        "mtime": "2026-11-06T10:19:12.100Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/azure.js",
+        "size": 928,
+        "mtime": "2026-11-05T17:27:21.936Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/cerebras.js",
+        "size": 2272,
+        "mtime": "2026-11-05T17:27:21.937Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/claude.js",
+        "size": 3256,
+        "mtime": "2026-11-06T04:38:57.455Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/deepseek.js",
+        "size": 3217,
+        "mtime": "2026-11-06T10:18:01.308Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/gemini.js",
+        "size": 8082,
+        "mtime": "2026-11-06T10:18:39.512Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/gpt.js",
+        "size": 7541,
+        "mtime": "2026-11-06T10:18:23.865Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/grok.js",
+        "size": 3178,
+        "mtime": "2026-11-06T04:42:39.425Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/groq.js",
+        "size": 3559,
+        "mtime": "2026-11-06T04:39:14.028Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/huggingface.js",
+        "size": 3600,
+        "mtime": "2026-11-06T04:40:50.957Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/hyperbolic.js",
+        "size": 6637,
+        "mtime": "2026-11-06T10:19:58.835Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/lmstudio.js",
+        "size": 2999,
+        "mtime": "2026-11-06T04:40:59.664Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/mercury.js",
+        "size": 3302,
+        "mtime": "2026-11-06T04:42:47.280Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/mistral.js",
+        "size": 3089,
+        "mtime": "2026-11-06T04:39:40.221Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/novita.js",
+        "size": 2713,
+        "mtime": "2026-11-06T04:41:21.401Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/ollama.js",
+        "size": 5816,
+        "mtime": "2026-11-06T10:19:37.139Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/openrouter.js",
+        "size": 2999,
+        "mtime": "2026-11-05T17:27:21.944Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/prompter.js",
+        "size": 23221,
+        "mtime": "2026-11-06T10:18:55.304Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/qwen.js",
+        "size": 3299,
+        "mtime": "2026-11-06T04:42:47.311Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/replicate.js",
+        "size": 4652,
+        "mtime": "2026-11-06T04:41:36.591Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/models/vllm.js",
+        "size": 4042,
+        "mtime": "2026-11-06T04:42:55.270Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/process/agent_process.js",
+        "size": 11614,
+        "mtime": "2026-11-06T04:12:57.861Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/process/init_agent.js",
+        "size": 4514,
+        "mtime": "2026-11-06T04:16:09.512Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/process/proc_lifecycle.js",
+        "size": 6245,
+        "mtime": "2026-11-06T04:17:22.795Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/sim/position_guard.js",
+        "size": 4308,
+        "mtime": "2026-11-05T17:27:21.951Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/sim/position_throttle.js",
+        "size": 2839,
+        "mtime": "2026-11-05T17:27:21.952Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/sim/vine_physics.js",
+        "size": 8220,
+        "mtime": "2026-11-05T17:27:21.952Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/env_flags.js",
+        "size": 3904,
+        "mtime": "2026-11-06T07:38:40.928Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/examples.js",
+        "size": 3136,
+        "mtime": "2026-11-06T10:18:44.493Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/keys.js",
+        "size": 596,
+        "mtime": "2026-11-05T17:27:21.952Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/loop_lag.js",
+        "size": 4441,
+        "mtime": "2026-11-06T04:47:00.208Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/math.js",
+        "size": 525,
+        "mtime": "2026-11-05T17:27:21.954Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/mcdata.js",
+        "size": 21129,
+        "mtime": "2026-11-05T17:27:21.954Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/skill_doc_check.js",
+        "size": 5503,
+        "mtime": "2026-10-21T13:16:20.105Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/text.js",
+        "size": 8683,
+        "mtime": "2026-11-06T10:20:51.852Z",
+        "lastRule": null
+      },
+      {
+        "path": "src/utils/translator.js",
+        "size": 1069,
+        "mtime": "2026-11-05T17:27:21.955Z",
+        "lastRule": null
+      },
+      {
+        "path": "start.bat",
+        "size": 8094,
+        "mtime": "2026-11-06T10:49:40.827Z",
+        "lastRule": null
+      },
+      {
+        "path": "Tasks.Dockerfile",
+        "size": 1345,
+        "mtime": "2026-11-05T17:27:21.829Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/analyse_results.py",
+        "size": 11916,
+        "mtime": "2026-11-05T17:27:21.955Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/analyze_construction_tasks.py",
+        "size": 10400,
+        "mtime": "2026-11-05T17:27:21.956Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/analyze_cooking_tasks.py",
+        "size": 15999,
+        "mtime": "2026-11-05T17:27:21.956Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/analyze_crafting_tasks.py",
+        "size": 16488,
+        "mtime": "2026-11-05T17:27:21.957Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/basic/single_agent.json",
+        "size": 462,
+        "mtime": "2026-11-05T17:27:21.957Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/analyze_multiagent_construction_tasks.js",
+        "size": 1101,
+        "mtime": "2026-11-05T17:27:21.958Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/blueprint_visualizer.py",
+        "size": 2837,
+        "mtime": "2026-11-05T17:27:21.959Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/church_blueprint.pdf",
+        "size": 57057,
+        "mtime": "2026-10-18T09:34:04.611Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/custom/church_one_agent.json",
+        "size": 53543,
+        "mtime": "2026-11-05T17:27:21.959Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/custom/church_three_agents.json",
+        "size": 49063,
+        "mtime": "2026-11-05T17:27:21.960Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/custom/church_two_agents.json",
+        "size": 53672,
+        "mtime": "2026-11-05T17:27:21.961Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/custom/flower_three_agents.json",
+        "size": 32506,
+        "mtime": "2026-11-05T17:27:21.961Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/custom/pyramid_three_agents.json",
+        "size": 15442,
+        "mtime": "2026-11-05T17:27:21.962Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/custom/pyramid.json",
+        "size": 15236,
+        "mtime": "2026-11-05T17:27:21.962Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/custom/tasks.json",
+        "size": 22076,
+        "mtime": "2026-11-05T17:27:21.963Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/filter_easy_tasks.py",
+        "size": 9948,
+        "mtime": "2026-11-05T17:27:21.963Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/filter_training_tasks.py",
+        "size": 3096,
+        "mtime": "2026-11-05T17:27:21.964Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/generate_multiagent_construction_tasks.js",
+        "size": 6274,
+        "mtime": "2026-11-05T17:27:21.964Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/get_blueprint.js",
+        "size": 2069,
+        "mtime": "2026-11-05T17:27:21.965Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/human_ai/1_agent_1_human.json",
+        "size": 80342,
+        "mtime": "2026-11-05T17:27:21.967Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/human_ai/2_agent_1_human.json",
+        "size": 54212,
+        "mtime": "2026-11-05T17:27:21.967Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/construction_tasks/README_ConstructionTasks.md",
+        "size": 1361,
+        "mtime": "2026-11-05T17:27:21.958Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/hells_kitchen_tasks.py",
+        "size": 21958,
+        "mtime": "2026-11-05T17:27:21.968Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/human_ai/1_agent_1_human.json",
+        "size": 1989,
+        "mtime": "2026-11-05T17:27:21.968Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/make_collaboration_required_cooking_task.py",
+        "size": 20436,
+        "mtime": "2026-11-05T17:27:21.969Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/1_agent_partial.json",
+        "size": 15090,
+        "mtime": "2026-11-05T17:27:21.969Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_all_possible.json",
+        "size": 64625,
+        "mtime": "2026-11-05T17:27:21.970Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_block_recipe_full.json",
+        "size": 22626,
+        "mtime": "2026-11-05T17:27:21.971Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_block_recipe_long_timeout.json",
+        "size": 16523,
+        "mtime": "2026-11-05T17:27:21.972Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_block_recipe.json",
+        "size": 12533,
+        "mtime": "2026-11-05T17:27:21.971Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_blocked_action_remaining.json",
+        "size": 26258,
+        "mtime": "2026-11-05T17:27:21.972Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_full_remaining.json",
+        "size": 34072,
+        "mtime": "2026-11-05T17:27:21.973Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_full.json",
+        "size": 42001,
+        "mtime": "2026-11-05T17:27:21.973Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_hells_kitchen_full.json",
+        "size": 40147,
+        "mtime": "2026-11-05T17:27:21.975Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_hells_kitchen.json",
+        "size": 17133,
+        "mtime": "2026-11-05T17:27:21.974Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_long_timeout.json",
+        "size": 15685,
+        "mtime": "2026-11-05T17:27:21.976Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent.json",
+        "size": 15679,
+        "mtime": "2026-11-05T17:27:21.969Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/3_agent_long_timeout.json",
+        "size": 16164,
+        "mtime": "2026-11-05T17:27:21.977Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/3_agent.json",
+        "size": 12138,
+        "mtime": "2026-11-05T17:27:21.976Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/4_agent_long_timeout.json",
+        "size": 16592,
+        "mtime": "2026-11-05T17:27:21.978Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/4_agent_remaining.json",
+        "size": 10962,
+        "mtime": "2026-11-05T17:27:21.979Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/4_agent.json",
+        "size": 12566,
+        "mtime": "2026-11-05T17:27:21.978Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/5_agent_long_timeout.json",
+        "size": 16978,
+        "mtime": "2026-11-05T17:27:21.981Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/5_agent_remaining.json",
+        "size": 8496,
+        "mtime": "2026-11-05T17:27:21.981Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/5_agent.json",
+        "size": 12951,
+        "mtime": "2026-11-05T17:27:21.979Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/2_agent_block_recipe.json",
+        "size": 135967,
+        "mtime": "2026-11-05T17:27:21.983Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/2_agent_hells_kitchen.json",
+        "size": 119072,
+        "mtime": "2026-11-05T17:27:21.984Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/2_agent.json",
+        "size": 111314,
+        "mtime": "2026-11-05T17:27:21.982Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/3_agent.json",
+        "size": 44109,
+        "mtime": "2026-11-05T17:27:21.984Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/4_agent.json",
+        "size": 23878,
+        "mtime": "2026-11-05T17:27:21.985Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/5_agent_remaining.json",
+        "size": 11076,
+        "mtime": "2026-11-05T17:27:21.986Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/5_agent.json",
+        "size": 24472,
+        "mtime": "2026-11-05T17:27:21.985Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/filtered_train_tasks.json",
+        "size": 48107,
+        "mtime": "2026-11-05T17:27:21.987Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/human_ai/1_agent_1_human_copy.json",
+        "size": 21913,
+        "mtime": "2026-11-05T17:27:21.988Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/human_ai/1_agent_1_human.json",
+        "size": 787,
+        "mtime": "2026-11-05T17:27:21.988Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/human_ai/3_agent_1_human.json",
+        "size": 29180,
+        "mtime": "2026-11-05T17:27:21.989Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/1_agent_remaining.json",
+        "size": 4105,
+        "mtime": "2026-11-05T17:27:21.991Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/1_agent.json",
+        "size": 9219,
+        "mtime": "2026-11-05T17:27:21.990Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/2_agent.json",
+        "size": 11282,
+        "mtime": "2026-11-05T17:27:21.992Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/filtered_tasks_3_agents.json",
+        "size": 20184,
+        "mtime": "2026-11-05T17:27:21.993Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/filtered_tasks_4_agents.json",
+        "size": 21949,
+        "mtime": "2026-11-05T17:27:21.994Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/filtered_tasks_5_agents.json",
+        "size": 23781,
+        "mtime": "2026-11-05T17:27:22.003Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/evaluation_script.py",
+        "size": 33133,
+        "mtime": "2026-11-05T17:27:22.009Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/example_tasks.json",
+        "size": 18853,
+        "mtime": "2026-11-05T17:27:22.009Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/experiment_script.sh",
+        "size": 1461,
+        "mtime": "2026-11-05T17:27:22.009Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/human_ai_tasks.py",
+        "size": 1785,
+        "mtime": "2026-11-05T17:27:22.011Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/human_evaluation.js",
+        "size": 4726,
+        "mtime": "2026-11-05T17:27:22.011Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/multi_data_collection_script.py",
+        "size": 8863,
+        "mtime": "2026-11-05T17:27:22.012Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/multiagent_crafting_tasks.json",
+        "size": 1267,
+        "mtime": "2026-11-05T17:27:22.012Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/new_analyze_construction_tasks.py",
+        "size": 498,
+        "mtime": "2026-11-05T17:27:22.012Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/run_task_file.py",
+        "size": 1785,
+        "mtime": "2026-11-05T17:27:22.013Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/running_human_ai.md",
+        "size": 1376,
+        "mtime": "2026-11-05T17:27:22.013Z",
+        "lastRule": null
+      },
+      {
+        "path": "tasks/single_agent/crafting_train.json",
+        "size": 5721,
+        "mtime": "2026-11-05T17:27:22.013Z",
+        "lastRule": null
+      }
+    ]
+  },
+  "imageSet": {
+    "description": "Dockerfile 显式 COPY 清单真正写进镜像的文件集合（当前实际口径）",
+    "fileCount": 268,
+    "totalBytes": 4546846,
+    "files": [
+      {
+        "path": "main.js",
+        "copyLine": 39,
+        "copyRaw": "COPY main.js settings.js ./",
+        "dest": "./"
+      },
+      {
+        "path": "package-lock.json",
+        "copyLine": 31,
+        "copyRaw": "COPY package*.json .",
+        "dest": "."
+      },
+      {
+        "path": "package.json",
+        "copyLine": 31,
+        "copyRaw": "COPY package*.json .",
+        "dest": "."
+      },
+      {
+        "path": "patches/minecraft-data+3.97.0.patch.disabled",
+        "copyLine": 32,
+        "copyRaw": "COPY patches ./patches",
+        "dest": "./patches"
+      },
+      {
+        "path": "patches/mineflayer-pathfinder+2.4.5.patch",
+        "copyLine": 32,
+        "copyRaw": "COPY patches ./patches",
+        "dest": "./patches"
+      },
+      {
+        "path": "patches/mineflayer-pvp+1.3.2.patch",
+        "copyLine": 32,
+        "copyRaw": "COPY patches ./patches",
+        "dest": "./patches"
+      },
+      {
+        "path": "patches/mineflayer+4.39.0.patch",
+        "copyLine": 32,
+        "copyRaw": "COPY patches ./patches",
+        "dest": "./patches"
+      },
+      {
+        "path": "patches/prismarine-viewer+1.33.0.patch",
+        "copyLine": 32,
+        "copyRaw": "COPY patches ./patches",
+        "dest": "./patches"
+      },
+      {
+        "path": "patches/protodef+1.19.0.patch",
+        "copyLine": 32,
+        "copyRaw": "COPY patches ./patches",
+        "dest": "./patches"
+      },
+      {
+        "path": "patches/SHA256SUMS",
+        "copyLine": 32,
+        "copyRaw": "COPY patches ./patches",
+        "dest": "./patches"
+      },
+      {
+        "path": "README.md",
+        "copyLine": 44,
+        "copyRaw": "COPY README.md ./",
+        "dest": "./"
+      },
+      {
+        "path": "schematics/house.litematic",
+        "copyLine": 43,
+        "copyRaw": "COPY schematics ./schematics",
+        "dest": "./schematics"
+      },
+      {
+        "path": "services/viaproxy/README.md",
+        "copyLine": 41,
+        "copyRaw": "COPY services ./services",
+        "dest": "./services"
+      },
+      {
+        "path": "settings.js",
+        "copyLine": 39,
+        "copyRaw": "COPY main.js settings.js ./",
+        "dest": "./"
+      },
+      {
+        "path": "src/agent/action_manager.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/agent.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/coder.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/commands/actions.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/commands/index.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/commands/queries.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/connection_handler.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/conversation.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/history.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_attack.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_blockuse.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_climb.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_container.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_craft.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_dig.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_entity.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_farm.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_fish.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_items.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_pillar.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_place.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_rest.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_step.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/act_swim.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_input_inventory.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_input_misc.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_input_mouse.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_input_move.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_look.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_read.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_tunnel.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_wait_item.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/atom_wait.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/board_claims.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/board_client.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/board_scheduler.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/board_server.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/board_store.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/bot_paths.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/code_hints.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/collect_planner.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/collect_targets.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/composite_registry.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/contract.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/control.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/executor.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_build.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_clear.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_collect_plan.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_collect.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_craft.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_eat.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_escape.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_farm.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_fight.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_follow.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_mine.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_pickup.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_platform.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_shelter.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_smelt.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/flow_store.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/full_state.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/heartbeat_loop.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/idle_planner.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/index.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/landmarks.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/lockdown.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/map_query.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/mca_import.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/memory_store.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/modes.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/nav_core.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/nav_hop.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/nav_pathfinder.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/outcome.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/path_3d.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/protect_owner.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/query_classify.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/query_drops.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/query_perceive.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/query_safe.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/query_stand.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/query_stuck.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/query_target.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/query_tree.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/rcon_client.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/scaffold_blocks.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/scaffold_cleanup.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/schematic.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/skill_library.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/skills.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/step_runner.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/storage.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/strat_first_night.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/strat_obtain.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/strat_tool_tier.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/terrain_view.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/terrain3d.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/tool_prep.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/trace_bus.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/world_model.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/library/world.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/memory_bank.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/mindserver_proxy.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/modes.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/build_goal.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/construction/dirt_shelter.json",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/construction/large_house.json",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/construction/small_stone_house.json",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/construction/small_wood_house.json",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/controller.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/data.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/item_goal.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/npc/utils.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/permissions.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/rules/audit_baseline.json",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/rules/game_rules.json",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/rules/rules.runtime.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/self_prompter.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/server_props.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/settings.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/speak.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/tasks/construction_tasks.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/tasks/cooking_tasks.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/tasks/task_chat.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/tasks/tasks.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/used_command.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/vision/browser_viewer.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/vision/camera.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/agent/vision/vision_interpreter.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/infra/log_prefix.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft-py/example.py",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft-py/init-mindcraft.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft-py/mindcraft.py",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/auth_gate.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/local_only.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/mcserver.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/mindcraft.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/mindserver.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/offline_identity_risk.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/proc_control.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/public/index.html",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/mindcraft/public/settings_spec.json",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/_model_map.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/_shared.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/azure.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/cerebras.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/claude.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/deepseek.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/gemini.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/gpt.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/grok.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/groq.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/huggingface.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/hyperbolic.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/lmstudio.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/mercury.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/mistral.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/novita.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/ollama.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/openrouter.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/prompter.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/qwen.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/replicate.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/models/vllm.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/process/agent_process.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/process/init_agent.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/process/proc_lifecycle.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/sim/position_guard.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/sim/position_throttle.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/sim/vine_physics.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/env_flags.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/examples.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/keys.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/loop_lag.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/math.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/mcdata.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/skill_doc_check.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/text.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "src/utils/translator.js",
+        "copyLine": 40,
+        "copyRaw": "COPY src ./src",
+        "dest": "./src"
+      },
+      {
+        "path": "tasks/analyse_results.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/analyze_construction_tasks.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/analyze_cooking_tasks.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/analyze_crafting_tasks.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/basic/single_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/analyze_multiagent_construction_tasks.js",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/blueprint_visualizer.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/church_blueprint.pdf",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/custom/church_one_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/custom/church_three_agents.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/custom/church_two_agents.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/custom/flower_three_agents.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/custom/pyramid_three_agents.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/custom/pyramid.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/custom/tasks.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/filter_easy_tasks.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/filter_training_tasks.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/generate_multiagent_construction_tasks.js",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/get_blueprint.js",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/human_ai/1_agent_1_human.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/human_ai/2_agent_1_human.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/construction_tasks/README_ConstructionTasks.md",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/hells_kitchen_tasks.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/human_ai/1_agent_1_human.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/make_collaboration_required_cooking_task.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/1_agent_partial.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_all_possible.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_block_recipe_full.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_block_recipe_long_timeout.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_block_recipe.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_blocked_action_remaining.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_full_remaining.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_full.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_hells_kitchen_full.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_hells_kitchen.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent_long_timeout.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/2_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/3_agent_long_timeout.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/3_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/4_agent_long_timeout.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/4_agent_remaining.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/4_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/5_agent_long_timeout.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/5_agent_remaining.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_test_2_items/5_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/2_agent_block_recipe.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/2_agent_hells_kitchen.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/2_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/3_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/4_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/5_agent_remaining.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/cooking_tasks/require_collab_train_2_items/5_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/filtered_train_tasks.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/human_ai/1_agent_1_human_copy.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/human_ai/1_agent_1_human.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/human_ai/3_agent_1_human.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/1_agent_remaining.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/1_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/2_agent.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/filtered_tasks_3_agents.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/filtered_tasks_4_agents.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/crafting_tasks/test_tasks/filtered_tasks_5_agents.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/evaluation_script.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/example_tasks.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/experiment_script.sh",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/human_ai_tasks.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/human_evaluation.js",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/multi_data_collection_script.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/multiagent_crafting_tasks.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/new_analyze_construction_tasks.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/run_task_file.py",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/running_human_ai.md",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      },
+      {
+        "path": "tasks/single_agent/crafting_train.json",
+        "copyLine": 42,
+        "copyRaw": "COPY tasks ./tasks",
+        "dest": "./tasks"
+      }
+    ]
+  },
+  "probes": [
+    {
+      "path": ".mindserver-token",
+      "why": "控制台握手令牌（本机真实存在）",
+      "existsOnDisk": true,
+      "onDiskKind": "file",
+      "onDiskSize": 36,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 24,
+        "pattern": ".mindserver-token"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": ".mindserver-token.bak",
+      "why": ".mindserver-token.* 变体",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 25,
+        "pattern": ".mindserver-token.*"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": ".env",
+      "why": "部署期环境变量（密钥常见载体）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 27,
+        "pattern": ".env"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": ".env.local",
+      "why": ".env.* 变体",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 28,
+        "pattern": ".env.*"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": ".env.production",
+      "why": ".env.* 变体",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 28,
+        "pattern": ".env.*"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": "profiles/my-local.json",
+      "why": "每个 bot 的人设 + permissions（可能内嵌 key）",
+      "existsOnDisk": true,
+      "onDiskKind": "file",
+      "onDiskSize": 1951,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 32,
+        "pattern": "profiles"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": "profiles/andy-4.json",
+      "why": "profiles 下普通文件",
+      "existsOnDisk": true,
+      "onDiskKind": "file",
+      "onDiskSize": 110,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 32,
+        "pattern": "profiles"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": ".git/config",
+      "why": "git 配置（可能含 remote 凭据）",
+      "existsOnDisk": true,
+      "onDiskKind": "file",
+      "onDiskSize": 547,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 16,
+        "pattern": ".git"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": ".git/HEAD",
+      "why": "git 仓库本体",
+      "existsOnDisk": true,
+      "onDiskKind": "file",
+      "onDiskSize": 37,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 16,
+        "pattern": ".git"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": "logs/mindserver.log",
+      "why": "运行日志（可能含 token）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 42,
+        "pattern": "**/*.log"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": "logs",
+      "why": "logs 目录本身",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 36,
+        "pattern": "logs"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": "tmp/whatever.json",
+      "why": "临时目录",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 37,
+        "pattern": "tmp"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": "bots/deepseek/memory.json",
+      "why": "bot 运行期记忆数据",
+      "existsOnDisk": true,
+      "onDiskKind": "file",
+      "onDiskSize": 2820,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 35,
+        "pattern": "bots"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": "keys.json",
+      "why": "模型 API Key（本机真实存在）",
+      "existsOnDisk": true,
+      "onDiskKind": "file",
+      "onDiskSize": 575,
+      "dockerignoreIgnored": true,
+      "dockerignoreRule": {
+        "line": 26,
+        "pattern": "keys.json"
+      },
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "EXCLUDED"
+    },
+    {
+      "path": "auth.token",
+      "why": "★ *.token：任意后缀令牌文件（.dockerignore 无此通配）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "deploy.token",
+      "why": "★ *.token 变体",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "mindserver.token",
+      "why": "★ *.token 变体",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "sub/dir/nested.token",
+      "why": "★ *.token 子目录变体",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "id_rsa",
+      "why": "SSH 私钥（check_secret_filenames 覆盖，dockerignore 无）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "id_ed25519",
+      "why": "SSH 私钥（同上）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "credentials.json",
+      "why": "cloud 凭据（同上）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "secrets.json",
+      "why": "密钥集合（同上）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "config.local.json",
+      "why": "本地私有配置（同上）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "server.pfx",
+      "why": "PFX 证书（dockerignore 只有 pem/key/p12）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "server.crt",
+      "why": "CRT 证书（同上）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "server.jks",
+      "why": "JKS 密钥库（同上）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "mindserver-token",
+      "why": "无前导点的 mindserver-token（check_secret_filenames 覆盖）",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "config/",
+      "why": "★ 队长点名：config 目录是否在上下文内",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "config/network.json",
+      "why": "★ 队长点名：config 下文件",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    },
+    {
+      "path": "config.local.js",
+      "why": "本地配置 js 变体",
+      "existsOnDisk": false,
+      "onDiskKind": null,
+      "onDiskSize": null,
+      "dockerignoreIgnored": false,
+      "dockerignoreRule": null,
+      "inBuildContext": false,
+      "inImage": false,
+      "verdict": "LATENT-GAP"
+    }
+  ],
+  "probeSummary": {
+    "leakInImage": [],
+    "inContextNotInImage": [],
+    "latentGaps": [
+      "auth.token",
+      "deploy.token",
+      "mindserver.token",
+      "sub/dir/nested.token",
+      "id_rsa",
+      "id_ed25519",
+      "credentials.json",
+      "secrets.json",
+      "config.local.json",
+      "server.pfx",
+      "server.crt",
+      "server.jks",
+      "mindserver-token",
+      "config/",
+      "config/network.json",
+      "config.local.js"
+    ],
+    "excluded": [
+      ".mindserver-token",
+      ".mindserver-token.bak",
+      ".env",
+      ".env.local",
+      ".env.production",
+      "profiles/my-local.json",
+      "profiles/andy-4.json",
+      ".git/config",
+      ".git/HEAD",
+      "logs/mindserver.log",
+      "logs",
+      "tmp/whatever.json",
+      "bots/deepseek/memory.json",
+      "keys.json"
+    ],
+    "notPresentInTree": []
+  },
+  "notes": {
+    "rootConfigIsOutsideContext": "队长点名的 `config/`：仓库根有 E:\\我的世界ai\\config\\network.json，但 docker-compose.yml 的 `build: .` 上下文是 **mindcraft/ 目录**，根 config/ 根本不在构建上下文里；而 mindcraft/ 下经实测**没有** config/ 目录。⇒ 「config/ 未排除」这条在当前目录布局下不构成真实泄漏，但 .dockerignore 缺 `config` 规则属**潜在**口径缺口（一旦有人在 mindcraft/ 下建 config/ 并放私有配置，它就会进上下文）。",
+    "explicitCopyIsTheRealGate": "真正的闸门是 Dockerfile 的显式 COPY 清单：即使某文件漏出 .dockerignore，只要不在 COPY 清单里就进不了镜像层。.dockerignore 决定的只是\"是否被送进 docker daemon 的构建上下文\"。两层都该严，但严重度不同。"
+  },
+  "mustKeepResult": [
+    {
+      "path": "main.js",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "settings.js",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "package.json",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "package-lock.json",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "patches",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "src/agent/agent.js",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "src/mindcraft/mindserver.js",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "services",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "tasks",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    },
+    {
+      "path": "schematics",
+      "existsOnDisk": true,
+      "inBuildContext": true,
+      "inImage": true
+    }
+  ],
+  "counterfactual": {
+    "note": "若 Dockerfile 退回 `COPY . .`（OPS-005 缺陷原貌），泄漏面 = 下面这些\"被 .dockerignore 挡住\"以外的全部文件；其中 probes 里 verdict=IN-CONTEXT-NOT-IN-IMAGE / LATENT-GAP 的项都会真的进层。",
+    "hypotheticalImageFilesCount": 280,
+    "hypotheticalImageBytes": 4583006,
+    "deltaVsExplicitCopy": 12,
+    "extraFilesThatWouldShip": [
+      ".dockerignore",
+      "andy.json",
+      "docker-compose.yml",
+      "Dockerfile",
+      "eslint.config.js",
+      "FAQ.md",
+      "keys.example.json",
+      "LICENSE",
+      "minecollab.md",
+      "requirements.txt",
+      "start.bat",
+      "Tasks.Dockerfile"
+    ]
+  },
+  "patternDiff": {
+    "available": true,
+    "scannerFile": "mindcraft/tools/check_secret_filenames.mjs",
+    "extractedScannerRegexCount": 15,
+    "rows": [
+      {
+        "path": "auth.token",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "deploy.token",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "mindserver.token",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "sub/nested.token",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "id_rsa",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "id_ed25519",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "credentials.json",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "secrets.json",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "config.local.json",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "server.pfx",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "server.crt",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "server.jks",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": "mindserver-token",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "IN-CONTEXT",
+        "divergence": true
+      },
+      {
+        "path": ".mindserver-token",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "EXCLUDED",
+        "divergence": false
+      },
+      {
+        "path": "keys.json",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "EXCLUDED",
+        "divergence": false
+      },
+      {
+        "path": ".env",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "EXCLUDED",
+        "divergence": false
+      },
+      {
+        "path": ".env.local",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "EXCLUDED",
+        "divergence": false
+      },
+      {
+        "path": "x.pem",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "EXCLUDED",
+        "divergence": false
+      },
+      {
+        "path": "x.key",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "EXCLUDED",
+        "divergence": false
+      },
+      {
+        "path": "x.p12",
+        "check_secret_filenames": "FLAG(凭据类)",
+        "dockerignore": "EXCLUDED",
+        "divergence": false
+      }
+    ],
+    "divergenceCount": 13,
+    "divergences": [
+      "auth.token",
+      "deploy.token",
+      "mindserver.token",
+      "sub/nested.token",
+      "id_rsa",
+      "id_ed25519",
+      "credentials.json",
+      "secrets.json",
+      "config.local.json",
+      "server.pfx",
+      "server.crt",
+      "server.jks",
+      "mindserver-token"
+    ]
+  },
+  "secretScan": {
+    "scannedFiles": 267,
+    "skippedBinaryOrBig": 1,
+    "hits": []
+  }
+}

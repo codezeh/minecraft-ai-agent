@@ -1,0 +1,104 @@
+{
+  "probe": "A2b-load-budget",
+  "startedAt": "2026-11-06T12:08:52.140Z",
+  "invBefore": {
+    "raw_iron": 16,
+    "coal": 8
+  },
+  "fuelNeededFor16": 2,
+  "furnaceBlock": {
+    "name": "furnace",
+    "pos": {
+      "x": 202,
+      "y": 71,
+      "z": 200
+    }
+  },
+  "furnaceLoadReturn": {
+    "ok": true,
+    "code": "OK",
+    "message": "",
+    "data": {
+      "input": "raw_iron",
+      "inputCount": 16,
+      "fuel": "coal",
+      "fuelCount": 2,
+      "costMs": 627
+    }
+  },
+  "loadCostMs": 627,
+  "nbtRightAfterLoad": {
+    "input": {
+      "slot": 0,
+      "id": "raw_iron",
+      "count": 16
+    },
+    "fuel": null,
+    "output": null,
+    "all": [
+      {
+        "slot": 0,
+        "id": "raw_iron",
+        "count": 16
+      }
+    ],
+    "raw": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 16}, {Slot: 1b, id: \"..."
+  },
+  "nbtPlus400ms": {
+    "input": {
+      "slot": 0,
+      "id": "raw_iron",
+      "count": 16
+    },
+    "fuel": null,
+    "output": null,
+    "all": [
+      {
+        "slot": 0,
+        "id": "raw_iron",
+        "count": 16
+      }
+    ],
+    "raw": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 16}, {Slot: 1b, id: \"..."
+  },
+  "nbtPlus1900ms": {
+    "input": {
+      "slot": 0,
+      "id": "raw_iron",
+      "count": 16
+    },
+    "fuel": null,
+    "output": null,
+    "all": [
+      {
+        "slot": 0,
+        "id": "raw_iron",
+        "count": 16
+      }
+    ],
+    "raw": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 16}, {Slot: 1b, id: \"..."
+  },
+  "invAfterLoad": {
+    "raw_iron": 0,
+    "coal": 0
+  },
+  "invDelta": {
+    "raw_ironTaken": 16,
+    "coalTaken": 8
+  },
+  "verdict": {
+    "loadOk": true,
+    "productReportedFuelCount": 2,
+    "productReportedInputCount": 16,
+    "fuelCountIs2": true,
+    "inputCountIs16": true,
+    "inventoryCoalTaken2": false,
+    "nbtFuelCountsSeen": [
+      null,
+      null,
+      null
+    ],
+    "nbtShowsCoalInFuelSlot": false,
+    "note": "服务端在开始燃烧时会立刻消耗第一份燃料，所以 NBT 可能读到 2（未及消耗）或 1（已消耗 1 份）；两者都证明\"2 份投进过燃料槽\""
+  }
+}

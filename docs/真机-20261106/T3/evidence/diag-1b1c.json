@@ -1,0 +1,128 @@
+{
+  "1_composition_only_beforeEnter": {
+    "domInputValue": "nihaoshijie",
+    "sendButtonDisabled": true,
+    "sendButtonLabel": "发送",
+    "chatMeTexts": [],
+    "composerPlaceholder": "和她说话，或直接发 !命令…"
+  },
+  "1_clickSend_duringComposition": {
+    "disabled": true
+  },
+  "1_afterClickSend": {
+    "domInputValue": "nihaoshijie",
+    "sendButtonDisabled": true,
+    "sendButtonLabel": "发送",
+    "chatMeTexts": [],
+    "composerPlaceholder": "和她说话，或直接发 !命令…"
+  },
+  "1_afterEnter": {
+    "domInputValue": "nihaoshijie",
+    "sendButtonDisabled": true,
+    "sendButtonLabel": "发送",
+    "chatMeTexts": [],
+    "composerPlaceholder": "和她说话，或直接发 !命令…"
+  },
+  "1_events": [
+    {
+      "t": 863.5,
+      "phase": "evt:compositionstart",
+      "data": ""
+    },
+    {
+      "t": 864.4,
+      "phase": "evt:input",
+      "data": "nihaoshijie",
+      "isComposing": true
+    },
+    {
+      "t": 1188.4,
+      "phase": "keydown@capture",
+      "key": "Enter",
+      "keyCode": 13,
+      "isComposing": true,
+      "prevented": false,
+      "target": "INPUT"
+    },
+    {
+      "t": 1189.2,
+      "phase": "keydown@settled",
+      "key": "Enter",
+      "isComposing": true,
+      "prevented": true
+    }
+  ],
+  "2_afterCompositionEnd": {
+    "domInputValue": "",
+    "sendButtonDisabled": true,
+    "sendButtonLabel": "发送",
+    "chatMeTexts": [],
+    "composerPlaceholder": "和她说话，或直接发 !命令…"
+  },
+  "2_afterEnter": {
+    "domInputValue": "",
+    "sendButtonDisabled": true,
+    "sendButtonLabel": "发送",
+    "chatMeTexts": [],
+    "composerPlaceholder": "和她说话，或直接发 !命令…"
+  },
+  "2_sendButtonDisabled": true,
+  "3_afterCommittedText": {
+    "domInputValue": "你好",
+    "sendButtonDisabled": false,
+    "sendButtonLabel": "发送",
+    "chatMeTexts": [],
+    "composerPlaceholder": "和她说话，或直接发 !命令…"
+  },
+  "3_compositionOnTopOfCommitted": {
+    "domInputValue": "你好shijie",
+    "sendButtonDisabled": false,
+    "sendButtonLabel": "发送",
+    "chatMeTexts": [],
+    "composerPlaceholder": "和她说话，或直接发 !命令…"
+  },
+  "3_afterEnter": {
+    "domInputValue": "你好shijie",
+    "sendButtonDisabled": true,
+    "sendButtonLabel": "发送",
+    "chatMeTexts": [
+      "你好"
+    ],
+    "composerPlaceholder": "和她说话，或直接发 !命令…"
+  },
+  "3_events": [
+    {
+      "t": 1793.6,
+      "phase": "evt:input",
+      "data": "你好",
+      "isComposing": false
+    },
+    {
+      "t": 2009.5,
+      "phase": "evt:compositionstart",
+      "data": ""
+    },
+    {
+      "t": 2009.8,
+      "phase": "evt:input",
+      "data": "shijie",
+      "isComposing": true
+    },
+    {
+      "t": 2214.2,
+      "phase": "keydown@capture",
+      "key": "Enter",
+      "keyCode": 13,
+      "isComposing": true,
+      "prevented": false,
+      "target": "INPUT"
+    },
+    {
+      "t": 2218.2,
+      "phase": "keydown@settled",
+      "key": "Enter",
+      "isComposing": true,
+      "prevented": true
+    }
+  ]
+}

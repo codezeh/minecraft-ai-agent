@@ -1,0 +1,276 @@
+﻿{
+    "probe":  "T5 runtime probe (OPS-005 真 build 前置)",
+    "generatedAt":  "2026-11-06T19:53:50.7439285+08:00",
+    "host":  {
+                 "computerName":  "LAPTOP-GDE992NS",
+                 "user":  "zeh",
+                 "os":  "Microsoft Windows 11 家庭版 中文版",
+                 "osVersion":  "10.0.26300",
+                 "psVersion":  "5.1.26100.9711",
+                 "arch":  "AMD64"
+             },
+    "pathProbe":  [
+                      {
+                          "name":  "docker",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      },
+                      {
+                          "name":  "docker-compose",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      },
+                      {
+                          "name":  "podman",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      },
+                      {
+                          "name":  "nerdctl",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      },
+                      {
+                          "name":  "nerdctl-full",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      },
+                      {
+                          "name":  "wsl",
+                          "found":  true,
+                          "source":  "C:\\Windows\\system32\\wsl.exe",
+                          "version":  "10.0.26100.9549"
+                      },
+                      {
+                          "name":  "containerd",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      },
+                      {
+                          "name":  "buildah",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      },
+                      {
+                          "name":  "limactl",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      },
+                      {
+                          "name":  "colima",
+                          "found":  false,
+                          "source":  null,
+                          "version":  null
+                      }
+                  ],
+    "installPaths":  [
+                         {
+                             "path":  "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker-compose.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files\\Docker\\Docker\\resources\\com.docker.backend.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files (x86)\\Docker\\Docker\\Docker Desktop.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Users\\zeh\\AppData\\Local\\Docker\\Docker\\Docker Desktop.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Users\\zeh\\AppData\\Local\\Docker\\Docker\\resources\\bin\\docker.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Users\\zeh\\AppData\\Local\\Docker\\wsl",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\ProgramData\\DockerDesktop",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\ProgramData\\Docker",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Users\\zeh\\.docker",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Users\\zeh\\.docker\\config.json",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Users\\zeh\\.docker\\contexts",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files\\podman\\podman.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files\\RedHat\\Podman\\podman.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files\\containerd\\ctr.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files\\Rancher Desktop\\Rancher Desktop.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Users\\zeh\\AppData\\Local\\Programs\\Rancher Desktop\\Rancher Desktop.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Program Files\\Nerdctl\\nerdctl.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\ProgramData\\chocolatey\\bin\\docker.exe",
+                             "exists":  false,
+                             "kind":  null
+                         },
+                         {
+                             "path":  "C:\\Users\\zeh\\scoop\\shims\\docker.exe",
+                             "exists":  false,
+                             "kind":  null
+                         }
+                     ],
+    "dockerDesktopMeta":  [
+                              {
+                                  "path":  "C:\\Program Files\\Docker\\Docker\\version.json",
+                                  "exists":  false,
+                                  "content":  null
+                              },
+                              {
+                                  "path":  "C:\\Program Files\\Docker\\Docker\\componentsVersion.json",
+                                  "exists":  false,
+                                  "content":  null
+                              },
+                              {
+                                  "path":  "C:\\Users\\zeh\\AppData\\Local\\Docker\\Docker\\version.json",
+                                  "exists":  false,
+                                  "content":  null
+                              },
+                              {
+                                  "path":  "C:\\ProgramData\\DockerDesktop\\version.json",
+                                  "exists":  false,
+                                  "content":  null
+                              }
+                          ],
+    "services":  [
+                     {
+                         "name":  "com.docker.service",
+                         "found":  false,
+                         "status":  null
+                     },
+                     {
+                         "name":  "docker",
+                         "found":  false,
+                         "status":  null
+                     },
+                     {
+                         "name":  "docker-engine",
+                         "found":  false,
+                         "status":  null
+                     },
+                     {
+                         "name":  "com.docker.buildkit",
+                         "found":  false,
+                         "status":  null
+                     }
+                 ],
+    "processes":  {
+
+                  },
+    "wsl":  {
+                "version":  {
+                                "exe":  "wsl.exe",
+                                "args":  "",
+                                "exitCode":  1,
+                                "stdout":  "",
+                                "stderr":  "未安装适用于 Linux 的 Windows 子系统。可通过运行 “wsl.exe --install” 进行安装。\r\r\n有关详细信息，请访问 https://aka.ms/wslinstall"
+                            },
+                "list":  {
+                             "exe":  "wsl.exe",
+                             "args":  "",
+                             "exitCode":  1,
+                             "stdout":  "",
+                             "stderr":  "未安装适用于 Linux 的 Windows 子系统。可通过运行 “wsl.exe --install” 进行安装。\r\r\n有关详细信息，请访问 https://aka.ms/wslinstall"
+                         },
+                "status":  {
+                               "exe":  "wsl.exe",
+                               "args":  "",
+                               "exitCode":  1,
+                               "stdout":  "",
+                               "stderr":  "未安装适用于 Linux 的 Windows 子系统。可通过运行 “wsl.exe --install” 进行安装。\r\r\n有关详细信息，请访问 https://aka.ms/wslinstall"
+                           }
+            },
+    "windowsFeatures":  [
+                            {
+                                "feature":  "Microsoft-Windows-Subsystem-Linux",
+                                "state":  "UNKNOWN",
+                                "source":  "ERR: The requested operation requires elevation.\r\n"
+                            },
+                            {
+                                "feature":  "VirtualMachinePlatform",
+                                "state":  "UNKNOWN",
+                                "source":  "ERR: The requested operation requires elevation.\r\n"
+                            },
+                            {
+                                "feature":  "Containers",
+                                "state":  "UNKNOWN",
+                                "source":  "ERR: The requested operation requires elevation.\r\n"
+                            }
+                        ],
+    "dockerVersionCmd":  null,
+    "dockerInfoCmd":  null,
+    "conclusion":  {
+                       "anyContainerRuntimeFound":  false,
+                       "dockerCliOnPath":  false,
+                       "dockerUsable":  false,
+                       "blockedReason":  "本机未找到 docker / podman / nerdctl / buildah 任一容器运行时（PATH 与常见安装路径均未命中，Docker Desktop 元数据与服务均不存在，WSL 子系统亦未安装）⇒ 真 build 无法执行。"
+                   }
+}

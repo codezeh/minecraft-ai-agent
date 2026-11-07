@@ -1,0 +1,1162 @@
+[
+  {
+    "t": 2.85,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 175,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 2815.9
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 2822.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 2829.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 2836.8
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 2843.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 2850.5
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 389,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 0,
+    "wallMs": 1
+  },
+  {
+    "t": 3.86,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 320,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 3822.8
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 3829.8
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 3836.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 3843.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 3850.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 3857.5
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 534,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 1,
+    "wallMs": 1005
+  },
+  {
+    "t": 4.86,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 464,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 4822.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 4829.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 4836.8
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 4843.8
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 4850.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 4857.4
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 678,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 2,
+    "wallMs": 2004
+  },
+  {
+    "t": 5.87,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 609,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 5829.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 5836.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 5843.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 5850.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 5857.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 5864.4
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 823,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 3,
+    "wallMs": 3013
+  },
+  {
+    "t": 6.87,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 753,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 6829.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 6836.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 6843.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 6850.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 6857.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 6864.3
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 967,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 4,
+    "wallMs": 4012
+  },
+  {
+    "t": 7.86,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 896,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 7822.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 7829.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 7837.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 7843.4
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 7850.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 7857.3
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 1110,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 5,
+    "wallMs": 5004
+  },
+  {
+    "t": 8.86,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 1040,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 8822.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 8829.6
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 8836.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 8843.4
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 8850.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 8857.3
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 1254,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 6,
+    "wallMs": 6005
+  },
+  {
+    "t": 9.85,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 1183,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 9815.9
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 9822.8
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 9829.7
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 9836.4
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 9843.4
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 9850.3
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 1397,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 7,
+    "wallMs": 7001
+  },
+  {
+    "t": 10.86,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 1328,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 10822.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 10829.4
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 10836.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 10843.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 10850.5
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 10857.3
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 1542,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 8,
+    "wallMs": 8007
+  },
+  {
+    "t": 11.87,
+    "gl": {
+      "createBuffer": 6,
+      "deleteBuffer": 0,
+      "createTexture": 4,
+      "deleteTexture": 0,
+      "createProgram": 1,
+      "deleteProgram": 0,
+      "createFramebuffer": 0,
+      "deleteFramebuffer": 0,
+      "createRenderbuffer": 0,
+      "deleteRenderbuffer": 0,
+      "createVertexArray": 1,
+      "deleteVertexArray": 0,
+      "contexts": 3
+    },
+    "live": {
+      "buffers": 6,
+      "textures": 4,
+      "programs": 1,
+      "vas": 1,
+      "framebuffers": 0
+    },
+    "drawCallsTotal": 1473,
+    "maxInstanceCountRecent": 3999,
+    "instanceCountSet": [
+      3999
+    ],
+    "instancedRecent": [
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 11829.4
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 11836.4
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 11843.3
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 11850.2
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 11857.3
+      },
+      {
+        "m": "drawElementsInstanced",
+        "instanceCount": 3999,
+        "count": 36,
+        "t": 11864.2
+      }
+    ],
+    "bufMeta": [
+      {
+        "len": 72,
+        "nonFinite": 0,
+        "min": -1,
+        "max": 1,
+        "via": "bufferData"
+      },
+      {
+        "len": 63984,
+        "nonFinite": 0,
+        "min": -99.5,
+        "max": 63.5,
+        "via": "bufferData"
+      },
+      {
+        "len": 11997,
+        "nonFinite": 0,
+        "min": 0.02,
+        "max": 0.82,
+        "via": "bufferData"
+      }
+    ],
+    "three": null,
+    "dataState": {
+      "hasData": true,
+      "count": 3999,
+      "fails": 0,
+      "stats": "3,999 面 · 1,600 列 · y 60~63 · lod 1 · 7ms",
+      "bbox": {},
+      "yMin": 60,
+      "yMax": 63,
+      "showFails": true,
+      "mode": "around"
+    },
+    "vis": "visible",
+    "hasFocus": true,
+    "raf": 1687,
+    "renders": 0,
+    "contextLost": 0,
+    "diag": {
+      "revision": "170",
+      "renderPatched": false,
+      "rendererName": "ko"
+    },
+    "glError": "NONE",
+    "i": 9,
+    "wallMs": 9015
+  }
+]

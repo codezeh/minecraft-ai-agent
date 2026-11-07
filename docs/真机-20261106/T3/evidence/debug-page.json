@@ -1,0 +1,15 @@
+{
+  "page": "{\n \"href\": \"http://localhost:8080/console/\",\n \"title\": \"陪玩控制台\",\n \"bodyLen\": 118,\n \"body\": \"◆\\n陪玩控制台\\n控制台\\n3D 地形\\n诊断\\n配置\\nmindserver 已连接\\n还没有 agent\\n\\nmindserver 没报告任何 agent。检查 settings.js 里的 profiles， 或去「配置」页创建一个。\\n\\n去配置\",\n \"scripts\": [\n  \"http://localhost:8080/console/assets/index-BfjaJXlW.js\"\n ],\n \"html\": \"<html lang=\\\"zh-CN\\\"><head>\\n  <meta charset=\\\"UTF-8\\\">\\n  <meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1.0\\\">\\n  <title>陪玩控制台</title>\\n  <script type=\\\"module\\\" crossorigin=\\\"\\\" src=\\\"/console/assets/index-BfjaJXlW.js\\\"></script>\\n  <link rel=\\\"stylesheet\\\" crossorigin=\\\"\\\" href=\\\"/console/assets/index-Ce4aIC61.css\\\">\\n</head>\\n<body>\\n  <div id=\\\"app\\\" data-v-app=\\\"\\\"><div data-v-ea586114=\\\"\\\" class=\\\"app\\\"><header data-v-ea586114=\\\"\\\" class=\\\"topbar\\\"><div data-v-ea586114=\\\"\\\" class=\\\"brand\\\"><span data-v-ea586114=\\\"\\\" class=\\\"logo\\\">◆</span><span data-v-ea586114=\\\"\\\" class=\\\"name\\\">陪玩控制台</span></div><nav data-v-ea5861\",\n \"appHtml\": \"<div data-v-ea586114=\\\"\\\" class=\\\"app\\\"><header data-v-ea586114=\\\"\\\" class=\\\"topbar\\\"><div data-v-ea586114=\\\"\\\" class=\\\"brand\\\"><span data-v-ea586114=\\\"\\\" class=\\\"logo\\\">◆</span><span data-v-ea586114=\\\"\\\" class=\\\"name\\\">陪玩控制台</span></div><nav data-v-ea586114=\\\"\\\" class=\\\"nav\\\"><a data-v-ea586114=\\\"\\\" href=\\\"/console/\\\" class=\\\"router-link-active router-link-exact-active nav-link active\\\" aria-current=\\\"page\\\">控制台</a><a data-v-ea586114=\\\"\\\" href=\\\"/console/terrain\\\" class=\\\"nav-link\\\">3D 地形</a><a data-v-ea586114=\\\"\\\" href=\\\"/console/deb\"\n}",
+  "net": [
+    "200 text/html http://localhost:8080/console/",
+    "200 text/css http://localhost:8080/console/assets/index-Ce4aIC61.css",
+    "200 application/javascript http://localhost:8080/console/assets/index-BfjaJXlW.js",
+    "200 text/plain http://localhost:8080/socket.io/?EIO=4&transport=polling&t=xd619w9x",
+    "200 text/html http://localhost:8080/socket.io/?EIO=4&transport=polling&t=xd62aqc7&sid=5cMg4eiP7N3aiZb8AAAB",
+    "200 application/octet-stream http://localhost:8080/socket.io/?EIO=4&transport=polling&t=xd62b5ie&sid=5cMg4eiP7N3aiZb8AAAB",
+    "200 text/html http://localhost:8080/socket.io/?EIO=4&transport=polling&t=xd62ghas&sid=5cMg4eiP7N3aiZb8AAAB",
+    "404 text/html http://localhost:8080/favicon.ico",
+    "200 text/plain http://localhost:8080/socket.io/?EIO=4&transport=polling&t=xd62fldf&sid=5cMg4eiP7N3aiZb8AAAB"
+  ],
+  "failed": []
+}

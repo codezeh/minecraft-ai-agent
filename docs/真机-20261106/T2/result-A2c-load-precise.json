@@ -1,0 +1,171 @@
+{
+  "probe": "A2c-load-precise",
+  "startedAt": "2026-11-06T12:10:58.867Z",
+  "slots": [],
+  "before": {
+    "inv": {
+      "raw_iron": 16,
+      "coal": 8
+    },
+    "nbt": [
+      {
+        "idx": 0,
+        "rawId": "Found no elements matching Items[0]",
+        "rawCount": "Found no elements matching Items[0]",
+        "id": null,
+        "count": null
+      },
+      {
+        "idx": 1,
+        "rawId": "Found no elements matching Items[1]",
+        "rawCount": "Found no elements matching Items[1]",
+        "id": null,
+        "count": null
+      },
+      {
+        "idx": 2,
+        "rawId": "Found no elements matching Items[2]",
+        "rawCount": "Found no elements matching Items[2]",
+        "id": null,
+        "count": null
+      }
+    ]
+  },
+  "fuelNeededFor16": 2,
+  "furnaceLoadReturn": {
+    "ok": true,
+    "code": "OK",
+    "message": "",
+    "data": {
+      "input": "raw_iron",
+      "inputCount": 16,
+      "fuel": "coal",
+      "fuelCount": 2,
+      "costMs": 993
+    }
+  },
+  "after0ms": {
+    "inv": {
+      "raw_iron": 0,
+      "coal": 6
+    },
+    "nbt": [
+      {
+        "idx": 0,
+        "rawId": "202, 71, 200 has the following block data: \"minecraft:raw_iron\"",
+        "rawCount": "202, 71, 200 has the following block data: 16",
+        "id": "minecraft:raw_iron",
+        "count": 16
+      },
+      {
+        "idx": 1,
+        "rawId": "202, 71, 200 has the following block data: \"minecraft:coal\"",
+        "rawCount": "202, 71, 200 has the following block data: 1",
+        "id": "minecraft:coal",
+        "count": 1
+      },
+      {
+        "idx": 2,
+        "rawId": "Found no elements matching Items[2]",
+        "rawCount": "Found no elements matching Items[2]",
+        "id": null,
+        "count": null
+      }
+    ]
+  },
+  "after300ms": {
+    "inv": {
+      "raw_iron": 0,
+      "coal": 0
+    },
+    "nbt": [
+      {
+        "idx": 0,
+        "rawId": "202, 71, 200 has the following block data: \"minecraft:raw_iron\"",
+        "rawCount": "202, 71, 200 has the following block data: 16",
+        "id": "minecraft:raw_iron",
+        "count": 16
+      },
+      {
+        "idx": 1,
+        "rawId": "202, 71, 200 has the following block data: \"minecraft:coal\"",
+        "rawCount": "202, 71, 200 has the following block data: 1",
+        "id": "minecraft:coal",
+        "count": 1
+      },
+      {
+        "idx": 2,
+        "rawId": "Found no elements matching Items[2]",
+        "rawCount": "Found no elements matching Items[2]",
+        "id": null,
+        "count": null
+      }
+    ]
+  },
+  "after1000ms": {
+    "inv": {
+      "raw_iron": 0,
+      "coal": 0
+    },
+    "nbt": [
+      {
+        "idx": 0,
+        "rawId": "202, 71, 200 has the following block data: \"minecraft:raw_iron\"",
+        "rawCount": "202, 71, 200 has the following block data: 16",
+        "id": "minecraft:raw_iron",
+        "count": 16
+      },
+      {
+        "idx": 1,
+        "rawId": "202, 71, 200 has the following block data: \"minecraft:coal\"",
+        "rawCount": "202, 71, 200 has the following block data: 1",
+        "id": "minecraft:coal",
+        "count": 1
+      },
+      {
+        "idx": 2,
+        "rawId": "Found no elements matching Items[2]",
+        "rawCount": "Found no elements matching Items[2]",
+        "id": null,
+        "count": null
+      }
+    ]
+  },
+  "after2000ms": {
+    "inv": {
+      "raw_iron": 0,
+      "coal": 0
+    },
+    "nbt": [
+      {
+        "idx": 0,
+        "rawId": "202, 71, 200 has the following block data: \"minecraft:raw_iron\"",
+        "rawCount": "202, 71, 200 has the following block data: 16",
+        "id": "minecraft:raw_iron",
+        "count": 16
+      },
+      {
+        "idx": 1,
+        "rawId": "202, 71, 200 has the following block data: \"minecraft:coal\"",
+        "rawCount": "202, 71, 200 has the following block data: 1",
+        "id": "minecraft:coal",
+        "count": 1
+      },
+      {
+        "idx": 2,
+        "rawId": "Found no elements matching Items[2]",
+        "rawCount": "Found no elements matching Items[2]",
+        "id": null,
+        "count": null
+      }
+    ]
+  },
+  "verdict": {
+    "productSaidFuelCount2": true,
+    "productSaidInputCount16": true,
+    "coalGoneFromInv": 8,
+    "furnaceFuelSlotCountAt2s": 1,
+    "furnaceInputSlotCountAt2s": 16,
+    "note": "vanilla /data get 会把长结果截断成 \"...\"（111 字符），所以这里逐条查 Items[i].id / Items[i].count"
+  }
+}

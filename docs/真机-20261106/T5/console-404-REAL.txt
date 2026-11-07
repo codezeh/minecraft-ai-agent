@@ -1,0 +1,10 @@
+=== 真镜像 + MIND_SERVER_HOST=0.0.0.0 ===
+status: Up 12 seconds
+--- 容器内监听地址 ---
+   0: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 876 1 0000000000000000 100 0 0 10 0                       
+--- 宿主 HTTP 探测（无 token / 带 token）---
+  /console          -> 401
+  /console?token=.. -> 404
+--- 日志关键行 ---
+MindServer running on port 8080 on host 0.0.0.0
+container removed

@@ -1,0 +1,288 @@
+{
+  "probe": "T7-deposit-withdraw-matrix",
+  "startedAt": "2026-11-07T07:43:22.251Z",
+  "scenarios": [
+    {
+      "name": "① deposit partial",
+      "open": {
+        "ok": true,
+        "code": "OK"
+      },
+      "returned": {
+        "ok": false,
+        "code": "INVENTORY_FULL",
+        "message": "只存进去 3/10（destination full）",
+        "data": {
+          "item": "iron_sword",
+          "want": 10,
+          "stored": 3,
+          "invBefore": 10,
+          "invAfter": 6,
+          "winBefore": 0,
+          "winAfter": 3,
+          "cursorAfter": 1,
+          "cursorReturned": true,
+          "invMoved": 3,
+          "winMoved": 3,
+          "partial": true,
+          "error": "destination full"
+        }
+      },
+      "wallMs": 1229,
+      "real": {
+        "invBefore": 10,
+        "invAfter": 7,
+        "invAfterClose": 7,
+        "chestBefore": 0,
+        "chestAfter": 3,
+        "chestAfterClose": 3
+      },
+      "cursorAtReturn": null,
+      "verdict": {
+        "codeIsInventoryFull": true,
+        "partialTrue": true,
+        "storedIs3": true,
+        "realChestGained3": true,
+        "realInvDropped3": true,
+        "storedMatchesRealChest": true,
+        "conservationAfterClose": 10
+      }
+    },
+    {
+      "name": "② deposit full",
+      "returned": {
+        "ok": true,
+        "code": "OK",
+        "message": "",
+        "data": {
+          "item": "iron_sword",
+          "want": 10,
+          "stored": 10,
+          "invBefore": 10,
+          "invAfter": 0,
+          "winBefore": 0,
+          "winAfter": 10,
+          "cursorAfter": 0,
+          "cursorReturned": false,
+          "invMoved": 10,
+          "winMoved": 10
+        }
+      },
+      "wallMs": 57,
+      "real": {
+        "invBefore": 10,
+        "invAfter": 0,
+        "invAfterClose": 0,
+        "chestBefore": 0,
+        "chestAfter": 10,
+        "chestAfterClose": 10
+      },
+      "verdict": {
+        "okTrue": true,
+        "storedIs10": true,
+        "noUnderReport": true,
+        "realChestGained10": true,
+        "realInvDropped10": true,
+        "conservationAfterClose": 10
+      }
+    },
+    {
+      "name": "③ withdraw partial",
+      "returned": {
+        "ok": false,
+        "code": "INVENTORY_FULL",
+        "message": "只取出 3/10（destination full）",
+        "data": {
+          "item": "iron_sword",
+          "want": 10,
+          "taken": 3,
+          "invBefore": 0,
+          "invAfter": 3,
+          "winBefore": 10,
+          "winAfter": 6,
+          "cursorAfter": 1,
+          "cursorReturned": true,
+          "invMoved": 3,
+          "winMoved": 4,
+          "partial": true,
+          "error": "destination full"
+        }
+      },
+      "wallMs": 1228,
+      "botFreeSlotsBefore": 3,
+      "real": {
+        "invBefore": 0,
+        "invAfter": 3,
+        "invAfterClose": 3,
+        "chestBefore": 10,
+        "chestAfter": 7,
+        "chestAfterClose": 7
+      },
+      "cursorAtReturn": null,
+      "verdict": {
+        "codeIsInventoryFull": true,
+        "partialTrue": true,
+        "takenIs3": true,
+        "realInvGained3": true,
+        "realChestLost3": true,
+        "takenMatchesRealInv": true,
+        "conservationAfterClose": 10
+      }
+    },
+    {
+      "name": "④ withdraw full",
+      "returned": {
+        "ok": true,
+        "code": "OK",
+        "message": "",
+        "data": {
+          "item": "iron_sword",
+          "want": 10,
+          "taken": 10,
+          "invBefore": 0,
+          "invAfter": 10,
+          "winBefore": 10,
+          "winAfter": 0,
+          "cursorAfter": 0,
+          "cursorReturned": false,
+          "invMoved": 10,
+          "winMoved": 10
+        }
+      },
+      "wallMs": 57,
+      "real": {
+        "invBefore": 0,
+        "invAfter": 10,
+        "invAfterClose": 10,
+        "chestBefore": 10,
+        "chestAfter": 0,
+        "chestAfterClose": 0
+      },
+      "verdict": {
+        "okTrue": true,
+        "takenIs10": true,
+        "noUnderReport": true,
+        "realInvGained10": true,
+        "realChestLost10": true,
+        "conservationAfterClose": 10
+      }
+    },
+    {
+      "name": "⑤ flow store partial (T2 等价复跑)",
+      "returned": {
+        "ok": false,
+        "code": "INVENTORY_FULL",
+        "message": "只存进去 3/10",
+        "data": {
+          "item": "iron_sword",
+          "want": 10,
+          "stored": 3,
+          "partial": true
+        }
+      },
+      "wallMs": 1302,
+      "real": {
+        "invBefore": 10,
+        "invAfter": 7,
+        "chestBefore": 0,
+        "chestAfter": 3
+      },
+      "verdict": {
+        "codeIsInventoryFull": true,
+        "partialTrue": true,
+        "storedIs3": true,
+        "realChestGained3": true,
+        "realInvDropped3": true,
+        "storedMatchesReal": true
+      }
+    },
+    {
+      "name": "⑥ flow fetch partial (跨箱累计路径)",
+      "returned": {
+        "ok": false,
+        "code": "NO_ITEM",
+        "message": "只取到 3/10 个 iron_sword",
+        "data": {
+          "item": "iron_sword",
+          "want": 10,
+          "taken": 3,
+          "partial": true
+        }
+      },
+      "wallMs": 1323,
+      "real": {
+        "invBefore": 0,
+        "invAfter": 3,
+        "chestBefore": 10,
+        "chestAfter": 7
+      },
+      "verdict": {
+        "code": "NO_ITEM",
+        "takenReported": 3,
+        "realInvGained": 3,
+        "realChestLost": 3,
+        "takenMatchesReal": true
+      }
+    }
+  ],
+  "summary": {
+    "scenarios": 6,
+    "allVerdicts": [
+      {
+        "name": "① deposit partial",
+        "codeIsInventoryFull": true,
+        "partialTrue": true,
+        "storedIs3": true,
+        "realChestGained3": true,
+        "realInvDropped3": true,
+        "storedMatchesRealChest": true,
+        "conservationAfterClose": 10
+      },
+      {
+        "name": "② deposit full",
+        "okTrue": true,
+        "storedIs10": true,
+        "noUnderReport": true,
+        "realChestGained10": true,
+        "realInvDropped10": true,
+        "conservationAfterClose": 10
+      },
+      {
+        "name": "③ withdraw partial",
+        "codeIsInventoryFull": true,
+        "partialTrue": true,
+        "takenIs3": true,
+        "realInvGained3": true,
+        "realChestLost3": true,
+        "takenMatchesRealInv": true,
+        "conservationAfterClose": 10
+      },
+      {
+        "name": "④ withdraw full",
+        "okTrue": true,
+        "takenIs10": true,
+        "noUnderReport": true,
+        "realInvGained10": true,
+        "realChestLost10": true,
+        "conservationAfterClose": 10
+      },
+      {
+        "name": "⑤ flow store partial (T2 等价复跑)",
+        "codeIsInventoryFull": true,
+        "partialTrue": true,
+        "storedIs3": true,
+        "realChestGained3": true,
+        "realInvDropped3": true,
+        "storedMatchesReal": true
+      },
+      {
+        "name": "⑥ flow fetch partial (跨箱累计路径)",
+        "code": "NO_ITEM",
+        "takenReported": 3,
+        "realInvGained": 3,
+        "realChestLost": 3,
+        "takenMatchesReal": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "probe": "S1-nbt-fuel-while-burning",
+  "startedAt": "2026-11-06T12:06:05.417Z",
+  "samples": [
+    {
+      "atMs": 1002,
+      "all": [
+        {
+          "slot": 0,
+          "id": "raw_iron",
+          "count": 4
+        }
+      ],
+      "raw": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 4}, {Slot: 1b, id: \"..."
+    },
+    {
+      "atMs": 5006,
+      "all": [
+        {
+          "slot": 0,
+          "id": "raw_iron",
+          "count": 4
+        }
+      ],
+      "raw": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 4}, {Slot: 1b, id: \"..."
+    },
+    {
+      "atMs": 20012,
+      "all": [
+        {
+          "slot": 0,
+          "id": "raw_iron",
+          "count": 2
+        }
+      ],
+      "raw": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 2}, {Slot: 1b, id: \"..."
+    },
+    {
+      "atMs": 90016,
+      "all": [
+        {
+          "slot": 1,
+          "id": "coal",
+          "count": 1
+        }
+      ],
+      "raw": "202, 71, 200 has the following block data: [{Slot: 1b, id: \"minecraft:coal\", count: 1}, {Slot: 2b, id: \"..."
+    },
+    {
+      "atMs": 110021,
+      "all": [
+        {
+          "slot": 1,
+          "id": "coal",
+          "count": 1
+        }
+      ],
+      "raw": "202, 71, 200 has the following block data: [{Slot: 1b, id: \"minecraft:coal\", count: 1}, {Slot: 2b, id: \"..."
+    }
+  ],
+  "verdict": {
+    "fuelSeenAtAnySample": true,
+    "note": "若燃料槽在燃烧期看不到煤 → A2 的 loadSnapshot 缺失 slot1 属于服务端行为，不是解析问题"
+  }
+}

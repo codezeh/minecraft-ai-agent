@@ -1,0 +1,75 @@
+{
+  "tool": "T6/probe-live-a.mjs",
+  "generatedAt": "2026-11-06T12:00:44.054Z",
+  "provider": "https://api.llmgo.net",
+  "model": "deepseek-v4.1-flash",
+  "api": "anthropic",
+  "params": {
+    "max_tokens": 16
+  },
+  "keyMasked": "sk-1*************************************************************0e (len=67)",
+  "budget": {
+    "maxRequests": 1,
+    "maxOutputTokens": 16
+  },
+  "instance": {
+    "constructor": "Claude",
+    "model_name": "deepseek-v4.1-flash",
+    "params": {
+      "max_tokens": 16
+    },
+    "hasAnthropicClient": true,
+    "baseURL": "https://api.llmgo.net",
+    "apiKeyPresent": true,
+    "apiKeyMasked": "sk-1…0e"
+  },
+  "request": {
+    "turns": [
+      {
+        "role": "user",
+        "contentLength": 22
+      }
+    ],
+    "systemMessageLength": 33
+  },
+  "result": {
+    "wallClockMs": 6101,
+    "httpRequests": 0,
+    "netLog": [],
+    "httpStatus": null,
+    "rawResponseMasked": "<no body>",
+    "parsed": null,
+    "adapterReturned": "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100",
+    "adapterReturnedLength": 291,
+    "markedTruncated": false,
+    "isFailedReply": false
+  },
+  "usageAccounting": {
+    "sinkLines": [
+      "[llm] model=deepseek-v4.1-flash prompt=54 completion=503"
+    ],
+    "totals": {
+      "calls": 1,
+      "prompt": 54,
+      "completion": 503,
+      "missing": 0
+    },
+    "note": "totals.calls 应等于 HTTP 请求次数；若 usage 缺失则 totals.missing 会加 1"
+  },
+  "costEstimate": {
+    "assumption": "代理未公开价目表，模型 id 是代理自定义的 deepseek-v4.1-flash。下面不是结算金额，只把**实测 token 数**代入几个公开参考档位，给出量级。",
+    "measuredTokens": {
+      "input": null,
+      "output": null,
+      "total": 0
+    },
+    "bands": [],
+    "verdict": "一次最小请求的费用量级是 1e-5 ~ 1e-4 美元（即\"不足一分钱的百分之一\"）"
+  },
+  "verdict": {
+    "connectivity": "不通（undefined）",
+    "requestsIssued": 0,
+    "doubleRequestObserved": false,
+    "truncationHandling": "无法判断"
+  }
+}

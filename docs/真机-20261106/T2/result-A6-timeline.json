@@ -1,0 +1,2434 @@
+{
+  "probe": "A6-timeline-decomposition",
+  "startedAt": "2026-11-06T13:21:46.202Z",
+  "want": 16,
+  "samples": [
+    {
+      "tMs": 623,
+      "input": 0,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 1183,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 1738,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 2316,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 2874,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 3427,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 3981,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 4535,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 5112,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 5670,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 6234,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 6798,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 7367,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 7923,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 8484,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 9049,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 9618,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 10173,
+      "input": 16,
+      "output": 0,
+      "invIngot": 0,
+      "totalProduced": 0
+    },
+    {
+      "tMs": 10732,
+      "input": 15,
+      "output": 1,
+      "invIngot": 0,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 11298,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 11848,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 12418,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 12976,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 13536,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 14112,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 14672,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 15231,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 15818,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 16377,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 16961,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 17523,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 18084,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 18671,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 19229,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 19789,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 20349,
+      "input": 15,
+      "output": 0,
+      "invIngot": 1,
+      "totalProduced": 1
+    },
+    {
+      "tMs": 20915,
+      "input": 14,
+      "output": 1,
+      "invIngot": 1,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 21473,
+      "input": 14,
+      "output": null,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 22035,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 22600,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 23165,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 23721,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 24281,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 24844,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 25421,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 25982,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 26566,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 27141,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 27720,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 28277,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 28838,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 29413,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 29975,
+      "input": 14,
+      "output": 0,
+      "invIngot": 2,
+      "totalProduced": 2
+    },
+    {
+      "tMs": 30565,
+      "input": 14,
+      "output": 1,
+      "invIngot": 2,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 31128,
+      "input": 13,
+      "output": 1,
+      "invIngot": 2,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 31696,
+      "input": 13,
+      "output": 1,
+      "invIngot": 2,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 32272,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 32834,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 33415,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 33977,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 34548,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 35126,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 35692,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 36272,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 36832,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 37412,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 37979,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 38550,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 39127,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 39689,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 40275,
+      "input": 13,
+      "output": 0,
+      "invIngot": 3,
+      "totalProduced": 3
+    },
+    {
+      "tMs": 40837,
+      "input": 12,
+      "output": 1,
+      "invIngot": 3,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 41389,
+      "input": 12,
+      "output": 1,
+      "invIngot": 3,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 41967,
+      "input": 12,
+      "output": 1,
+      "invIngot": 3,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 42532,
+      "input": 12,
+      "output": null,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 43099,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 43668,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 44237,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 44803,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 45370,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 45934,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 46499,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 47051,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 47623,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 48184,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 48748,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 49315,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 49876,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 50434,
+      "input": 12,
+      "output": 0,
+      "invIngot": 4,
+      "totalProduced": 4
+    },
+    {
+      "tMs": 50998,
+      "input": 11,
+      "output": 1,
+      "invIngot": 4,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 51568,
+      "input": 11,
+      "output": 1,
+      "invIngot": 4,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 52132,
+      "input": 11,
+      "output": 1,
+      "invIngot": 4,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 52698,
+      "input": 11,
+      "output": 1,
+      "invIngot": 4,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 53267,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 53831,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 54397,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 54970,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 55528,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 56098,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 56649,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 57218,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 57779,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 58334,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 58899,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 59483,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 60063,
+      "input": 11,
+      "output": 0,
+      "invIngot": 5,
+      "totalProduced": 5
+    },
+    {
+      "tMs": 60624,
+      "input": 10,
+      "output": 1,
+      "invIngot": 5,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 61192,
+      "input": 10,
+      "output": 1,
+      "invIngot": 5,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 61769,
+      "input": 10,
+      "output": 1,
+      "invIngot": 5,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 62329,
+      "input": 10,
+      "output": 1,
+      "invIngot": 5,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 62878,
+      "input": 10,
+      "output": 1,
+      "invIngot": 5,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 63448,
+      "input": 10,
+      "output": 1,
+      "invIngot": 6,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 64015,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 64578,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 65147,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 65713,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 66274,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 66838,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 67399,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 67971,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 68529,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 69099,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 69678,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 70238,
+      "input": 10,
+      "output": 0,
+      "invIngot": 6,
+      "totalProduced": 6
+    },
+    {
+      "tMs": 70816,
+      "input": 9,
+      "output": 1,
+      "invIngot": 6,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 71379,
+      "input": 9,
+      "output": 1,
+      "invIngot": 6,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 71937,
+      "input": 9,
+      "output": 1,
+      "invIngot": 6,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 72515,
+      "input": 9,
+      "output": 1,
+      "invIngot": 6,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 73075,
+      "input": 9,
+      "output": 1,
+      "invIngot": 6,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 73665,
+      "input": 9,
+      "output": 1,
+      "invIngot": 6,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 74225,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 74784,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 75348,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 75920,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 76485,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 77048,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 77625,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 78188,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 78763,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 79325,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 79886,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 80461,
+      "input": 9,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 81009,
+      "input": 8,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 81568,
+      "input": 8,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 82119,
+      "input": 8,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 82680,
+      "input": 8,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 83248,
+      "input": 8,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 83820,
+      "input": 8,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 84380,
+      "input": 8,
+      "output": 0,
+      "invIngot": 7,
+      "totalProduced": 7
+    },
+    {
+      "tMs": 84950,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 85517,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 86083,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 86666,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 87222,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 87813,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 88376,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 88948,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 89515,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 90075,
+      "input": 8,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 90639,
+      "input": 7,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 91232,
+      "input": 7,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 91798,
+      "input": 7,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 92374,
+      "input": 7,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 92948,
+      "input": 7,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 93497,
+      "input": 7,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 94071,
+      "input": 7,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 94636,
+      "input": 7,
+      "output": 0,
+      "invIngot": 8,
+      "totalProduced": 8
+    },
+    {
+      "tMs": 95198,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 95748,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 96300,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 96883,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 97467,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 98032,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 98598,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 99167,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 99739,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 100318,
+      "input": 7,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 100881,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 101463,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 102028,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 102590,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 103172,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 103735,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 104317,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 104878,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 105448,
+      "input": 6,
+      "output": 0,
+      "invIngot": 9,
+      "totalProduced": 9
+    },
+    {
+      "tMs": 105999,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 106571,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 107135,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 107712,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 108277,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 108840,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 109421,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 109990,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 110577,
+      "input": 6,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 111148,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 111699,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 112269,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 112838,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 113399,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 113948,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 114528,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 115098,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 115671,
+      "input": 5,
+      "output": 0,
+      "invIngot": 10,
+      "totalProduced": 10
+    },
+    {
+      "tMs": 116236,
+      "input": 5,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 116818,
+      "input": 5,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 117382,
+      "input": 5,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 117964,
+      "input": 5,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 118534,
+      "input": 5,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 119114,
+      "input": 5,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 119679,
+      "input": 5,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 120239,
+      "input": 5,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 120819,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 121387,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 121967,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 122536,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 123116,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 123678,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 124241,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 124785,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 125363,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 125928,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 126498,
+      "input": 4,
+      "output": 0,
+      "invIngot": 11,
+      "totalProduced": 11
+    },
+    {
+      "tMs": 127045,
+      "input": 4,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 127599,
+      "input": 4,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 128173,
+      "input": 4,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 128736,
+      "input": 4,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 129303,
+      "input": 4,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 129867,
+      "input": 4,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 130433,
+      "input": 4,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 130998,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 131574,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 132138,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 132714,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 133281,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 133849,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 134417,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 134980,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 135548,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 136113,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 136676,
+      "input": 3,
+      "output": 0,
+      "invIngot": 12,
+      "totalProduced": 12
+    },
+    {
+      "tMs": 137237,
+      "input": 3,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 137817,
+      "input": 3,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 138380,
+      "input": 3,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 138949,
+      "input": 3,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 139528,
+      "input": 3,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 140098,
+      "input": 3,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 140675,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 141240,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 141814,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 142375,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 142948,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 143525,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 144087,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 144647,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 145223,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 145785,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 146349,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 146917,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 147478,
+      "input": 2,
+      "output": 0,
+      "invIngot": 13,
+      "totalProduced": 13
+    },
+    {
+      "tMs": 148047,
+      "input": 2,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 148615,
+      "input": 2,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 149174,
+      "input": 2,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 149735,
+      "input": 2,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 150313,
+      "input": 2,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 150875,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 151433,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 151999,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 152568,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 153131,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 153697,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 154267,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 154832,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 155398,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 155972,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 156529,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 157098,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 157674,
+      "input": 1,
+      "output": 0,
+      "invIngot": 14,
+      "totalProduced": 14
+    },
+    {
+      "tMs": 158239,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 158816,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 159378,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 159948,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 160525,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 161091,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 161673,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 162237,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 162815,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 163379,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 163937,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 164498,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 165069,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 165633,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 166214,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 166773,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 167334,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 167898,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    },
+    {
+      "tMs": 168466,
+      "input": 1,
+      "output": 0,
+      "invIngot": 15,
+      "totalProduced": 15
+    }
+  ],
+  "windowOps": [
+    {
+      "startMs": 53,
+      "endMs": 307,
+      "durMs": 254
+    },
+    {
+      "startMs": 811,
+      "endMs": 813,
+      "durMs": 2
+    },
+    {
+      "startMs": 10823,
+      "endMs": 10826,
+      "durMs": 3
+    },
+    {
+      "startMs": 11332,
+      "endMs": 11333,
+      "durMs": 1
+    },
+    {
+      "startMs": 21348,
+      "endMs": 21350,
+      "durMs": 2
+    },
+    {
+      "startMs": 21863,
+      "endMs": 21865,
+      "durMs": 2
+    },
+    {
+      "startMs": 31869,
+      "endMs": 31870,
+      "durMs": 1
+    },
+    {
+      "startMs": 32382,
+      "endMs": 32383,
+      "durMs": 1
+    },
+    {
+      "startMs": 42390,
+      "endMs": 42391,
+      "durMs": 1
+    },
+    {
+      "startMs": 42892,
+      "endMs": 42894,
+      "durMs": 2
+    },
+    {
+      "startMs": 52894,
+      "endMs": 52896,
+      "durMs": 2
+    },
+    {
+      "startMs": 53399,
+      "endMs": 53401,
+      "durMs": 2
+    },
+    {
+      "startMs": 63409,
+      "endMs": 63411,
+      "durMs": 2
+    },
+    {
+      "startMs": 63921,
+      "endMs": 63922,
+      "durMs": 1
+    },
+    {
+      "startMs": 73932,
+      "endMs": 73934,
+      "durMs": 2
+    },
+    {
+      "startMs": 74443,
+      "endMs": 74445,
+      "durMs": 2
+    },
+    {
+      "startMs": 84449,
+      "endMs": 84451,
+      "durMs": 2
+    },
+    {
+      "startMs": 84950,
+      "endMs": 84952,
+      "durMs": 2
+    },
+    {
+      "startMs": 94960,
+      "endMs": 94962,
+      "durMs": 2
+    },
+    {
+      "startMs": 95477,
+      "endMs": 95478,
+      "durMs": 1
+    },
+    {
+      "startMs": 105494,
+      "endMs": 105495,
+      "durMs": 1
+    },
+    {
+      "startMs": 105999,
+      "endMs": 106000,
+      "durMs": 1
+    },
+    {
+      "startMs": 116014,
+      "endMs": 116015,
+      "durMs": 1
+    },
+    {
+      "startMs": 116519,
+      "endMs": 116521,
+      "durMs": 2
+    },
+    {
+      "startMs": 126529,
+      "endMs": 126531,
+      "durMs": 2
+    },
+    {
+      "startMs": 127044,
+      "endMs": 127045,
+      "durMs": 1
+    },
+    {
+      "startMs": 137047,
+      "endMs": 137049,
+      "durMs": 2
+    },
+    {
+      "startMs": 137548,
+      "endMs": 137550,
+      "durMs": 2
+    },
+    {
+      "startMs": 147555,
+      "endMs": 147557,
+      "durMs": 2
+    },
+    {
+      "startMs": 148057,
+      "endMs": 148058,
+      "durMs": 1
+    },
+    {
+      "startMs": 158066,
+      "endMs": 158068,
+      "durMs": 2
+    },
+    {
+      "startMs": 158568,
+      "endMs": 158569,
+      "durMs": 1
+    },
+    {
+      "startMs": 168576,
+      "endMs": 168577,
+      "durMs": 1
+    }
+  ],
+  "result": {
+    "ok": true,
+    "code": "OK",
+    "message": "",
+    "data": {
+      "input": "raw_iron",
+      "count": 16,
+      "want": 16,
+      "got": 16,
+      "fuel": "coal",
+      "placedFurnace": false,
+      "costMs": 168577
+    }
+  },
+  "returnMs": 168669,
+  "decomposition": {
+    "loadWindowEndMs": 307,
+    "burnDoneAtMs": null,
+    "returnMs": 168669,
+    "loadPhaseMs": 307,
+    "burnPhaseMs": null,
+    "tailMs": null,
+    "collectPollCount": 32,
+    "collectOverheadTotalMs": 52,
+    "collectOverheadAvgMs": 1.6,
+    "pollStartsMs": [
+      811,
+      10823,
+      11332,
+      21348,
+      21863,
+      31869,
+      32382,
+      42390,
+      42892,
+      52894,
+      53399,
+      63409,
+      63921,
+      73932,
+      74443,
+      84449,
+      84950,
+      94960,
+      95477,
+      105494,
+      105999,
+      116014,
+      116519,
+      126529,
+      127044,
+      137047,
+      137548,
+      147555,
+      148057,
+      158066,
+      158568,
+      168576
+    ],
+    "pollIntervalsMs": [
+      504,
+      10012,
+      509,
+      10016,
+      515,
+      10006,
+      513,
+      10008,
+      502,
+      10002,
+      505,
+      10010,
+      512,
+      10011,
+      511,
+      10006,
+      501,
+      10010,
+      517,
+      10017,
+      505,
+      10015,
+      505,
+      10010,
+      515,
+      10003,
+      501,
+      10007,
+      502,
+      10009,
+      502,
+      10008
+    ],
+    "theoreticalBurnMs": 160000,
+    "wallMs": 168669,
+    "firstSamples": [
+      {
+        "tMs": 623,
+        "input": 0,
+        "output": 0,
+        "invIngot": 0,
+        "totalProduced": 0
+      },
+      {
+        "tMs": 1183,
+        "input": 16,
+        "output": 0,
+        "invIngot": 0,
+        "totalProduced": 0
+      },
+      {
+        "tMs": 1738,
+        "input": 16,
+        "output": 0,
+        "invIngot": 0,
+        "totalProduced": 0
+      },
+      {
+        "tMs": 2316,
+        "input": 16,
+        "output": 0,
+        "invIngot": 0,
+        "totalProduced": 0
+      },
+      {
+        "tMs": 2874,
+        "input": 16,
+        "output": 0,
+        "invIngot": 0,
+        "totalProduced": 0
+      },
+      {
+        "tMs": 3427,
+        "input": 16,
+        "output": 0,
+        "invIngot": 0,
+        "totalProduced": 0
+      }
+    ],
+    "lastSamples": [
+      {
+        "tMs": 166773,
+        "input": 1,
+        "output": 0,
+        "invIngot": 15,
+        "totalProduced": 15
+      },
+      {
+        "tMs": 167334,
+        "input": 1,
+        "output": 0,
+        "invIngot": 15,
+        "totalProduced": 15
+      },
+      {
+        "tMs": 167898,
+        "input": 1,
+        "output": 0,
+        "invIngot": 15,
+        "totalProduced": 15
+      },
+      {
+        "tMs": 168466,
+        "input": 1,
+        "output": 0,
+        "invIngot": 15,
+        "totalProduced": 15
+      }
+    ]
+  },
+  "verdict": {
+    "got16": true,
+    "theoretical160s": 160,
+    "measuredWallSeconds": 168.669,
+    "overheadSeconds": 8.669,
+    "split": {
+      "loadSeconds": 0.307,
+      "burnSeconds": null,
+      "tailSeconds": null
+    }
+  }
+}

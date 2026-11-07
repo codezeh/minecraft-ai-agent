@@ -1,0 +1,440 @@
+{
+  "mode": "current",
+  "headless": false,
+  "focusSelfCheck": {
+    "attempts": 1,
+    "seen": 1,
+    "visibilityState": "visible"
+  },
+  "edge": "Edg/156.0.4314.58",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+  "fixture": {
+    "dist": "dist-current",
+    "served": [
+      {
+        "url": "http://localhost:8080/console/",
+        "as": "document(index.html)",
+        "bytes": 373
+      },
+      {
+        "url": "http://localhost:8080/console/assets/t3-index-C0upAQu5.js",
+        "as": "asset:t3-index-C0upAQu5.js",
+        "bytes": 115262
+      },
+      {
+        "url": "http://localhost:8080/console/assets/t3-index-iRxHzGYO.css",
+        "as": "asset:t3-index-iRxHzGYO.css",
+        "bytes": 1721
+      },
+      {
+        "url": "http://localhost:8080/console/assets/t3-index-C0upAQu5.js",
+        "as": "asset:t3-index-C0upAQu5.js",
+        "bytes": 115262
+      }
+    ],
+    "bundleMark": {
+      "src": "/console/assets/t3-index-C0upAQu5.js",
+      "bytes": 115000,
+      "hasImeComposing": true,
+      "has229": true,
+      "hasProcess": true
+    }
+  },
+  "pageUrl": "http://localhost:8080/console/",
+  "token": "f211****e4",
+  "assertions": {
+    "control0_disabled_enter": {
+      "keydownsSeen": 1,
+      "keydownTargets": [
+        "BODY"
+      ],
+      "clears": 0,
+      "inputValue": "",
+      "note": "disabled 时 keydown 只落到 BODY（应用处理器挂在 input 上，收不到）⇒ 后面各序列的输入框一定是被显式启用过的"
+    },
+    "seq1a_composition_enter(key=Process,VK=229)": {
+      "keydowns": [
+        {
+          "key": "Process",
+          "code": "",
+          "keyCode": 229,
+          "isComposing": true,
+          "target": "INPUT[text]",
+          "valueBefore": "nihaoshijie"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Process",
+          "keyCode": 229,
+          "isComposing": true,
+          "defaultPrevented": false,
+          "valueAfter": "nihaoshijie",
+          "clearsSoFar": 0,
+          "chatMeLines": 0
+        }
+      ],
+      "sendPathExecuted": false,
+      "sendCount": 0,
+      "clearedTexts": [],
+      "inputValueBefore": "nihaoshijie",
+      "inputValueAfter": "nihaoshijie",
+      "chatMeLinesBefore": 0,
+      "chatMeLinesAfter": 0,
+      "chatLinesDelta": 0,
+      "chatMeTextsAdded": [],
+      "compositionEvents": [],
+      "storeConnected": true
+    },
+    "seq1b_composition_enter(key=Enter,VK=229)": {
+      "keydowns": [
+        {
+          "key": "Enter",
+          "code": "Enter",
+          "keyCode": 229,
+          "isComposing": true,
+          "target": "INPUT[text]",
+          "valueBefore": "nihaoshijie"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Enter",
+          "keyCode": 229,
+          "isComposing": true,
+          "defaultPrevented": false,
+          "valueAfter": "nihaoshijie",
+          "clearsSoFar": 0,
+          "chatMeLines": 0
+        }
+      ],
+      "sendPathExecuted": false,
+      "sendCount": 0,
+      "clearedTexts": [],
+      "inputValueBefore": "nihaoshijie",
+      "inputValueAfter": "nihaoshijie",
+      "chatMeLinesBefore": 0,
+      "chatMeLinesAfter": 0,
+      "chatLinesDelta": 0,
+      "chatMeTextsAdded": [],
+      "compositionEvents": [],
+      "storeConnected": true
+    },
+    "seq1c_composition_enter(key=Enter,VK=13)": {
+      "keydowns": [
+        {
+          "key": "Enter",
+          "code": "Enter",
+          "keyCode": 13,
+          "isComposing": true,
+          "target": "INPUT[text]",
+          "valueBefore": "nihaoshijie"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Enter",
+          "keyCode": 13,
+          "isComposing": true,
+          "defaultPrevented": false,
+          "valueAfter": "nihaoshijie",
+          "clearsSoFar": 0,
+          "chatMeLines": 0
+        }
+      ],
+      "sendPathExecuted": false,
+      "sendCount": 0,
+      "clearedTexts": [],
+      "inputValueBefore": "nihaoshijie",
+      "inputValueAfter": "nihaoshijie",
+      "chatMeLinesBefore": 0,
+      "chatMeLinesAfter": 0,
+      "chatLinesDelta": 0,
+      "chatMeTextsAdded": [],
+      "compositionEvents": [],
+      "storeConnected": true
+    },
+    "seq1d_branch_key=Process_only": {
+      "keydowns": [
+        {
+          "key": "Process",
+          "code": "KeyA",
+          "keyCode": 65,
+          "isComposing": true,
+          "target": "INPUT[text]",
+          "valueBefore": "nihaoshijie"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Process",
+          "keyCode": 65,
+          "isComposing": true,
+          "defaultPrevented": false,
+          "valueAfter": "nihaoshijie",
+          "clearsSoFar": 0,
+          "chatMeLines": 0
+        }
+      ],
+      "sendPathExecuted": false,
+      "sendCount": 0,
+      "clearedTexts": [],
+      "inputValueBefore": "nihaoshijie",
+      "inputValueAfter": "nihaoshijie",
+      "chatMeLinesBefore": 0,
+      "chatMeLinesAfter": 0,
+      "chatLinesDelta": 0,
+      "chatMeTextsAdded": [],
+      "compositionEvents": [],
+      "storeConnected": true
+    },
+    "seq1e_branch_isComposing_only": {
+      "synthReturn": {
+        "key": "Enter",
+        "keyCode": 13,
+        "isComposing": true,
+        "defaultPrevented": false
+      },
+      "keydowns": [
+        {
+          "key": "Enter",
+          "code": "",
+          "keyCode": 13,
+          "isComposing": true,
+          "target": "INPUT[text]",
+          "valueBefore": "nihaoshijie"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Enter",
+          "keyCode": 13,
+          "isComposing": true,
+          "defaultPrevented": false,
+          "valueAfter": "nihaoshijie",
+          "clearsSoFar": 0,
+          "chatMeLines": 0
+        }
+      ],
+      "sendPathExecuted": false,
+      "sendCount": 0,
+      "clearedTexts": [],
+      "inputValueBefore": null,
+      "inputValueAfter": "nihaoshijie",
+      "chatMeLinesBefore": null,
+      "chatMeLinesAfter": 0,
+      "chatLinesDelta": null,
+      "chatMeTextsAdded": [],
+      "compositionEvents": [],
+      "storeConnected": true
+    },
+    "seq1f_composing_with_committed_text": {
+      "keydowns": [
+        {
+          "key": "Enter",
+          "code": "Enter",
+          "keyCode": 13,
+          "isComposing": true,
+          "target": "INPUT[text]",
+          "valueBefore": "你好shijie"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Enter",
+          "keyCode": 13,
+          "isComposing": true,
+          "defaultPrevented": false,
+          "valueAfter": "你好shijie",
+          "clearsSoFar": 0,
+          "chatMeLines": 0
+        }
+      ],
+      "sendPathExecuted": false,
+      "sendCount": 0,
+      "clearedTexts": [],
+      "inputValueBefore": "你好shijie",
+      "inputValueAfter": "你好shijie",
+      "chatMeLinesBefore": 0,
+      "chatMeLinesAfter": 0,
+      "chatLinesDelta": 0,
+      "chatMeTextsAdded": [],
+      "compositionEvents": [],
+      "storeConnected": true
+    },
+    "seq2_after_composition_enter": {
+      "keydowns": [
+        {
+          "key": "Enter",
+          "code": "Enter",
+          "keyCode": 13,
+          "isComposing": false,
+          "target": "INPUT[text]",
+          "valueBefore": "你好世界"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Enter",
+          "keyCode": 13,
+          "isComposing": false,
+          "defaultPrevented": true,
+          "valueAfter": "",
+          "clearsSoFar": 1,
+          "chatMeLines": 1
+        }
+      ],
+      "sendPathExecuted": true,
+      "sendCount": 1,
+      "clearedTexts": [
+        "你好世界"
+      ],
+      "inputValueBefore": "你好世界",
+      "inputValueAfter": "",
+      "chatMeLinesBefore": 0,
+      "chatMeLinesAfter": 1,
+      "chatLinesDelta": 1,
+      "chatMeTextsAdded": [
+        "你好世界"
+      ],
+      "compositionEvents": [],
+      "storeConnected": true
+    },
+    "seq3_plain_enter": {
+      "keydowns": [
+        {
+          "key": "Enter",
+          "code": "Enter",
+          "keyCode": 13,
+          "isComposing": false,
+          "target": "INPUT[text]",
+          "valueBefore": "普通回车测试"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Enter",
+          "keyCode": 13,
+          "isComposing": false,
+          "defaultPrevented": true,
+          "valueAfter": "",
+          "clearsSoFar": 1,
+          "chatMeLines": 2
+        }
+      ],
+      "sendPathExecuted": true,
+      "sendCount": 1,
+      "clearedTexts": [
+        "普通回车测试"
+      ],
+      "inputValueBefore": "普通回车测试",
+      "inputValueAfter": "",
+      "chatMeLinesBefore": 1,
+      "chatMeLinesAfter": 2,
+      "chatLinesDelta": 1,
+      "chatMeTextsAdded": [
+        "普通回车测试"
+      ],
+      "compositionEvents": [],
+      "storeConnected": true
+    },
+    "seq4_inserttext_then_enter": {
+      "keydowns": [
+        {
+          "key": "Enter",
+          "code": "Enter",
+          "keyCode": 13,
+          "isComposing": false,
+          "target": "INPUT[text]",
+          "valueBefore": "上屏即回车"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Enter",
+          "keyCode": 13,
+          "isComposing": false,
+          "defaultPrevented": true,
+          "valueAfter": "",
+          "clearsSoFar": 1,
+          "chatMeLines": 3
+        }
+      ],
+      "sendPathExecuted": true,
+      "sendCount": 1,
+      "clearedTexts": [
+        "上屏即回车"
+      ],
+      "inputValueBefore": "",
+      "inputValueAfter": "",
+      "chatMeLinesBefore": 2,
+      "chatMeLinesAfter": 3,
+      "chatLinesDelta": 1,
+      "chatMeTextsAdded": [
+        "上屏即回车"
+      ],
+      "compositionEvents": [
+        {
+          "phase": "evt:beforeinput",
+          "data": "上屏即回车",
+          "value": ""
+        },
+        {
+          "phase": "evt:input",
+          "data": "上屏即回车",
+          "value": "上屏即回车"
+        }
+      ],
+      "storeConnected": true
+    },
+    "appendix_shift_enter": {
+      "keydowns": [
+        {
+          "key": "Enter",
+          "code": "Enter",
+          "keyCode": 13,
+          "isComposing": false,
+          "target": "INPUT[text]",
+          "valueBefore": "换行测试"
+        }
+      ],
+      "settled": [
+        {
+          "key": "Enter",
+          "keyCode": 13,
+          "isComposing": false,
+          "defaultPrevented": false,
+          "valueAfter": "换行测试",
+          "clearsSoFar": 0,
+          "chatMeLines": 3
+        }
+      ],
+      "sendPathExecuted": false,
+      "sendCount": 0,
+      "clearedTexts": [],
+      "inputValueBefore": "",
+      "inputValueAfter": "换行测试",
+      "chatMeLinesBefore": 3,
+      "chatMeLinesAfter": 3,
+      "chatLinesDelta": 0,
+      "chatMeTextsAdded": [],
+      "compositionEvents": [
+        {
+          "phase": "evt:beforeinput",
+          "data": "换行测试",
+          "value": ""
+        },
+        {
+          "phase": "evt:input",
+          "data": "换行测试",
+          "value": "换行测试"
+        }
+      ],
+      "storeConnected": true
+    }
+  },
+  "files": {
+    "steps": "current.steps.jsonl",
+    "snapshots": "current.snapshots.json"
+  }
+}

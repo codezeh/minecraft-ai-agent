@@ -1,0 +1,110 @@
+{
+  "probe": "C-container-open-timeout-cancel",
+  "startedAt": "2026-11-06T12:17:37.668Z",
+  "chestPos": {
+    "x": 403,
+    "y": 71,
+    "z": 400
+  },
+  "realOpenLatency": [
+    {
+      "ms": 290,
+      "ok": true,
+      "code": "OK",
+      "dataCostMs": 289
+    },
+    {
+      "ms": 19,
+      "ok": true,
+      "code": "OK",
+      "dataCostMs": 18
+    },
+    {
+      "ms": 3,
+      "ok": true,
+      "code": "OK",
+      "dataCostMs": 3
+    },
+    {
+      "ms": 3,
+      "ok": true,
+      "code": "OK",
+      "dataCostMs": 3
+    },
+    {
+      "ms": 4,
+      "ok": true,
+      "code": "OK",
+      "dataCostMs": 4
+    }
+  ],
+  "naturalTimeoutPossible": false,
+  "naturalTimeoutWhy": "实测真实开窗 290/19/3/3/4 ms，远小于默认 4000ms 超时；本机回环不存在自然超时",
+  "farUnloadedChunkAttempt": {
+    "ok": false,
+    "code": "NO_TARGET",
+    "message": "那个位置没有方块"
+  },
+  "timeoutInjection": {
+    "timeoutMs": 300,
+    "elapsedMs": 311,
+    "result": {
+      "ok": false,
+      "code": "TIMEOUT",
+      "message": "开了 311ms 还没开",
+      "data": {
+        "block": "chest",
+        "costMs": 311
+      }
+    },
+    "timersCreated": [
+      {
+        "id": {
+          "_idleTimeout": 300,
+          "_idlePrev": null,
+          "_idleNext": null,
+          "_idleStart": 12785,
+          "_onTimeout": null,
+          "_repeat": null,
+          "_destroyed": true
+        },
+        "ms": 300,
+        "cleared": true
+      }
+    ],
+    "timerForTimeoutCleared": true,
+    "timerCount": 1
+  },
+  "lateWindow": {
+    "currentWindowAfterLate": null,
+    "closeCalls": [
+      "LATE-GHOST"
+    ],
+    "notPolluted": true,
+    "closedLateWindow": true
+  },
+  "interruptDuringWait": {
+    "result": {
+      "ok": false,
+      "code": "INTERRUPTED",
+      "message": "被取消了"
+    },
+    "currentWindowAfter": null,
+    "closeCalls": [
+      "LATE-AFTER-INTERRUPT"
+    ],
+    "notOk": true,
+    "codeIsInterrupted": true,
+    "windowNotLeftBehind": true
+  },
+  "verdict": {
+    "timeoutReturnedTimeoutCode": true,
+    "timeoutTimerCleared": true,
+    "timeoutElapsedNearInjected": true,
+    "lateWindowDidNotPollute": true,
+    "lateWindowWasClosed": true,
+    "interruptNotReportedOk": true,
+    "interruptCodeIsInterrupted": true,
+    "interruptLeftNoWindow": true
+  }
+}

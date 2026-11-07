@@ -1,0 +1,88 @@
+{
+  "probe": "A1-single-item",
+  "startedAt": "2026-11-06T12:00:25.640Z",
+  "steps": [],
+  "geometry": {
+    "floorY": 70,
+    "standY": 71,
+    "center": {
+      "x": 200,
+      "y": 70,
+      "z": 200
+    },
+    "furnace": {
+      "x": 202,
+      "y": 71,
+      "z": 200
+    }
+  },
+  "invBefore": {
+    "raw_iron": 1,
+    "coal": 1,
+    "iron_ingot": 0
+  },
+  "furnaceBefore": {
+    "input": null,
+    "fuel": null,
+    "output": null,
+    "all": [],
+    "raw": "202, 71, 200 has the following block data: []"
+  },
+  "furnaceAfterLoad": {
+    "input": {
+      "slot": 0,
+      "id": "raw_iron",
+      "count": 1
+    },
+    "fuel": null,
+    "output": null,
+    "all": [
+      {
+        "slot": 0,
+        "id": "raw_iron",
+        "count": 1
+      }
+    ],
+    "raw": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 1}]"
+  },
+  "result": {
+    "ok": true,
+    "code": "OK",
+    "message": "",
+    "data": {
+      "input": "raw_iron",
+      "count": 1,
+      "want": 1,
+      "got": 1,
+      "fuel": "coal",
+      "placedFurnace": false,
+      "costMs": 11052
+    }
+  },
+  "wallMs": 11053,
+  "wallSeconds": 11.053,
+  "invAfter": {
+    "raw_iron": 0,
+    "coal": 0,
+    "iron_ingot": 1
+  },
+  "furnaceAfter": {
+    "input": null,
+    "fuel": null,
+    "output": null,
+    "all": [],
+    "raw": "202, 71, 200 has the following block data: []"
+  },
+  "tps": "§6TPS from last 1m, 5m, 15m: §a20.0§r, §a20.0§r, §a20.0",
+  "expected": {
+    "singleItemSeconds": 10,
+    "note": "1 件 = 200 tick = 10s；燃料 1 煤 = 80s，够烧 8 件"
+  },
+  "verdict": {
+    "ok": true,
+    "gotEquals1": true,
+    "ingotDelta": 1,
+    "gotMatchesRealDelta": true,
+    "wallNear10s": true
+  }
+}

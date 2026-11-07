@@ -1,0 +1,1531 @@
+[
+  {
+    "inputValue": "",
+    "inputDisabled": true,
+    "inputFocused": false,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 2434.6,
+        "phase": "keydown@capture",
+        "valueBefore": "",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": false,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "BODY"
+      },
+      {
+        "n": 2,
+        "t": 2435.1,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "Enter",
+        "isComposing": false,
+        "defaultPrevented": false,
+        "valueAfter": "",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      }
+    ],
+    "label": "control0-disabled-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "nihaoshijie",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 2621.9,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 2622,
+        "phase": "evt:compositionupdate",
+        "data": "nihaoshijie",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 3,
+        "t": 2622.1,
+        "phase": "evt:beforeinput",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": ""
+      },
+      {
+        "n": 4,
+        "t": 2623.3,
+        "phase": "evt:input",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      }
+    ],
+    "label": "①-a-before-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "nihaoshijie",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 2621.9,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 2622,
+        "phase": "evt:compositionupdate",
+        "data": "nihaoshijie",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 3,
+        "t": 2622.1,
+        "phase": "evt:beforeinput",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": ""
+      },
+      {
+        "n": 4,
+        "t": 2623.3,
+        "phase": "evt:input",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 5,
+        "t": 2788.6,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Process",
+        "code": "",
+        "keyCode": 229,
+        "which": 229,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 6,
+        "t": 2788.9,
+        "phase": "keydown@settled",
+        "key": "Process",
+        "keyCode": 229,
+        "code": "",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      }
+    ],
+    "label": "①-a-after-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "nihaoshijie",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 2621.9,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 2622,
+        "phase": "evt:compositionupdate",
+        "data": "nihaoshijie",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 3,
+        "t": 2622.1,
+        "phase": "evt:beforeinput",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": ""
+      },
+      {
+        "n": 4,
+        "t": 2623.3,
+        "phase": "evt:input",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 5,
+        "t": 2788.6,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Process",
+        "code": "",
+        "keyCode": 229,
+        "which": 229,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 6,
+        "t": 2788.9,
+        "phase": "keydown@settled",
+        "key": "Process",
+        "keyCode": 229,
+        "code": "",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      },
+      {
+        "n": 7,
+        "t": 2973.9,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 229,
+        "which": 229,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 8,
+        "t": 2974.1,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 229,
+        "code": "Enter",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      }
+    ],
+    "label": "①-b-after-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "nihaoshijie",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 2621.9,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 2622,
+        "phase": "evt:compositionupdate",
+        "data": "nihaoshijie",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 3,
+        "t": 2622.1,
+        "phase": "evt:beforeinput",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": ""
+      },
+      {
+        "n": 4,
+        "t": 2623.3,
+        "phase": "evt:input",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 5,
+        "t": 2788.6,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Process",
+        "code": "",
+        "keyCode": 229,
+        "which": 229,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 6,
+        "t": 2788.9,
+        "phase": "keydown@settled",
+        "key": "Process",
+        "keyCode": 229,
+        "code": "",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      },
+      {
+        "n": 7,
+        "t": 2973.9,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 229,
+        "which": 229,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 8,
+        "t": 2974.1,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 229,
+        "code": "Enter",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      },
+      {
+        "n": 9,
+        "t": 3157.6,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 10,
+        "t": 3157.7,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "Enter",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      }
+    ],
+    "label": "①-c-after-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "nihaoshijie",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 2621.9,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 2622,
+        "phase": "evt:compositionupdate",
+        "data": "nihaoshijie",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 3,
+        "t": 2622.1,
+        "phase": "evt:beforeinput",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": ""
+      },
+      {
+        "n": 4,
+        "t": 2623.3,
+        "phase": "evt:input",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 5,
+        "t": 2788.6,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Process",
+        "code": "",
+        "keyCode": 229,
+        "which": 229,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 6,
+        "t": 2788.9,
+        "phase": "keydown@settled",
+        "key": "Process",
+        "keyCode": 229,
+        "code": "",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      },
+      {
+        "n": 7,
+        "t": 2973.9,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 229,
+        "which": 229,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 8,
+        "t": 2974.1,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 229,
+        "code": "Enter",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      },
+      {
+        "n": 9,
+        "t": 3157.6,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 10,
+        "t": 3157.7,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "Enter",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      },
+      {
+        "n": 11,
+        "t": 3342.7,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Process",
+        "code": "KeyA",
+        "keyCode": 65,
+        "which": 65,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 12,
+        "t": 3343,
+        "phase": "keydown@settled",
+        "key": "Process",
+        "keyCode": 65,
+        "code": "KeyA",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      }
+    ],
+    "label": "①-d-after-key",
+    "mode": "current"
+  },
+  {
+    "inputValue": "nihaoshijie",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 3529.5,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 2,
+        "t": 3529.7,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      }
+    ],
+    "label": "①-e-after-synth",
+    "mode": "current"
+  },
+  {
+    "inputValue": "",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 3529.5,
+        "phase": "keydown@capture",
+        "valueBefore": "nihaoshijie",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 2,
+        "t": 3529.7,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "nihaoshijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      },
+      {
+        "n": 3,
+        "t": 3715.2,
+        "phase": "evt:compositionupdate",
+        "data": "",
+        "inputType": null,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 4,
+        "t": 3715.2,
+        "phase": "evt:beforeinput",
+        "data": "",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 5,
+        "t": 3715.8,
+        "phase": "evt:input",
+        "data": null,
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": ""
+      },
+      {
+        "n": 6,
+        "t": 3715.8,
+        "phase": "evt:compositionend",
+        "data": "",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 7,
+        "t": 3715.8,
+        "phase": "evt:input",
+        "data": null,
+        "inputType": null,
+        "value": ""
+      }
+    ],
+    "label": "①-cleanup",
+    "mode": "current"
+  },
+  {
+    "inputValue": "你好shijie",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 3929.8,
+        "phase": "evt:beforeinput",
+        "data": "你好",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 3930.5,
+        "phase": "evt:input",
+        "data": "你好",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": "你好"
+      },
+      {
+        "n": 3,
+        "t": 4083.3,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": "你好"
+      },
+      {
+        "n": 4,
+        "t": 4083.4,
+        "phase": "evt:compositionupdate",
+        "data": "shijie",
+        "inputType": null,
+        "value": "你好"
+      },
+      {
+        "n": 5,
+        "t": 4083.4,
+        "phase": "evt:beforeinput",
+        "data": "shijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "你好"
+      },
+      {
+        "n": 6,
+        "t": 4083.6,
+        "phase": "evt:input",
+        "data": "shijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "你好shijie"
+      }
+    ],
+    "label": "①-f-before-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "你好shijie",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 3929.8,
+        "phase": "evt:beforeinput",
+        "data": "你好",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 3930.5,
+        "phase": "evt:input",
+        "data": "你好",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": "你好"
+      },
+      {
+        "n": 3,
+        "t": 4083.3,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": "你好"
+      },
+      {
+        "n": 4,
+        "t": 4083.4,
+        "phase": "evt:compositionupdate",
+        "data": "shijie",
+        "inputType": null,
+        "value": "你好"
+      },
+      {
+        "n": 5,
+        "t": 4083.4,
+        "phase": "evt:beforeinput",
+        "data": "shijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "你好"
+      },
+      {
+        "n": 6,
+        "t": 4083.6,
+        "phase": "evt:input",
+        "data": "shijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "你好shijie"
+      },
+      {
+        "n": 7,
+        "t": 4241.1,
+        "phase": "keydown@capture",
+        "valueBefore": "你好shijie",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": true,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 8,
+        "t": 4241.3,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "Enter",
+        "isComposing": true,
+        "defaultPrevented": false,
+        "valueAfter": "你好shijie",
+        "clearsSoFar": 0,
+        "chatMeLines": 0
+      }
+    ],
+    "label": "①-f-after-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "你好世界",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 0,
+    "chatMeTexts": [],
+    "chatAllLines": 0,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 4654.1,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 4654.2,
+        "phase": "evt:compositionupdate",
+        "data": "nihaoshijie",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 3,
+        "t": 4654.2,
+        "phase": "evt:beforeinput",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": ""
+      },
+      {
+        "n": 4,
+        "t": 4654.4,
+        "phase": "evt:input",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 5,
+        "t": 4797.2,
+        "phase": "evt:compositionupdate",
+        "data": "你好世界",
+        "inputType": null,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 6,
+        "t": 4797.2,
+        "phase": "evt:beforeinput",
+        "data": "你好世界",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 7,
+        "t": 4797.8,
+        "phase": "evt:input",
+        "data": "你好世界",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "你好世界"
+      },
+      {
+        "n": 8,
+        "t": 4797.8,
+        "phase": "evt:compositionend",
+        "data": "你好世界",
+        "inputType": null,
+        "value": "你好世界"
+      },
+      {
+        "n": 9,
+        "t": 4797.8,
+        "phase": "evt:input",
+        "data": null,
+        "inputType": null,
+        "value": "你好世界"
+      }
+    ],
+    "label": "②-before-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 1,
+    "chatMeTexts": [
+      "你好世界"
+    ],
+    "chatAllLines": 1,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [
+      {
+        "t": 5064.8,
+        "text": "你好世界"
+      }
+    ],
+    "rec": [
+      {
+        "n": 1,
+        "t": 4654.1,
+        "phase": "evt:compositionstart",
+        "data": "",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 4654.2,
+        "phase": "evt:compositionupdate",
+        "data": "nihaoshijie",
+        "inputType": null,
+        "value": ""
+      },
+      {
+        "n": 3,
+        "t": 4654.2,
+        "phase": "evt:beforeinput",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": ""
+      },
+      {
+        "n": 4,
+        "t": 4654.4,
+        "phase": "evt:input",
+        "data": "nihaoshijie",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 5,
+        "t": 4797.2,
+        "phase": "evt:compositionupdate",
+        "data": "你好世界",
+        "inputType": null,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 6,
+        "t": 4797.2,
+        "phase": "evt:beforeinput",
+        "data": "你好世界",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "nihaoshijie"
+      },
+      {
+        "n": 7,
+        "t": 4797.8,
+        "phase": "evt:input",
+        "data": "你好世界",
+        "inputType": "insertCompositionText",
+        "isComposing": true,
+        "value": "你好世界"
+      },
+      {
+        "n": 8,
+        "t": 4797.8,
+        "phase": "evt:compositionend",
+        "data": "你好世界",
+        "inputType": null,
+        "value": "你好世界"
+      },
+      {
+        "n": 9,
+        "t": 4797.8,
+        "phase": "evt:input",
+        "data": null,
+        "inputType": null,
+        "value": "你好世界"
+      },
+      {
+        "n": 10,
+        "t": 5063.4,
+        "phase": "keydown@capture",
+        "valueBefore": "你好世界",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": false,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 11,
+        "t": 5067.1,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "Enter",
+        "isComposing": false,
+        "defaultPrevented": true,
+        "valueAfter": "",
+        "clearsSoFar": 1,
+        "chatMeLines": 1
+      }
+    ],
+    "label": "②-after-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "普通回车测试",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 1,
+    "chatMeTexts": [
+      "你好世界"
+    ],
+    "chatAllLines": 1,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 5423.4,
+        "phase": "evt:beforeinput",
+        "data": "普通回车测试",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 5424.4,
+        "phase": "evt:input",
+        "data": "普通回车测试",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": "普通回车测试"
+      }
+    ],
+    "label": "③-before-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 2,
+    "chatMeTexts": [
+      "你好世界",
+      "普通回车测试"
+    ],
+    "chatAllLines": 2,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [
+      {
+        "t": 5577.8,
+        "text": "普通回车测试"
+      }
+    ],
+    "rec": [
+      {
+        "n": 1,
+        "t": 5423.4,
+        "phase": "evt:beforeinput",
+        "data": "普通回车测试",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 5424.4,
+        "phase": "evt:input",
+        "data": "普通回车测试",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": "普通回车测试"
+      },
+      {
+        "n": 3,
+        "t": 5577.1,
+        "phase": "keydown@capture",
+        "valueBefore": "普通回车测试",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": false,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 4,
+        "t": 5579.5,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "Enter",
+        "isComposing": false,
+        "defaultPrevented": true,
+        "valueAfter": "",
+        "clearsSoFar": 1,
+        "chatMeLines": 2
+      }
+    ],
+    "label": "③-after-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 2,
+    "chatMeTexts": [
+      "你好世界",
+      "普通回车测试"
+    ],
+    "chatAllLines": 2,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [],
+    "label": "④-before-insertText",
+    "mode": "current"
+  },
+  {
+    "inputValue": "",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 3,
+    "chatMeTexts": [
+      "你好世界",
+      "普通回车测试",
+      "上屏即回车"
+    ],
+    "chatAllLines": 3,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [
+      {
+        "t": 5991.8,
+        "text": "上屏即回车"
+      }
+    ],
+    "rec": [
+      {
+        "n": 1,
+        "t": 5986.8,
+        "phase": "evt:beforeinput",
+        "data": "上屏即回车",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 5988,
+        "phase": "evt:input",
+        "data": "上屏即回车",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": "上屏即回车"
+      },
+      {
+        "n": 3,
+        "t": 5990.9,
+        "phase": "keydown@capture",
+        "valueBefore": "上屏即回车",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": false,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": false,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 4,
+        "t": 5997.8,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "Enter",
+        "isComposing": false,
+        "defaultPrevented": true,
+        "valueAfter": "",
+        "clearsSoFar": 1,
+        "chatMeLines": 3
+      }
+    ],
+    "label": "④-after-enter",
+    "mode": "current"
+  },
+  {
+    "inputValue": "",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 3,
+    "chatMeTexts": [
+      "你好世界",
+      "普通回车测试",
+      "上屏即回车"
+    ],
+    "chatAllLines": 3,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [],
+    "label": "附-before",
+    "mode": "current"
+  },
+  {
+    "inputValue": "换行测试",
+    "inputDisabled": false,
+    "inputFocused": true,
+    "chatMeLines": 3,
+    "chatMeTexts": [
+      "你好世界",
+      "普通回车测试",
+      "上屏即回车"
+    ],
+    "chatAllLines": 3,
+    "composerPlaceholder": "和她说话，或直接发 !命令…",
+    "store": {
+      "connected": true,
+      "agents": [
+        "t3-stub"
+      ],
+      "current": "",
+      "lastError": ""
+    },
+    "clears": [],
+    "rec": [
+      {
+        "n": 1,
+        "t": 6282.5,
+        "phase": "evt:beforeinput",
+        "data": "换行测试",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": ""
+      },
+      {
+        "n": 2,
+        "t": 6283.6,
+        "phase": "evt:input",
+        "data": "换行测试",
+        "inputType": "insertText",
+        "isComposing": false,
+        "value": "换行测试"
+      },
+      {
+        "n": 3,
+        "t": 6286.6,
+        "phase": "keydown@capture",
+        "valueBefore": "换行测试",
+        "eventType": "keydown",
+        "key": "Enter",
+        "code": "Enter",
+        "keyCode": 13,
+        "which": 13,
+        "isComposing": false,
+        "repeat": false,
+        "defaultPrevented": false,
+        "shift": true,
+        "ctrl": false,
+        "meta": false,
+        "target": "INPUT[text]"
+      },
+      {
+        "n": 4,
+        "t": 6289.2,
+        "phase": "keydown@settled",
+        "key": "Enter",
+        "keyCode": 13,
+        "code": "Enter",
+        "isComposing": false,
+        "defaultPrevented": false,
+        "valueAfter": "换行测试",
+        "clearsSoFar": 0,
+        "chatMeLines": 3
+      }
+    ],
+    "label": "附-ShiftEnter",
+    "mode": "current"
+  }
+]

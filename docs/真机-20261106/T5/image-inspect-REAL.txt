@@ -1,0 +1,45 @@
+=== IMAGE IDENTITY ===
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+VERSION_ID="12"
+node: v22.23.4
+
+=== F1: console UI (/web/dist) ===
+  MISSING  /web
+  MISSING  /web/dist
+  MISSING  /app/web
+  MISSING  /app/web/dist
+  -- any index.html under /web? --
+
+=== F2: bots/*.js source templates ===
+  MISSING  /app/bots/execTemplate.js
+  MISSING  /app/bots/lintTemplate.js
+  MISSING  /app/bots
+
+=== App tree sanity (COPY list) ===
+  ok   /app/main.js
+  ok   /app/settings.js
+  ok   /app/src
+  ok   /app/services
+  ok   /app/tasks
+  ok   /app/schematics
+  ok   /app/README.md
+  ok   /app/package.json
+  ok   /app/patches
+
+=== Credential leakage (existence only, never contents) ===
+  clean  /app/.mindserver-token
+  clean  /app/keys.json
+  clean  /app/.env
+  clean  /app/profiles
+  clean  /app/.git
+  clean  /app/bots/_board
+  clean  /app/logs
+  clean  /app/tmp
+
+=== *.token wildcard probe (G1) ===
+  (empty above = nothing matched)
+
+=== Package install mode (OPS-007) ===
+  (Dockerfile not in image; check build log)
+
+=== DONE ===

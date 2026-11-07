@@ -1,0 +1,72 @@
+{
+  "probe": "A4-want1-with-64",
+  "startedAt": "2026-11-06T12:01:29.668Z",
+  "invBefore": {
+    "raw_iron": 64,
+    "coal": 8
+  },
+  "furnaceBefore": {
+    "input": null,
+    "fuel": null,
+    "output": null,
+    "all": [],
+    "raw": "202, 71, 200 has the following block data: []"
+  },
+  "loadSnapshot": {
+    "input": {
+      "slot": 0,
+      "id": "raw_iron",
+      "count": 1
+    },
+    "fuel": null,
+    "output": null,
+    "all": [
+      {
+        "slot": 0,
+        "id": "raw_iron",
+        "count": 1
+      }
+    ],
+    "raw": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 1}]"
+  },
+  "result": {
+    "ok": true,
+    "code": "OK",
+    "message": "",
+    "data": {
+      "input": "raw_iron",
+      "count": 1,
+      "want": 1,
+      "got": 1,
+      "fuel": "coal",
+      "placedFurnace": false,
+      "costMs": 10883
+    }
+  },
+  "wallSeconds": 10.884,
+  "invAfter": {
+    "raw_iron": 63,
+    "coal": 7,
+    "iron_ingot": 1
+  },
+  "furnaceAfter": {
+    "input": null,
+    "fuel": null,
+    "output": null,
+    "all": [],
+    "raw": "202, 71, 200 has the following block data: []"
+  },
+  "expected": {
+    "furnaceInputCountAtLoad": 1,
+    "rawIronLeftAfter": 63,
+    "got": 1,
+    "note": "老行为是 Math.min(have,64) → 会把 64 件全塞进炉子"
+  },
+  "verdict": {
+    "loadedOnly1": true,
+    "inputNotMoreThan2": true,
+    "rawLeft63": true,
+    "got1": true,
+    "okOrAtLeastReported1": true
+  }
+}

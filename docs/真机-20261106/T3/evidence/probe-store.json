@@ -1,0 +1,11 @@
+{
+  "discover": {
+    "app": true,
+    "instances": []
+  },
+  "inject": {
+    "ok": false,
+    "reason": "store not reachable"
+  },
+  "after": "{\"composer\":false,\"disabled\":null,\"chatLines\":0,\"body\":\"◆\\n陪玩控制台\\n控制台\\n3D 地形\\n诊断\\n配置\\nmindserver 已连接\\n还没有 agent\\n\\nmindserver 没报告任何 agent。检查 settings.js 里的 profiles， 或去「配置」页创建一个。\\n\\n去配置\"}"
+}

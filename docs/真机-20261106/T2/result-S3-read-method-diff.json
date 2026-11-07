@@ -1,0 +1,88 @@
+{
+  "probe": "S3-read-method-diff",
+  "startedAt": "2026-11-06T13:24:51.553Z",
+  "oneShotItems": {
+    "bodyLen": 112,
+    "endsWithEllipsis": true,
+    "body": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 16}, {Slot: 1b, id: \"...",
+    "parsedByOldRegex": [
+      {
+        "slot": 0,
+        "id": "raw_iron",
+        "count": 16
+      }
+    ]
+  },
+  "legacyFirstPacketResult": {
+    "bodyLen": 112,
+    "body": "202, 71, 200 has the following block data: [{Slot: 0b, id: \"minecraft:raw_iron\", count: 16}, {Slot: 1b, id: \"..."
+  },
+  "perSlot": [
+    {
+      "idx": 0,
+      "id": "raw_iron",
+      "count": 16,
+      "rawId": "202, 71, 200 has the following block data: \"minecraft:raw_iron\"",
+      "rawCount": "202, 71, 200 has the following block data: 16"
+    },
+    {
+      "idx": 1,
+      "id": "coal",
+      "count": 1,
+      "rawId": "202, 71, 200 has the following block data: \"minecraft:coal\"",
+      "rawCount": "202, 71, 200 has the following block data: 1"
+    },
+    {
+      "idx": 2,
+      "id": null,
+      "count": null,
+      "rawId": "Found no elements matching Items[2]",
+      "rawCount": "Found no elements matching Items[2]"
+    }
+  ],
+  "productLoad": {
+    "returned": {
+      "ok": true,
+      "code": "OK",
+      "message": "",
+      "data": {
+        "input": "raw_iron",
+        "inputCount": 16,
+        "fuel": "coal",
+        "fuelCount": 2,
+        "costMs": 926
+      }
+    },
+    "loadCostMs": 1459,
+    "furnaceSlotsDirectObservation": [
+      {
+        "idx": 0,
+        "id": "raw_iron",
+        "count": 16
+      },
+      {
+        "idx": 1,
+        "id": "coal",
+        "count": 1
+      },
+      {
+        "idx": 2,
+        "id": null,
+        "count": null
+      }
+    ],
+    "serverCoal": "Found 6 matching item(s) on player probe2"
+  },
+  "verdict": {
+    "oneShotTruncated": true,
+    "oneShotSawOnlySlots": [
+      0
+    ],
+    "legacyFirstPacketAlsoTruncated": true,
+    "perSlotSawFuelCount": 1,
+    "perSlotSawInputCount": 16,
+    "afterLoadInputDirect": 16,
+    "afterLoadFuelDirect": 1,
+    "note": "① 一次性 Items 因服务端截断只看到前两格；③ 逐格读法给出直接读数 ⇒ 原先的 loadSnapshot=null 是探针假象"
+  }
+}

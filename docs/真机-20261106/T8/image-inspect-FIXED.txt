@@ -1,0 +1,26 @@
+=== 镜像身份 ===
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+v22.23.4
+
+=== F1: 控制台 UI ===
+  EXISTS /app/web-dist (3 entries)
+  MISSING /web
+  MISSING /web/dist
+  index.html: /app/web-dist/index.html
+  assets js: 4 个
+
+=== F2: bots 源码模板 ===
+  EXISTS /app/bots/execTemplate.js
+  EXISTS /app/bots/lintTemplate.js
+  bots/ 下条目数: 2
+
+=== 凭据泄漏（只看存在性）===
+  clean /app/.mindserver-token
+  clean /app/keys.json
+  clean /app/.env
+  clean /app/profiles
+  clean /app/.git
+  clean /app/bots/_board
+  clean /app/logs
+  clean /app/tmp
+  *.token: 0 个

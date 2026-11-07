@@ -1,0 +1,70 @@
+{
+  "tool": "T6/analyze-live-a.mjs",
+  "generatedAt": "2026-11-06T12:03:14.715Z",
+  "derivedFrom": [
+    "live-a-result.json",
+    "mod006-result.json"
+  ],
+  "correctedVerdict": {
+    "connectivity": "通",
+    "connectivityEvidence": "adapter 返回了 291 字符真实内容（非 [LLM_ERROR] 标记），且 recordUsage 记下 input=54 / output=503（usage 只可能来自真响应）",
+    "transportLevelStatus": 200,
+    "transportLevelNote": "模型 POST 的 HTTP 状态未被捕获（SDK 走自有 transport，绕过全局 fetch）；但同一 key、同一域名下的 GET /v1/models 实测 HTTP 200 （模型数 1），可作端点可达性的旁证。"
+  },
+  "requestCount": {
+    "measuredByInterceptor": 0,
+    "measuredNote": "0 是**拦截器失效**造成的假值（SDK 不用 globalThis.fetch），不是\"没发请求\"",
+    "structuralValue": 1,
+    "structuralReason": "src/models/claude.js 全文没有 turns.slice(1) 递归、也没有 isContextLengthError 分支 ⇒ 一次 sendRequest 只可能发出 1 次底层请求；本次运行日志也只有一次 \"Awaiting…/Received.\" 对",
+    "doubleRequestObserved": false
+  },
+  "maxTokensBudget": {
+    "requested": 16,
+    "actualOutputTokens": 503,
+    "honored": false,
+    "finding": "★ 代理**没有**遵守 max_tokens=16：实际输出 503 tokens（约 31×）。⇒ \"显式传小 max_tokens 就能把花费压到 16\" 的假设在本代理上**不成立**；这也说明本次没能通过 max_tokens 制造\"真实截断\"。"
+  },
+  "truncationObserved": {
+    "replyLooksComplete": true,
+    "adapterMarkedTruncated": false,
+    "conclusion": "本次真实调用**没有**发生截断（模型把 1..100 数完了），所以\"真实截断是否被误判成上下文超限\"无法靠这次调用观察；该问题改用 T6/probe-mod001-stub.mjs 的确定性触发（真实适配器代码 + 假 transport）来证明。"
+  },
+  "costEstimate": {
+    "measuredTokens": {
+      "input": 54,
+      "output": 503,
+      "total": 557
+    },
+    "assumption": "代理未公开价目表；模型 id 是代理自定义的 deepseek-v4.1-flash。下表不是结算金额，只是把**实测 token 数**代入几个公开参考档位，给出量级。",
+    "bands": [
+      {
+        "label": "DeepSeek-V3 官价（缓存未命中，$0.27/$1.10 per M）",
+        "usd": 0.00056788,
+        "rmb": 0.00403195
+      },
+      {
+        "label": "DeepSeek-V3.1 官价（$0.56/$1.68 per M）",
+        "usd": 0.00087528,
+        "rmb": 0.00621449
+      },
+      {
+        "label": "低价档参考（$0.14/$0.28 per M）",
+        "usd": 0.0001484,
+        "rmb": 0.00105364
+      }
+    ],
+    "verdict": "单次最小请求量级 ≈ 3e-5 ~ 9e-4 美元（不到一分钱的千分之一），可安全重复做验收"
+  },
+  "budgetAccounting": {
+    "outboundModelCalls": 1,
+    "outboundFreeGets": 1,
+    "unreachableLocalAttempts": 1,
+    "outputTokensTotal": 503,
+    "declaredBudget": {
+      "maxModelCalls": 3,
+      "maxOutputTokens": 500
+    },
+    "overrun": true,
+    "overrunReason": "超出 3 tokens —— 原因不是脚本没设上限，而是**代理忽略了 max_tokens=16**（见 maxTokensBudget）。"
+  }
+}

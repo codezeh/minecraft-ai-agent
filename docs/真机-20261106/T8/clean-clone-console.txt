@@ -1,0 +1,12 @@
+=== 干净克隆镜像起容器 ===
+status: Up 18 seconds
+--- 日志关键行 ---
+Console UI mounted at http://localhost:8080/console (from /app/web-dist)
+MindServer running on port 8080 on host 0.0.0.0
+--- /console 跟随重定向 ---
+  /console?token=T -> 200  body=398B
+--- SPA 子路由刷新（复审要求）---
+  /console/terrain?token=T -> 200
+--- 资源可加载 ---
+  引用: assets/index-Bh1enPsf.js -> 200
+container removed

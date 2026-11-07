@@ -1,0 +1,10 @@
+=== 跟随重定向 + 带 token（token 走 cookie 或 query 均试）===
+--- 301 目标 ---
+  /console?token=T -> 301 redirect=http://127.0.0.1:18090/console/?token=audit-fixed-token-0001
+--- 跟随重定向（-L），token 保留在 query ---
+  /console/?token=T -L -> 200  (body 398 字节)
+--- body 里是否引用 assets ---
+assets/index-Bh1enPsf.js
+--- 直接取该 js ---
+  GET /console/assets/index-Bh1enPsf.js -> 200
+container removed
