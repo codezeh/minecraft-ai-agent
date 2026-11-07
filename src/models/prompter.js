@@ -10,7 +10,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { selectAPI, createModel } from './_model_map.js';
 // 第31条：模型层失败会以 `[LLM_ERROR] …` 回来，prompter 必须把它当"失败"而不是"回答"
-import { isFailedReply } from './_shared.js';
+import { isFailedReply, isTruncatedReply, stripTruncatedMark } from './_shared.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -333,6 +333,18 @@ export class Prompter {
                 generation = afterThink;
             }
 
+            // ★ 2026-11-07 复审（第3B条）：截断标记是**内部诊断信号**，不是对话内容。
+            //   原来它会被原样返回 → 进聊天历史 → 经 routeResponse 说给玩家，
+            //   玩家真的看到 "[LLM_TRUNCATED]" 几个字。这里剥离并单独记日志。
+            if (isTruncatedReply(generation)) {
+                const { text, truncated } = stripTruncatedMark(generation);
+                if (truncated) {
+                    console.warn(`[llm] ${this.agent.name} 本轮回答被输出额度截断：正文已剥离内部标记，仅保留诊断日志`);
+                    this.last_convo_truncated = true;
+                }
+                return text;
+            }
+
             return generation;
         }
 
@@ -361,7 +373,18 @@ export class Prompter {
             prompt = await this.replaceStrings(prompt, messages, this.coding_examples);
 
             let resp = await this.code_model.sendRequest(messages, prompt);
-            await this._saveLog(prompt, messages, resp, isFailedReply(resp) ? 'coding-failed' : 'coding');
+            // ★ 2026-11-07 复审（第3B条）：**截断的代码不许进入执行路径。**
+            //   半截代码最坏情况是语法错误（浪费一次执行），更坏是把一句正确指令截成
+            //   另一条危险指令（例如 `!newAction` 里删一半的路径）。这里明确失败：
+            //   原始响应（含标记）已进日志便于排查，返回"没有代码"让 coder.js 走既有的
+            //   「没写代码 → 重试」分支 —— 与第 345 行"正在等待代码"同一约定。
+            const codingTruncated = isTruncatedReply(resp);
+            await this._saveLog(prompt, messages, resp,
+                isFailedReply(resp) ? 'coding-failed' : (codingTruncated ? 'coding-truncated' : 'coding'));
+            if (codingTruncated) {
+                console.warn(`[llm] ${this.agent.name} 代码生成被输出额度截断：拒绝执行半截代码（原文已记日志）`);
+                return '```//no response (truncated)```';
+            }
             // 第31条：失败标记原样往上传（带 `[LLM_ERROR]` 前缀 ⇒ 不会被误当代码）。
             // coder.js 那边 `res.indexOf('```') === -1` 会走既有的「没写代码→重试」分支，不会把它执行。
             return resp;
@@ -386,6 +409,13 @@ export class Prompter {
             const [_, afterThink] = resp.split('</think>');
             resp = afterThink;
         }
+        // ★ 2026-11-07 复审（第3B条）：截断标记不许写进 memory.json ——
+        //   记忆是被反复读回的长期内容，混进内部标记等于永久污染。
+        if (isTruncatedReply(resp)) {
+            const { text, truncated } = stripTruncatedMark(resp);
+            if (truncated) console.warn(`[llm] ${this.agent.name} 记忆摘要被输出额度截断：已剥离内部标记`);
+            return text;
+        }
         return resp;
     }
 
@@ -401,7 +431,10 @@ export class Prompter {
             console.warn(`[llm] ${this.agent.name} bot_responder 调用失败，按「不接话」处理: ${res}`);
             return false;
         }
-        return res.trim().toLowerCase() === 'respond';
+        // ★ 2026-11-07 复审（第3B条）：截断标记会让 `=== 'respond'` 恒为 false。
+        //   bot_responder 只输出一个词，被截断基本等于不可用 ⇒ 剥掉标记后仍按原逻辑比较。
+        const decision = isTruncatedReply(res) ? stripTruncatedMark(res).text : res;
+        return decision.trim().toLowerCase() === 'respond';
     }
 
     async promptVision(messages, imageBuffer) {

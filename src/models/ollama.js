@@ -95,15 +95,16 @@ export class Ollama {
         let data = null;
         try {
             // ★ MOD-006：走带**总期限 + 取消信号**的 fetch（原来裸 fetch 会一直挂住）
-            const res = await fetchWithDeadline(request, {}, {
+            // ★ 2026-11-07 复审（第2条）：status 检查与 `res.json()` 都放进 `parse`，
+            //   这样**读响应体也在总期限里** —— 否则服务端发完头不发 body 时会无限等。
+            data = await fetchWithDeadline(request, {}, {
                 timeoutMs: this.timeoutMs,
                 onAbort: (why) => console.warn(`[ollama] 请求被终止：${why}`),
+                parse: async (res) => {
+                    if (!res.ok) throw new Error(`Ollama Status: ${res.status}`);
+                    return await res.json();
+                },
             });
-            if (res.ok) {
-                data = await res.json();
-            } else {
-                throw new Error(`Ollama Status: ${res.status}`);
-            }
         } catch (err) {
             // 第31条 第3点：**不许吞成 null**。吞掉之后上层只看到"没有数据"，永远不知道发生过网络错误，
             // 也永远不会重试。这里原样抛出，让 sendRequest 的 catch 去判 429 / 记失败标记。

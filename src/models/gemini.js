@@ -3,7 +3,7 @@ import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
 
-import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, markTruncated } from './_shared.js';
 
 export class Gemini {
     static prefix = 'google';
@@ -62,6 +62,17 @@ export class Gemini {
             const response = await result.text;
 
             console.log('Received.');
+
+            // ★ 2026-11-07 复审（第3A条）：Gemini 的输出截断信号是 **`finishReason: 'MAX_TOKENS'`**，
+            //   原来这里只读 `result.text`，完全不看 finishReason ⇒ 被截断的回答被当成"说完了"，
+            //   与 DeepSeek/GPT/Claude 的可识别行为不一致。
+            //   注意：Gemini 的 `candidates[0].finishReason` 还可能是 SAFETY / RECITATION 等，
+            //   那些不是"输出额度用完"，不在这里打截断标记（避免把安全拦截误标成截断）。
+            const finishReason = result?.candidates?.[0]?.finishReason;
+            if (finishReason === 'MAX_TOKENS') {
+                console.log('[llm] gemini 输出被 max_tokens 截断（finishReason=MAX_TOKENS）：返回已得内容并打标记');
+                return markTruncated(response ?? '');
+            }
 
             return response;
         } catch (err) {

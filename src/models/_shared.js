@@ -58,6 +58,25 @@ export function markTruncated(text) {
 }
 
 /**
+ * ★★ 2026-11-07 复审（第3B条）：把内部截断标记**从展示文本里剥掉**，同时保留结构化的"是否截断"。
+ *
+ * 缺陷原貌：`markTruncated()` 直接把 `[LLM_TRUNCATED]` 追加到正文末尾，但**没有任何消费端**
+ *   调用 `isTruncatedReply()`（全仓 0 处调用）。于是它会一路进到 `promptConvo()` 的返回值 →
+ *   聊天历史 → `routeResponse()` → **玩家真的看到 "[LLM_TRUNCATED]" 这几个字**。
+ *
+ * 修法：标记是**内部诊断信号**，不是对话内容。在对话边界剥离，并把 `truncated` 作为
+ *   独立字段交给调用方（打日志/做降级决策），正文里不留痕迹。
+ *
+ * @param {string} text 可能带标记的文本
+ * @returns {{text: string, truncated: boolean}} 剥离后的正文 + 是否曾被截断
+ */
+export function stripTruncatedMark(text) {
+    const s = typeof text === 'string' ? text : String(text ?? '');
+    if (!isTruncatedReply(s)) return { text: s, truncated: false };
+    return { text: s.slice(0, -TRUNCATED_SUFFIX.length), truncated: true };
+}
+
+/**
  * 这次失败是不是**真的**上下文超限（MOD-001）。
  *
  * 只认供应商/网关明确表达的那几种；**不要把 finish_reason='length' 算进来**
@@ -150,7 +169,11 @@ export function rateLimitDelayMs(attempt) {
  * @param {object} [opts]
  *   timeoutMs 总期限（毫秒），默认 DEFAULT_LLM_TIMEOUT_MS；<=0 表示不限
  *   onAbort   超时/取消时的回调（便于日志）
- * @returns {Promise<Response>} 与 fetch 同形；超时抛 AbortError（带 code='LLM_TIMEOUT'）
+ *   parse     可选。传了它，期限的作用域就**延伸到响应体读完**：
+ *             `parse(res)` 在本函数内部 await，之后才清 timer / 摘 abort listener。
+ *             典型用法：`parse: async (res) => { if (!res.ok) throw ...; return res.json(); }`
+ * @returns {Promise<Response|any>} 没传 parse 时与 fetch 同形；传了则返回 parse 的返回值。
+ *          超时抛 AbortError（带 code='LLM_TIMEOUT'）
  */
 export const DEFAULT_LLM_TIMEOUT_MS = 120000;
 
@@ -171,7 +194,14 @@ export async function fetchWithDeadline(input, init = {}, opts = {}) {
         timer = setTimeout(() => { timedOut = true; try { ctrl.abort(); } catch { /* ignore */ } }, timeoutMs);
     }
     try {
-        return await fetch(input, { ...init, signal: ctrl.signal });
+        const res = await fetch(input, { ...init, signal: ctrl.signal });
+        // ★★ 2026-11-07 复审（第2条）：期限必须覆盖**响应体读取**。
+        //   原来这里直接 `return res`：`fetch` 只等到响应头就 resolve，`finally` 立刻清掉 timer，
+        //   调用方随后的 `res.json()` 完全不受期限约束 —— 服务端发完头却不发 body 时，
+        //   应用级总期限形同虚设（复审实测：期限 35ms，body 150ms 才完成，仍一路等到 150ms）。
+        //   传了 `parse` 就把读体也放进本作用域：timer 与 abort listener 要等 body 读完才清。
+        if (typeof opts.parse === 'function') return await opts.parse(res);
+        return res;
     } catch (err) {
         // 把"为什么被中断"讲清楚：超时 ≠ 用户取消 ≠ 网络错误
         if (timedOut) {

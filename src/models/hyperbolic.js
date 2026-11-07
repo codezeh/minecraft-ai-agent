@@ -56,7 +56,9 @@ export class Hyperbolic {
 
             try {
                 // ★ MOD-006：带总期限 + 取消信号的 fetch（原来裸 fetch 会一直挂住）
-                const response = await fetchWithDeadline(this.apiUrl, {
+                // ★ 2026-11-07 复审（第2条）：status 检查与 `response.json()` 都放进 `parse`，
+                //   这样**读响应体也在总期限里** —— 否则发完头不发 body 时总期限形同虚设。
+                const data = await fetchWithDeadline(this.apiUrl, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -66,17 +68,17 @@ export class Hyperbolic {
                 }, {
                     timeoutMs: this.timeoutMs,
                     onAbort: (why) => console.warn(`[hyperbolic] 请求被终止：${why}`),
+                    parse: async (response) => {
+                        if (!response.ok) {
+                            // 429 要重试而不是把失败当回答（第31条 第3点：三个裸 fetch 适配器都缺这条）
+                            if (response.status === 429) {
+                                throw Object.assign(new Error('HTTP 429 rate limited'), { status: 429 });
+                            }
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        return await response.json();
+                    },
                 });
-
-                if (!response.ok) {
-                    // 429 要重试而不是把失败当回答（第31条 第3点：三个裸 fetch 适配器都缺这条）
-                    if (response.status === 429) {
-                        throw Object.assign(new Error('HTTP 429 rate limited'), { status: 429 });
-                    }
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
-                const data = await response.json();
                 recordUsage(data?.usage, this.modelName);
                 // ★ MOD-001：`finish_reason === 'length'` 是**输出额度**用完，不是上下文超限。
                 //   原来这里 throw 'Context length exceeded' → 裁历史重试（无效且多花钱）。
