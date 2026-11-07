@@ -1,0 +1,27 @@
+# 换行符策略 —— 只写**必须固定**的那部分，不给全局加约束。
+#
+# 为什么需要这个文件（2026-11-07 复审 第4条修完后的实测发现）：
+#   `mindcraft/web-dist/` 是镜像用的**构建产物**，它的内容按字节被
+#   `web_dist_manifest_unit` 用 sha256 校验。而本机 `core.autocrlf=true` 时，
+#   Git 会把文本文件在检出时把 LF 改成 CRLF —— index.html 从 398 字节变成 411 字节，
+#   9 个产物的哈希全部变化，**干净克隆上一致性门禁必然报红**（实测复核过）。
+#   ⇒ 产物目录必须声明 `-text`（不做任何换行转换），保证"克隆出来的字节 == 构建出来的字节"。
+#
+# 同理，`patches/` 里的补丁是按字节应用的（patch-package），换行被改写会让补丁对不上。
+
+# 构建产物：逐字节保持原样
+web-dist/** -text
+web-dist/* -text
+
+# 依赖补丁：按字节应用，不能改写换行
+patches/** -text
+patches/* -text
+
+# 二进制类资源（万一以后加了）
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
