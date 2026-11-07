@@ -95,38 +95,7 @@ COPY web-dist ./web-dist
 #   ⚠️ 本段的单引号内不得再出现单引号（JS 源码整体被 sh 的单引号包住）。
 RUN set -eu; \
     cd /app/web-dist; \
-    node --input-type=commonjs -e '
-const fs = require("fs"), path = require("path"), crypto = require("crypto");
-const bad = (m) => { console.error("ERROR[T10] " + m); process.exit(1); };
-const sha = (p) => crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
-if (!fs.existsSync("index.html")) bad("/app/web-dist/index.html 缺失：镜像里没有控制台入口。请在仓库根运行 scripts/release.ps1 生成产物后重新 docker build。");
-if (!fs.existsSync("MANIFEST.json")) bad("/app/web-dist/MANIFEST.json 缺失：产物没有清单，无法证明它与 web/ 源码一致。请在仓库根运行 scripts/release.ps1。");
-const m = JSON.parse(fs.readFileSync("MANIFEST.json", "utf8"));
-const files = m.files || {};
-const names = Object.keys(files);
-if (names.length === 0) bad("MANIFEST.json 的 files 为空：产物目录是个空壳。");
-for (const f of names) {
-  if (!fs.existsSync(f)) bad("清单里有、镜像里没有的文件: " + f);
-  const g = sha(f);
-  if (g !== files[f]) bad("产物内容与清单不一致（被手改或漏拷）: " + f);
-}
-const html = fs.readFileSync("index.html", "utf8");
-const refs = [...new Set([...html.matchAll(/\/console\/[A-Za-z0-9._\/-]+/g)].map((x) => x[0].slice(9)))];
-if (refs.length === 0) bad("index.html 里没有任何 /console/ 资源引用：vite base 配错时页面会白屏。");
-for (const r of refs) { if (!fs.existsSync(r)) bad("index.html 引用了产物里不存在的资源: " + r); }
-const extra = [];
-const walk = (d, b) => {
-  for (const n of fs.readdirSync(d)) {
-    const a = path.join(d, n), r = b ? b + "/" + n : n;
-    if (fs.statSync(a).isDirectory()) walk(a, r); else extra.push(r);
-  }
-};
-walk(".", "");
-for (const f of extra) {
-  if (!names.includes(f) && f !== "MANIFEST.json" && f !== "README.md") bad("产物里有清单未记录的野文件（多半是上一版残留）: " + f);
-}
-console.log("[T10] web-dist 构建期校验通过: " + names.length + " 个文件、" + refs.length + " 个入口引用均一致");
-'
+    node --input-type=commonjs -e 'const fs=require("fs"),p=require("path"),c=require("crypto");const bad=(m)=>{console.error("ERROR[T10] "+m);process.exit(1)};const sha=(f)=>c.createHash("sha256").update(fs.readFileSync(f)).digest("hex");if(!fs.existsSync("index.html"))bad("/app/web-dist/index.html 缺失：镜像里没有控制台入口。请在仓库根运行 scripts/release.ps1 生成产物后重新 docker build。");if(!fs.existsSync("MANIFEST.json"))bad("/app/web-dist/MANIFEST.json 缺失：产物没有清单，无法证明它与 web/ 源码一致。请在仓库根运行 scripts/release.ps1。");const mm=JSON.parse(fs.readFileSync("MANIFEST.json","utf8")),files=mm.files||{},names=Object.keys(files);if(!names.length)bad("MANIFEST.json 的 files 为空：产物目录是个空壳。");names.forEach((f)=>{if(!fs.existsSync(f))bad("清单里有、镜像里没有的文件: "+f);if(sha(f)!==files[f])bad("产物内容与清单不一致（被手改或漏拷）: "+f)});const html=fs.readFileSync("index.html","utf8"),refs=[...new Set([...html.matchAll(/\/console\/([A-Za-z0-9._\/-]+)/g)].map((x)=>x[1]))];if(!refs.length)bad("index.html 里没有任何 /console/ 资源引用：vite base 配错时页面会白屏。");refs.forEach((r)=>{if(!fs.existsSync(r))bad("index.html 引用了产物里不存在的资源: "+r)});const extra=[],walk=(d,b)=>{for(const n of fs.readdirSync(d)){const a=p.join(d,n),r=b?b+"/"+n:n;fs.statSync(a).isDirectory()?walk(a,r):extra.push(r)}};walk(".","");extra.forEach((f)=>{if(!names.includes(f)&&f!=="MANIFEST.json"&&f!=="README.md")bad("产物里有清单未记录的野文件（多半是上一版残留）: "+f)});console.log("[T10] web-dist 构建期校验通过: "+names.length+" 个文件 / "+refs.length+" 个入口引用");'
 
 # 运行时需要挂载的两样东西（不要用 COPY 烤进来）：
 #   · profiles/           每个 bot 的人设 + permissions（可能内嵌 API Key）
