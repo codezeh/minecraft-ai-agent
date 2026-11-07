@@ -492,15 +492,39 @@ export function createMindServer(host_public = false, port = 8080) {
         }
     });
 
-    // 新版控制台（web/ 用 Vue3 + Vite 构建）。存在才挂，缺了不影响旧面板。
-    const webDist = path.join(__dirname, '../../../web/dist');
-    if (existsSync(webDist)) {
+    // 新版控制台（web/ 用 Vue3 + Vite 构建）。
+    //
+    // ★ F1（2026-11-07 真机验收）：原来只认 `path.join(__dirname, '../../../web/dist')`，
+    //   而容器里 __dirname=/app/src/mindcraft ⇒ 上溯三级是 **/web/dist**（在 /app 之外），
+    //   永远不存在 ⇒ 镜像里 /console 静默 404，且**没有任何提示**（existsSync 守卫吞掉了）。
+    //   现在改成候选列表，按顺序取第一个存在的：
+    //     ① $WEB_DIST            —— 运维显式覆盖（挂载/自定义布局）
+    //     ② <repo>/web/dist      —— 本机开发：直接 `node main.js` 时命中
+    //                               （__dirname=/…/mindcraft/src/mindcraft 上溯三级 = 仓库根）
+    //     ③ /app/web-dist        —— 镜像内：由 Dockerfile 的 `COPY web-dist ./web-dist` 提供
+    //                                  （__dirname=/app/src/mindcraft 上溯两级 = /app）
+    //   本机开发路径保持在原位且优先级更高，行为不变。
+    //   全都找不到时**打一条 warn**，不让"缺 UI"变成无声失败。
+    const webDistCandidates = [
+        process.env.WEB_DIST,                              // ① 显式覆盖
+        path.join(__dirname, '../../../web/dist'),         // ② 本机开发：仓库根 web/dist
+        path.join(__dirname, '../../web-dist'),            // ③ 镜像：/app/web-dist
+    ].filter(Boolean);
+    const webDist = webDistCandidates.find((p) => {
+        try { return existsSync(p); } catch { return false; }
+    });
+    if (webDist) {
         app.use('/console', express.static(webDist));
         // SPA fallback：/console/terrain 这类前端路由都回 index.html
         app.get(['/console', '/console/*'], (req, res) => {
             res.sendFile(path.join(webDist, 'index.html'));
         });
-        console.log(`Console UI mounted at http://localhost:${port || 8080}/console`);
+        console.log(`Console UI mounted at http://localhost:${port || 8080}/console (from ${webDist})`);
+    } else {
+        // F1：不许静默。缺 UI 时明确告诉运维"找过哪些路径、后果是什么"。
+        console.warn('[mindserver] 未找到控制台 UI：/console 将返回 404。'
+            + `已查找: ${webDistCandidates.join(' | ')}`
+            + '（可用 WEB_DIST 环境变量指定固定路径）');
     }
 
     // Socket.io connection handling

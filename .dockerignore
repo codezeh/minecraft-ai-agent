@@ -29,10 +29,36 @@ keys.json
 *.pem
 *.key
 *.p12
+# ★ G1（2026-11-07 真机验收）：补 `*.token` 通配。
+#   原来只排了 `.mindserver-token` 与 `.mindserver-token.*`，任何**别的** `*.token`
+#   （auth.token / deploy.token / mindserver.token …）都照样进上下文 ——
+#   这与 F-SEC-206「真正漏的是 *.token」是同一个洞的 Docker 版。
+#   注意 `*` 不跨 `/`，所以要两条才覆盖"任意层级"。
+*.token
+**/*.token
+# ★ G2（2026-11-07 顺手补齐）：与 tools/check_secret_filenames.mjs 的凭据模式集对齐 ——
+#   实测那套扫描器比本文件宽 13 项，这里把同一类补齐，免得"两道防线口径不一致"。
+*.pfx
+*.crt
+*.jks
+id_rsa*
+id_ed25519*
+credentials*.json
+secrets*.json
+config.local.*
+mindserver-token
+config
 profiles
 
 # ── 运行期数据（挂载进来，不要烤进镜像）────────────────────────
+# ★ F2（2026-11-07 真机验收）：原来整目录 `bots` 排除，连带把 **git 跟踪的源码模板**
+#   bots/execTemplate.js、bots/lintTemplate.js 一起排掉了 —— 而 src/agent/coder.js:20-27
+#   会 readFile 这两个文件，且回调里 `if (err) throw err`（异步抛异常 = 进程崩）。
+#   compose 恰好挂了 ./bots 所以侥幸能用，但 `docker run <image>` 直用镜像会在代码生成时崩。
+#   改白名单式：子目录/运行期数据照旧排除，只放行顶层那两个 .js 源码模板。
 bots
+bots/*
+!bots/*.js
 logs
 tmp
 tmp-*
@@ -42,7 +68,7 @@ tmp-*
 **/*.log
 run-live*
 
-# ── 依赖（镜像内 npm install 生成）──────────────────────────────
+# ── 依赖（镜像内 npm ci 生成）──────────────────────────────────
 node_modules
 npm-debug.log*
 
@@ -57,6 +83,9 @@ web
 .eslintcache
 t25_keys_probe.mjs
 t25_noboard_probe.mjs
+
+# 注意：`dist` 只匹配顶层的 dist/，**不影响** `web-dist/`（控制台 UI 的固化产物，
+# 必须进镜像，见 Dockerfile 的 `COPY web-dist ./web-dist`）。
 
 # ── 编辑器/系统垃圾 ────────────────────────────────────────────
 .DS_Store

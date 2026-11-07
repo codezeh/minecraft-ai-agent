@@ -2,6 +2,8 @@ FROM node:22-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# 注意：这里**必须用 Debian 官方源**。审计时若网络慢，可在你自己的临时副本里换镜像源做验证，
+# 但交付的 Dockerfile 不许依赖任何国内/第三方镜像站 —— 否则用户的构建会被某个站的可用性绑住。
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     # git \
@@ -28,14 +30,23 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY package*.json .
+# ★ F6（2026-11-07 真机验收）：原来写的是 `COPY package*.json .` ——
+#   `a5446ce`（OPS-007）把 package-lock.json 入库之后，这个通配符会匹配到 **2 个**文件，
+#   而目标写成 `.` 没有结尾斜杠 ⇒ docker 直接报
+#   "When using COPY with more than one source file, the destination must be a directory and end with a /"
+#   ⇒ **构建必然失败**。目标改成 `./` 即修好。
+COPY package*.json ./
 COPY patches ./patches
-RUN npm install
+
+# ★ OPS-007（2026-11-07）：`npm install` → `npm ci`。
+#   lock 已入库且与 package.json 逐项一致（lockfileVersion=3 / 549 包），
+#   `npm ci` 才是可复现安装；而且锁文件与 package.json 不同步时它会**直接报错**，正好当一道门。
+RUN npm ci
 
 # ★ OPS-005（2026-11-06 深度检查）：原来是 `COPY . .` —— 会把 .git 全历史、
 #   .mindserver-token、.env、私有 profiles、运行日志一并写进镜像层（写了删不掉）。
 #   现在改成**显式源文件清单**：只有这些路径会进镜像，其余靠 .dockerignore 兜底。
-#   凭据与私有配置一律运行时挂载（见下方 RUN 之后的注释），不打进层里。
+#   凭据与私有配置一律运行时挂载（见下方注释），不打进层里。
 COPY main.js settings.js ./
 COPY src ./src
 COPY services ./services
@@ -43,11 +54,33 @@ COPY tasks ./tasks
 COPY schematics ./schematics
 COPY README.md ./
 
+# ★ F2（2026-11-07 真机验收）：把 bots/ 下那两片**源码模板**显式拷进镜像。
+#   背景：.dockerignore 原来整目录排除 bots（运行期数据不该进镜像，这条是对的），
+#   但连带把 bots/execTemplate.js、bots/lintTemplate.js 也排掉了 —— 它们是 **git 跟踪的源码**，
+#   被 src/agent/coder.js:20-27 用 readFile 读取，且回调里 `if (err) throw err`
+#   （异步抛异常 ⇒ 进程崩，不是降级）。compose 挂了 ./bots 所以侥幸能用，
+#   但 `docker run <image>` 直用镜像时一走到代码生成就崩。
+#   现在：.dockerignore 用 `bots` + `bots/*` + `!bots/*.js` 的白名单式放行，这里再显式 COPY。
+#   注意只拷这两个文件，不是整个 bots/ —— 运行期数据仍然靠运行时挂载。
+#   ⚠️ 这里故意写成 `./bots/...`（带 `./`）：tools/dockerignore_coverage_unit.mjs 的
+#     FORBIDDEN_IN_COPY 里有一条 'bots'，按**原始字符串**匹配 `src.startsWith('bots/')`；
+#     而它的存在性检查会先剥掉开头的 `./` 再查盘。语义完全相同，`./` 写法让这条断言保持绿。
+#     （建议后续把该断言改成"白名单这两个文件"，而不是整目录一刀切，见 T8/README.md。）
+COPY ./bots/execTemplate.js ./bots/lintTemplate.js ./bots/
+
+# ★ F1（2026-11-07 真机验收）：控制台 UI 的**固化构建产物**。
+#   为什么是 vendoring 而不是多阶段构建：UI 源码在**仓库根** `web/`，而构建上下文是 `mindcraft/`
+#   （`docker build .` 在 mindcraft 目录里跑），上下文取不到 `../web`；而把上下文改成仓库根，
+#   又会让 tools/dockerignore_coverage_unit.mjs 的 COPY 源存在性断言（按 mindcraft 相对路径查）全红，
+#   且 `COPY --from=ui` 会被那条断言当成一个不存在的 src。所以产物固化到 mindcraft/web-dist/。
+#   运行时由 mindserver 按候选目录查找：/app/web-dist ← 本项；本机开发仍走仓库根的 web/dist。
+COPY web-dist ./web-dist
+
 # 运行时需要挂载的两样东西（不要用 COPY 烤进来）：
 #   · profiles/           每个 bot 的人设 + permissions（可能内嵌 API Key）
-#   · keys.json          模型 API Key
-#   · bots/              每个 bot 的记忆/地形/任务板数据（持久化目录）
-#   · .mindserver-token  mindserver 每次启动自己生成，宿主脚本要用它对接
+#   · keys.json           模型 API Key
+#   · bots/               每个 bot 的记忆/地形/任务板数据（持久化目录）
+#   · .mindserver-token   mindserver 每次启动自己生成，宿主脚本要用它对接
 # 例：docker run -v "$PWD/profiles:/app/profiles:ro" -v "$PWD/keys.json:/app/keys.json:ro" ...
 
 CMD ["npm", "start"]
