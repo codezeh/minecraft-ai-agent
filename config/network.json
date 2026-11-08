@@ -1,9 +1,7 @@
 {
   "_说明": "Minecraft 服务器网络与准入配置。改完运行 `node tools/server-net.mjs apply` 生效（会先备份 server.properties），然后重启服务器。",
   "_为什么需要这个文件": "原来只有 server-ip=127.0.0.1 一种状态，写死在 server.properties 里。只绑本机很安全但局域网/手机连不上，很多功能用不了；绑所有网卡方便但离线模式下任何人都能冒用 op 名字进服（ops.json 里有 341 个 bot 账号）。所以做成开关，由你按需要切。",
-
   "_主服与测试服配置不同": "主服是你实际玩的，要绑所有网卡（局域网/手机能连）+ 开白名单（只挡名单外的人；**挡不住冒用 HEAVENZEH 这个名字**，见 F-SEC-204 —— 2026-11-06 审计更正：旧文案声称「名单内的人才进得来」，那是错的）。测试服是跑 atom_all/bench 用的，脚本每轮会新建 ma<时间戳> 的 bot —— 如果测试服开白名单，这些 bot 全部会被挡在外面、测试直接挂。所以测试服固定绑本机 + 不开白名单。",
-
   "servers": {
     "main": {
       "_说明": "主服（25565）。bind: 'localhost' | 'all' | 'custom'；custom 时填 nic。",
@@ -13,7 +11,9 @@
       "whiteList": true,
       "enforceWhiteList": true,
       "onlineMode": false,
-      "players": ["HEAVENZEH"]
+      "players": [
+        "HEAVENZEH"
+      ]
     },
     "test": {
       "_说明": "测试服（25566）。**建议不要开白名单**：bench/atom_all 每轮新建 ma<时间戳> bot，开了白名单会被挡住。",
@@ -24,5 +24,7 @@
       "onlineMode": false,
       "players": []
     }
-  }
+  },
+  "_如何切到正版验证（用户拍板 ①）": "日常用离线服（局域网/手机方便）没问题；需要更强身份保证时按下面四步切到正版验证：① 改本文件 servers.main.onlineMode = true；② 跑 `node tools/server-net.mjs apply`（会先备份 server.properties，再把 online-mode 写进去）；③ 重启 Minecraft 服务器；④ 之后**所有玩家都必须用正版账号**登录（盗版客户端会被拒绝）。切过去以后：服务端签发的 uuid 由 Mojang 验证、可信 ⇒ 面板「玩家身份」区的绑定**持久有效**，同名冒用不再成立（离线模式下 uuid 由名字派生，同名即同 uuid，只能靠 !claim 的时间窗口缓解）。切回离线：把 onlineMode 改回 false 再 apply + 重启即可（已绑定的人仍然有效，只是重新落入离线策略）。",
+  "_身份与权限（第四轮审计 ①，用户已拍板）": "用户拍板：允许离线，但保留正版验证开关。生效策略由 `online-mode` × `identity_binding.offline_owner_mode` 合成，**唯一判据入口**是 mindcraft/src/mindcraft/offline_identity_risk.js 的 resolveIdentityPolicy()：online-mode=true ⇒ 持久授 owner（无视窗口）；online-mode=false ⇒ 默认 session（!claim 后 720 分钟内）。面板「玩家身份」区会显示当前处于哪种模式，不用自己猜。"
 }

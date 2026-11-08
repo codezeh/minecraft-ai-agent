@@ -16,7 +16,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import {
   currentAgent, issueIdentityCode, identityStatus, unbindIdentity,
-  type IdentityBindingRow,
+  type IdentityBindingRow, type IdentityMode,
 } from '../stores/agents'
 
 const busy = ref(false)
@@ -25,6 +25,8 @@ const code = ref('')
 const expiresAt = ref(0)
 const now = ref(Date.now())
 const bindings = ref<IdentityBindingRow[]>([])
+// ★ t27：当前"离线 / 正版验证 + owner 策略"——用户在面板上就能看到自己处在哪种状态
+const mode = ref<IdentityMode | null>(null)
 const pending = ref<{ expiresAt: number; sessionId: string | null }[]>([])
 
 let tick: ReturnType<typeof setInterval> | null = null
@@ -52,6 +54,7 @@ async function refresh() {
     if (r?.ok) {
       bindings.value = r.bindings || []
       pending.value = r.pendingCodes || []
+      mode.value = r.mode || null
       err.value = ''
     } else {
       err.value = humanize(r?.reason)
@@ -107,6 +110,15 @@ function humanize(reason?: string): string {
   return r
 }
 
+/** 当前模式的**人话**（含 owner 可达性）。 */
+const modeText = computed(() => {
+  const m = mode.value
+  if (!m) return ''
+  if (m.effective === 'persistent') return 'uuid 可信 ⇒ 绑定持久有效（owner 可达）'
+  if (m.effective === 'session') return `uuid 由名字派生 ⇒ owner 仅在 !claim 后 ${m.sessionMinutes} 分钟内有效`
+  return 'uuid 由名字派生 ⇒ 离线时 owner 不可达（只聊天）'
+})
+
 function copyCode() {
   if (!code.value) return
   try { void navigator.clipboard?.writeText(code.value) } catch { /* 剪贴板不可用就算了，码就在眼前 */ }
@@ -126,6 +138,17 @@ onUnmounted(() => { if (tick) clearInterval(tick) })
       <button class="tiny" :disabled="!agentName || busy" :title="'生成一个一次性绑定码，让玩家在游戏里 !claim'" @click="generate">
         {{ busy ? '生成中…' : '生成绑定码' }}
       </button>
+    </div>
+
+    <!-- ★ t27：当前模式（离线 / 正版验证）+ 生效的 owner 策略 -->
+    <div v-if="mode" class="mode" :class="mode.onlineMode === true ? 'premium' : 'offline'">
+      <span class="badge">{{ mode.onlineMode === true ? '正版验证' : '离线模式' }}</span>
+      <span class="mode-text">{{ modeText }}</span>
+    </div>
+    <div v-if="mode && mode.onlineMode !== true" class="switch-hint">
+      想切成正版验证（owner 持久、不可被同名冒用）：改
+      <code>config/network.json</code> 的 <code>servers.main.onlineMode = true</code>
+      → 跑 <code>node tools/server-net.mjs apply</code> → 重启 Minecraft 服务器。
     </div>
 
     <div v-if="err" class="bad small">{{ err }}</div>
@@ -190,6 +213,15 @@ onUnmounted(() => { if (tick) clearInterval(tick) })
 .tag.owner { color: var(--ok, #4ade80); }
 .tag.weak { color: var(--warn, #c9a227); }
 .tag.expired { color: var(--bad, #f87171); }
+
+/* t27：模式徽标 */
+.mode { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border-soft); white-space: nowrap; }
+.mode.premium .badge { color: var(--ok, #4ade80); }
+.mode.offline .badge { color: var(--warn, #c9a227); }
+.mode-text { color: var(--text-dim); line-height: 1.5; }
+.switch-hint { font-size: 10px; line-height: 1.6; color: var(--text-dim); opacity: .85; }
+.switch-hint code { background: var(--bg-hover); padding: 0 3px; border-radius: 2px; }
 
 button.tiny { font-size: 11px; padding: 2px 8px; }
 button.tiny.ghost { background: transparent; border: 1px solid var(--border-soft); }

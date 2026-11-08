@@ -215,11 +215,27 @@ export interface IdentityBindingRow {
   weak: boolean
 }
 
+/**
+ * 当前"身份模式"（t27）—— 面板据此告诉用户他现在处在哪种状态：
+ * 离线（uuid 由名字派生，owner 限时）还是正版验证（uuid 可信，owner 持久）。
+ */
+export interface IdentityMode {
+  /** true=正版验证；false=离线；null=读不到 server.properties（按离线处理） */
+  onlineMode: boolean | null
+  source: string
+  /** persistent | session | deny */
+  effective: string
+  uuidTrusted: boolean
+  sessionMinutes: number
+  reason: string
+}
+
 export interface IdentityStatus {
   ok: boolean
   agent?: string
   bindings?: IdentityBindingRow[]
   pendingCodes?: { expiresAt: number; sessionId: string | null }[]
+  mode?: IdentityMode | null
   reason?: string
 }
 
