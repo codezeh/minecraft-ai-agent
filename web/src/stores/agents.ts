@@ -1,5 +1,5 @@
 import { reactive, computed } from 'vue'
-import { socket, connect, emitControl, isOnline } from '../api/socket'
+import { socket, request, connect, emitControl, isOnline } from '../api/socket'
 import type { AgentInfo, FullState, TerrainResult } from '../api/types'
 
 export interface ChatLine {
@@ -182,6 +182,67 @@ export async function agentAction(
     return false
   }
   return true
+}
+
+/**
+ * 身份绑定 —— 面板侧入口（R4 t24）。
+ *
+ * ★ 这条链路原来**是断的**：mindserver 注册了 `identity-issue-code`，但 web/src 里
+ *   对 identity/绑定/claim 的引用是 **0** —— 玩家永远拿不到码，`!claim` 永远失败，
+ *   owner 永远不可达（叠加 t20 的 deny 默认 = 彻底锁死）。所以下面三个函数就是那座桥。
+ *
+ * 语义（与 mindserver 一致）：
+ *   · 码 5 分钟内有效、**只能用一次**、**绑当前面板会话**（断开即作废未核销的码）；
+ *   · 码只会出现在**签发的这一次回执**里（identity-status 不回码，免得被随手拉走）。
+ */
+export interface IssuedIdentityCode {
+  ok: boolean
+  agent?: string
+  code?: string
+  expiresAt?: number
+  ttlMs?: number
+  reason?: string
+}
+
+export interface IdentityBindingRow {
+  uuid: string | null
+  name: string | null
+  level: string
+  boundAt: number
+  expiresAt: number
+  expired: boolean
+  /** t20：离线服按名字派生 uuid ⇒ 同名者可冒用（这叫弱绑定） */
+  weak: boolean
+}
+
+export interface IdentityStatus {
+  ok: boolean
+  agent?: string
+  bindings?: IdentityBindingRow[]
+  pendingCodes?: { expiresAt: number; sessionId: string | null }[]
+  reason?: string
+}
+
+/** 面板点「生成绑定码」→ 拿一个一次性码。 */
+export function issueIdentityCode(agentName = currentAgent.value?.name): Promise<IssuedIdentityCode> {
+  if (!agentName) return Promise.reject(new Error('没有选中的 agent'))
+  return request<IssuedIdentityCode>('identity-issue-code', agentName)
+}
+
+/** 查当前绑定与未核销的码（不含码本身）。 */
+export function identityStatus(agentName = currentAgent.value?.name): Promise<IdentityStatus> {
+  if (!agentName) return Promise.reject(new Error('没有选中的 agent'))
+  return request<IdentityStatus>('identity-status', agentName)
+}
+
+/** 解绑（立刻生效，不需要重启）。 */
+export function unbindIdentity(
+  who: { uuid?: string | null; name?: string | null },
+  agentName = currentAgent.value?.name,
+): Promise<{ ok: boolean; removed?: number; reason?: string }> {
+  if (!agentName) return Promise.reject(new Error('没有选中的 agent'))
+  // mindserver 的签名是 (agentName, who, callback) —— request() 会把 callback 追加在最后
+  return request('identity-unbind', agentName, who)
 }
 
 export async function refreshTerrain(opts: {

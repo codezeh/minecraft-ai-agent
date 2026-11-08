@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import StatusCard from '../components/StatusCard.vue'
+// R4 t24：身份绑定入口（原来整套 identity-* 事件在面板里**零调用方**）
+import IdentityPanel from '../components/IdentityPanel.vue'
 import InventoryGrid from '../components/InventoryGrid.vue'
 import ChatStream from '../components/ChatStream.vue'
 import QuickCommands from '../components/QuickCommands.vue'
@@ -21,6 +23,8 @@ import { store } from '../stores/agents'
   <div v-else class="console">
     <aside class="left panel">
       <StatusCard />
+      <div class="divider" />
+      <IdentityPanel />
       <div class="divider" />
       <div class="panel-title">背包</div>
       <InventoryGrid />
