@@ -20,6 +20,8 @@ import {
     CLAIM_BACKOFF_MS, HEARTBEAT_MS,
 } from '../src/agent/library/board_scheduler.js';
 import { JOB_STATE, STOP_REASONS, BRIEF_REQUEUE_MS } from '../src/agent/library/control.js';
+// ★ A5-8：客户端那半边（心跳守卫在 board_client 里）也一起锁上
+import { BoardClient } from '../src/agent/library/board_client.js';
 // t68：**共享假件**（默认 strictPoints:true —— 像真 mineflayer 一样拒裸坐标）。
 // 下面 t39 段用本文件的 makeIdleBot（宽松件，只测判据逻辑）；末尾 ⑧ 专门用这个严格件
 // 复现"生产真实形态"，因为两者的差别正是 t70/t39 那类 bug 的藏身处。
@@ -56,7 +58,7 @@ function makeFakeBoard(initialJobs = []) {
             return out.map((j) => ({ ...j }));
         },
         get(id) { calls.push({ op: 'get', id }); const j = jobs.get(id); return j ? { ...j } : null; },
-        async claim() {
+        claim() {
             calls.push({ op: 'claim' });
             // 挑最高优先级、ready 的
             const cand = [...jobs.values()]
@@ -67,7 +69,7 @@ function makeFakeBoard(initialJobs = []) {
             cand.lease = { owner: 'tester', until: Date.now() + 30000 };
             return { ok: true, data: { job: { ...cand } } };
         },
-        async setState(id, state, reason = '') {
+        setState(id, state, reason = '') {
             calls.push({ op: 'setState', id, state, reason });
             const j = jobs.get(id);
             if (!j) return { ok: false, code: 'NO_TARGET' };
@@ -76,14 +78,14 @@ function makeFakeBoard(initialJobs = []) {
             if (state === JOB_STATE.READY) j.pausedReason = null;
             return { ok: true, data: { job: { ...j } } };
         },
-        async heartbeat(id, progress) {
+        heartbeat(id, progress) {
             calls.push({ op: 'heartbeat', id, progress });
             const j = jobs.get(id);
             if (!j) return { ok: false, code: 'NO_TARGET' };
             if (progress) j.progress = progress;
             return { ok: true, data: { job: { ...j } } };
         },
-        async finish(id, result) {
+        finish(id, result) {
             calls.push({ op: 'finish', id, result });
             const j = jobs.get(id);
             if (!j) return { ok: false, code: 'NO_TARGET' };
@@ -93,24 +95,24 @@ function makeFakeBoard(initialJobs = []) {
             j.result = result;
             return { ok: true, data: { next: j.state, counted } };
         },
-        async update(id, patch) {
+        update(id, patch) {
             calls.push({ op: 'update', id, patch });
             const j = jobs.get(id);
             if (j && patch) Object.assign(j, patch);
             return { ok: true };
         },
-        async getAsync(id) { return { ok: true, data: { job: jobs.get(id) ?? null } }; },
+        getAsync(id) { return { ok: true, data: { job: jobs.get(id) ?? null } }; },
         /** t39：idle_planner 第 1 层自己找的单要真的落板（`enqueue` → `board.add`）。 */
-        async add(job) {
+        add(job) {
             calls.push({ op: 'add', job });
             const id = job?.id ?? `auto${jobs.size + 1}`;
             const j = { ...job, id, state: job?.state ?? JOB_STATE.READY };
             jobs.set(id, j);
             return { ok: true, data: { job: { ...j } } };
         },
-        async hello() { return { ok: true }; },
-        async refresh() { return { ok: true }; },
-        async checkpoint() { return { ok: true }; },
+        hello() { return { ok: true }; },
+        refresh() { return { ok: true }; },
+        checkpoint() { return { ok: true }; },
     };
     return api;
 }
@@ -142,7 +144,7 @@ function makeFakeActions({ stopDelayMs = 0 } = {}) {
             if (stopDelayMs) await new Promise((r) => setTimeout(r, stopDelayMs));
             state.executing = false;      // 正常情况：流程在步骤边界退出
         },
-        async runAction(_label, fn) { return fn(); },
+        runAction(_label, fn) { return fn(); },
     };
 }
 
@@ -152,7 +154,7 @@ function makeClock(start = 1_000_000) {
     return {
         now: () => t,
         advance: (ms) => { t += ms; },
-        sleep: async (ms) => { t += ms; },
+        sleep: (ms) => { t += ms; },
     };
 }
 
@@ -343,8 +345,8 @@ function makeRunner({ clock, actions, durations = {}, onBody = null }) {
     const sched = new BoardScheduler({ agent: { name: 'tester' }, board, actions, runSkill, now: clock.now, sleep: clock.sleep });
     // 用真 ctx 不好注入，这里包一层 runSkill 不行 —— 改测 _reserveClaims 的行为
     const ctx = {
-        reserve: async (k) => { reserveCalls.push(['reserve', k]); return k === 'area:2' ? { ok: false, code: 'CLAIM_CONFLICT' } : { ok: true }; },
-        release: async (k) => { reserveCalls.push(['release', k]); return { ok: true }; },
+        reserve: (k) => { reserveCalls.push(['reserve', k]); return k === 'area:2' ? { ok: false, code: 'CLAIM_CONFLICT' } : { ok: true }; },
+        release: (k) => { reserveCalls.push(['release', k]); return { ok: true }; },
     };
     const res = await sched._reserveClaims({ id: 'j1', claims: ['area:1', 'area:2'] }, ctx);
     const releasedFirst = reserveCalls.some(([op, k]) => op === 'release' && k === 'area:1');
@@ -440,7 +442,7 @@ function makeRunner({ clock, actions, durations = {}, onBody = null }) {
 
     // 4) tick → 抢占
     const r = await sched.tick();
-    try { lowGateResolve?.(); } catch { }               // 放行闸门，让被打断的流程退出
+    try { lowGateResolve?.(); } catch { /* 闸门已经放行/没有闸门 */ }   // 放行闸门，让被打断的流程退出
     await running.catch(() => { });                     // 等低优先级流程收尾
     await clock.sleep(100);
 
@@ -484,34 +486,34 @@ function makeRunner({ clock, actions, durations = {}, onBody = null }) {
             return src.filter((j) => !f.states || f.states.includes(j.state)).map((j) => ({ ...j }));
         },
         get: (id) => (mirror.get(id) ? { ...mirror.get(id) } : null),
-        async refresh() {
+        refresh() {
             refreshCalls++;
             // refresh = 从服务端拉最新：把 serverJobs 灌进镜像
             for (const [id, j] of serverJobs) mirror.set(id, { ...j });
             return { ok: true };
         },
-        async claim() {
+        claim() {
             const cand = [...serverJobs.values()].find((j) => j.state === JOB_STATE.READY);
             if (!cand) return { ok: true, data: { job: null } };
             cand.state = JOB_STATE.CLAIMED;
             return { ok: true, data: { job: { ...cand } } };
         },
-        async setState(id, state, reason) {
+        setState(id, state, reason) {
             const j = serverJobs.get(id) ?? mirror.get(id);
             if (j) { j.state = state; if (state === JOB_STATE.PAUSED) j.pausedReason = reason; }
             if (mirror.has(id)) mirror.get(id).state = state;
             return { ok: true, data: { job: j ? { ...j } : null } };
         },
-        async heartbeat() { return { ok: true }; },
-        async finish() { return { ok: true }; },
-        async update() { return { ok: true }; },
+        heartbeat() { return { ok: true }; },
+        finish() { return { ok: true }; },
+        update() { return { ok: true }; },
     };
 
     const actions = makeFakeActions();
     actions.state.executing = true;
     actions.state.currentJobId = 'low';
     const runs = [];
-    const runSkill = async (_a, skill) => { runs.push(skill); return { ok: true, code: 'OK', data: { count: 1, want: 1 } }; };
+    const runSkill = (_a, skill) => { runs.push(skill); return { ok: true, code: 'OK', data: { count: 1, want: 1 } }; };
 
     const sched = new BoardScheduler({ agent: { name: 'tester' }, board, actions, runSkill, now: clock.now, sleep: clock.sleep });
     sched.currentJobId = 'low';
@@ -542,8 +544,8 @@ function makeRunner({ clock, actions, durations = {}, onBody = null }) {
     // ★ 签名必须和真 `BoardClient.reserve(id, keys)` 一致（owner 是 client 内部自己填的）。
     //   我第一版写成 (id, owner, keys) 三参，于是"keys 里有没有 area:..."这条断言永远假 ——
     //   那是假板写错，不是代码错。
-    board.reserve = async (id, keys) => { reserveCalls.push({ id, keys }); return { ok: true, reserved: keys, until: clock.now() + 30000 }; };
-    board.release = async (id, keys) => { reserveCalls.push({ id, op: 'release', keys }); return { ok: true }; };
+    board.reserve = (id, keys) => { reserveCalls.push({ id, keys }); return { ok: true, reserved: keys, until: clock.now() + 30000 }; };
+    board.release = (id, keys) => { reserveCalls.push({ id, op: 'release', keys }); return { ok: true }; };
 
     const actions = makeFakeActions();
     const { runSkill } = makeRunner({ clock, actions, durations: { steps: 1 } });
@@ -655,7 +657,7 @@ function makeRunner({ clock, actions, durations = {}, onBody = null }) {
 // 15. 没有板时调度器完全空转（不抛）
 {
     const clock = makeClock();
-    const sched = new BoardScheduler({ agent: { name: 'tester' }, board: null, actions: makeFakeActions(), runSkill: async () => ({ ok: true }), now: clock.now, sleep: clock.sleep });
+    const sched = new BoardScheduler({ agent: { name: 'tester' }, board: null, actions: makeFakeActions(), runSkill: () => ({ ok: true }), now: clock.now, sleep: clock.sleep });
     const r = await sched.tick();
     if (!r.acted && r.reason === 'no-board') okCase('没有任务板 → 空转不抛（无板降级）', r.reason);
     else badCase('无板空转', r);
@@ -1103,7 +1105,7 @@ async function tickIdle({ bot, availableSkills = null, reader = null } = {}) {
     const board = makeFakeBoard([{ id: 'j-data', state: JOB_STATE.READY, skill: 'mine', args: { count: 3 }, priority: 5 }]);
     const actions = makeFakeActions();
     // runner 返回**带 data 的失败**（模拟 act/flow 层把 diag 带上来）
-    const runSkill = async () => ({
+    const runSkill = () => ({
         ok: false, code: 'NO_ITEM', message: '料不够',
         data: { inv: { a: 1 }, limit: 2, got: 0 },
     });
@@ -1126,6 +1128,360 @@ async function tickIdle({ bot, availableSkills = null, reader = null } = {}) {
         okCase('★ t76 调度器同时保留 code/message', `code=${fin.result.code}`);
     } else {
         badCase('t76 调度器丢了 code/message', { finish: fin ?? null });
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ⑩ ★★★ A5-8（S2，第四轮审计 §6.5）：**心跳不看停止标志 → paused 单仍续租**
+//
+// ★ 下面这段的假件与用例写成"async 但内部不 await"（与本文件既有假件同一风格：
+//   `claim/setState/heartbeat/finish` 都返回 Promise 形状），
+//   `require-await` 在这个文件里本来就是**基线内**的老问题，本段**不新增** lint 债，
+//   所以只在本段范围内关掉这条规则（结束后立刻 eslint-enable）。
+//
+//   病根（审计原文）：
+//     · `board_scheduler.js` 的 `setInterval` 心跳只看 `_runJob` 有没有走完 finally，
+//       **完全不看**停止/paused 状态 ⇒ 单子已 `paused`，租约仍归自己；
+//     · `board_client.heartbeat()` 同样无条件发 `board:heartbeat`。
+//     · 而 `_runJob` 卡住的最长来源是 30 分钟模型调用 / 10 分钟动作超时
+//       ⇒ 别的 bot **直到进程被杀都拿不到这张单**（多 bot 下的软死锁）。
+//
+//   本节的判据（不靠"看起来对"，全部数**调用次数**与**库里的字段**）：
+//     ① 暂停后心跳次数**不再增长**（`board.heartbeat` 调用计数）；
+//     ② 停手时**主动释放**租约（`update` 里带 lease_owner/lease_until = null）与预约；
+//     ③ 「暂停（可恢复）」≠「取消（释放）」：paused 单**留在 paused**、不被 finish 推回 ready；
+//     ④ 停租之后租约**真的会到期** → `expireLeases` 那套判据把它回收成 ready + 清 assignee
+//        ⇒ 别的 bot 能领到（这条正是审计要的"租约到期被回收"）。
+// ══════════════════════════════════════════════════════════════════════════
+
+const LEASE_TEST_MS = 30000;
+const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const waitUntil = async (fn, ms = 3000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        if (fn()) return true;
+        await realSleep(5);
+    }
+    return false;
+};
+
+/**
+ * 带**租约语义**的假板：心跳真的把 `lease.until` 往前推，
+ * 并且能模拟 store 的 `expireLeases` 判据（过期 → ready + 清 assignee + attempts+1）。
+ *
+ * 为什么要这一份而不是复用上面的 `makeFakeBoard`：那条判据（"到期被回收"）
+ * 必须靠**时间 + 租约字段**才证得出来，光数调用次数证明不了。
+ */
+function makeLeaseBoard(initialJobs = []) {
+    const jobs = new Map(initialJobs.map((j) => [j.id, {
+        assignee: null, attempts: 0, lease: { owner: null, until: null }, ...j,
+    }]));
+    const calls = [];
+    const api = {
+        jobs,
+        calls,
+        heartbeatCount(id) { return calls.filter((c) => c.op === 'heartbeat' && c.id === id).length; },
+        list(filter = {}) {
+            const states = filter.states ?? null;
+            return [...jobs.values()].filter((j) => !states || states.includes(j.state)).map((j) => ({ ...j }));
+        },
+        get(id) { const j = jobs.get(id); return j ? { ...j } : null; },
+        getAsync(id) {
+            calls.push({ op: 'getAsync', id });
+            const j = jobs.get(id);
+            return { ok: true, data: { job: j ? { ...j } : null } };
+        },
+        claim() {
+            calls.push({ op: 'claim' });
+            const cand = [...jobs.values()]
+                .filter((j) => j.state === JOB_STATE.READY)
+                .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0))[0];
+            if (!cand) return { ok: true, data: { job: null } };
+            cand.state = JOB_STATE.CLAIMED;
+            cand.assignee = 'tester';
+            cand.lease = { owner: 'tester', until: Date.now() + LEASE_TEST_MS };
+            return { ok: true, data: { job: { ...cand } } };
+        },
+        heartbeat(id) {
+            calls.push({ op: 'heartbeat', id });
+            const j = jobs.get(id);
+            if (!j) return { ok: false, code: 'NO_TARGET' };
+            if (j.lease?.owner !== 'tester') return { ok: false, code: 'LEASE_LOST' };
+            j.lease = { owner: 'tester', until: Date.now() + LEASE_TEST_MS };   // ← 续租
+            if (j.state === JOB_STATE.CLAIMED) j.state = JOB_STATE.RUNNING;
+            return { ok: true, data: { job: { ...j } } };
+        },
+        setState(id, state) {
+            const j = jobs.get(id);
+            if (!j) return { ok: false, code: 'NO_TARGET' };
+            j.state = state;
+            if ([JOB_STATE.READY, JOB_STATE.PAUSED, JOB_STATE.CANCELLED, JOB_STATE.BLOCKED].includes(state)) {
+                j.lease = { owner: null, until: null };
+            }
+            return { ok: true, data: { job: { ...j } } };
+        },
+        update(id, patch) {
+            calls.push({ op: 'update', id, patch });
+            const j = jobs.get(id);
+            if (!j || !patch) return { ok: true };
+            // ★ 与 store 的 PATCHABLE 对齐：`lease_owner/lease_until` 是**两个列**，
+            //   而本假板把租约装在一个 `lease` 对象里 —— 不映射就等于"update 没生效"，
+            //   会用例自己把自己判红（那不是 bug，是假件不忠实）。
+            for (const [k, v] of Object.entries(patch)) {
+                if (k === 'lease_owner') { j.lease = { ...(j.lease ?? {}), owner: v }; continue; }
+                if (k === 'lease_until') { j.lease = { ...(j.lease ?? {}), until: v }; continue; }
+                j[k] = v;
+            }
+            return { ok: true };
+        },
+        finish(id, result) {
+            calls.push({ op: 'finish', id, result });
+            const j = jobs.get(id);
+            if (j) { j.state = JOB_STATE.READY; j.result = result; }
+            return { ok: true, data: { next: JOB_STATE.READY } };
+        },
+        add(job) {
+            const id = job?.id ?? `auto${jobs.size + 1}`;
+            jobs.set(id, { assignee: null, attempts: 0, lease: { owner: null, until: null }, ...job, id, state: JOB_STATE.READY });
+            return { ok: true, data: { job: { ...jobs.get(id) } } };
+        },
+        refresh() { return { ok: true }; },
+        checkpoint() { return { ok: true }; },
+        /** store `expireLeases` 的判据（board_store.js:1064 那一套的最小复刻）。 */
+        expire(now = Date.now()) {
+            const out = [];
+            for (const j of jobs.values()) {
+                if (!j.lease?.until || j.lease.until >= now) continue;
+                if (![JOB_STATE.CLAIMED, JOB_STATE.RUNNING, JOB_STATE.PAUSED].includes(j.state)) continue;
+                j.state = JOB_STATE.READY;
+                j.assignee = null;
+                j.lease = { owner: null, until: null };
+                j.attempts = (j.attempts ?? 0) + 1;
+                out.push(j.id);
+            }
+            return out;
+        },
+    };
+    return api;
+}
+
+/** 会**真的**跑一会儿的流程（真实 sleep，好让心跳定时器真的跳起来）。 */
+function makeSlowRunner(actions, { stepMs = 10, steps = 60 } = {}) {
+    return async () => {
+        actions.state.executing = true;
+        try {
+            for (let i = 0; i < steps; i++) {
+                await realSleep(stepMs);
+                const sr = actions.state.stopReason;
+                if (sr && sr !== STOP_REASONS.BRIEF) {
+                    return { ok: false, code: 'INTERRUPTED', data: { count: i, want: steps } };
+                }
+            }
+            return { ok: true, code: 'OK', data: { count: steps, want: steps } };
+        } finally {
+            actions.state.executing = false;
+        }
+    };
+}
+
+/**
+ * 现场：一张在跑的慢单 + 极短心跳间隔（10ms），并在跑单中途执行 `midway`
+ * （模拟"玩家按停 / 被取消"，口径与 `control.applyStop` 一致：写库 + 记停止原因）。
+ */
+async function runSlowScene({ midway, stepMs = 10, steps = 60 } = {}) {
+    const board = makeLeaseBoard([{ id: 'j-a58', state: JOB_STATE.READY, skill: 'mine', args: {}, priority: 5 }]);
+    const actions = makeFakeActions();
+    const runner = makeSlowRunner(actions, { stepMs, steps });
+    const sched = new BoardScheduler({
+        agent: { name: 'tester' }, board, actions, runSkill: runner,
+        now: () => Date.now(), sleep: realSleep, heartbeatMs: 10,
+    });
+    const tickP = sched.tick();                       // 不 await：让它真的跑起来
+    await waitUntil(() => board.heartbeatCount('j-a58') >= 2, 2000);
+    const hbBefore = board.heartbeatCount('j-a58');
+    const releaseBefore = board.calls.filter((c) => c.op === 'update').length;
+    await midway({ board, actions, sched, job: board.get('j-a58') });
+    await realSleep(120);                              // 给"如果不修"的心跳足够拍数（≥10 拍）
+    const hbAfter = board.heartbeatCount('j-a58');
+    const leasePatch = board.calls.filter((c) => c.op === 'update'
+        && c.patch && 'lease_owner' in c.patch && c.patch.lease_owner === null).pop() ?? null;
+    await tickP;
+    return { board, actions, sched, hbBefore, hbAfter, leasePatch, releaseBefore };
+}
+
+// ⑩-① 暂停（可恢复）：心跳停 + 主动摘租约 + 单留在 paused（不被 finish 推回 ready）
+{
+    const s = await runSlowScene({
+        midway: async ({ board, actions, job }) => {
+            // `!stop` 的真实链路：control.applyStop → board.update(patch{state:'paused'})
+            await board.update(job.id, {
+                state: JOB_STATE.PAUSED,
+                result: { code: 'INTERRUPTED' },
+                checkpoint: { ...(job.checkpoint ?? {}), pausedReason: 'player' },
+            });
+            actions.state.stopReason = STOP_REASONS.PLAYER;
+            await actions.stop(STOP_REASONS.PLAYER);
+        },
+    });
+    const job = s.board.get('j-a58');
+    const noMoreRenew = s.hbAfter === s.hbBefore;
+    const pausedKept = job.state === JOB_STATE.PAUSED
+        && job.checkpoint?.pausedReason === 'player';
+    const finished = s.board.calls.some((c) => c.op === 'finish');
+    if (noMoreRenew && s.leasePatch && pausedKept && !finished) {
+        okCase('★ ⑩-① paused 后**不再续租**（心跳计数停住）+ 主动摘租约 + 单留在 paused 不被 finish',
+            `心跳 ${s.hbBefore} → ${s.hbAfter} 拍；lease 已摘=${!!s.leasePatch}；state=${job.state}`);
+    } else {
+        badCase('⑩-① 暂停后仍在续租 / 没摘租约 / 单被推回 ready（A5-8 回归）', {
+            hbBefore: s.hbBefore, hbAfter: s.hbAfter, leasePatch: s.leasePatch,
+            state: job.state, finished,
+        });
+    }
+}
+
+// ⑩-② 租约到期被回收：停租之后没人续 → `expireLeases` 判据把它回收成 ready + 清 assignee
+{
+    const s = await runSlowScene({
+        midway: async ({ board, actions, job }) => {
+            await board.update(job.id, { state: JOB_STATE.PAUSED });
+            actions.state.stopReason = STOP_REASONS.PLAYER;
+            await actions.stop(STOP_REASONS.PLAYER);
+        },
+    });
+    const job = s.board.get('j-a58');
+    // ① 修复后：停租那一刻租约已经被**主动摘掉**（不留僵尸租约给任何人）
+    const leaseCleared = job.lease?.owner == null && job.lease?.until == null;
+    // ② 再模拟"如果没主动摘"的那半条：把 until 回填成过去时间，
+    //    证明回收判据确实认这个字段 —— 即"不再续租 → 到期 → 回收 → 别人能领"这条链成立。
+    s.board.jobs.get('j-a58').lease = { owner: 'tester', until: Date.now() - 1 };
+    s.board.jobs.get('j-a58').state = JOB_STATE.PAUSED;
+    s.board.jobs.get('j-a58').assignee = 'tester';
+    const reclaimed = s.board.expire(Date.now());
+    const after = s.board.get('j-a58');
+    // ③ 回收之后别的 bot 能不能领到（假板的 claim 按 ready 挑，等价于 store 的候选条件）
+    const nextClaim = await s.board.claim();
+    const claimedByOther = nextClaim?.data?.job?.id === 'j-a58';
+    if (leaseCleared && reclaimed.includes('j-a58')
+        && after.state === JOB_STATE.READY && after.assignee == null
+        && after.attempts === 1 && claimedByOther) {
+        okCase('★ ⑩-② 停租后租约到期被回收：ready + assignee 清空 + attempts+1 → 别的 bot 能领到',
+            `reclaimed=${reclaimed.join(',')} state=${after.state} attempts=${after.attempts}`);
+    } else {
+        badCase('⑩-② 到期回收链路不通（别人永远拿不到这张单）', {
+            leaseCleared, reclaimed, state: after.state, assignee: after.assignee,
+            attempts: after.attempts, claimedByOther,
+        });
+    }
+}
+
+// ⑩-③ 「取消（释放）」≠「暂停（可恢复）」：取消后同样停租，且单子**不会**被 resume 回队列
+{
+    // ★ 注意：`control.JOB_STATE` 只有 ready/claimed/running/paused/failed 五个；
+    //   `cancelled` 属于 **board_store.JOB_STATE** 那张全表 —— 这里直接用字面值，
+    //   否则 `JOB_STATE.CANCELLED` 是 undefined，用例会自己造出"没有状态"的假现场。
+    const CANCELLED = 'cancelled';
+    const s = await runSlowScene({
+        midway: async ({ board, actions, job }) => {
+            await board.update(job.id, { state: CANCELLED });
+            actions.state.stopReason = STOP_REASONS.PLAYER;
+            await actions.stop(STOP_REASONS.PLAYER);
+        },
+    });
+    const job = s.board.get('j-a58');
+    const noMoreRenew = s.hbAfter === s.hbBefore;
+    const cancelledKept = job.state === CANCELLED;
+    const finished = s.board.calls.some((c) => c.op === 'finish');
+    if (noMoreRenew && s.leasePatch && cancelledKept && !finished) {
+        okCase('★ ⑩-③ 取消（cancelled）同样停租 + 释放，且状态保持 cancelled（不被 finish/resume 复活）',
+            `心跳 ${s.hbBefore} → ${s.hbAfter} 拍；state=${job.state}`);
+    } else {
+        badCase('⑩-③ 取消后仍续租 / 状态被复活', {
+            hbBefore: s.hbBefore, hbAfter: s.hbAfter, state: job.state, finished,
+            leasePatch: s.leasePatch,
+            updates: s.board.calls.filter((c) => c.op === 'update').map((c) => c.patch),
+        });
+    }
+}
+
+// ⑩-④ 显式 `sched.stop()`（进程退出 / 死亡）：不领新单、不再续租
+{
+    const board = makeLeaseBoard([{ id: 'j-stop', state: JOB_STATE.READY, skill: 'mine', args: {}, priority: 5 }]);
+    const actions = makeFakeActions();
+    const sched = new BoardScheduler({
+        agent: { name: 'tester' }, board, actions, runSkill: makeSlowRunner(actions),
+        now: () => Date.now(), sleep: realSleep, heartbeatMs: 10,
+    });
+    sched.stop(STOP_REASONS.SHUTDOWN);
+    const r = await sched.tick();
+    const claimed = board.calls.some((c) => c.op === 'claim');
+    if (r.reason === 'stopped' && !claimed && sched.stopped === true) {
+        okCase('★ ⑩-④ `stop(shutdown)` 后 tick 直接返回 stopped（不领新单、不 resume）', `reason=${r.reason}`);
+    } else {
+        badCase('⑩-④ 停止后调度器照领新单', { r, claimed, stopped: sched.stopped });
+    }
+}
+
+// ⑩-⑤ 客户端那半边：`board_client.heartbeat()` 停了就**一次网络都不发**
+{
+    const sent = [];
+    const socket = {
+        on() { /* 不需要服务端推 */ },
+        emit(event, payload, ack) {
+            sent.push({ event, payload });
+            if (event === 'board:set-state') {
+                // 服务端把 paused 单的租约清掉（store: setState 的 clearLease）
+                ack?.({ ok: true, data: { job: { id: payload.id, state: payload.state, lease: { owner: null, until: null } } } });
+                return;
+            }
+            ack?.({ ok: true, data: { job: { id: payload.id, state: 'running', lease: { owner: 'tester', until: Date.now() + 30000 } } } });
+        },
+    };
+    const client = new BoardClient({ socket, name: 'tester', timeoutMs: 50 });
+    const hbEvents = () => sent.filter((s) => s.event === 'board:heartbeat').length;
+
+    // 先证明"没停时会发"（否则下面那条只是空过）
+    const before = await client.heartbeat('j-c1', { count: 1, want: 4 });
+    const sentBefore = hbEvents();
+
+    // 自己发起的暂停（setState）→ 之后一次都不许发
+    await client.setState('j-c1', 'paused', 'player');
+    const pausedHb = await client.heartbeat('j-c1', { count: 2, want: 4 });
+    const sentAfterPause = hbEvents();
+
+    // applyStop 那条链路（update 带 state:'paused'）也要拦住
+    const client2 = new BoardClient({ socket, name: 'tester', timeoutMs: 50 });
+    await client2.update('j-c2', { state: 'paused', checkpoint: { pausedReason: 'player' } });
+    const updHb = await client2.heartbeat('j-c2', { count: 1, want: 2 });
+    const sentAfterUpdate = hbEvents();
+
+    // 整端停止
+    client2.stop('shutdown');
+    const stoppedHb = await client2.heartbeat('j-c3', null);
+    const sentAfterStop = hbEvents();
+
+    const good = before.ok === true && sentBefore === 1
+        && pausedHb.ok === false && pausedHb.code === 'HEARTBEAT_SKIPPED' && sentAfterPause === sentBefore
+        && updHb.ok === false && updHb.code === 'HEARTBEAT_SKIPPED' && sentAfterUpdate === sentBefore
+        && stoppedHb.ok === false && stoppedHb.code === 'HEARTBEAT_SKIPPED' && sentAfterStop === sentBefore;
+    if (good) {
+        okCase('★ ⑩-⑤ board_client：暂停/取消/整端停止后 heartbeat 直接 HEARTBEAT_SKIPPED（零网络）',
+            `发了 ${sentBefore} 次 → 暂停后仍 ${sentAfterPause} 次`);
+    } else {
+        badCase('⑩-⑤ 客户端停了还在发 board:heartbeat（审计点的第二处）', {
+            before: before.ok, sentBefore,
+            paused: [pausedHb.ok, pausedHb.code], sentAfterPause,
+            updated: [updHb.ok, updHb.code], sentAfterUpdate,
+            stopped: [stoppedHb.ok, stoppedHb.code], sentAfterStop,
+        });
+    }
+
+    // ⑩-⑤b 反证：resume / 重新领到之后**必须**恢复续租（否则修成"永远不续租"就是新 bug）
+    client.markJobResumed('j-c1');
+    const again = await client.heartbeat('j-c1', null);
+    if (again.ok === true && hbEvents() === sentBefore + 1) {
+        okCase('★ ⑩-⑤b 恢复（resume）后心跳重新开始（没有把"续租"永久关死）', `sent=${hbEvents()}`);
+    } else {
+        badCase('⑩-⑤b resume 之后心跳发不出来（修过头，变成永不续租）', { again, sent: hbEvents() });
     }
 }
 

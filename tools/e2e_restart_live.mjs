@@ -99,7 +99,7 @@ async function withBot(fn) {
         return await fn(bot);
     }
     finally {
-        try { bot.quit(); } catch { }
+        try { bot.quit(); } catch { /* 故意忽略：bot 可能已断开，quit 抛错不影响断言 */ }
     }
 }
 
@@ -167,7 +167,7 @@ async function stage() {
             const block = bot.blockAt(new (await import('vec3')).Vec3(CHEST.x, CHEST.y, CHEST.z));
             const container = await bot.openContainer(block);
             try { return container.containerItems().map(itemKey).sort(); }
-            finally { try { container.close(); } catch { } }
+            finally { try { container.close(); } catch { /* 故意忽略：容器可能已被关掉，关闭失败不该盖住真实结果 */ } }
         });
         const wanted = CHEST_ITEMS.map((it) => `${it.id.replace('minecraft:', '')}|${it.count}`).sort();
         const same = staged.length === wanted.length && wanted.every((w, i) => w === staged[i]);
@@ -232,7 +232,7 @@ async function verify() {
                     : `期望 [${wanted.join(', ')}] 实际 [${actual.join(', ') || '空'}]`;
                 return same;
             }
-            finally { try { container.close(); } catch { } }
+            finally { try { container.close(); } catch { /* 故意忽略：容器可能已被关掉，关闭失败不该盖住真实结果 */ } }
         });
     } catch (e) {
         chestDetail = 'bot 读箱子失败: ' + String(e?.message ?? e).slice(0, 160);
@@ -257,7 +257,7 @@ async function verify() {
                     fuelSeconds: furnace.fuelSeconds,
                 };
             }
-            finally { try { furnace.close(); } catch { } }
+            finally { try { furnace.close(); } catch { /* 故意忽略：熔炉可能已被关掉，关闭失败不该盖住真实结果 */ } }
         });
         if (fr.err) { furnaceDetail = fr.err; }
         else {

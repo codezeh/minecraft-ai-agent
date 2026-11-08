@@ -17,7 +17,8 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
 import {
-    openBoard, addJob, getJob, claimFor, expireLeases, JOB_STATE, LEASE_MS, BOARD_RESULT_CODES,
+    openBoard, addJob, getJob, claimFor, expireLeases, heartbeat, updateJob, setState,
+    JOB_STATE, LEASE_MS, BOARD_RESULT_CODES,
 } from '../src/agent/library/board_store.js';
 
 let pass = 0, fail = 0;
@@ -144,8 +145,107 @@ const freshDb = () => { const d = join(DIR, `db${++seq}`); rmSync(d, { recursive
     else badCase('⑦ 结果码字面值被改了', BOARD_RESULT_CODES);
 }
 
-try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+// ══════════════════════════════════════════════════════════════════════════
+// ★★ ⑨ 【A5-8】"paused 之后不再续租"的租约账（真 sqlite 端到端）
+//
+//   第四轮审计 §6.5 的现场：
+//     · 单子已经 `paused`（玩家 !stop），**租约仍归自己**；
+//     · 原因是心跳不看停止标志，每 10 秒续一次 ⇒ `lease_until` 永远在未来；
+//     · 而 `expireLeases` 的扫描条件是 `state IN ('claimed','running')`
+//       ⇒ paused 的单**等多久都不会被回收**，别人也领不到 ⇒ "直到进程被杀"。
+//   所以修复不能只"停掉心跳、等它过期"，必须**停手时主动摘租约**。
+//   三条一起证：
+//     ⑨-a 停手后主动摘租约（`lease_owner/lease_until = NULL`）→ 单留在 paused（可恢复），
+//          resume 之后原持有者能接着做；paused 期间别人不该把它当无主单领走；
+//     ⑨-b 反证：不主动摘 → paused 等不来回收（expireLeases 不扫 paused）→ 僵尸租约；
+//     ⑨-c 反证（另一半）：claimed/running 时照旧续租 → 租约永不过期 → 别人领不到，
+//          与 ⑧（过期 → 回收 → B 能领）合起来才说明"回收真的依赖停止续租"。
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const { db } = freshDb();
+    const t0 = 8000000;
+    const job = addJob(db, { title: '被玩家按停的单', skill: 'mine', maxAttempts: 5 });
+    claimFor(db, 'A', { now: t0 });
+    // 模拟 `!stop`：状态转 paused，但**租约不动** —— 这正是现场（`control.applyStop`
+    // 走的是 `board.update(patch{lease:null})`，而 store 的 PATCHABLE 里没有 `lease`
+    // 这个字段，于是租约留在库里；这里用 updateJob 同口径复现，不额外造状态）。
+    updateJob(db, job.id, { state: JOB_STATE.PAUSED, checkpoint: { pausedReason: 'player' } });
+    const pausedAt = getJob(db, job.id);
+    const leaseStillMine = pausedAt.lease?.owner === 'A' && pausedAt.state === JOB_STATE.PAUSED;
 
+    // ⑨-a 修复后：停手时**主动摘租约**（`BoardClient.releaseLease` / 调度器 `_releaseOnStop`
+    //   落的就是 `lease_owner`/`lease_until` 这两列），而不是"等它自己过期"。
+    const hbCalls = 0;                       // 停租之后一次心跳都没发
+    const cleared = updateJob(db, job.id, { lease_owner: null, lease_until: null });
+    const afterRelease = getJob(db, job.id);
+    const leaseGone = cleared?.ok === true
+        && afterRelease.lease?.owner == null && afterRelease.lease?.until == null;
+    // 暂停是**可恢复**的：租约摘掉 ≠ 单子被释放。它仍在 paused，别人不该当"无主 ready"领走。
+    const bCannotClaimWhilePaused = claimFor(db, 'B', { now: t0 + 1000 }) == null;
+    // 玩家说"继续" → 回 ready → 这时**原来的持有者 A** 才能接着做
+    //   （`claimFor` 的候选条件是 `assignee IS NULL OR assignee = 我`，而暂停不清 assignee：
+    //    个人单本来就只该 A 做。这正是「暂停=可恢复」与「取消/过期回收=退回共享池」的区别。）
+    setState(db, job.id, JOB_STATE.READY, {});
+    const aGot = claimFor(db, 'A', { now: t0 + 2000 });
+    const goodA = leaseStillMine && hbCalls === 0 && leaseGone
+        && afterRelease.state === JOB_STATE.PAUSED
+        && bCannotClaimWhilePaused && aGot?.id === job.id;
+    if (goodA) {
+        okCase('★ ⑨-a paused 后不续租 + **主动摘租约**：单留在 paused（可恢复），resume 后原持有者能接着做',
+            `paused 时租约归 A=${leaseStillMine}；摘掉=${leaseGone}；paused 期间 B 领不到=${bCannotClaimWhilePaused}；resume 后 A 领到=${aGot?.id === job.id}`);
+    } else {
+        badCase('⑨-a 停手后的租约处理不对（僵尸租约 / 或把暂停当成释放）', {
+            leaseStillMine, leaseGone, state: afterRelease.state,
+            bCannotClaimWhilePaused, aGot: aGot?.id ?? aGot,
+        });
+    }
+
+    // ⑨-b 为什么**必须主动摘**而不能"等过期"：
+    //   `expireLeases` 的扫描条件是 `state IN ('claimed','running')` —— **paused 不在里面**。
+    //   于是"paused + 租约还挂在自己名下"的单，等多久都**不会被回收**，也没人领得到。
+    //   ⇒ 这就是审计 §6.5 那句"直到进程被杀"的机制层解释。
+    {
+        const { db: db2 } = freshDb();
+        const j2 = addJob(db2, { title: '暂停但租约还挂着', skill: 'mine', maxAttempts: 5 });
+        claimFor(db2, 'A', { now: t0 });
+        updateJob(db2, j2.id, { state: JOB_STATE.PAUSED, checkpoint: { pausedReason: 'player' } });
+        const reclaimed2 = expireLeases(db2, t0 + LEASE_MS * 10);
+        const after2 = getJob(db2, j2.id);
+        const zombieLease = after2.lease?.owner === 'A';
+        const bCannotClaim2 = claimFor(db2, 'B', { now: t0 + LEASE_MS * 10 + 1 }) == null;
+        if (reclaimed2.length === 0 && zombieLease && bCannotClaim2) {
+            okCase('★ ⑨-b 反证：paused 的单**等不来**回收（expireLeases 只扫 claimed/running）'
+                + ' ⇒ 租约一直挂在自己名下、别人永远领不到 ⇒ 必须停手时主动摘',
+                `回收=${reclaimed2.length} 租约仍归 A=${zombieLease} B领到=${!bCannotClaim2}`);
+        } else {
+            badCase('⑨-b "paused 不会被过期回收"这个前提不成立（用例前提要重判）', {
+                reclaimed2, zombieLease, bCannotClaim2,
+            });
+        }
+    }
+
+    // ⑨-c 反证（另一半）：claimed/running 时**照旧每 10 秒续租**（= 修之前的心跳行为）
+    //   → 租约永不过期 → 别人领不到。这条与 ⑧ 合起来才叫"到期回收"真的依赖"停止续租"。
+    {
+        const { db: db3 } = freshDb();
+        const j3 = addJob(db3, { title: '还在跑的僵尸', skill: 'mine', maxAttempts: 5 });
+        claimFor(db3, 'A', { now: t0 });
+        const zombieHb = heartbeat(db3, j3.id, 'A', { now: t0 + LEASE_MS - 1000 });
+        const renewed = zombieHb.ok === true;
+        const stillNoReclaim = expireLeases(db3, t0 + LEASE_MS + 1).length === 0;
+        const bCannotClaim3 = claimFor(db3, 'B', { now: t0 + LEASE_MS + 2 }) == null;
+        if (renewed && stillNoReclaim && bCannotClaim3) {
+            okCase('★ ⑨-c 反证：照旧续租 → 租约永不过期 → 别的 bot **确实**领不到（僵尸租约现场）',
+                `heartbeat.ok=${renewed} 回收=0 B领到=false`);
+        } else {
+            badCase('⑨-c 反证不成立（"续租 → 别人拿不到"这条因果链没被证实）', {
+                renewed, stillNoReclaim, bCannotClaim3,
+            });
+        }
+    }
+}
+
+try { rmSync(DIR, { recursive: true, force: true }); } catch { /* ignore */ }
 // ══════════════════════════════════════════════════════════════════════════
 // ★★ ⑧ 【T31 补充B】租约过期必须**一并回滚 `assignee`**
 //

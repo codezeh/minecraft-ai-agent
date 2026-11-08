@@ -41,6 +41,21 @@ export class ActionManager {
          */
         this._launchSeq = 0;
         this._pendingLaunch = null;
+        /**
+         * ★★★ t4（A5 §5 方案 B）：**前台操作的身份**。
+         *
+         * 一个动作 = 一次 operation：`{ id, deadline, ac }`
+         *   · id       —— 唯一、单调递增（`<bot>:<seq>`），只在这里生成**一处**；
+         *   · deadline —— 与动作总超时同源（`timeout` 分钟），没有超时就是 null；
+         *   · ac       —— AbortController，**唯一取消源**：stop()/超时/被取代一律 abort。
+         *
+         * 为什么要有它：模型请求最坏 30 分钟不可取消（A5 §4），而"取消"必须能一路
+         * 走到 fetch/SDK；并且迟到的结果必须能被判出"它属于已经作废的那次操作"。
+         * `_retiredOpId` 记最近一次被作废的 id，纯粹为了诊断与单测断言。
+         */
+        this._opSeq = 0;
+        this.currentOperation = null;
+        this._retiredOpId = null;
     }
 
     async resumeAction(actionFn, timeout) {
@@ -86,6 +101,12 @@ export class ActionManager {
     async stop(reason = DEFAULT_STOP_REASON) {
         const r = normalizeStopReason(reason);
         this.stop_reason = r;
+
+        // ★★★ t4：**停 = 取消同一个操作，而不是再造一个新 opId**（队长硬要求 3）。
+        //   面板停止 / `!stop` / 超时 / 被取代 走的都是这条入口，所以它们取消的是
+        //   同一个 `currentOperation`：abort 之后它上面所有在飞的模型请求一起被中断，
+        //   而"迟到结果"的判据 `isOperationCurrent(op.id)` 立刻变成 false。
+        this._abortCurrentOperation(r);
 
         // 把"停"的后果交给控制层（打的是任务单时才有转移；不是单就只留 stop_reason）
         try {
@@ -164,6 +185,61 @@ export class ActionManager {
     cancelResume() {
         this.resume_func = null;
         this.resume_name = null;
+    }
+
+    /**
+     * 造一次操作身份（★ t4：**全仓唯一创建点**，只允许 _executeAction 调）。
+     *
+     * @param {number} timeout 动作总超时（分钟，<=0 表示不设期限）
+     * @returns {{id:string, deadline:number|null, ac:AbortController}}
+     */
+    _newOperation(timeout = 0) {
+        this._opSeq = (this._opSeq ?? 0) + 1;
+        const name = this.agent?.name ?? 'agent';
+        const minutes = Number(timeout);
+        return {
+            id: `${name}:${this._opSeq}`,
+            deadline: minutes > 0 ? Date.now() + minutes * 60_000 : null,
+            ac: new AbortController(),
+        };
+    }
+
+    /**
+     * 取消当前操作（不动 id、不造新 id）：abort 唯一取消源，然后把它退休。
+     * 之后任何"属于这次操作"的迟到结果都会被 `isOperationCurrent()` 判成过期。
+     */
+    _abortCurrentOperation(reason = null) {
+        const op = this.currentOperation;
+        if (op) {
+            this._retiredOpId = op.id;
+            try { op.ac?.abort?.(reason ?? 'stopped'); } catch { /* abort 失败不该挡住停 */ }
+            this.currentOperation = null;
+            if (this.agent) this.agent.currentOperation = null;
+        }
+        return op?.id ?? null;
+    }
+
+    /** 动作正常收尾：清槽位（signal 不 abort —— 这次操作是**成功结束**的）。 */
+    _retireOperation(op) {
+        if (!op) return;
+        if (this.currentOperation === op) {
+            this.currentOperation = null;
+            if (this.agent && this.agent.currentOperation === op) this.agent.currentOperation = null;
+        }
+    }
+
+    /**
+     * 这次操作还算数吗？—— 消费端丢弃迟到结果的**唯一**判据（与板侧 attemptSeq 同构）。
+     *
+     * 两个条件都必须满足：
+     *   ① 它仍是当前操作（`currentOperation.id === opId`，旧动作的 id 永远对不上）；
+     *   ② 它的取消源没被 abort（stop() 之后即使槽位还没清，也已经不算数）。
+     */
+    isOperationCurrent(opId) {
+        if (!opId) return false;
+        const op = this.currentOperation;
+        if (!op || op.id !== opId) return false;
+        return op.ac?.signal?.aborted !== true;
     }
 
     async _executeResume(actionLabel = null, actionFn = null, timeout = 10, stopReason = DEFAULT_STOP_REASON) {
@@ -275,6 +351,13 @@ export class ActionManager {
             // 立刻以 INTERRUPTED 返回 —— 实测现象：连说两次「跟着我」，第二次必然「不跟了」。
             this.agent.clearBotLogs();
 
+            // ★★★ t4：**operationId 的唯一创建点就在这里**（全仓只此一处）。
+            //   放在认领动作槽之后、`executing = true` 之前：槽位已经归我，
+            //   中途没有任何 await，所以"同一个动作只有一个 op"是可断言的。
+            const op = this._newOperation(timeout);
+            this.currentOperation = op;
+            if (this.agent) this.agent.currentOperation = op;
+
             this.executing = true;
             this.currentActionLabel = actionLabel;
             this.currentActionFn = actionFn;
@@ -290,6 +373,7 @@ export class ActionManager {
             await actionFn();
 
             // mark action as finished + cleanup
+            this._retireOperation(op);
             this.executing = false;
             try {
                 trace('action-end', {
@@ -315,6 +399,7 @@ export class ActionManager {
             // return action status report
             return { success: true, message: output, interrupted, timedout };
         } catch (err) {
+            this._retireOperation(this.currentOperation);
             this.executing = false;
             this.currentActionLabel = '';
             this.currentActionFn = null;

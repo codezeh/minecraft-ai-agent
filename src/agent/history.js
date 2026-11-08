@@ -1,10 +1,12 @@
-import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, readFileSync, mkdirSync, existsSync, promises as fsp } from 'fs';
 import { NPCData } from './npc/data.js';
 import settings from './settings.js';
 // ★ T17：bots 根唯一可取处（默认 `./bots`；测试可用 `MC_BOTS_ROOT` 指到独立目录）
 import { botsRootOf } from './library/bot_paths.js';
 // F-AI-203：记忆落盘前净化（去控制字符/折叠空行，不删正文）
 import { sanitizeExternalText } from '../utils/text.js';
+// H4 第二道保险：摘要文本本身还带截断标记 = 当轮的摘要不完整（不依赖 prompter 的标志）
+import { isTruncatedReply } from '../models/_shared.js';
 
 /**
  * 记忆的代码版本号。
@@ -92,7 +94,30 @@ export class History {
 
     async summarizeMemories(turns) {
         console.log("Storing memories...");
-        this.memory = await this.agent.prompter.promptMemSaving(turns);
+        // ★★★ H4（第四轮复审）：**截断的摘要不许覆盖 memory.json**。
+        //   生产端（prompter.promptMemSaving）已经改成"截断就返回旧摘要"，
+        //   这里再做一次**事实校验**（第二道保险）：只要 prompter 报了截断，就根本不赋值。
+        //   为什么要两道：摘要链是串行的（BOT-007），一旦有人以后在 prompter 里把截断分支
+        //   改回"剥标记后照旧返回"，这边会把半截摘要写进长期记忆 —— 而 memory.json 跨重启存活，
+        //   一次覆盖就是永久降级，且这批 turns 已经 splice 掉、没有重来的机会。
+        // 架构收敛项(1) 步 1：优先读结果类型（status/errorCode），字符串判据只作未迁移路径的兜底。
+        const prompter = this.agent.prompter;
+        if (typeof prompter?.promptMemSavingResult === 'function') {
+            const typed = await prompter.promptMemSavingResult(turns);
+            if (typed.failed || typed.truncated || prompter.last_memory_summary_truncated) {
+                console.warn('[memory] 本轮摘要不可用(' + typed.status
+                    + (typed.errorCode ? '/' + typed.errorCode : '') + ') → 保留旧摘要，不覆盖 memory.json');
+                return;
+            }
+            this.memory = typed.content;
+        } else {
+            const nextMemory = await prompter.promptMemSaving(turns);
+            if (prompter?.last_memory_summary_truncated || isTruncatedReply(nextMemory)) {
+                console.warn('[memory] 本轮摘要被输出额度截断 → 保留旧摘要，不覆盖 memory.json');
+                return;
+            }
+            this.memory = nextMemory;
+        }
 
         // ★ F-AI-203（2026-11-06）：记忆是**数据不是命令**，执行侧没有判据可依赖，
         // 所以落盘前必须净化（只去控制字符/折叠空行，不删正文）；注入时再由 prompter 的
@@ -108,19 +133,109 @@ export class History {
         console.log("Memory updated to: ", this.memory);
     }
 
+    /**
+     * 把这一批 turns **追写**进全程记录文件。
+     *
+     * ★ R4 §7-①（2026-11-07 第四轮审计）修复 —— 两个缺陷：
+     *
+     * ① **O(n²) 写盘**：原来是「每 5 条就把整个文件读进内存 → JSON.parse → push → 全量写回」。
+     *    一次长会话的全程记录能到几十 MB，于是写第 N 条的成本是 O(N)，
+     *    整场会话累计 O(N²)。现在只在**第一次**建文件，之后每次只改尾部。
+     *
+     * ② **一次截断就永久停写**：read/parse 失败被 `catch` 吞成一行日志 ⇒ 下次还在同一个
+     *    坏文件上解析、还是失败 ⇒ 全程记录从那一刻起**永久空转**，而日志里只是一行 warn。
+     *    现在：写失败会保留这一批（下次一起重试），并显式 `console.error` + 记到
+     *    `this.fullHistoryError`；只有确认是「文件结构坏了」才换一个新文件（自愈），
+     *    其它错误（磁盘满等）继续在同一文件上重试，不会造成"历史断掉还看不出来"。
+     *
+     * 文件格式**仍是合法 JSON 数组**（`histories/<时间戳>.json`），备份/外部查看脚本不用改：
+     * 追写的方式是「退掉结尾的 `]` → 追加 `,{...}` → 补回 `]`」，单批成本 O(批大小)。
+     *
+     * 为什么这里**不向上抛**：`history.add()` 有 9 处是 fire-and-forget（不 await），
+     * 抛出去就是 unhandled rejection —— 会直接带走整个 agent 进程。
+     * 「写全程记录失败」不该有这种杀伤力，所以走"记错误 + 保住数据 + 下次重试"。
+     */
     async appendFullHistory(to_store) {
-        if (this.full_history_fp === undefined) {
-            const string_timestamp = new Date().toLocaleString().replace(/[/:]/g, '-').replace(/ /g, '').replace(/,/g, '_');
-            this.full_history_fp = `${botsRootOf()}/${this.name}/histories/${string_timestamp}.json`;
-            writeFileSync(this.full_history_fp, '[]', 'utf8');
-        }
+        const batch = Array.isArray(to_store)
+            ? to_store.filter((t) => t && typeof t === 'object')
+            : [];
+        if (batch.length === 0) return;
+
+        // 上一次写失败的批次不丢：与本次合并重写，避免"错一次就永久少一段历史"
+        const pending = Array.isArray(this._fullHistoryPending) ? this._fullHistoryPending : [];
+        const all = pending.concat(batch);
+
         try {
-            const data = readFileSync(this.full_history_fp, 'utf8');
-            let full_history = JSON.parse(data);
-            full_history.push(...to_store);
-            writeFileSync(this.full_history_fp, JSON.stringify(full_history, null, 4), 'utf8');
+            const fp = this._ensureFullHistoryFile();
+            await this._appendJsonArray(fp, all);
+            this._fullHistoryPending = [];
+            this.fullHistoryError = null;
         } catch (err) {
-            console.error(`Error reading ${this.name}'s full history file: ${err.message}`);
+            // 只保留最近 500 条，防止"持续失败 + 持续新消息"把内存拖爆
+            this._fullHistoryPending = all.slice(-500);
+            this.fullHistoryError = err;
+            if (err?.code === 'FULL_HISTORY_CORRUPT') {
+                // 文件被外部截断/改写：换一个新文件接着写（这是"永久停写"的自愈点）
+                this.full_history_fp = undefined;
+            }
+            console.error(`[history] 写 ${this.name} 的全程记录失败（本批 ${all.length} 条已留待下次重试）: ${err?.message ?? err}`);
+        }
+    }
+
+    /** 全程记录文件：只在第一次落盘时创建（`[\n]` 空数组骨架）。 */
+    _ensureFullHistoryFile() {
+        if (this.full_history_fp !== undefined) return this.full_history_fp;
+        const string_timestamp = new Date().toLocaleString().replace(/[/:]/g, '-').replace(/ /g, '').replace(/,/g, '_');
+        const dir = `${botsRootOf()}/${this.name}/histories`;
+        let fp = `${dir}/${string_timestamp}.json`;
+        // 同一秒内重启可能撞名：绝不覆盖已有文件，换个序号
+        for (let n = 2; existsSync(fp); n++) fp = `${dir}/${string_timestamp}-${n}.json`;
+        writeFileSync(fp, '[\n]\n', 'utf8');
+        this.full_history_fp = fp;
+        return fp;
+    }
+
+    /**
+     * 把 items 追到一个 JSON 数组文件的尾部 —— **不重写已有内容**。
+     *
+     * 定位结尾 `]` → 截掉它 → 追加 `,\n{...}` → 补 `]`。只在文件尾部读写，
+     * 因此单批成本与文件已有多大无关（修掉 O(n²)）。
+     */
+    async _appendJsonArray(fp, items) {
+        const body = items.map((t) => JSON.stringify(t, null, 4)).join(',\n');
+        const isWs = (c) => c === 0x20 || c === 0x0a || c === 0x0d || c === 0x09;
+        let fh;
+        try {
+            fh = await fsp.open(fp, 'r+');
+            const { size } = await fh.stat();
+            const tailLen = Math.min(size, 4096);
+            if (tailLen === 0) {
+                const err = new Error('全程记录文件是空的');
+                err.code = 'FULL_HISTORY_CORRUPT';
+                throw err;
+            }
+            const tail = Buffer.alloc(tailLen);
+            await fh.read(tail, 0, tailLen, size - tailLen);
+
+            // 从尾部往回跳空白，找数组结尾的 `]`
+            let i = tailLen - 1;
+            while (i >= 0 && isWs(tail[i])) i--;
+            if (i < 0 || tail[i] !== 0x5d) {
+                const err = new Error('全程记录文件结尾不是 JSON 数组的 “]”（文件可能被外部截断/改写）');
+                err.code = 'FULL_HISTORY_CORRUPT';
+                throw err;
+            }
+            const bracketAt = size - tailLen + i;
+
+            // 再往前看一个非空白字符：是 `[` ⇒ 数组还是空的（不需要前置逗号）
+            let j = i - 1;
+            while (j >= 0 && isWs(tail[j])) j--;
+            const isEmpty = j >= 0 && tail[j] === 0x5b;
+
+            await fh.truncate(bracketAt);
+            await fh.write(isEmpty ? `\n${body}\n]\n` : `,\n${body}\n]\n`, bracketAt, 'utf8');
+        } finally {
+            await fh?.close();
         }
     }
 
@@ -230,12 +345,19 @@ export class History {
             out.self_prompt = out.self_prompt.slice(0, 800) + '…（已截断）';
         }
         // memory_bank：地点/箱子这类"事实"，随使用无限增长；按条数额度收口
+        // ★ R4 §7-②：原来 `keys.slice(0, MAX_BANK)` 保留的是**最旧**的 120 条、
+        //   把**最新**登记的地点/箱子扔掉 —— 而这正是最有用的那些（刚 !rememberHere 的坐标
+        //   反而最先被淘汰，模型于是"刚记住就忘"）。改成保留**最新**登记的一批。
         if (out.memory_bank && typeof out.memory_bank === 'object') {
-            const bank = {};
-            const keys = Object.keys(out.memory_bank);
             const MAX_BANK = 120;
-            for (const k of keys.slice(0, MAX_BANK)) bank[k] = out.memory_bank[k];
-            out.memory_bank = bank;
+            const keys = Object.keys(out.memory_bank);
+            if (keys.length > MAX_BANK) {
+                const keep = new Set(keys.slice(-MAX_BANK));   // 最新的在后（插入序）
+                const bank = {};
+                for (const k of keys) if (keep.has(k)) bank[k] = out.memory_bank[k];
+                out.memory_bank = bank;
+                console.warn(`[memory] memory_bank 有 ${keys.length} 条，已保留最新 ${MAX_BANK} 条（旧的先淘汰）`);
+            }
         }
         if (byteLen(out) <= LIMIT) return out;
 

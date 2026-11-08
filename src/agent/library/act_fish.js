@@ -12,6 +12,39 @@ import { ok, fail } from './contract.js';
 import { countItem } from './query_perceive.js';
 
 /**
+ * 超时哨兵：`raceWithTimeout()` 超时时返回它（与任何正常返回值都不相等）。
+ * 用 Symbol 而不是 `null`/`undefined`，避免和"动作正常返回空"混淆。
+ */
+const TIMED_OUT = Symbol('timed-out');
+
+/**
+ * 超时竞速。
+ *
+ * ★ R4 §7-⑥（2026-11-07 第四轮审计）修复 —— 与 modes.js 的 unstuck 相同的病灶：
+ *   原来是裸的 `Promise.race([work(), new Promise((_r, rej) => setTimeout(...))])`：
+ *    ① **计时器从不 clearTimeout**：任务正常结束/提前失败后，那个定时器还挂在事件循环上
+ *       （单次钓鱼 30 秒、批量钓鱼同时挂 N 个；测试进程会被它拖住不退出）；
+ *    ② 超时只是"上层不再等"，底层 `bot.fish()` **仍在后台跑**，会和下一次动作抢 bot。
+ *   这里：到点必清定时器；超时以**返回值**告知（而不是造一个假异常），
+ *   调用方负责把底层收掉（见 fishOnce 里超时分支的 deactivateItem）。
+ *
+ * @returns {Promise<any|typeof TIMED_OUT>}
+ */
+async function raceWithTimeout(promise, ms) {
+    let timer;
+    const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), ms);
+    });
+    try {
+        // Promise.race 会给两侧都挂 then ⇒ 超时后底层再 reject 也不会变成
+        // unhandled rejection（那条链已经有人接了）。
+        return await Promise.race([promise, timeout]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/**
  * 钓一次鱼。
  *
  * @returns ActionResult
@@ -50,18 +83,20 @@ export async function fishOnce(bot, target = null, opts = {}) {
 
     const before = (bot.inventory?.items?.() ?? []).reduce((n, i) => n + (i.count ?? 0), 0);
 
+    let fishResult;
     try {
         // bot.fish() 会自己等浮标下沉然后收竿
-        await Promise.race([
-            bot.fish(),
-            new Promise((_r, rej) => setTimeout(() => rej(Object.assign(new Error('fish-timeout'), { __timeout: true })), timeoutMs)),
-        ]);
+        fishResult = await raceWithTimeout(bot.fish(), timeoutMs);
     } catch (e) {
         const msg = String(e?.message ?? e);
-        if (e?.__timeout) return fail('TIMEOUT', `钓了 ${Math.round((Date.now() - t0) / 1000)} 秒还没收竿`, { costMs: Date.now() - t0 });
         if (/interrupt/i.test(msg)) return fail('INTERRUPTED', '被取消了');
         // mineflayer 在"浮标一直没沉/被拉走"时抛错 —— 那是这次没鱼，不是动作坏了
         return fail('NOT_READY', msg.slice(0, 120), { error: msg, costMs: Date.now() - t0 });
+    }
+    if (fishResult === TIMED_OUT) {
+        // 超时：把底层收掉，别让它在后台继续钓（会与下一次动作抢 bot）
+        try { bot.deactivateItem?.(); } catch { /* 没这个接口就算了，不掩盖 TIMEOUT */ }
+        return fail('TIMEOUT', `钓了 ${Math.round((Date.now() - t0) / 1000)} 秒还没收竿`, { costMs: Date.now() - t0 });
     }
 
     const after = (bot.inventory?.items?.() ?? []).reduce((n, i) => n + (i.count ?? 0), 0);

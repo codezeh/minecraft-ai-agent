@@ -20,7 +20,31 @@ let isSpeaking = false;
  *     **之后整个 TTS 队列永久静音**（日志里只有一条 unhandled rejection，最难查）。
  */
 function continueQueue() {
-    processQueue().catch((e) => console.error('[TTS] 队列异常（已隔离，不中断播放）：', e));
+    processQueue().catch((e) => {
+        console.error('[TTS] 队列异常（已隔离，不中断播放）：', e);
+        // ★ R4 §7-④（2026-11-07 第四轮审计）：**这里原来是唯一漏掉复位的地方**。
+        //   缺陷原貌：`catch` 只 `console.error` 一行，没有把 `isSpeaking` 放回 false。
+        //   而 `isSpeaking` 是"泵在跑吗"的闸门：`speak()` 里 `if (!isSpeaking) continueQueue()`
+        //   ⇒ 只要有一次异常走到这里（例如 `item.text` 不是字符串，`txt.trim()` 直接 TypeError），
+        //   闸门**永久卡在 true**，之后所有 TTS 请求只会入队、永远没人播 —— 症状是"她突然永久哑了"，
+        //   日志里只有一条不显眼的 unhandled rejection。
+        //   修法：复位闸门 + 把泵重新拉起来（空队列时 processQueue 自己会立刻返回）。
+        isSpeaking = false;
+        pumpNext();
+    });
+}
+
+/**
+ * 在一次异常之后把泵**重新拉起**。
+ *
+ * 走 `queueMicrotask`/promise 而不是直接递归：如果失败是**同步**抛出的，
+ * 直接 `continueQueue()` 会在同一个微任务栈上层层嵌套；走下一个微任务就没有这个风险。
+ * `speakingQueue.length` 兜底：队空了就不必再起泵（processQueue 本来也只做复位）。
+ */
+function pumpNext() {
+    Promise.resolve().then(() => {
+        if (!isSpeaking && speakingQueue.length > 0) continueQueue();
+    });
 }
 
 export function speak(text, speak_model) {
@@ -76,7 +100,10 @@ async function processQueue() {
         return;
     }
     const item = speakingQueue.shift();
-    const { text: txt, model, audioData } = item;
+    // ★ R4 §7-④：`text` 不是字符串时 `txt.trim()` 会直接 TypeError，把泵卡死在
+    //   `isSpeaking = true`（见 continueQueue 的说明）。入口统一收成字符串。
+    const model = item.model;
+    const txt = typeof item.text === 'string' ? item.text : String(item.text ?? '');
     if (txt.trim() === '') {
         isSpeaking = false;
         continueQueue();
@@ -196,3 +223,17 @@ async function processQueue() {
         }
     }
 }
+
+/**
+ * ★ R4 §7-④：**只给离线单测用的观察窗**（生产代码不读它）。
+ *
+ * 为什么需要：要断言"一次异常之后队列泵还在跑"，从外部只能靠副作用
+ * （真的去 spawn powershell / ffplay，单测里不能这么干）。给出两个只读探针，
+ * 让 tools/*_unit.mjs 能直接验行为，而不是去 grep 源码字符串（那不是测试）。
+ */
+export const __ttsDiagnostics = {
+    /** 还有几句在排队 */
+    pending: () => speakingQueue.length,
+    /** 泵是否卡在"正在播"（一次异常后必须回到 false） */
+    isSpeaking: () => isSpeaking,
+};

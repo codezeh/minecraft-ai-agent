@@ -80,6 +80,62 @@ const argv = yargs(args)
             },
         });
 
+        // ═══ R4：**先摘租约/放预约，再退出**（这是父进程杀进程前的"停手"契约）
+        //  父进程（agent_process.stop()/stopAndWait()）一律**先发 SIGINT、等 graceMs、才 SIGKILL**；
+        //  本进程收到 SIGINT 后必须在退出之前把"我手上那张单"交还共享池，否则：
+        //  租约还挂着 → 别的 bot 在这 30 秒里拿不到单；而进程一死就**没人能摘了**。
+        //  注意顺序：**摘租约（步骤 ④⑤）必须在断开连接/退出之前**，所以这里是 await 到底再 exit。
+        let graceful = false;
+        const gracefulStop = async (trigger) => {
+            if (graceful) return false;
+            graceful = true;
+            console.log(`[agent:${argv.name}] 收到 ${trigger} ⇒ 先摘租约/放预约，再退出`);
+            try { agent?.board?.setAutoClaim?.(false); } catch { /* ignore */ }
+            // 'preempt' = control.STOP_REASONS.PREEMPT（"回 ready，放掉租约和预约"）
+            try { agent?.scheduler?.stop?.('preempt'); } catch { /* ignore */ }
+            try { agent?.board?.stop?.('preempt'); } catch { /* 心跳从此一拍都不发 */ }
+            const id = agent?.scheduler?.currentJobId ?? agent?.actions?.currentJobId ?? null;
+            if (id != null) {
+                try {
+                    // ④ 单回共享池：一次性把 state/租约/assignee 都清掉。
+                    //    ★ 为什么不能只 `releaseLease()`（只清 lease）：`expireLeases` 只回收
+                    //    `lease_until IS NOT NULL` 的单 ⇒ 租约清成 NULL 而状态还留在 claimed
+                    //    就**再也不会被回收**（比过期更糟：永久僵尸单）。而 assignee 不清，
+                    //    `claimFor` 的候选条件（assignee IS NULL OR = 我）也让别人抢不到。
+                    await agent?.board?.update?.(id, {
+                        state: 'ready', lease_owner: null, lease_until: null, assignee: null,
+                    });
+                } catch { /* 交还失败也要继续退出：别把退出路径挂死 */ }
+                try { await agent?.board?.release?.(id); } catch { /* 放预约 */ }
+            }
+            // ⑤ 最后才断板连接 + 退出（顺序反了就等于"先死再摘"）
+            try { agent?.board?.socket?.disconnect?.(); } catch { /* ignore */ }
+            try { watcher?.stop?.(); } catch { /* ignore */ }
+            return true;
+        };
+        for (const sig of ['SIGINT', 'SIGTERM']) {
+            process.once(sig, () => {
+                void gracefulStop(`signal:${sig}`).finally(() => {
+                    // 给上面几次 ack 一点落地时间再退（父进程在 stopAndWait 里等这一下）
+                    setTimeout(() => process.exit(0), 50).unref?.();
+                });
+            });
+        }
+
+        // ⑥ 还有一条**不走信号**的退出路径：`agent.cleanKill()`（被踢 / 断线超时 / 缺玩家）
+        //    它内部直接 `process.exit(code)`，绕过上面的 SIGINT 处理器。这里包一层：
+        //    **先摘租约再让它退出**（顺序与信号路径一致）。agent.js 本体一行不动。
+        if (typeof agent?.cleanKill === 'function') {
+            const originalCleanKill = agent.cleanKill.bind(agent);
+            agent.cleanKill = (msg, code) => {
+                // 不返回 Promise（调用点都是同步的），但两侧都接住 —— 退出路径不许再抛
+                gracefulStop(`cleanKill:${code ?? 1}`).then(
+                    () => originalCleanKill(msg, code),
+                    () => originalCleanKill(msg, code),
+                ).catch(() => { /* ignore */ });
+            };
+        }
+
         await agent.start(argv.load_memory, argv.init_message, argv.count_id);
     } catch (error) {
         console.error('Failed to start agent process:');

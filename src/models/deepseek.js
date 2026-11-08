@@ -2,7 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated, LLM_MAX_CALL_MS, LLM_MAX_RETRIES, sdkCallOptions } from './_shared.js';
 
 export class DeepSeek {
     static prefix = 'deepseek';
@@ -15,10 +15,15 @@ export class DeepSeek {
         config.baseURL = url || 'https://api.deepseek.com';
         config.apiKey = getKey('DEEPSEEK_API_KEY');
 
+        // ★ H3：显式压住 openai SDK 默认值（timeout=600000 + maxRetries=2，且超时也在重试范围内
+        //   ⇒ 一次调用最坏 3×600s=30 分钟）。单次 ≤120s、重试 ≤1。
+        config.timeout = LLM_MAX_CALL_MS;
+        config.maxRetries = LLM_MAX_RETRIES;
+
         this.openai = new OpenAIApi(config);
     }
 
-    async sendRequest(turns, systemMessage, stop_seq='***') {
+    async sendRequest(turns, systemMessage, stop_seq='***', opts = {}) {
         let messages = [{'role': 'system', 'content': systemMessage}].concat(turns);
 
         messages = strictFormat(messages);
@@ -33,7 +38,7 @@ export class DeepSeek {
         let res = null;
         try {
             console.log('Awaiting deepseek api response...');
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await this.openai.chat.completions.create(pack, sdkCallOptions(opts));
             recordUsage(completion?.usage, this.model_name);
             // ★★★ MOD-001：`finish_reason === 'length'` 是**输出额度用完**，不是上下文超限。
             //   原来这里直接 `throw 'Context length exceeded'` → catch 里裁历史重试 ⇒
@@ -54,7 +59,7 @@ export class DeepSeek {
             // ★ MOD-001：只有**真正**的上下文超限才裁历史重试。
             if (isContextLengthError(err) && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
-                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
+                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq, opts);
             } else {
                 console.log(safeErrText(err));
                 res = failedReply(`deepseek request failed: ${errMessage(err) || err}`);

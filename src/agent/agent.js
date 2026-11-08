@@ -30,6 +30,9 @@ import { runHeartbeatLoop, HEARTBEAT_INTERVAL_MS } from './library/heartbeat_loo
 // ★ 第31条：模型层失败标记（T11 在 src/models/_shared.js 定义）——
 //   约定：sendRequest 返回以 FAILED_REPLY 开头的串 = **这次调用失败了**，不是模型说的话。
 import { isFailedReply } from '../models/_shared.js';
+// ★ t4（t2 步 1 的消费端）：模型结果现在带 status —— agent.js 必须**读 status**，
+// 不能再把"取消/失败/截断"三义同形的串当回答（A5 §6.1）。
+import { STATUS } from '../models/result.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 // 控制层（M2，07 §4 / §7）：死亡对任务单的处理
 import { onDeath } from './library/control.js';
@@ -175,6 +178,9 @@ export class Agent {
 
     async start(load_mem=false, init_message=null, count_id=0) {
         this.last_sender = null;
+        // ★ t4：当前操作（由 ActionManager._executeAction 创建并挂上来）——
+        //   只在动作里非空；纯对话回合是 null，行为与 t3 完全一致。
+        this.currentOperation = null;
         this.count_id = count_id;
         this._disconnectHandled = false;
 
@@ -561,7 +567,39 @@ export class Agent {
         }
     }
 
+    /**
+     * 记一次「取消」（A5-1，S1）。**只增不减的序号**，不是一个标志位。
+     *
+     * 为什么不能只看 `bot.interrupt_code`：`!stop` 的实现是
+     * `actions.stop('player')` **紧跟** `agent.clearBotLogs()`
+     * （commands/actions.js:140-141），而 clearBotLogs 里就有 `interrupt_code = false`。
+     * 等那句"其实已经生成好"的回复从模型返回时，标志位早就被抹掉了 ——
+     * 只看标志位，永远判不出"这一轮确实被取消过"（A5-1 的根因就在这）。
+     *
+     * 语义边界（"清标志只影响新动作，不影响旧动作的收尾判定"）：
+     *   · 旧动作的收尾继续读**标志位**（action_manager 的 `interrupted`、
+     *     getBotOutputSummary 的 `if (bot.interrupt_code)`）—— 那些地方一行都不用改；
+     *   · 新回合 / 新一次模型调用在**开工前**取一份 `cancelEpoch()` 快照，只认
+     *     "我开工之后发生的取消"。上一轮遗留的取消因此不会把新回合直接判死。
+     *
+     * @param {string} [reason] 记录用：谁取消的（interrupt / shut-up / player-stop）
+     * @returns {number} 取消后的序号
+     */
+    noteCancel(reason = 'cancel') {
+        this._cancelEpoch = (this._cancelEpoch ?? 0) + 1;
+        this._lastCancelReason = reason;
+        return this._cancelEpoch;
+    }
+
+    /** 当前取消序号（新回合 / 新一次模型调用在开工前取快照）。 */
+    cancelEpoch() {
+        return this._cancelEpoch ?? 0;
+    }
+
     requestInterrupt() {
+        // ★ A5-1：`stop()` 的每一条路径最终都落到这里（action_manager.js:112,130），
+        //   在这里记一次取消 —— "身体被打断"这一事实就不随标志位被清掉而消失。
+        this.noteCancel('interrupt');
         this.bot.interrupt_code = true;
         this.bot.stopDigging();
         this.bot.collectBlock.cancelTask();
@@ -575,6 +613,10 @@ export class Agent {
     }
 
     shutUp() {
+        // ★ A5-1：`!stfu` 也算取消。否则"闭嘴"之后，那句已经生成好、只是还没返回的
+        //   回复照样会被说出口 —— `routeResponse` 只看**当时**的 `shut_up`，而它会被
+        //   下一条消息的 respondFunc / 会话开始清回 false（agent.js:416、conversation.js:353）。
+        this.noteCancel('shut-up');
         this.shut_up = true;
         if (this.self_prompter.isActive()) {
             this.self_prompter.stop(false);
@@ -638,6 +680,20 @@ export class Agent {
             : (is_internal ? null : source);
         const perm = { author: perm_author, isOtherBot: from_other_bot };
 
+        // ★ A5-1（S1）：**进入本回合前**收掉上一轮遗留的停止标志。
+        //
+        //   判据必须带上"此刻没有动作在跑"（`actions.executing`）：
+        //     · 没有动作在跑 → 这个 true 只可能是**旧动作**留下的陈迹。新回合算"新动作"，
+        //       不清掉的话本回合第一个 `checkInterrupt()` 就命中 → 她此后永远不吭声
+        //       （比原来的 bug 更糟：从"多说一句"变成"再也不说话"）。
+        //     · 有动作正在跑 → **绝不能清**。旧动作的收尾判定还在读这一位
+        //       （action_manager.js:306/344 的 `interrupted`、getBotOutputSummary 的
+        //       `if (bot.interrupt_code)`），在这里清掉等于让已经停了的东西接着跑。
+        //   —— 这就是"清标志的时机只影响新动作、不影响旧动作收尾判定"的落点。
+        if (this.bot?.interrupt_code === true && !this.actions?.executing) {
+            try { this.bot.interrupt_code = false; } catch { /* 只读 bot 桩：忽略 */ }
+        }
+
         if (!self_prompt && !from_other_bot) { // from user, check for forced commands
             const user_command_name = containsCommand(message);
             if (user_command_name) {
@@ -665,7 +721,16 @@ export class Agent {
         message = await handleEnglishTranslation(message);
         console.log('received message from', source, ':', message);
 
-        const checkInterrupt = () => this.self_prompter.shouldInterrupt(self_prompt) || this.shut_up || convoManager.responseScheduledFor(source);
+        // ★ A5-1（S1）：判据里**补上停止标志** `bot.interrupt_code`。
+        //   原来只有 `shouldInterrupt / shut_up / responseScheduledFor` 三条 ——
+        //   "身体已经 stop 了"这件事在对话回合里完全看不见，于是已经决定不作数的一轮
+        //   照样接着调模型、照样把回答说出来。
+        //   上一轮遗留的标志已在上面按 `actions.executing` 收掉，所以这里读到 true
+        //   只可能是**本回合开始之后**才置起的 = 真的被取消。
+        const checkInterrupt = () => this.self_prompter.shouldInterrupt(self_prompt)
+            || this.shut_up
+            || this.bot?.interrupt_code === true
+            || convoManager.responseScheduledFor(source);
         
         let behavior_log = this.bot.modes.flushBehaviorLog().trim();
         if (behavior_log.length > 0) {
@@ -686,7 +751,32 @@ export class Agent {
         for (let i=0; i<max_responses; i++) {
             if (checkInterrupt()) break;
             let history = this.history.getHistory();
-            let res = await this.prompter.promptConvo(history);
+            // ★ A5-1：给**这一次模型调用**取一份取消快照。
+            //   取消只能作废"它发生之后才返回的结果"，不能牵连同一回合的下一轮 ——
+            //   否则一轮里连着几条命令时，第一条命令的 stop（requestInterrupt）
+            //   会把整轮后续都截断。
+            const opEpoch = this.cancelEpoch();
+            // ★★★ t4（第 2 跳）：把**当前操作**的 signal / deadline / operationId 交给 prompter，
+            //   再由它交给适配器 → fetch/SDK。没有操作时三项都缺省 ⇒ 与 t3 逐字一致。
+            const op = this.currentOperation ?? null;
+            const typed = await this.prompter.promptConvoResult(history, op ? {
+                signal: op.ac?.signal ?? null, deadline: op.deadline ?? null, operationId: op.id,
+            } : {});
+            let res = typed?.content ?? '';
+            // ★ t4：读 status（t2 步 1 的消费端）—— 取消/失败都不是"她说了句话"。
+            if (typed?.status === STATUS.CANCELLED) {
+                console.warn('[取消] 模型结果 status=cancelled（这一轮已被取消/超期），丢弃（不写 history、不说给玩家）');
+                break;
+            }
+
+            // ★★★ t4 硬要求 2：**operationId 过期 ⇒ 三重不得**。
+            //   不写 history、不进聊天、不 finish 租约 —— 旧操作的迟到结果不许影响新任务
+            //   （与板侧 attemptSeq 代次判据同构，见 A5 §5.3）。
+            //   位置：连"她说了什么"的日志都不打 —— 这句本来就不是这一轮的回答。
+            if (op && !this.isOperationCurrent(op.id)) {
+                console.warn(`[取消] operationId ${op.id} 已过期，迟到结果丢弃（不写 history、不说给玩家、不 finish 租约）`);
+                break;
+            }
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
 
@@ -710,6 +800,23 @@ export class Agent {
             if (res.trim().length === 0) {
                 console.warn('no response')
                 break; // empty response ends loop
+            }
+
+            // ★★★ A5-1（S1，审计 A5 §4/§5 的 P0-d）：**模型返回之后必须复查取消。**
+            //
+            //   缺陷原貌：`!stop` 之后那句"她其实已经生成好的回复"照样被说出口 ——
+            //   这一分支在 `promptConvo` 返回后没有任何复查，而它既非"新消息取代"、
+            //   也不在 `checkInterrupt()` 的判据里（审计 A5 表最后一行）。
+            //
+            //   为什么用**取消序号**而不是只看标志位：`!stop` 自己就是
+            //   `stop('player')` 后紧接 `clearBotLogs()`（commands/actions.js:140-141），
+            //   标志位在迟到回复回来之前**已经被清成 false** —— 只看标志位永远抓不到它。
+            //
+            //   位置很关键：必须在下面 `this.history.add(...)` / `routeResponse(...)` **之前**，
+            //   否则"不写 history、不说给玩家"就只是一句注释。
+            if (this.cancelEpoch() !== opEpoch || checkInterrupt()) {
+                console.warn('[取消] 这一轮在生成期间已被取消，丢弃迟到的模型回复（不写 history、不说给玩家）');
+                break;
             }
 
             let command_name = containsCommand(res, { fromModel: true });
@@ -780,6 +887,38 @@ export class Agent {
         }
 
         return used_command;
+    }
+
+    /**
+     * 这次操作还算数吗（★ t4 消费端唯一判据，转发给 ActionManager）。
+     * 没有 actions（离线桩/老测试）时按"操作已不存在"处理 ⇒ 有 op 就一定丢弃。
+     */
+    isOperationCurrent(opId) {
+        if (!opId) return false;
+        try {
+            return this.actions?.isOperationCurrent?.(opId) === true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * **唯一**的"完成这张单"入口（★ t4 硬要求 2 的第三重：不 finish 租约）。
+     *
+     * 迟到的 finish 直接丢弃：否则旧操作在单子已经被 paused/released 之后
+     * 又把它 finish 掉，别人永远拿不到（A5 §5.3 末）。
+     *
+     * @param {{id?:string}|null} op 结果所属的操作
+     * @param {string|null} jobId
+     * @returns {boolean} 是否真的交了上去
+     */
+    finishOperation(op, jobId = null) {
+        if (!op || !this.isOperationCurrent(op.id)) {
+            console.warn(`[取消] 迟到的 finish 被丢弃（op=${op?.id ?? 'null'}）`);
+            return false;
+        }
+        try { this.board?.finishJob?.({ jobId, opId: op.id }); } catch { /* 板不在就只丢日志 */ }
+        return true;
     }
 
     async routeResponse(to_player, message) {

@@ -3,7 +3,7 @@ import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
 
-import { failedReply, recordUsage, safeErrText, errMessage, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, markTruncated, LLM_MAX_CALL_MS } from './_shared.js';
 
 export class Gemini {
     static prefix = 'google';
@@ -33,10 +33,18 @@ export class Gemini {
             },
         ];
 
-        this.genAI = new GoogleGenAI({apiKey: getKey('GEMINI_API_KEY')});
+        // ★★★ H5（第四轮复审）：`@google/genai` **只有在你传了 `httpOptions.timeout` 时才设超时**
+        //   （`@google/genai/dist/node/index.cjs:13183-13189`：`if (httpOptions.timeout) setTimeout(...)`）
+        //   ⇒ 原来这里既没传 timeout、也没传 abortSignal，等于**完全没有期限**：
+        //   服务端不响应时 `await` 会一直挂着，`!stop`/动作超时都拦不住。
+        //   现在：单次调用上限 120s（单位是毫秒，SDK 内部用 AbortController 实现，连读响应体一起管）。
+        this.genAI = new GoogleGenAI({
+            apiKey: getKey('GEMINI_API_KEY'),
+            httpOptions: { timeout: LLM_MAX_CALL_MS },
+        });
     }
 
-    async sendRequest(turns, systemMessage) {
+    async sendRequest(turns, systemMessage, stop_seq, opts = {}) {
         console.log('Awaiting Google API response...');
 
         turns = strictFormat(turns);
@@ -55,7 +63,9 @@ export class Gemini {
                 safetySettings: this.safetySettings,
                 config: {
                     systemInstruction: systemMessage,
-                    ...(this.params || {})
+                    ...(this.params || {}),
+                    // t19：取消信号（GenAI 的 abortSignal 属于 GenerateContentConfig，不是顶层参数）
+                    ...(opts?.signal ? { abortSignal: opts.signal } : {}),
                 }
             });
             recordUsage(result?.usageMetadata, this.model_name);
@@ -170,7 +180,11 @@ export class Gemini {
 }
 
 const sendAudioRequest = async (text, model, voice, url) => {
-    const ai = new GoogleGenAI({apiKey: getKey('GEMINI_API_KEY')});
+    const ai = new GoogleGenAI({
+        apiKey: getKey('GEMINI_API_KEY'),
+        // ★ H5：TTS 这个临时客户端同样不能没有期限（原来只有 apiKey）
+        httpOptions: { timeout: LLM_MAX_CALL_MS },
+    });
 
     const response = await ai.models.generateContent({
         model: model,

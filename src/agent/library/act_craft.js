@@ -548,6 +548,10 @@ export function fuelNeededFor(fuel, n) {
  *   OUT_OF_REACH 熔炉太远 —— 走近就能解决，所以不是 NO_WORKSTATION（那是"根本没有熔炉"）
  *   OCCUPIED     熔炉里正在炼别的东西 —— 不抢，上层换一个熔炉（"那格本身有东西"正是这个码的语义）
  */
+
+/** ★ T6：没有注入 reserveNow 时只 warn 一次（不是"占位成功"）。 */
+let _warnedNoReserve = false;
+
 export async function furnaceLoad(bot, furnace, input, fuel, opts = {}) {
     const t0 = Date.now();
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
@@ -580,6 +584,37 @@ export async function furnaceLoad(bot, furnace, input, fuel, opts = {}) {
     const fuelPut = Math.min(fuelHave, fuelNeededFor(fuelItem, putCount));
 
     let win = null;
+    // ★★★ T6（架构收敛项 3）：**开炉那一刻按真实目标补占位**（`station:furnace@x,y,z`）。
+    //
+    //   `deriveClaims` 只能在单里**已经给了熔炉坐标**时推导 `station:`；
+    //   而 `flow_smelt` 是"找附近熔炉"（现找现用）⇒ 单里通常没有坐标 ⇒
+    //   两个 bot 会往同一个炉子塞料（下面的 `furnaceBusyWith` 只能挡住"正在炼别的"，
+    //   挡不住"两边同时判断为空、同时开塞"的竞态）。
+    //
+    //   冲突（CLAIM_CONFLICT）当场返回：上层换一个熔炉（与 `OCCUPIED` 的处置一致）。
+    //   ★ `opts.skipClaim === true` 可跳过（离线夹具/诊断用）。
+    if (opts.skipClaim !== true) {
+        // ★ 回调由**调用方注入**（`opts.reserveNow`）或由 ctx 挂在 bot 上（`bot.__reserveNow`）——
+        //   `act_*` **不 import board 任何模块**（分层：动作层不该知道任务板存在）。
+        //   两处都没有 = 单机/无板：跳过并 warn（不假装协调成功）。
+        const reserveNow = opts.reserveNow ?? bot?.__reserveNow ?? null;
+        if (typeof reserveNow !== 'function') {
+            if (!_warnedNoReserve) {
+                _warnedNoReserve = true;
+                try { console.warn('[act_craft] 没有收到 reserveNow 回调：开炉**未做资源占位**（单机正常/多机需接线）'); } catch { /* ignore */ }
+            }
+        } else {
+            try {
+                const p = furnace.position;
+                const claim = await reserveNow(`station:furnace@${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`);
+                if (claim && claim.ok === false && claim.code === 'CLAIM_CONFLICT') {
+                    return fail('CLAIM_CONFLICT', `这台熔炉已被别人占了：${(claim.data?.conflicts ?? []).join(', ')}`, {
+                        input, pos: { x: p.x, y: p.y, z: p.z }, conflicts: claim.data?.conflicts ?? [],
+                    });
+                }
+            } catch { /* 预约层出错不该让开炉失败（协调是增强，不是前置） */ }
+        }
+    }
     try {
         win = await bot.openFurnace(furnace);
 

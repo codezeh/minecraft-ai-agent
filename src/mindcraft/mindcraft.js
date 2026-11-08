@@ -37,6 +37,17 @@ export async function createAgent(settings) {
             error: 'Agent name is required in profile'
         };
     }
+    // ★ R4 S1#3：同名 agent 的**旧进程还活着**时不许再创建一个。
+    //   原来这里只看 agent_connections（面板侧的表），而 destroyAgent 未确认退出时会留下
+    //   agent_processes 条目 —— 于是"删了再建"能造出两个同名进程（双开）。
+    //   现在把"进程表里还有人"当成硬拒绝，并说清该做什么。
+    if (agent_processes[settings.profile.name]?.running && agent_processes[settings.profile.name]?.process) {
+        console.error(`[create] ${settings.profile.name} 的进程仍在运行，拒绝重复创建（会双开）`);
+        return {
+            success: false,
+            error: `agent "${settings.profile.name}" 的进程仍在运行；请先 destroy-agent 并确认它已退出`
+        };
+    }
     settings = JSON.parse(JSON.stringify(settings));
     let agent_name = settings.profile.name;
     const agentIndex = agent_count++;
@@ -64,12 +75,16 @@ export async function createAgent(settings) {
         //   **只摘掉这个 agent**，而不是 process.exit 掉整个 mindserver。
         //   用注入而不是让 agent_process.js 反向 import 本文件：那会形成
         //   mindcraft → agent_process → mindcraft 的循环依赖。
-        agentProcess.unregister = () => destroyAgent(agent_name);
+        //   ★ R4 S1#4：destroyAgent 现在是异步的（要等子进程确认退出）⇒ 注入的函数
+        //   必须自己接住拒绝，不能让一个未处理的 Promise 把控制面带走。
+        agentProcess.unregister = () => {
+            destroyAgent(agent_name).catch((e) => console.error(`[agent:${agent_name}] 摘除失败：`, e));
+        };
         agentProcess.start(load_memory, init_message, agentIndex);
         agent_processes[settings.profile.name] = agentProcess;
     } catch (error) {
         console.error(`Error creating agent ${agent_name}:`, error);
-        destroyAgent(agent_name);
+        await destroyAgent(agent_name);   // ★ R4 S1#4：等它确认退出，别留下半个进程
         return {
             success: false,
             error: error.message
@@ -86,25 +101,64 @@ export function getAgentProcess(agentName) {
 }
 
 export function startAgent(agentName) {
-    if (agent_processes[agentName]) {
-        agent_processes[agentName].forceRestart();
-    }
-    else {
+    const ap = agent_processes[agentName];
+    if (!ap) {
         console.error(`Cannot start agent ${agentName}; not found`);
+        return { started: false, exited: true, reason: 'not-found' };
     }
+    // ★ R4 S1#3：forceRestart 现在是**异步**的（先等旧子进程确认退出，再拉起新进程）。
+    //   原来这里是同步调用、结果被丢掉 ⇒ 面板连点时两个 spawn 并发 = 同一个 bot 双开。
+    //   返回 Promise 让 mindserver 能等到结果并如实告诉面板「这次没起来 / 正在重启中」。
+    if (typeof ap.forceRestart === 'function') return ap.forceRestart();
+    // 兜底：老对象没有 forceRestart（不该发生，但别因此把启动变成静默失败）
+    const started = typeof ap.start === 'function' ? ap.start(true, 'Agent process restarted.', ap.count_id) : false;
+    return { started: started !== false, exited: true, reason: 'no-forceRestart' };
 }
 
 export function stopAgent(agentName) {
-    if (agent_processes[agentName]) {
-        agent_processes[agentName].stop();
+    const ap = agent_processes[agentName];
+    if (!ap) {
+        console.error(`Cannot stop agent ${agentName}; not found`);
+        return { exited: true, sent: false, reason: 'not-found' };
     }
+    return ap.stop();
 }
 
-export function destroyAgent(agentName) {
-    if (agent_processes[agentName]) {
-        agent_processes[agentName].stop();
-        delete agent_processes[agentName];
+/**
+ * ★★★ R4 S1#4：删掉一个 agent —— **未确认退出就不删表**。
+ *
+ * 缺陷原貌（`mindcraft.js:103-108`）：`stop()`（fire-and-forget，只发 SIGINT）+ 立刻
+ * `delete agent_processes[agentName]`。于是：
+ *   · 忽略 SIGINT 的子进程仍在跑（孤儿），**继续持有 board 连接、继续领单 + 续租**；
+ *   · 而控制面这边已经把句柄删了 ⇒ 再也管不到它（面板看不到、`!stop` 到不了、重启也拉不回）。
+ * 面板上表现为"这个 bot 明明删掉了却还在干活"，任务板上一张单被一个不存在的人长期占着。
+ *
+ * 现在：`stopAndWait()`（SIGINT → 等 graceMs → SIGKILL → 再等）确认退出之后才删表；
+ * 没确认退出就**保留注册表条目**并返回 `{ok:false}` —— 让调用方如实告诉用户
+ * （"还在跑，请查进程表"），而不是把问题变成不可见的孤儿。
+ *
+ * @returns {Promise<{ok:boolean, removed:boolean, exited:boolean, escalated?:boolean, reason:string}>}
+ */
+export async function destroyAgent(agentName) {
+    const ap = agent_processes[agentName];
+    if (!ap) return { ok: true, removed: false, exited: true, reason: 'not-found' };
+
+    let r;
+    if (typeof ap.stopAndWait === 'function') {
+        r = await ap.stopAndWait({ graceMs: 5000, killGraceMs: 3000 });
+    } else {
+        // 兜底：老对象只有 stop()（不该发生）。它不能证明"退了"，所以按未确认处理。
+        ap.stop?.();
+        r = { exited: false, escalated: false, reason: 'no-stopAndWait' };
     }
+
+    if (!r.exited) {
+        console.error(`[destroy] ${agentName} 未确认退出（${r.reason}）—— **保留注册表条目**：` +
+            `否则它会变成再也管不到的孤儿（继续领单/续租），面板也看不到它。`);
+        return { ok: false, removed: false, exited: false, escalated: !!r.escalated, reason: r.reason };
+    }
+    delete agent_processes[agentName];
+    return { ok: true, removed: true, exited: true, escalated: !!r.escalated, reason: r.reason };
 }
 
 /**
@@ -158,3 +212,17 @@ export function shutdown() {
     // 兼容旧调用点：语义不变（发信号并最终退出），但改成"等确认"的实现
     return shutdownAndWait();
 }
+
+/**
+ * ★ 仅测试用：`agent_processes` 是模块私有表，离线用例要能注入"假 AgentProcess"
+ * 才验得了 `destroyAgent` 的「未确认退出不删表」与 `startAgent` 的双开闸。
+ *
+ * 生产代码不得使用（表的所有权只属于本模块的 createAgent/destroyAgent）。
+ * 单独命名成 __test 而不是散落的 setter，是为了 grep 就能查清"谁在动这张表"。
+ */
+export const __test = {
+    names: () => Object.keys(agent_processes),
+    get: (agentName) => agent_processes[agentName],
+    set: (agentName, ap) => { agent_processes[agentName] = ap; },
+    remove: (agentName) => { delete agent_processes[agentName]; },
+};

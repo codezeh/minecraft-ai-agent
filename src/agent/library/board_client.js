@@ -35,6 +35,26 @@ import { normalizeReportedItems, attemptSeqOfJob } from './board_claims.js';
 export const ACK_TIMEOUT_MS = 5000;
 
 /**
+ * ★ A5-8：**"这一拍不续租"** 的返回码。
+ *
+ * 为什么不走 `fail()`：`contract.js` 的 `CODES` 是一张**封闭词汇表**（任务单结果码另有
+ * `board_store.BOARD_RESULT_CODES` 一套），加一个新码要动 contract.js —— 那不属于本条
+ * 的修复范围，而且会把"客户端停租"这件事混进流程结果码里（它根本不是流程结果）。
+ * 所以这里给一个**自洽的**返回值：形状与 ActionResult 一致（`ok/code/message/data`），
+ * 上层只看 `code === 'HEARTBEAT_SKIPPED'`，不会被误当成流程失败。
+ */
+export const HEARTBEAT_SKIPPED = 'HEARTBEAT_SKIPPED';
+
+/**
+ * 造一个"跳过续租"的结果。
+ * ★ T6：`HEARTBEAT_SKIPPED` 已注册进 `contract.CODES`（新码必须在册，否则 gate 报
+ *   "未注册的 code"），所以这里直接走 `fail()` —— 形状/冻结/校验与其它码一致。
+ */
+function heartbeatSkipped(message, data = {}) {
+    return fail(HEARTBEAT_SKIPPED, message, data);
+}
+
+/**
  * 把 id 归一成字符串；**不合法的返回 null**（绝不 `String(对象)`）。
  *
  * ★ 2026-11-02（t20）：`String({id:'x'})` → `"[object Object]"`，服务端拿它查库永远查不到，
@@ -87,6 +107,25 @@ export class BoardClient {
         this._attempts = new Map();
         this._connected = false;
         this._autoClaim = true;
+        /**
+         * ★★★ A5-8（S2，第四轮审计 §6.5）：**整端停止原因**（null = 没停）。
+         *
+         * 客户端这层原来只知道 `_autoClaim`（"要不要领下一张"），**完全没有"停"这个概念**，
+         * 于是 `heartbeat()`（本文件 415 行那段）无条件续租 —— 只要调度器还在跑心跳，
+         * 被 paused / 被取消的单就一直续着租，别的 bot 到进程被杀都拿不到。
+         */
+        this._stopRequested = null;
+        /**
+         * ★ A5-8：**逐单**的停止簿记（jobId → `{kind, reason, at}`）。
+         *
+         * 三种来源都会写进这里（都在本文件内）：
+         *   · `setState(id, 'paused'|'cancelled')` —— 自己发起的暂停/取消；
+         *   · `update(id, {state:'paused'|'cancelled'})` —— `control.applyStop()` 走的就是这条路
+         *     （`!stop` 的真实链路！），不在这里记一笔就等于完全没防到；
+         *   · `heartbeat()` 看到服务端回传的状态已经不是 claimed/running（别人停的）。
+         * 记录之后 `heartbeat()` 直接返回 `HEARTBEAT_SKIPPED`，一次网络都不发。
+         */
+        this._stoppedJobs = new Map();
 
         // 服务端推 `board:changed` → 刷新该单（06 §14 只推这一个事件）
         try {
@@ -211,6 +250,15 @@ export class BoardClient {
 
     /** 【不等】更新一张单（控制层只 try 不 await）。返回 Promise<ActionResult> 供需要的人用。 */
     update(id, patch) {
+        // ★★★ A5-8：`control.applyStop()` 的 `!stop` 链路走的就是这里
+        //   （`board.update(job.id, plan.patch)`，patch 里带 `state:'paused'`）。
+        //   不在这里记一笔，客户端就永远不知道"这张单已经停了"→ 心跳照旧续租。
+        //   ★ 先记再发：ack 慢（或失败回滚）也不能让这几拍继续续租。
+        if (patch && typeof patch === 'object' && (patch.state === 'paused' || patch.state === 'cancelled')) {
+            this.markJobStopped(id, patch.state, patch.checkpoint?.pausedReason ?? null);
+        } else if (patch && typeof patch === 'object' && patch.state === 'ready') {
+            this.markJobResumed(id);
+        }
         // 乐观更新本地镜像，失败时以 ack 为准回滚（见 .then）
         const prev = this._byId.get(String(id));
         if (prev && patch && typeof patch === 'object') {
@@ -292,6 +340,78 @@ export class BoardClient {
 
     /** 当前的自动领单开关（B2 的调度器要读）。 */
     get autoClaim() { return this._autoClaim; }
+
+    // ── ★ A5-8：停止 / 暂停簿记（"停了就不许再续租"的唯一判据来源）────────
+
+    /**
+     * 整端停止（进程退出 / 玩家按停 / 自杀式重连）。
+     *
+     * 与 `setAutoClaim(false)` 的区别：那个只是"不再领下一张"，**手上这张照常续租**；
+     * 这个是"停了"：从这一刻起 `heartbeat()` 一次都不发。
+     */
+    stop(reason = 'player') {
+        this._stopRequested = String(reason ?? 'player');
+        return this._stopRequested;
+    }
+
+    /** 撤销整端停止（"继续"）。已经停掉的单仍各自记着自己的停止簿记。 */
+    resume() {
+        this._stopRequested = null;
+        return null;
+    }
+
+    get stopRequested() { return this._stopRequested; }
+    get stopped() { return this._stopRequested != null; }
+
+    /**
+     * ★ A5-8：把一张单记成"已停"。
+     * @param {string|number} id
+     * @param {'paused'|'cancelled'} kind  paused=可恢复（玩家说继续还能接着做）；cancelled=终态
+     * @param {string|null} reason
+     */
+    markJobStopped(id, kind = 'paused', reason = null) {
+        const key = normalizeId(id);
+        if (key == null) return null;
+        const rec = { kind: kind === 'cancelled' ? 'cancelled' : 'paused', reason, at: this.now() };
+        this._stoppedJobs.set(key, rec);
+        return rec;
+    }
+
+    /** ★ A5-8：撤销一张单的停止簿记（resume / 重新领到这张单时）。 */
+    markJobResumed(id) {
+        const key = normalizeId(id);
+        if (key == null) return false;
+        return this._stoppedJobs.delete(key);
+    }
+
+    /** 这张单的停止簿记（没有就 null）。 */
+    stoppedJob(id) {
+        const key = normalizeId(id);
+        if (key == null) return null;
+        return this._stoppedJobs.get(key) ?? null;
+    }
+
+    /** ★ A5-8：这一拍**为什么不该续租**（null = 可以续）。 */
+    heartbeatBlockedBy(id) {
+        if (this._stopRequested != null) {
+            return { kind: 'stopped', reason: this._stopRequested, message: `客户端已停止（${this._stopRequested}）` };
+        }
+        const rec = this.stoppedJob(id);
+        if (rec) {
+            return {
+                kind: rec.kind, reason: rec.reason,
+                message: rec.kind === 'cancelled' ? '这张单已取消' : '这张单已暂停（可恢复，但不再续租）',
+            };
+        }
+        return null;
+    }
+
+    /** 服务端回传的单如果是 paused/cancelled，就地记一笔（下一拍起停租）。 */
+    _noteJobState(job) {
+        if (!job?.id) return;
+        if (job.state === 'paused') this.markJobStopped(job.id, 'paused', job.checkpoint?.pausedReason ?? null);
+        else if (job.state === 'cancelled') this.markJobStopped(job.id, 'cancelled', null);
+    }
 
     // ── 给调度器 / 命令层用的异步版（返回 ActionResult）──────────────────
 
@@ -386,7 +506,11 @@ export class BoardClient {
         //   两边不会漂移；老调用方传 undefined/非数组 → 空数组（服务端当没报，不崩）。
         if (who != null) payload.items = normalizeReportedItems(who?.items);
         const r = await this._call('board:claim', payload);
-        if (r.ok && r.data?.job) this._rememberAttempt(r.data.job);
+        if (r.ok && r.data?.job) {
+            this._rememberAttempt(r.data.job);
+            // ★ A5-8：重新领到这张单 = 之前的停止簿记作废（否则新尝试一次心跳都不发）
+            this.markJobResumed(r.data.job.id);
+        }
         return r;
     }
 
@@ -411,14 +535,38 @@ export class BoardClient {
         return Number.isFinite(seq) ? seq : undefined;
     }
 
-    /** 续租 + 进度。LEASE_LOST 要立刻停手（06 §6）。 */
+    /**
+     * 续租 + 进度。LEASE_LOST 要立刻停手（06 §6）。
+     *
+     * ★★★ A5-8（S2，第四轮审计 §6.5）：**停了就不许续租。**
+     *
+     *   原来这个方法无条件发 `board:heartbeat` —— 只要调用方还在跑心跳，被 paused
+     *   或被取消的单就每 10 秒续一次租，别的 bot **一直拿不到这张单**（直到进程被杀）。
+     *   审计点的正是这里（client 415-420）与调度器心跳两处。
+     *
+     *   现在两个前置判据（任一命中就**一次网络都不发**，直接返回 `HEARTBEAT_SKIPPED`）：
+     *     ① 整端停止：`stop(reason)`；
+     *     ② 逐单停止簿记：`setState/update/heartbeat` 任一看到 paused/cancelled。
+     *   另外，服务端回传的状态已经不是 claimed/running 时**就地记一笔**，下一拍起停租。
+     */
     async heartbeat(id, progress = null) {
-        const payload = { id: String(id), bot: this.name, progress };
+        const key = String(id);
+        const blocked = this.heartbeatBlockedBy(id);
+        if (blocked) {
+            return heartbeatSkipped(`不再续租：${blocked.message}`, {
+                id: key, skipped: true, kind: blocked.kind, reason: blocked.reason,
+            });
+        }
+        const payload = { id: key, bot: this.name, progress };
         // ★ BOARD-003：带尝试标识，同名重领后旧尝试不能再续租/写进度
         const seq = this._attemptOf(id);
         if (seq !== undefined) payload.attemptSeq = seq;
         const r = await this._call('board:heartbeat', payload);
-        if (r.ok && r.data?.job) this._rememberAttempt(r.data.job);
+        if (r.ok && r.data?.job) {
+            this._rememberAttempt(r.data.job);
+            // ★ A5-8：服务端说它已经 paused/cancelled（可能是**别人**停的）→ 记下来，下一拍停租
+            this._noteJobState(r.data.job);
+        }
         return r;
     }
 
@@ -449,6 +597,11 @@ export class BoardClient {
 
     /** 设状态（cancel / pause / resume）。 */
     async setState(id, state, reason = '') {
+        // ★ A5-8：先记簿记再发 —— paused/cancelled 之后本端**一次心跳都不许再发**；
+        //   ready（resume）则撤销簿记。ack 失败也不回滚这条簿记：
+        //   宁可少续一次租（单会回 ready 被别人捡走），也不要留一个僵尸租约。
+        if (state === 'paused' || state === 'cancelled') this.markJobStopped(id, state, reason || null);
+        else if (state === 'ready') this.markJobResumed(id);
         const payload = { id: String(id), state, reason };
         // ★ BOARD-003 补洞：带尝试标识 —— 否则同名重领后旧尝试一句 set-state(paused/ready)
         //   就能清掉新尝试的租约（`clearLease` 会把 lease_owner/until 置空）。
@@ -480,6 +633,21 @@ export class BoardClient {
         return this._call('board:release', { id: String(id), owner: this.name, keys });
     }
 
+    /**
+     * ★ A5-8：**主动放掉租约**（只清 `lease_owner/lease_until`，不动状态）。
+     *
+     * 为什么不用 `setState(paused)`：暂停的单**已经在 paused 了**，store 的状态转移表里
+     * `paused → paused` 是**非法转移**，会失败；而 store 的 `PATCHABLE` 白名单里
+     * 正好有 `lease_owner/lease_until` 两个字段 —— 只摘租约、不动状态，
+     * 于是"暂停（可恢复）"与"取消（终态）"两种语义都不会被改写。
+     */
+    releaseLease(id) {
+        const key = normalizeId(id);
+        if (key == null) {
+            return Promise.resolve(fail('NO_TARGET', `id 必须是字符串（收到 ${describeId(id)}）`, { idType: typeof id }));
+        }
+        return this.update(key, { lease_owner: null, lease_until: null });
+    }
     /** 这张单持有哪些预约（诊断）。 */
     async claims(id = null) {
         return this._call('board:claims', id ? { id: String(id) } : {});

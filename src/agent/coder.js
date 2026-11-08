@@ -6,8 +6,31 @@ import * as skills from './library/skills.js';
 import * as world from './library/world.js';
 import { Vec3 } from 'vec3';
 import {ESLint} from "eslint";
+// H2：认「这一轮没有可执行代码」信号（见 coder.js:generateCode 里的说明）
+import { isNoCodeReply } from '../models/_shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * H2 双保险之二：代码块里**是否真的含有语句**。
+ *
+ * 为什么需要（这是 H2 的原始复现路径）：旧兜底串 `'```//no response (truncated)```'`
+ * 被抽出来的"代码"是 `//no response (truncated)` —— **一行注释**。它执行不报错，
+ * 于是被记账成"写了一段代码并成功执行"。所以判据不能是"有没有反引号"，
+ * 也不能只依赖上游信号：**剥掉注释与空行后什么都没有 = 没有代码**。
+ *
+ * @param {string} code 从代码块里抽出的文本
+ * @returns {boolean} 含有至少一条语句
+ */
+function hasStatements(code) {
+    const stripped = String(code ?? '')
+        .replace(/\/\*[\s\S]*?\*\//g, '')   // 块注释
+        .split('\n')
+        .map((line) => line.replace(/\/\/.*$/, '').trim())  // 行注释
+        .join('')
+        .trim();
+    return stripped.length > 0;
+}
 
 export class Coder {
     constructor(agent) {
@@ -44,9 +67,37 @@ export class Coder {
             if (this.agent.bot.interrupt_code)
                 return null;
             const messages_copy = JSON.parse(JSON.stringify(messages));
-            let res = await this.agent.prompter.promptCoding(messages_copy);
+            // 架构收敛项(1) 步 1：改读**结果类型**，不再在字符串里找暗号。
+            //   失败 -> status=error（原来靠「没有反引号」碰巧走对分支）；
+            //   截断 -> status=truncated 且 content 已是 NO_CODE 信号（H2 契约，不回退）。
+            const typed = await this.agent.prompter.promptCodingResult(messages_copy);
             if (this.agent.bot.interrupt_code)
                 return null;
+            if (typed.failed) {
+                console.warn('[coder] 代码生成失败(' + typed.errorCode + ')：按没写代码处理（不执行任何东西）');
+            }
+            // 只有内容可用时才交进下面的抽码逻辑；失败一律当空串（与旧路径同语义）
+            const res = typed.hasContent ? typed.content : '';
+            // ★★★ H2 双保险（第四轮复审，S1「截断假成功」）：
+            //   下面 `res.indexOf('```') !== -1` 是**弱判据** —— "回复里有反引号"不等于"模型写了代码"。
+            //   缺陷实测：promptCoding 截断时返回的兜底串自带三反引号，于是这里判成有代码、
+            //   `substring` 抽出一行 `// no response` 注释当代码执行，跑通后**报成功**
+            //   （一次截断 = 一次什么都没做却记账成功的动作）。
+            //   所以：**先显式认「没代码」信号**（`[NO_CODE]` 前缀，不含反引号），
+            //   认出来就按"没写代码"处理，无论它里面有没有反引号。
+            if (isNoCodeReply(res)) {
+                console.warn(`No code provided (explicit signal): ${String(res).slice(0, 120)}`);
+                if (no_code_failures >= MAX_NO_CODE) {
+                    console.warn("Action failed, agent would not write code.");
+                    return 'Action failed, agent would not write code.';
+                }
+                messages.push({
+                    role: 'system',
+                    content: 'Error: no code provided. Write code in codeblock in your response. ``` // example ```'
+                });
+                no_code_failures++;
+                continue;
+            }
             let contains_code = res.indexOf('```') !== -1;
             if (!contains_code) {
                 if (res.indexOf('!newAction') !== -1) {
@@ -70,6 +121,22 @@ export class Coder {
                 continue;
             }
             code = res.substring(res.indexOf('```')+3, res.lastIndexOf('```'));
+            // ★★★ H2 双保险之二：**只有注释的代码块 = 没有代码**，执行前就拦掉。
+            //   原缺陷正是这样复现的：`//no response (truncated)` 被执行、跑通、报成功。
+            //   判据不看反引号、也不只依赖上游信号（双保险）—— 剥注释后为空就不碰执行器。
+            if (!hasStatements(code)) {
+                console.warn('Code block contains no statements (comment-only) — treated as "no code".');
+                if (no_code_failures >= MAX_NO_CODE) {
+                    console.warn("Action failed, agent would not write code.");
+                    return 'Action failed, agent would not write code.';
+                }
+                messages.push({
+                    role: 'system',
+                    content: 'Error: no code provided. Write code in codeblock in your response. ``` // example ```'
+                });
+                no_code_failures++;
+                continue;
+            }
             const result = await this._stageCode(code);
             const executionModule = result.func;
             const lintResult = await this._lintCode(result.src_lint_copy);

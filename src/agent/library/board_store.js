@@ -836,6 +836,25 @@ export function finish(db, id, result = {}, opts = {}) {
     const job = getJob(db, id);
     if (!job) return { ok: false, code: 'NO_TARGET' };
 
+    // ★★ T6（架构收敛项 3）：**finish 必须校验"当前 state 允许被收尾"**。
+    //
+    //   原来只有"租约归属"这一道（`lease_owner IS NULL OR = 我`），没看状态 ——
+    //   于是 `pending` / `blocked` 这种**根本没有执行者**的单也能被 finish 写进去。
+    //   `blocked` 是"等前置/等资源"的挂起态，一次迟到的 finish 会按"失败一次"把它
+    //   推回 ready 重新派单，而它的前置可能仍然没好 ⇒ blocked/ready 反复抖动。
+    //   判据取"**真的有人可能正在跑它**"的四个状态：
+    //     claimed / running（正常在跑）、paused（按停后收尾）、
+    //     ready（无人持有的草稿态，保持既有语义："没人持有 ⇒ 谁都可能是合法收尾者"）。
+    //   只拒 `pending` / `blocked` / 终态 —— 不改变任何正常路径。
+    //   ★ 需要老的宽松行为时显式传 `{ anyState: true }`（离线夹具/工具）。
+    const FINISHABLE_STATES = [JOB_STATE.READY, JOB_STATE.CLAIMED, JOB_STATE.RUNNING, JOB_STATE.PAUSED];
+    if (opts.anyState !== true && !FINISHABLE_STATES.includes(job.state)) {
+        return {
+            ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
+            message: `单 ${id} 的状态是 ${job.state}，不该被 finish（一个字段都没写）`,
+        };
+    }
+
     const code = result.code ?? 'OK';
     const okFlag = result.ok === true;
     // ★ 同样单调：finish 报的 progress 不能把已有的进度压小
@@ -1309,21 +1328,60 @@ export function reserve(db, jobId, owner, keys, opts = {}) {
 
 /**
  * 放掉预约（不传 keys = 放掉这张单的全部）。
- * @returns {{ok:true, released:number}}
+ *
+ * ★ T6：**校验 owner 与当前 state**（原来只按 `claims.owner` 过滤，完全不看这张单）。
+ *   漏掉单这一层的后果：`release(jobId, 别人)` 能把**别人正在用**的资源全放掉
+ *   （单 id 是共享可见的），于是两个 bot 同时开同一个箱子 —— 正是预约要防的事。
+ *
+ * 判据：这张单的租约若**在别人手上且未过期** → 拒绝（`LEASE_STALE`，一个字段都不删）。
+ * 反过来，"租约已过期/没人持有/就是我自己"三种情形一律放行（清理残局必须能做）。
+ *
+ * @returns {{ok:true, released:number} | {ok:false, code:string, released:0, message:string}}
  */
-export function release(db, jobId, owner, keys = null) {
+export function release(db, jobId, owner, keys = null, opts = {}) {
+    const now = opts.now ?? Date.now();
+    const id = jobId == null ? '' : String(jobId);
+    const me = owner == null || owner === '' ? null : String(owner);
+    const job = id ? getJob(db, id) : null;
+    // ★ 兼容：`claims` 表里可能有"还没有任务单行（或单已被归档）"的预约
+    //   （离线工具/夹具直接 `reserve(db,'jobA',…)`）。没有单行 = 没有租约归属可校验
+    //   ⇒ 退回旧行为，不因为"查不到单"就拒（否则纯预约层用例全红，而那不是本条的靶子）。
+    if (!job) {
+        if (Array.isArray(keys) && keys.length) {
+            const norm = normalizeClaimKeys(keys);
+            const list = norm.ok ? norm.keys : [];
+            let n = 0;
+            for (const k of list) {
+                const r = db.prepare('DELETE FROM claims WHERE id=? AND (owner IS NULL OR owner = ?) AND key=?')
+                    .run(id, me, k);
+                n += Number(r.changes ?? 0);
+            }
+            return { ok: true, released: n, noJobRow: true };
+        }
+        const r0 = db.prepare('DELETE FROM claims WHERE id=? AND (owner IS NULL OR owner = ?)').run(id, me);
+        return { ok: true, released: Number(r0.changes ?? 0), noJobRow: true };
+    }
+    const holder = job.lease?.owner ?? null;
+    const untilLease = Number(job.lease?.until);
+    const leaseExpired = Number.isFinite(untilLease) && untilLease <= now;
+    if (me != null && holder != null && holder !== me && !leaseExpired) {
+        return {
+            ok: false, code: BOARD_RESULT_CODES.LEASE_STALE, released: 0,
+            message: `单 ${id} 的租约属于 ${holder}，不是 ${me}：一条预约都没放`,
+        };
+    }
     if (Array.isArray(keys) && keys.length) {
         const norm = normalizeClaimKeys(keys);
         const list = norm.ok ? norm.keys : [];
         let n = 0;
         for (const k of list) {
             const r = db.prepare('DELETE FROM claims WHERE id=? AND (owner IS NULL OR owner = ?) AND key=?')
-                .run(jobId, owner, k);
+                .run(id, me, k);
             n += Number(r.changes ?? 0);
         }
         return { ok: true, released: n };
     }
-    const r = db.prepare('DELETE FROM claims WHERE id=? AND (owner IS NULL OR owner = ?)').run(jobId, owner);
+    const r = db.prepare('DELETE FROM claims WHERE id=? AND (owner IS NULL OR owner = ?)').run(id, me);
     return { ok: true, released: Number(r.changes ?? 0) };
 }
 
@@ -1340,13 +1398,58 @@ export function expireClaims(db, now = Date.now()) {
 
 /**
  * 续期这张单持有的全部预约（heartbeat 时调）。
- * @returns {number} 续了几条
+ *
+ * ★ T6（架构收敛项 3）：**必须校验 owner 与当前 state**。
+ *   原来 `UPDATE claims SET until=? WHERE id=?` —— 只要知道 jobId（任务板的单 id
+ *   是**共享可见**的：list/board:changed 都能拿到别人的单 id），任何 bot 都能替
+ *   **别人正在跑的单**续预约 ⇒ 那个 bot 掉线后预约永远不过期，资源被永久占住。
+ *
+ * 判据（与 `heartbeat()` 的 LEASE_LOST 同源）：
+ *   ① 单必须处于 `claimed`/`running`（真的被持有）—— ready/paused/终态都不续；
+ *   ② 给了 `owner` 时，租约必须属于它（`lease_owner` 为空 = 没人持有，按"谁都可能是合法者"放行，
+ *      与 finish 的既有判据一致）；
+ *   ③ UPDATE 只命中 `owner IS NULL OR owner = ?` 的预约行。
+ *
+ * @returns {{ok:true, code:'OK', renewed:number, until:number} | {ok:false, code:string, renewed:0, message:string}}
+ *   ★ 返回值从"数字"改成形状化结果（T6）：`changed === 0` 与"不归我"必须能区分，
+ *     数字 0 分不清。调用方只有 `board_server` 的心跳，它不看返回值。
  */
 export function renewClaims(db, jobId, opts = {}) {
     const now = opts.now ?? Date.now();
     const ttlMs = opts.ttlMs ?? CLAIM_TTL_MS;
-    const r = db.prepare('UPDATE claims SET until=? WHERE id=?').run(now + ttlMs, jobId);
-    return Number(r.changes ?? 0);
+    const owner = opts.owner == null || opts.owner === '' ? null : String(opts.owner);
+    const id = jobId == null ? null : String(jobId);
+    const job = id == null ? null : getJob(db, id);
+    // ★ 兼容：`claims` 表可以有一张**还不存在（或已归档）的任务单**的预约
+    //   （离线工具/夹具直接 `reserve(db,'jobA',…)`）。没有单行 = 没有租约归属可校验
+    //   ⇒ 退回旧行为（只按 owner 过滤），不因为"查不到单"就拒。
+    if (!job) {
+        const until = now + ttlMs;
+        const r0 = owner == null
+            ? db.prepare('UPDATE claims SET until=? WHERE id=?').run(until, id)
+            : db.prepare('UPDATE claims SET until=? WHERE id=? AND (owner IS NULL OR owner=?)').run(until, id, owner);
+        return { ok: true, code: 'OK', renewed: Number(r0.changes ?? 0), until, noJobRow: true };
+    }
+    if (![JOB_STATE.CLAIMED, JOB_STATE.RUNNING].includes(job.state)) {
+        return {
+            ok: false, code: BOARD_RESULT_CODES.LEASE_STALE, renewed: 0,
+            message: `单 ${id} 的状态是 ${job.state}（不在跑），不续预约`,
+        };
+    }
+    const holder = job.lease?.owner ?? null;
+    const untilLease = Number(job.lease?.until);
+    const leaseExpired = Number.isFinite(untilLease) && untilLease <= now;
+    if (owner != null && holder != null && holder !== owner && !leaseExpired) {
+        return {
+            ok: false, code: BOARD_RESULT_CODES.LEASE_STALE, renewed: 0,
+            message: `单 ${id} 的租约属于 ${holder}，不是 ${owner}：一条预约都没续`,
+        };
+    }
+    const until = now + ttlMs;
+    const r = owner == null
+        ? db.prepare('UPDATE claims SET until=? WHERE id=?').run(until, id)
+        : db.prepare('UPDATE claims SET until=? WHERE id=? AND (owner IS NULL OR owner=?)').run(until, id, owner);
+    return { ok: true, code: 'OK', renewed: Number(r.changes ?? 0), until };
 }
 
 /** 列预约（诊断/断言用）。 */

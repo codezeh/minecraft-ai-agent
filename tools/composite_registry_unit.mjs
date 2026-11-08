@@ -212,16 +212,44 @@ const base = () => ({
         && Math.abs((noJob.deadline - Date.now()) - manifest.timeoutMs) < 2000
         && withJob.jobId === 12
         && Math.abs((withJob.deadline - Date.now()) - 5000) < 2000
-        && noJob.mapDir === './bots/unit_bot/map';
+        // ★ bot_paths 从相对路径改成绝对路径（另一条线在改），这里两种形态都接受：
+        //   本用例要锁的是"mapDir 来自 mapDirOf、不是自己拼的"，不是路径前缀长什么样。
+        && String(noJob.mapDir ?? '').replace(/\\/g, '/').endsWith('bots/unit_bot/map');
 
     const r1 = await noJob.reserve('block:oak_log');
     const r2 = await noJob.release('block:oak_log');
 
-    if (dOk && r1.ok && r2.ok) {
-        okCase('makeCtx：jobId/deadline/mapDir + 无任务板 reserve 恒成功',
-            `noJobDeadline=${Math.round((noJob.deadline - Date.now()) / 1000)}s job=${withJob.jobId}`);
+    // ★ T6（架构收敛项 3）：无板时 reserve/release **不再 fail-open**。
+    //   原来这里是 `r1.ok && r2.ok`（断言"恒成功"）—— 那正是审计点名的 fail-open：
+    //   调用方以为占位成功，其实 claims 表一行都没有（真机事故：85 张单 done、claims 0 行）。
+    //   现在必须：**ok=false + code=NO_BOARD + data.noBoard=true**，并带一行 warn（不静默）。
+    const noBoardOk = r1.ok === false && r1.code === 'NO_BOARD' && r1.data?.noBoard === true
+        && r2.ok === false && r2.code === 'NO_BOARD' && r2.data?.noBoard === true;
+
+    if (dOk && noBoardOk) {
+        okCase('makeCtx：jobId/deadline/mapDir + 无任务板时 reserve/release 显式 NO_BOARD（不再 fail-open）',
+            `noJobDeadline=${Math.round((noJob.deadline - Date.now()) / 1000)}s job=${withJob.jobId} code=${r1.code}`);
     } else {
-        badCase('makeCtx：jobId/deadline/mapDir + 无任务板 reserve 恒成功', JSON.stringify({ dOk, r1, r2 }));
+        badCase('makeCtx：jobId/deadline/mapDir + 无任务板时 reserve/release 必须显式告警',
+            JSON.stringify({ dOk, noBoardOk, r1, r2 }));
+    }
+
+    // ★ T6 反向用例：**调用方不能把它误当"占位成功"**。
+    //   三个判据缺一不可：
+    //     ① `ok === false`（不会走进"占位成功"分支）
+    //     ② `code === 'NO_BOARD'`（能与 CLAIM_CONFLICT 区分：那是"有人占着"，要换目标）
+    //     ③ message 里**明说"没有发生/未预约"**（日志/面板都能看出"这次没协调"）
+    const msg1 = String(r1.message ?? '');
+    const msg2 = String(r2.message ?? '');
+    const notMistaken = r1.ok === false && r1.code === 'NO_BOARD'
+        && /未预约|没有发生|没有任务板/.test(msg1)
+        && r2.ok === false && r2.code === 'NO_BOARD'
+        && /未释放|没有发生|没有任务板/.test(msg2);
+    if (notMistaken) {
+        okCase('★ 反向：无板 reserve/release 的 message 明说"没有发生"，不会被误读成占位成功',
+            `reserve="${msg1}" release="${msg2}"`);
+    } else {
+        badCase('反向：无板 reserve/release 的措辞含糊（可能被误读成成功）', { msg1, msg2, r1, r2 });
     }
 }
 
@@ -244,7 +272,10 @@ const base = () => ({
     const a = mapDirOf({ bot: { username: 'u1' } });
     const b = mapDirOf({ username: 'u2' });
     const c = mapDirOf({ bot: {} });
-    if (a === './bots/u1/map' && b === './bots/u2/map' && c === './bots/agent/map') {
+    // ★ 同上：mapDirOf 可能返回相对（`./bots/...`）或绝对路径，两种都算对。
+    const norm = (v) => String(v ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
+    const tail = (v) => norm(v).endsWith('bots/u1/map') || norm(v).endsWith('bots/u1/map/');
+    if (tail(a) && norm(b).endsWith('bots/u2/map') && norm(c).endsWith('bots/agent/map')) {
         okCase('mapDirOf 兼容 agent / bot 且兜底 agent', `${a} | ${b} | ${c}`);
     } else {
         badCase('mapDirOf 兼容 agent / bot 且兜底 agent', JSON.stringify({ a, b, c }));

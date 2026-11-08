@@ -136,6 +136,12 @@ export const actionsList = [
         name: '!stop',
         description: 'Force stop all actions and commands that are currently executing.',
         perform: async function (agent) {
+            // ★ A5-1（S1）：**先记"取消"，再停。**
+            //   顺序不能反，也不能只靠 `stop()`：`ActionManager.stop()` 在
+            //   "没有动作在跑、也没有在飞的任务单"时**直接 return**（action_manager.js:100-115），
+            //   一个中断信号都不发 —— 而"她的回复还在模型那边生成"正是这种情况。
+            //   于是 `!stop` 之后那句迟到的回复没人拦得住（A5-1 的原貌）。
+            try { agent.noteCancel?.('player-stop'); } catch { /* 记取消失败不该挡住"停" */ }
             // 07 §4：玩家喊停 → 被打断的单 `paused` + 暂停自动领单（不然她停一秒又去领下一张）
             await agent.actions.stop('player');
             agent.clearBotLogs();

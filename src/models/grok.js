@@ -1,7 +1,7 @@
 import OpenAIApi from 'openai';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated, LLM_MAX_CALL_MS, LLM_MAX_RETRIES, sdkCallOptions } from './_shared.js';
 
 // xAI doesn't supply a SDK for their models, but fully supports OpenAI and Anthropic SDKs
 export class Grok {
@@ -19,10 +19,14 @@ export class Grok {
 
         config.apiKey = getKey('XAI_API_KEY');
 
+        // ★ H3：显式压住 openai SDK 默认值（600s × (1+2 次重试) ⇒ 最坏 30 分钟）
+        config.timeout = LLM_MAX_CALL_MS;
+        config.maxRetries = LLM_MAX_RETRIES;
+
         this.openai = new OpenAIApi(config);
     }
 
-    async sendRequest(turns, systemMessage) {
+    async sendRequest(turns, systemMessage, stop_seq, opts = {}) {
         let messages = [{'role': 'system', 'content': systemMessage}].concat(turns);
 
         const pack = {
@@ -35,7 +39,7 @@ export class Grok {
         let truncatedByLength = false;   // 输出额度截断 ≠ 上下文超限（MOD-001）
         try {
             console.log('Awaiting xai api response...');
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await this.openai.chat.completions.create(pack, sdkCallOptions(opts));
             recordUsage(completion?.usage, this.model_name);
             // ★ MOD-001：finish_reason==='length' 是**输出额度**用完，不是上下文超限。
             //   原来这里直接 throw 'Context length exceeded' → catch 里裁历史重发：缩短输入对
@@ -53,7 +57,7 @@ export class Grok {
         catch (err) {
             if (isContextLengthError(err) && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
-                return await this.sendRequest(turns.slice(1), systemMessage);
+                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq, opts);
             } else if (errMessage(err).includes('The model expects a single `text` element per message.')) {
                 console.log(safeErrText(err));
                 res = 'Vision is only supported by certain models.';

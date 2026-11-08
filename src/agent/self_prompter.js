@@ -4,6 +4,13 @@ import { jobsBusy } from './library/control.js';
 const STOPPED = 0
 const ACTIVE = 1
 const PAUSED = 2
+
+/**
+ * ★ R4 §7-③：目标循环**连续**抛错多少次才认定"真的坏了"并停下状态。
+ * 单次异常（模型层超时、一次工具报错）不该把目标判死 —— `finally` 会让
+ * `update()` 在空闲后按既有节流自动重启下一轮；只有连续失败才置 STOPPED。
+ */
+const MAX_LOOP_ERRORS = 3;
 export class SelfPrompter {
     constructor(agent) {
         this.agent = agent;
@@ -17,6 +24,8 @@ export class SelfPrompter {
         // 等级执行（prompt 里的字不算数），提示词注入借不到自提示的路子提权。
         // null = 不知道（系统 / NPCController 设的目标），executeCommand 按「信任」处理。
         this.author = null;
+        /** ★ R4 §7-③：目标循环连续异常计数（成功跑完一轮就清零）。 */
+        this.loop_errors = 0;
     }
 
     start(prompt, author = null) {
@@ -29,6 +38,7 @@ export class SelfPrompter {
         if (author) this.author = author;
         this.state = ACTIVE;
         this.prompt = prompt;
+        this.loop_errors = 0;   // 新目标 = 新的失败预算
         this.startLoop();
     }
 
@@ -72,30 +82,60 @@ export class SelfPrompter {
         this.loop_active = true;
         let no_command_count = 0;
         const MAX_NO_COMMAND = 3;
-        while (!this.interrupt) {
-            const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
-            
-            // BOT-001：目标循环是**唯一**可以继承主人权限的内部回合
-            // （目标是人设的 !goal，「谁设的目标就是谁的意图」），所以显式带 selfPrompt。
-            let used_command = await this.agent.handleMessage('system', msg, -1, { internal: true, selfPrompt: true });
-            if (!used_command) {
-                no_command_count++;
-                if (no_command_count >= MAX_NO_COMMAND) {
-                    let out = `Agent did not use command in the last ${MAX_NO_COMMAND} auto-prompts. Stopping auto-prompting.`;
-                    this.agent.openChat(out);
-                    console.warn(out);
-                    this.state = STOPPED;
-                    break;
+        try {
+            while (!this.interrupt) {
+                const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
+
+                // BOT-001：目标循环是**唯一**可以继承主人权限的内部回合
+                // （目标是人设的 !goal，「谁设的目标就是谁的意图」），所以显式带 selfPrompt。
+                let used_command = await this.agent.handleMessage('system', msg, -1, { internal: true, selfPrompt: true });
+                if (!used_command) {
+                    no_command_count++;
+                    if (no_command_count >= MAX_NO_COMMAND) {
+                        let out = `Agent did not use command in the last ${MAX_NO_COMMAND} auto-prompts. Stopping auto-prompting.`;
+                        this.agent.openChat(out)?.catch?.((e) => {
+                            console.warn(`[self-prompt] 播报失败：${String(e?.message ?? e)}`);
+                        });
+                        console.warn(out);
+                        this.state = STOPPED;
+                        break;
+                    }
+                }
+                else {
+                    no_command_count = 0;
+                    this.loop_errors = 0;      // 这轮正常跑通了 ⇒ 连续失败计数清零
+                    await new Promise(r => setTimeout(r, this.cooldown));
                 }
             }
-            else {
-                no_command_count = 0;
-                await new Promise(r => setTimeout(r, this.cooldown));
+        } catch (err) {
+            /**
+             * ★ R4 §7-③（2026-11-07 第四轮审计）：一次异常不许把目标循环**悄悄弄死**。
+             *
+             * 缺陷原貌：循环体里没有任何 try/finally。`handleMessage()` 一旦 reject
+             * （模型层/网络/工具里任何一处向上抛），`startLoop()` 就地中断：
+             *   ① `this.loop_active` **永远停在 true** ⇒ `update()` 的"自动重启"判据
+             *      `!this.loop_active` 恒假 ⇒ 目标循环**永久不再启动**；
+             *   ② `this.state` 仍是 ACTIVE ⇒ 界面/存档都说"目标在跑"，实际早就死了。
+             * 两者合起来就是"看起来在自驱，其实再也不会动了"。
+             *
+             * 修法：catch 记日志并把状态**说清楚**；`finally` 无条件复位 loop_active /
+             * interrupt（下面的 update() 因此能按既有节流自动重启这一个回合）。
+             * 连续失败 MAX_LOOP_ERRORS 次才认定是真的坏了 → state 置 STOPPED，
+             * 不再假装 ACTIVE（避免"每 2 秒重试一次、每 2 秒失败一次"的无声空转）。
+             */
+            this.loop_errors = (this.loop_errors ?? 0) + 1;
+            console.error(`[self-prompt] 目标循环异常（第 ${this.loop_errors} 次），已退出本轮循环: ${err?.stack ?? err}`);
+            if (this.loop_errors >= MAX_LOOP_ERRORS && this.state === ACTIVE) {
+                this.state = STOPPED;
+                const out = `Self-prompt loop failed ${this.loop_errors} times in a row, stopping auto-prompting. (${String(err?.message ?? err)})`;
+                console.error(out);
+                try { this.agent.openChat?.(out)?.catch?.(() => {}); } catch { /* 播报失败不影响停循环 */ }
             }
+        } finally {
+            console.log('self prompt loop stopped')
+            this.loop_active = false;
+            this.interrupt = false;
         }
-        console.log('self prompt loop stopped')
-        this.loop_active = false;
-        this.interrupt = false;
     }
 
     update(delta) {

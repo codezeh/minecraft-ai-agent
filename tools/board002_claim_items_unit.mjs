@@ -145,8 +145,8 @@ const server = (db, pair) => attachBoardServer({
     };
     const calls = { claim: [], setState: [], inventoryReads: 0 };
     const fakeBoard = {
-        claim: async (who) => { calls.claim.push(who); return { ok: true, data: { job: { ...jobNeedTool } } }; },
-        setState: async (id, state, reason) => { calls.setState.push({ id, state, reason }); return { ok: true }; },
+        claim: (who) => { calls.claim.push(who); return Promise.resolve({ ok: true, data: { job: { ...jobNeedTool } } }); },
+        setState: (id, state, reason) => { calls.setState.push({ id, state, reason }); return Promise.resolve({ ok: true }); },
         list: () => [],
         get: () => null,
     };
@@ -182,8 +182,8 @@ const server = (db, pair) => attachBoardServer({
     const calls = { claim: [], setState: [] };
     const fakeBoard = {
         // 服务端按"上报时"的库存放行了，但本地此刻已经没那把镐了
-        claim: async (who) => { calls.claim.push(who); return { ok: true, data: { job: { ...jobNeedTool } } }; },
-        setState: async (id, state, reason) => { calls.setState.push({ id, state, reason }); return { ok: true }; },
+        claim: (who) => { calls.claim.push(who); return Promise.resolve({ ok: true, data: { job: { ...jobNeedTool } } }); },
+        setState: (id, state, reason) => { calls.setState.push({ id, state, reason }); return Promise.resolve({ ok: true }); },
         list: () => [],
         get: () => null,
     };

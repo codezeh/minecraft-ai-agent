@@ -18,6 +18,10 @@
  * 输出：PASS <用例> / FAIL <用例> <实际>，全过退出码 0。
  */
 
+/** 迁移期兼容取值：已类型化的适配器返回 ModelResult，未迁移的仍是 string。
+ *  架构收敛项(1) 步 2 会逐个适配器迁移，本文件用这两个助手保证两种形状都能断言。 */
+const contentOf = (x) => (x && typeof x === 'object' && typeof x.content === 'string') ? x.content : x;
+const failedOf = (x) => (x && typeof x === 'object' && typeof x.status === 'string') ? x.status === 'error' : isFailedReply(x);
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {
     if (cond) { pass++; console.log(`PASS ${name} ${detail}`); }
@@ -163,13 +167,13 @@ for (const a of ADAPTERS) {
         check(`${a.name}: usage 数值正确`, !!llmLine && llmLine.includes(`prompt=${p}`) && llmLine.includes(`completion=${c}`),
             `→ ${llmLine}`);
     }
-    check(`${a.name}: 成功时返回模型内容`, out === '模型说的话', `→ ${JSON.stringify(out)}`);
+    check(`${a.name}: 成功时返回模型内容`, contentOf(out) === '模型说的话', `→ ${JSON.stringify(out)}`);
 
     // 失败路径
     const inst2 = new Cls('test-model');
     a.bad(inst2);
     const bad = await inst2.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
-    check(`${a.name}: 失败时返回 FAILED_REPLY 标记（不是假台词）`, isFailedReply(bad), `→ ${JSON.stringify(bad)}`);
+    check(`${a.name}: 失败时返回 FAILED_REPLY 标记（不是假台词）`, failedOf(bad), `→ ${JSON.stringify(bad)}`);
     check(`${a.name}: 失败时返回值里不含假台词`, !/brain disconnected|thought too hard|No response (received|data|from)/i.test(String(bad)),
         `→ ${JSON.stringify(bad)}`);
 }
@@ -188,7 +192,7 @@ for (const a of ADAPTERS) {
     good.replicate = { run: () => Promise.resolve('模型说的话'), stream: function* () { yield '模型说的话'; } };
     lines.length = 0;
     const out = await good.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
-    check('replicate: 成功时返回内容', out === '模型说的话', `→ ${JSON.stringify(out)}`);
+    check('replicate: 成功时返回内容', contentOf(out) === '模型说的话', `→ ${JSON.stringify(out)}`);
     check('replicate: 成功时记了 usage（流式无 usage → 记 missing 并带 tag）',
         lines.some((l) => l.startsWith('[llm]') && l.includes('tag=replicate')), `→ ${JSON.stringify(lines)}`);
 
@@ -200,7 +204,7 @@ for (const a of ADAPTERS) {
     };
     const out2 = await bad.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('replicate: 429 会退避重试（stream 被调用 ≥3 次）', tries >= 3, `→ tries=${tries}`);
-    check('replicate: 429 重试后拿到正常回答', out2 === '重试后成功', `→ ${JSON.stringify(out2)}`);
+    check('replicate: 429 重试后拿到正常回答', contentOf(out2) === '重试后成功', `→ ${JSON.stringify(out2)}`);
 }
 
 // Hyperbolic：裸 fetch，用全局 fetch 桩
@@ -307,7 +311,7 @@ function makePrompter(reply) {
     const m1 = new Ollama('test-model');
     const r1 = await m1.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('ollama: 网络异常 → 返回 FAILED_REPLY（不再吞成 null→"No response data."）',
-        isFailedReply(r1), `→ ${JSON.stringify(r1)}`);
+        failedOf(r1), `→ ${JSON.stringify(r1)}`);
 
     // D2: 前两次 429、第三次 200 → 必须重试到成功
     let calls = 0;
@@ -320,7 +324,7 @@ function makePrompter(reply) {
     lines.length = 0;
     const r2 = await m2.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('ollama: 429 会重试（fetch 被调用 ≥3 次）', calls >= 3, `→ calls=${calls}`);
-    check('ollama: 429 重试后拿到正常回答', r2 === '重试后成功', `→ ${JSON.stringify(r2)}`);
+    check('ollama: 429 重试后拿到正常回答', contentOf(r2) === '重试后成功', `→ ${JSON.stringify(r2)}`);
     check('ollama: 重试成功后仍记了 usage', lines.some((l) => l.includes('prompt=7') && l.includes('completion=2')),
         `→ ${JSON.stringify(lines)}`);
 
@@ -334,7 +338,8 @@ function makePrompter(reply) {
     const fs = await import('node:fs');
     const dir = new URL('../src/models/', import.meta.url);
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js')
-        && !['_shared.js', '_model_map.js', 'prompter.js', 'azure.js'].includes(f));
+        // 非适配器的模块：结果类型（架构收敛项 1）、共享契约、模型映射、聚合层、Azure 继承 GPT
+        && !['_shared.js', '_model_map.js', 'prompter.js', 'azure.js', 'result.js'].includes(f));
     const missing = [];
     for (const f of files) {
         const src = fs.readFileSync(new URL(f, dir), 'utf8');

@@ -2,7 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated, LLM_MAX_CALL_MS, LLM_MAX_RETRIES, sdkCallOptions } from './_shared.js';
 
 /**
  * ★ MOD-002/003：给消息追加停止标记 —— **只加在字符串内容上，且返回新对象**。
@@ -42,10 +42,18 @@ export class GPT {
 
         config.apiKey = getKey('OPENAI_API_KEY');
 
+        // ★★★ H3（第四轮复审，S1「单次模型调用最坏 30 分钟不可取消」）：
+        //   openai SDK 默认 `timeout=600000` + `maxRetries=2`，且**超时也重试**
+        //   （core.js:325-330 把 AbortError 折成 APIConnectionTimeoutError 后照样重试）
+        //   ⇒ 一次调用最坏 3×600s。这期间 `!stop` / 面板停止 / 动作 10 分钟超时全都拦不住。
+        //   这里显式写死：单次 ≤120s、重试 ≤1（最坏 2×120s=4 分钟，仍远优于 30 分钟）。
+        config.timeout = LLM_MAX_CALL_MS;
+        config.maxRetries = LLM_MAX_RETRIES;
+
         this.openai = new OpenAIApi(config);
     }
 
-    async sendRequest(turns, systemMessage, stop_seq='***') {
+    async sendRequest(turns, systemMessage, stop_seq='***', opts = {}) {
         let res = null;
 
         try {
@@ -70,7 +78,7 @@ export class GPT {
                 if (model.includes('o1') || model.includes('o3') || model.includes('5')) {
                     delete pack.stop;
                 }
-                let completion = await this.openai.chat.completions.create(pack);
+                let completion = await this.openai.chat.completions.create(pack, sdkCallOptions(opts));
                 recordUsage(completion?.usage, model);
                 // ★ MOD-001：`finish_reason==='length'` 是**输出额度**用完，不是上下文超限。
                 //   原来直接 throw 'Context length exceeded' → 裁历史重试（无效且多花钱）。
@@ -91,7 +99,7 @@ export class GPT {
                     instructions: systemMessage,
                     input: messages,
                     ...(this.params || {})
-                });
+                }, sdkCallOptions(opts));   // t19：responses 那条支路同样要接取消/期限
                 console.log('Received.');
                 recordUsage(response?.usage, model);
                 res = response.output_text;
@@ -110,7 +118,7 @@ export class GPT {
             // ★ MOD-001：只有真正的上下文超限才裁历史
             if (isContextLengthError(err) && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
-                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
+                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq, opts);
             } else if (errMessage(err).includes('image_url')) {
                 console.log(safeErrText(err));
                 res = 'Vision is only supported by certain models.';
@@ -167,6 +175,10 @@ const sendAudioRequest = async (text, model, voice, url) => {
         config.organization = getKey('OPENAI_ORG_ID');
 
     config.apiKey = getKey('OPENAI_API_KEY');
+
+    // ★ H3：同一个 SDK 默认值问题（600s × 3 次）也存在于 TTS 用的这个临时客户端
+    config.timeout = LLM_MAX_CALL_MS;
+    config.maxRetries = LLM_MAX_RETRIES;
 
     const openai = new OpenAIApi(config);
 

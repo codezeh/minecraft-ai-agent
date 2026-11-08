@@ -1,6 +1,8 @@
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, safeErrText, errMessage, fetchWithDeadline } from './_shared.js';
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, safeErrText, errMessage, fetchWithDeadline, normalizeUsage } from './_shared.js';
+// ★ A) 结果类型化：Ollama 的 done_reason（'length'）= 输出额度用完，原来这个字段被扔了
+import { toModelResult } from './result.js';
 
 export class Ollama {
     static prefix = 'ollama';
@@ -15,13 +17,16 @@ export class Ollama {
         this.timeoutMs = Number(params?.timeoutMs) > 0 ? Number(params.timeoutMs) : undefined;
     }
 
-    async sendRequest(turns, systemMessage) {
+    async sendRequest(turns, systemMessage, stop_seq, opts = {}) {
         let model = this.model_name || 'sweaterdog/andy-4:micro-q8_0';
         let messages = strictFormat(turns);
         messages.unshift({ role: 'system', content: systemMessage });
         const maxAttempts = 5;
         let attempt = 0;
         let finalRes = null;
+        let finishReason = null;
+        let usageShape = null;
+        const started = Date.now();
 
         while (attempt < maxAttempts) {
             attempt++;
@@ -33,9 +38,11 @@ export class Ollama {
                     messages: messages,
                     stream: false,
                     ...(this.params || {})
-                });
+                }, opts);   // t19：第 4 参（取消信号/期限）必须传进 send() → fetchWithDeadline
                 // Ollama 把用量放在 prompt_eval_count / eval_count（_shared.recordUsage 认得）
                 recordUsage(apiResponse, model);
+                usageShape = normalizeUsage(apiResponse);
+                finishReason = apiResponse?.done_reason ?? null;
                 if (apiResponse?.['message']?.content !== undefined) {
                     res = apiResponse['message']['content'];
                 } else {
@@ -44,7 +51,7 @@ export class Ollama {
             } catch (err) {
                 if (errMessage(err).toLowerCase().includes('context length') && turns.length > 1) {
                     console.log('Context length exceeded, trying again with shorter context.');
-                    return await this.sendRequest(turns.slice(1), systemMessage);
+                    return await this.sendRequest(turns.slice(1), systemMessage, stop_seq, opts);
                 } else if (isRateLimit(err) && attempt < maxAttempts) {
                     const wait = rateLimitDelayMs(attempt);
                     console.warn(`Ollama 被限流（429），${wait}ms 后重试（第 ${attempt}/${maxAttempts} 次）`);
@@ -77,7 +84,9 @@ export class Ollama {
             console.warn("Could not get a valid response after max attempts.");
             finalRes = failedReply('ollama gave no usable response after max attempts');
         }
-        return finalRes;
+        return toModelResult(finalRes, {
+            finishReason, usage: usageShape, elapsedMs: Date.now() - started, attempts: attempt,
+        });
     }
 
     async embed(text) {
@@ -87,7 +96,7 @@ export class Ollama {
         return res['embedding'];
     }
 
-    async send(endpoint, body) {
+    async send(endpoint, body, opts = {}) {
         const url = new URL(endpoint, this.url);
         let method = 'POST';
         let headers = new Headers();
@@ -97,8 +106,8 @@ export class Ollama {
             // ★ MOD-006：走带**总期限 + 取消信号**的 fetch（原来裸 fetch 会一直挂住）
             // ★ 2026-11-07 复审（第2条）：status 检查与 `res.json()` 都放进 `parse`，
             //   这样**读响应体也在总期限里** —— 否则服务端发完头不发 body 时会无限等。
-            data = await fetchWithDeadline(request, {}, {
-                timeoutMs: this.timeoutMs,
+            data = await fetchWithDeadline(request, { signal: opts?.signal }, {
+                timeoutMs: opts?.timeoutMs ?? this.timeoutMs,
                 onAbort: (why) => console.warn(`[ollama] 请求被终止：${why}`),
                 parse: async (res) => {
                     if (!res.ok) throw new Error(`Ollama Status: ${res.status}`);

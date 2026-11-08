@@ -1,7 +1,12 @@
 import Groq from 'groq-sdk';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, LLM_MAX_RETRIES, normalizeUsage, sdkCallOptions } from './_shared.js';
+// ★ A) 结果类型化：返回 ModelResult，截断由 finishReason 承载（原来这个适配器**完全没有**截断检测）
+import { toModelResult } from './result.js';
+
+/** H5：Groq 属于「60s」这一档（SDK 默认就是 60s），这里显式写死，避免将来 SDK 改默认值时静默漂移。 */
+const GROQ_CALL_TIMEOUT_MS = 60000;
 
 // THIS API IS NOT TO BE CONFUSED WITH GROK!
 // Go to grok.js for that. :)
@@ -25,16 +30,26 @@ export class GroqCloudAPI {
         if (this.url)
             console.warn("Groq Cloud has no implementation for custom URLs. Ignoring provided URL.");
 
-        this.groq = new Groq({ apiKey: getKey('GROQCLOUD_API_KEY') });
+        // ★ H3：SDK 默认 maxRetries=2 且超时也重试 ⇒ 60s 的期限实际可放大到 3 倍。
+        //   显式写死：单次 60s、重试 ≤1。
+        this.groq = new Groq({
+            apiKey: getKey('GROQCLOUD_API_KEY'),
+            timeout: GROQ_CALL_TIMEOUT_MS,
+            maxRetries: LLM_MAX_RETRIES,
+        });
 
 
     }
 
-    async sendRequest(turns, systemMessage, stop_seq = null) {
+    async sendRequest(turns, systemMessage, stop_seq = null, opts = {}) {
         // Construct messages array
         let messages = [{"role": "system", "content": systemMessage}].concat(turns);
 
         let res = null;
+        // ★ A) 观测字段：截断/用量都由结构化字段承载，不再往字符串拼标记
+        let finishReason = null;
+        let usageShape = null;
+        const started = Date.now();
 
         try {
             console.log("Awaiting Groq response...");
@@ -56,9 +71,12 @@ export class GroqCloudAPI {
                 "stream": false,
                 "stop": stop_seq,
                 ...(this.params || {})
-            });
+            }, sdkCallOptions(opts));
 
             recordUsage(completion?.usage, this.model_name);
+            usageShape = normalizeUsage(completion?.usage);
+            // `finish_reason === 'length'` = 输出额度用完 —— 信息一直在手里，原来被扔了
+            finishReason = completion?.choices?.[0]?.finish_reason ?? null;
             res = completion.choices[0].message.content;
 
             res = res.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
@@ -71,7 +89,9 @@ export class GroqCloudAPI {
             }
             console.log(safeErrText(err));
         }
-        return res;
+        return toModelResult(res, {
+            finishReason, usage: usageShape, elapsedMs: Date.now() - started,
+        });
     }
 
     sendVisionRequest(messages, systemMessage, imageBuffer) {

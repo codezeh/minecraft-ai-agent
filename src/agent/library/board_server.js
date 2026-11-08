@@ -245,7 +245,11 @@ export function attachBoardServer(deps = {}) {
                 });
                 if (!r.ok) return ack(cb, { ok: false, code: r.code ?? 'LEASE_LOST' });
                 // ★ B3：心跳同时也是**预约续期**的时刻（06 §9.2 "跟着 heartbeat 续期"）
-                try { renewClaims(db, String(payload?.id ?? ''), { now: now() }); } catch { /* 续不上不影响心跳 */ }
+                // ★ T6：必须带上 **owner** —— 不带就等于"谁都能替别人续预约"
+                //   （单 id 共享可见）。给了 owner 后 store 会校验租约归属与状态。
+                try {
+                    renewClaims(db, String(payload?.id ?? ''), { now: now(), owner: String(payload?.bot ?? '') });
+                } catch { /* 续不上不影响心跳 */ }
                 ack(cb, { ok: true, job: r.job });
             } catch (e) {
                 ack(cb, { ok: false, reason: String(e?.message ?? e) });

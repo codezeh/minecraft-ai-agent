@@ -2,7 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, markTruncated, LLM_MAX_CALL_MS, LLM_MAX_RETRIES, sdkCallOptions } from './_shared.js';
 
 export class OpenRouter {
     static prefix = 'openrouter';
@@ -20,10 +20,14 @@ export class OpenRouter {
         // Pass the API key to OpenAI compatible Api
         config.apiKey = apiKey; 
 
+        // ★ H3：显式压住 openai SDK 默认值（600s × (1+2 次重试) ⇒ 最坏 30 分钟）
+        config.timeout = LLM_MAX_CALL_MS;
+        config.maxRetries = LLM_MAX_RETRIES;
+
         this.openai = new OpenAIApi(config);
     }
 
-    async sendRequest(turns, systemMessage, stop_seq='*') {
+    async sendRequest(turns, systemMessage, stop_seq='*', opts = {}) {
         let messages = [{ role: 'system', content: systemMessage }, ...turns];
         messages = strictFormat(messages);
 
@@ -37,7 +41,7 @@ export class OpenRouter {
         let res = null;
         try {
             console.log('Awaiting openrouter api response...');
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await this.openai.chat.completions.create(pack, sdkCallOptions(opts));
             recordUsage(completion?.usage, this.model_name);
             if (!completion?.choices?.[0]) {
                 console.error('No completion or choices returned:', completion);

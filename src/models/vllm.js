@@ -10,7 +10,7 @@ import { strictFormat } from '../utils/text.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated, LLM_MAX_CALL_MS, LLM_MAX_RETRIES, sdkCallOptions } from './_shared.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,10 +28,14 @@ export class VLLM {
 
         vllm_config.apiKey = "";
 
+        // ★ H3：显式压住 openai SDK 默认值（600s × 3 次 ⇒ 最坏 30 分钟）
+        vllm_config.timeout = LLM_MAX_CALL_MS;
+        vllm_config.maxRetries = LLM_MAX_RETRIES;
+
         this.vllm = new OpenAIApi(vllm_config);
     }
 
-    async sendRequest(turns, systemMessage, stop_seq = '***') {
+    async sendRequest(turns, systemMessage, stop_seq = '***', opts = {}) {
         let messages = [{ 'role': 'system', 'content': systemMessage }].concat(turns);
         let model = this.model_name || "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B";  
         
@@ -50,7 +54,7 @@ export class VLLM {
         try {
             console.log('Awaiting openai api response...');
             // todo set max_tokens, temperature, top_p, etc. in pack
-            let completion = await this.vllm.chat.completions.create(pack);
+            let completion = await this.vllm.chat.completions.create(pack, sdkCallOptions(opts));
             recordUsage(completion?.usage, model);
             // ★ MOD-001：finish_reason==='length' 是**输出额度**用完，不是上下文超限。
             //   原来这里直接 throw 'Context length exceeded' → catch 里裁历史重发：缩短输入对
@@ -68,7 +72,7 @@ export class VLLM {
         catch (err) {
             if (isContextLengthError(err) && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
-                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
+                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq, opts);
             } else {
                 console.log(safeErrText(err));
                 res = failedReply(`vllm request failed: ${err?.message ?? err}`);

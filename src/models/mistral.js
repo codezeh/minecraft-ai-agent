@@ -2,7 +2,9 @@ import { Mistral as MistralClient } from '@mistralai/mistralai';
 import { getKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, LLM_MAX_CALL_MS, normalizeUsage, sdkCallOptions } from './_shared.js';
+// ★ A) 结果类型化：Mistral 的 finishReason（'length'/'model_length'）由 result.js 收敛
+import { toModelResult } from './result.js';
 
 export class Mistral {
     static prefix = 'mistral';
@@ -21,9 +23,16 @@ export class Mistral {
             throw new Error("Mistral API Key missing, make sure to set MISTRAL_API_KEY in settings.json");
         }
 
+        // ★★★ H5（第四轮复审）：Mistral 的期限原来**完全没有确证**（审计标注"未见默认值"），
+        //   而它的 SDK（speakeasy 生成）自带 retry 循环。这里显式给定：
+        //   · timeoutMs = 120s（与其它适配器同档）；
+        //   · retryConfig strategy='none' ⇒ 重试 0 次（满足「重试 ≤1」，且避免
+        //     "超时也重试"把 120s 放大成几分钟 —— speakeasy 的重试默认对连接错误也生效）。
         this.#client = new MistralClient(
             {
-                apiKey: getKey("MISTRAL_API_KEY")
+                apiKey: getKey("MISTRAL_API_KEY"),
+                timeoutMs: LLM_MAX_CALL_MS,
+                retryConfig: { strategy: "none" },
             }
         );
 
@@ -38,9 +47,12 @@ export class Mistral {
         }
     }
 
-    async sendRequest(turns, systemMessage) {
+    async sendRequest(turns, systemMessage, stop_seq, opts = {}) {
 
         let result;
+        let finishReason = null;
+        let usageShape = null;
+        const started = Date.now();
 
         try {
             const model = this.model_name || "mistral-large-latest";
@@ -55,9 +67,11 @@ export class Mistral {
                 model,
                 messages,
                 ...(this.params || {})
-            });
+            }, sdkCallOptions(opts));
 
             recordUsage(response?.usage, model);
+            usageShape = normalizeUsage(response?.usage);
+            finishReason = response?.choices?.[0]?.finishReason ?? null;
             result = response.choices[0].message.content;
         } catch (err) {
             if (errMessage(err).includes("A request containing images has been given to a model which does not have the 'vision' capability.")) {
@@ -68,7 +82,9 @@ export class Mistral {
             console.log(safeErrText(err));
         }
 
-        return result;
+        return toModelResult(result, {
+            finishReason, usage: usageShape, elapsedMs: Date.now() - started,
+        });
     }
 
     sendVisionRequest(messages, systemMessage, imageBuffer) {

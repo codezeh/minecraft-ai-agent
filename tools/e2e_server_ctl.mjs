@@ -54,15 +54,15 @@ let stopping = false;
 const shutdown = (why) => {
     if (stopping) return;
     stopping = true;
-    try { child.stdin.write('stop\n'); } catch { }
-    setTimeout(() => { try { child.kill(); } catch { } }, 15000).unref?.();
+    try { child.stdin.write('stop\n'); } catch { /* 故意忽略：子进程可能已退出，写不进去就等于已经停了 */ }
+    setTimeout(() => { try { child.kill(); } catch { /* 故意忽略：进程可能已自行退出 */ } }, 15000).unref?.();
     if (why) console.log(`[server-ctl] ${why} → 请求停服`);
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 child.on('exit', (code, signal) => {
-    try { out.end(); err.end(); } catch { }
+    try { out.end(); err.end(); } catch { /* 故意忽略：流可能已被下游关闭 */ }
     console.log(`[server-ctl] java 退出 code=${code} signal=${signal}`);
     process.exit(0);
 });

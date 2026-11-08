@@ -28,6 +28,20 @@ import { GOAL_LOOK_AT_DEFAULT_REACH } from '../rules/rules.runtime.js';
  */
 const _openGen = new WeakMap();
 
+/**
+ * ★ T6：没有注入 `reserveNow` 时的**一次性**告警。
+ *
+ * 语义要准确：**不是**"占位成功"，而是"这次没有做资源协调"。
+ * 单机/无板跑本来就该照常工作 —— 所以这里只 warn、不失败；
+ * 但在多 bot 同服时，这条 warn 就是你排查"两个 bot 开了同一个箱子"的线索。
+ */
+const _warnedNoReserve = new Set();
+function warnNoReserve(what) {
+    if (_warnedNoReserve.has(what)) return;
+    _warnedNoReserve.add(what);
+    try { console.warn(`[act_${what}] 没有收到 reserveNow 回调：本次**未做资源占位**（单机正常/多机需接线）`); } catch { /* ignore */ }
+}
+
 /** 名字 → 容器类别。用模式匹配，注册表里出现新变体也能覆盖。 */
 const CONTAINER_PATTERNS = [
     { re: /^chest$|^trapped_chest$/, kind: 'chest' },
@@ -169,6 +183,39 @@ export async function openContainer(bot, pos, opts = {}) {
 
     let win = null;
     let timer = null;
+    // ★★★ T6（架构收敛项 3）：**开窗那一刻按真实目标补占位**。
+    //
+    //   为什么在这里：`deriveClaims` 只能从单里的 `args.target/pos` 推容器，
+    //   而 `flow_store` / `flow_fetch` 是**跑到那儿现选箱子**的（指定的 > 记忆里同类的 > 最近的）
+    //   ⇒ 单里常常没有坐标 ⇒ 两个 bot 可能同时开同一个箱子，计数直接对不上。
+    //
+    //   为什么不传 ctx：`flow_*` 调动作只传 bot（`entry.run(agent?.bot ?? agent, …)`），
+    //   动作层拿不到 ctx。沿用本仓既有约定（`bot.board` + `bot.__navJobId`，都由 makeCtx 挂），
+    //   见 `board_claims.reserveRealTarget` 的注释。
+    //
+    //   冲突（`CLAIM_CONFLICT`）**当场返回**，不静默继续 —— 上层据此换目标/重排，
+    //   而不是"两个 bot 一起开同一个箱子，各记各的账"。
+    //   ★ `opts.skipClaim === true` 可跳过（离线夹具/诊断用）。
+    if (opts.skipClaim !== true) {
+        // ★ 回调由**调用方注入**（`opts.reserveNow`），或由 ctx 挂在 bot 上的那个
+        //   （`bot.__reserveNow`，见 composite_registry.makeCtx）—— `act_*` **不 import
+        //   board 任何模块**（分层：动作层不该知道"任务板"存在）。
+        //   两处都没有 = 单机/无板场景：跳过并 warn，**不假装协调成功**。
+        const reserveNow = opts.reserveNow ?? bot?.__reserveNow ?? null;
+        if (typeof reserveNow !== 'function') {
+            warnNoReserve('container');
+        } else {
+            try {
+                const key = `container:${Math.floor(v.x)},${Math.floor(v.y)},${Math.floor(v.z)}`;
+                const claim = await reserveNow(key);
+                if (claim && claim.ok === false && claim.code === 'CLAIM_CONFLICT') {
+                    return fail('CLAIM_CONFLICT', `这个容器已被别人占了：${(claim.data?.conflicts ?? []).join(', ')}`, {
+                        block: block.name, pos: { x: v.x, y: v.y, z: v.z }, conflicts: claim.data?.conflicts ?? [],
+                    });
+                }
+            } catch { /* 预约层出错不该让开窗失败（协调是增强，不是前置） */ }
+        }
+    }
     try {
         const opener = USE_OPEN_CONTAINER.has(kind)
             ? bot.openContainer(block)

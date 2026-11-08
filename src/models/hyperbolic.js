@@ -4,12 +4,19 @@ import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, errMessage, is
 
 export class Hyperbolic {
     static prefix = 'hyperbolic';
-    constructor(modelName, apiUrl) {
+    constructor(modelName, apiUrl, params) {
         this.modelName = modelName || "deepseek-ai/DeepSeek-V3";
         this.apiUrl = apiUrl || "https://api.hyperbolic.xyz/v1/chat/completions";
+        // H5：构造函数原来**根本不接第三个参数**（`createModel` 传的是 `(model, url, params)`），
+        //   这也是 `this.timeoutMs` 恒为 undefined 的另一半原因 —— 就算读了 params 也拿不到。
+        this.params = params;
 
-        // ★ MOD-006：一次模型请求的应用级总期限（未设置则用 _shared 的默认值）
-        this.timeoutMs = undefined;
+        // ★ MOD-006：一次模型请求的应用级总期限（未设置则用 _shared 的默认值 120s）
+        // ★★★ H5（第四轮复审）：这里原来是**硬编码 `undefined`**，既不读 params、
+        //   也没人给它赋值 ⇒ 配置里写的 `timeoutMs` **永远不生效**（审计实测：
+        //   `hyperbolic.timeoutMs` 恒为 undefined）。现在与 ollama.js:15 同一写法：
+        //   `params.timeoutMs > 0` 就采用，否则留给 fetchWithDeadline 的默认值。
+        this.timeoutMs = Number(params?.timeoutMs) > 0 ? Number(params.timeoutMs) : undefined;
 
         // Retrieve the Hyperbolic API key from keys.js
         this.apiKey = getKey('HYPERBOLIC_API_KEY');
@@ -26,7 +33,7 @@ export class Hyperbolic {
      * @param {string} stopSeq - A stopping sequence, default '***'.
      * @returns {Promise<string>} - The model's reply.
      */
-    async sendRequest(turns, systemMessage, stopSeq = '***') {
+    async sendRequest(turns, systemMessage, stopSeq = '***', opts = {}) {
         // Prepare the messages with a system prompt at the beginning
         const messages = [{ role: 'system', content: systemMessage }, ...turns];
 
@@ -64,9 +71,11 @@ export class Hyperbolic {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${this.apiKey}`
                     },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify(payload),
+                    // t19：外部取消信号（面板停止/动作超时）真的进到网络层
+                    signal: opts?.signal,
                 }, {
-                    timeoutMs: this.timeoutMs,
+                    timeoutMs: opts?.timeoutMs ?? this.timeoutMs,
                     onAbort: (why) => console.warn(`[hyperbolic] 请求被终止：${why}`),
                     parse: async (response) => {
                         if (!response.ok) {
@@ -94,7 +103,7 @@ export class Hyperbolic {
             } catch (err) {
                 if (isContextLengthError(err) && turns.length > 1) {
                     console.log('Context length exceeded, trying again with a shorter context...');
-                    return await this.sendRequest(turns.slice(1), systemMessage, stopSeq);
+                    return await this.sendRequest(turns.slice(1), systemMessage, stopSeq, opts);
                 } else if (isRateLimit(err) && attempt < maxAttempts) {
                     const wait = rateLimitDelayMs(attempt);
                     console.warn(`Hyperbolic 被限流（429），${wait}ms 后重试（第 ${attempt}/${maxAttempts} 次）`);

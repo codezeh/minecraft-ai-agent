@@ -185,19 +185,89 @@ export function normalizeClaimKeys(keys) {
 export function deriveClaims(job) {
     if (Array.isArray(job?.claims) && job.claims.length) return job.claims;
     const args = job?.args ?? {};
+    const skill = String(job?.skill ?? '');
     const out = [];
-    // 明确的坐标目标 → 预约那个方块（采集/挖掘/放置）
-    const t = args.target ?? args.pos ?? null;
-    if (t && Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.z)) {
-        if (['collect', 'mine', 'dig'].includes(String(job?.skill ?? ''))) {
-            out.push(`block:${Math.floor(t.x)},${Math.floor(t.y)},${Math.floor(t.z)}`);
+    const pt = pointOf(args.target) ?? pointOf(args.pos) ?? pointOf(args.at) ?? pointOf(args.area);
+    const push = (k) => { if (!out.includes(k)) out.push(k); };
+    const xy = (p) => `${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}`;
+
+    // ── ① 方块：采集/挖掘/放置（明确的坐标目标）──
+    if (['collect', 'mine', 'dig'].includes(skill) && pt) push(`block:${xy(pt)}`);
+
+    // ── ② 容器：存取 ──
+    if (['store', 'fetch'].includes(skill) && pt) push(`container:${xy(pt)}`);
+
+    // ── ③ 工作站（T6 补）：熔炼要抢同一个熔炉，合成要抢同一张工作台 ──
+    //   只认**单里已经给了坐标**的情形（`args.furnace` / `args.station` / `args.bench` / 通用坐标）；
+    //   没给坐标就不推导 —— 那正是执行期 `reserveNow` 的活（按**真实**打开的那个方块补占位）。
+    //   为什么不按名字猜坐标：猜出来的 key 会跟真正要用的那个方块对不上，
+    //   于是"预约了但没挡住真撞车"，比不预约更糟（假的安心）。
+    if (['smelt', 'smeltItem', 'craft', 'craftRecipe'].includes(skill)) {
+        const sp = pointOf(args.furnace) ?? pointOf(args.station) ?? pointOf(args.bench) ?? pt;
+        const name = ['smelt', 'smeltItem'].includes(skill) ? 'furnace' : 'crafting_table';
+        if (sp) push(`station:${name}@${xy(sp)}`);
+    }
+
+    // ── ④ 区域（T6 补）：建造/整片挖掘 —— 防两个 bot 在同一片地里互相拆台 ──
+    //   `args.area = {x,y,z,r}` 或 `args.center + args.radius`。
+    //   r 必须是正数（`parseClaimKey` 同样要求），否则不推导。
+    {
+        const areaCenter = pointOf(args.area) ?? pointOf(args.center) ?? null;
+        const r = Number(args.radius ?? args.area?.r ?? args.area?.radius ?? NaN);
+        if (areaCenter && Number.isFinite(r) && r > 0) {
+            push(`area:${xy(areaCenter)}:${r}`);
         }
     }
-    // 存取 → 预约容器
-    if (['store', 'fetch'].includes(String(job?.skill ?? '')) && t && Number.isFinite(t.x)) {
-        out.push(`container:${Math.floor(t.x)},${Math.floor(t.y)},${Math.floor(t.z)}`);
+
+    // ── ⑤ 实体（T6 补）：打同一只怪 / 和同一个村民交易 ──
+    //   `args.entity` / `args.entityId` / `args.uuid`；`args.target` 是**字符串**时也认
+    //   （`attack`/`trade` 的目标本来就是实体，不是方块）。
+    if (['attack', 'trade', 'fight'].includes(skill)) {
+        const id = asEntityId(args.entity) ?? asEntityId(args.entityId)
+            ?? asEntityId(args.uuid) ?? asEntityId(args.target);
+        if (id) push(`entity:${id}`);
+    }
+
+    // ── ⑥ 物品额度（T6 补）：**材料**是"谁能拿这份"的稀缺资源 ──
+    //   只认显式声明（`args.materials` 对象 / `args.cost` 对象 / `args.material`+`args.count`）。
+    //   不根据 args.item 猜 —— "要做的东西"不是被抢的材料，猜它就等于把自己锁死。
+    {
+        const mats = args.materials && typeof args.materials === 'object' ? args.materials : null;
+        if (mats) {
+            for (const [name, n] of Object.entries(mats)) {
+                if (!name) continue;
+                const num = Number(n);
+                push(Number.isFinite(num) && num > 0 ? `item:${name}:${Math.floor(num)}` : `item:${name}`);
+            }
+        }
+        if (typeof args.material === 'string' && args.material) {
+            const n = Number(args.count ?? args.amount ?? NaN);
+            push(Number.isFinite(n) && n > 0 ? `item:${args.material}:${Math.floor(n)}` : `item:${args.material}`);
+        }
+        if (args.cost && typeof args.cost === 'object') {
+            for (const [name, n] of Object.entries(args.cost)) {
+                if (!name) continue;
+                const num = Number(n);
+                push(Number.isFinite(num) && num > 0 ? `item:${name}:${Math.floor(num)}` : `item:${name}`);
+            }
+        }
     }
     return out;
+}
+
+/** 从各种"点"形状里取 {x,y,z}；不是点就返回 null（**不猜**）。 */
+function pointOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    const x = Number(v.x), y = Number(v.y), z = Number(v.z);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+    return { x, y, z };
+}
+
+/** 实体 id 只接受**非空字符串/数字**；对象/数组一律不认（否则会推出 `entity:[object Object]`）。 */
+function asEntityId(v) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+    return null;
 }
 
 // ───────────────────────────────────────────────────────────────────────────

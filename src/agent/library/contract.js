@@ -94,6 +94,24 @@ export const CODES = [
     //   LEASE_LOST 必须**立刻停且不写结果** —— 别人可能已经接手同一张单，
     //   写结果会把别人的进度覆盖掉。
     'LEASE_LOST',
+    // ★★★ T6（架构收敛项 3）：**"没有任务板" / "不是任务单" ≠ 占位成功。**
+    //   这两个码专门用来消灭两类 fail-open：
+    //     NO_BOARD —— `composite_registry.reserve/release/reserveNow` 无板时原来返回
+    //       `ok:true`（"恒成功"）。调用方以为占位成功，其实 `claims` 表一行都没有
+    //       （真机事故：85 张单 done、claims 0 行）。现在返回这个码 + 一行 warn。
+    //     NO_JOB   —— 执行期补占位需要一个**任务单 id** 作为预约归属
+    //       （`claims.id`）；直接从命令调用（jobId=null）时没有归属，不能假装占上了。
+    //   与 CLAIM_CONFLICT 的区别（三者处置完全不同）：
+    //     CLAIM_CONFLICT = 有人真的占着 → **换目标**；
+    //     NO_BOARD       = 没有协调设施  → 单机照常干 / 多机必须接线（是配置问题）；
+    //     NO_JOB         = 这次不是任务单 → 不需要协调（正常路径，不是错误）。
+    'NO_BOARD',
+    'NO_JOB',
+    // ★ A5-8（t5）：**"这一拍不续租"**（客户端主动停手，不是流程失败）。
+    //   出现在 `board_client.heartbeat()`：客户端已 stop / 这张单已被暂停或取消。
+    //   与 LEASE_LOST 的区别：LEASE_LOST 是"租约被别人拿走了"（要停手并让位）；
+    //   HEARTBEAT_SKIPPED 是"我自己不续了"（正常停止路径，别人可以接手）。
+    'HEARTBEAT_SKIPPED',
 ];
 
 export function ok(data = {}) {

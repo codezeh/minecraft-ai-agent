@@ -3,6 +3,14 @@ import { Camera } from "./camera.js";
 // 2026-11-01（t6）：转头/看坐标改走输入原子（bot.look* 的唯一出口）。
 import { setLook, lookAtPoint } from "../library/atom_input_mouse.js";
 import fs from 'fs';
+// R4 §7-⑤：`[LLM_ERROR]` 失败标记的判别（模型层契约）
+// ★ t21（缺口 C）：除失败标记外，截断/无代码标记同样不许进上下文
+import {
+    isFailedReply, isTruncatedReply, isNoCodeReply,
+    FAILED_REPLY, TRUNCATED_SUFFIX, NO_CODE_PREFIX,
+} from "../../models/_shared.js";
+// ★ t21（缺口 C 根治点）：视觉结果现在带类型 —— 必须**读 status**，不能只当字符串用
+import { STATUS } from "../../models/result.js";
 
 export class VisionInterpreter {
     constructor(agent, allow_vision) {
@@ -42,7 +50,7 @@ export class VisionInterpreter {
 
         }
 
-        return result + `Image analysis: "${await this.analyzeImage(filename)}"`;
+        return this._withAnalysis(result, await this.analyzeImage(filename));
     }
 
     async lookAtPosition(x, y, z) {
@@ -56,7 +64,7 @@ export class VisionInterpreter {
 
         let filename = await this.camera.capture();
 
-        return result + `Image analysis: "${await this.analyzeImage(filename)}"`;
+        return this._withAnalysis(result, await this.analyzeImage(filename));
     }
 
     getCenterBlockInfo() {
@@ -77,12 +85,80 @@ export class VisionInterpreter {
             const messages = this.agent.history.getHistory();
 
             const blockInfo = this.getCenterBlockInfo();
-            const result = await this.agent.prompter.promptVision(messages, imageBuffer);
-            return result + `\n${blockInfo}`;
-
+            // ★ R4 §7-⑤ + t21（缺口 C）：只有**可信正文**才拼进"图像分析"进上下文；
+            //   失败/截断/取消一律 null，由调用方整段省略（宁可不给视觉结论，
+            //   也不给一句假的/半截的/带内部标记的结论）。
+            const analysis = await this._visionAnalysis(messages, imageBuffer);
+            if (analysis === null) return null;
+            return `${analysis}\n${blockInfo}`;
         } catch (error) {
             console.warn('Error reading image:', error);
-            return `Error reading image: ${error.message}`;
+            return null;   // 同上：错误文本不进上下文
         }
     }
-} 
+
+    /**
+     * 取一次视觉分析的**正文**。拿不到可信正文就返回 `null`（绝不返回标记或半截文本）。
+     *
+     * t2 把模型结果做成 `ModelResult`（`status` + `content`），并留了这个"步 1：读 status"
+     * 的消费点给视觉链路。这里的顺序：
+     *   ① **优先调带类型的新出口** `promptVisionResult()` —— `status === 'ok'` 才用 `content`；
+     *      `truncated`（半截）/`error`/`cancelled`/`timeout` 一律不用（缺口 C 的根治点）。
+     *   ② 兼容期退回旧字符串出口 `promptVision()`，但必须过 `isFailedReply()` /
+     *      `isTruncatedReply()` 判断后再用（旧出口的标记语义见 `models/_shared.js`）。
+     * 两条路径最后都过 `_cleanAnalysis()`：任何内部标记都不许流到 `_withAnalysis()`。
+     */
+    async _visionAnalysis(messages, imageBuffer) {
+        const prompter = this.agent?.prompter;
+        const tag = this.agent?.name ?? '?';
+
+        if (typeof prompter?.promptVisionResult === 'function') {
+            const r = await prompter.promptVisionResult(messages, imageBuffer);
+            if (r && typeof r === 'object' && typeof r.status === 'string') {
+                if (r.status !== STATUS.OK) {
+                    console.warn(`[vision] ${tag} 视觉结果 status=${r.status}（${r.errorCode ?? '-'}），`
+                        + `不写进上下文: ${String(r.errorMessage ?? '').slice(0, 120)}`);
+                    return null;
+                }
+                return this._cleanAnalysis(r.content);
+            }
+            // 拿到了但不是带类型的结果 ⇒ 落到旧字符串路径（仍要过标记判断）
+        }
+
+        const raw = await prompter.promptVision(messages, imageBuffer);
+        return this._cleanAnalysis(raw);
+    }
+
+    /**
+     * 视觉分析字符串兜底净化（暂替 t21 收口前的行为，保住旧出口的安全语义）。
+     * 判别顺序：失败/截断/无代码 ⇒ 不可用；正文里夹带内部标记 ⇒ 同样不可用。
+     */
+    _cleanAnalysis(value) {
+        if (typeof value !== 'string') return null;
+        const text = value.trim();
+        if (!text) return null;
+        if (isFailedReply(text) || isTruncatedReply(text) || isNoCodeReply(text) || this._containsMarker(text)) {
+            console.warn(`[vision] ${this.agent?.name ?? '?'} 视觉结果带内部标记/不可用，整段丢弃（不进上下文）`);
+            return null;
+        }
+        return text;
+    }
+
+    /** 这段文本里是否夹带着模型层的内部标记（任一命中都算不可用）。 */
+    _containsMarker(text) {
+        return [FAILED_REPLY, TRUNCATED_SUFFIX, NO_CODE_PREFIX].some((m) => text.includes(m));
+    }
+
+    /**
+     * 把「图像分析」拼成一句可进上下文的文本。
+     *
+     * 分析失败/截断（null）时**整段省略**，只留"看哪儿"的事实 ——
+     * 宁可不给视觉结论，也不给一句假的/半截的结论。
+     * ★ t21：这里是最后一关 —— 即便上游漏了净化，带内部标记的正文也不许被拼出去。
+     */
+    _withAnalysis(head, analysis) {
+        if (typeof analysis !== 'string' || !analysis.trim()) return head;
+        if (this._containsMarker(analysis)) return head;
+        return `${head}Image analysis: "${analysis}"`;
+    }
+}

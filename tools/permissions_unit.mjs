@@ -129,7 +129,10 @@ function makeAgent({ permissions, name = 'deepseek' } = {}) {
     const calls = { cleared: 0, goal: null, authorSeenInPerform: undefined };
     const agent = {
         name,
-        prompter: { profile: { permissions } },
+        // ★ R4 t13：这些用例钉的是「名字 → 等级」这张表，而那条路现在是**兼容回退**，
+        //   只有 profile 显式 legacy_profile_names 才生效（默认 fail-closed）。
+        //   新契约（未绑定 ⇒ guest、持码 ⇒ owner）在下面的 8e 段和 identity_binding_unit 里。
+        prompter: { profile: { permissions: { ...(permissions ?? {}), identity: { legacy_profile_names: true } } } },
         history: { clear() { calls.cleared++; } },
         self_prompter: {
             start(prompt, author) { calls.goal = { prompt, author, authorSeen: agent.command_author }; },
@@ -258,6 +261,48 @@ check('job.source=system → 主人级',
     levelForJobSource({ source: 'system' }, perms) === LEVEL.OWNER);
 check('认不出来的 source → 信任级（不白给主人权）',
     levelForJobSource({}, perms) === LEVEL.TRUSTED);
+
+// ── 10b. ★ R4 t13 新契约：身份绑定优先，名字不再换权限 ─────────────
+//   这一段的四个用例与 identity_binding_unit.mjs 的 B 段同源（那边还额外覆盖码的
+//   TTL/单次/面板会话），放在这里是为了让"改了什么"在**原有测试文件**里也看得见。
+{
+    const { emptyStore, bindFromCode, revokeBinding, resolveBinding } =
+        await import('../src/mindcraft/identity_store.js');
+    // 与 commands/index.js 的 identityContextOf 同形：查绑定表，查不到返回 level=null
+    const mkCtx = (store) => ({
+        enabled: true, legacyNames: false,
+        resolve: ({ uuid, name }) => resolveBinding(store, { uuid, name }),
+    });
+
+    const now = Date.now();
+    const bound = bindFromCode(emptyStore(), { uuid: 'uuid-owner', name: 'Zeh', now }).store;
+
+    check('★ 未绑定 + 默认（legacy 关）⇒ other（fail-closed，命令不执行）',
+        resolveLevel({ author: 'Zeh', uuid: 'uuid-owner', permissions: perms, identity: mkCtx(emptyStore()) }) === LEVEL.OTHER);
+
+    check('★ 持码绑定后 ⇒ owner',
+        resolveLevel({ author: 'Zeh', uuid: 'uuid-owner', permissions: perms, identity: mkCtx(bound) }) === LEVEL.OWNER);
+
+    const expired = bindFromCode(emptyStore(), { uuid: 'uuid-owner', name: 'Zeh', now: now - 10_000, ttlMs: 1 }).store;
+    check('★ 绑定过期 ⇒ other',
+        resolveLevel({ author: 'Zeh', uuid: 'uuid-owner', permissions: perms, identity: mkCtx(expired) }) === LEVEL.OTHER);
+
+    const revoked = revokeBinding(bound, { uuid: 'uuid-owner' }).store;
+    check('★ 解绑后 ⇒ other',
+        resolveLevel({ author: 'Zeh', uuid: 'uuid-owner', permissions: perms, identity: mkCtx(revoked) }) === LEVEL.OTHER);
+
+    // ★ 反向用例（整个 t13 的存在理由）：同名冒名者必须拿不到 owner
+    check('★ 冒名者（同名 Zeh、uuid 不同、没有绑定）⇒ other，不是 owner',
+        resolveLevel({ author: 'Zeh', uuid: 'uuid-impostor', permissions: perms, identity: mkCtx(bound) }) === LEVEL.OTHER);
+
+    // 逃生门：显式 legacy 才退回按名字
+    check('★ identity.legacy_profile_names=true ⇒ 退回按名字（逃生门）',
+        resolveLevel({ author: 'Zeh', permissions: perms, identity: { enabled: true, legacyNames: true, resolve: null } }) === LEVEL.OWNER);
+
+    // !claim 对 guest 开放（否则绑定流程第一步就走不通）
+    check('★ !claim 对 other 也放行', canRunCommand(LEVEL.OTHER, '!claim') === true);
+    check('★ !claim 不算信任级（不打乱分级表）', commandLevel('!claim') === LEVEL.OTHER);
+}
 
 // ── 11. 拒绝话术一行、不啰嗦 ────────────────────────────
 {

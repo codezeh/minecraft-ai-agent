@@ -76,6 +76,31 @@ export function stripTruncatedMark(text) {
     return { text: s.slice(0, -TRUNCATED_SUFFIX.length), truncated: true };
 }
 
+// ── 「这一轮没有可执行代码」信号（第四轮复审 H2：截断假成功）──────
+// 缺陷原貌（已实测复现）：`promptCoding` 在「代码被输出额度截断」时返回
+//   `'```//no response (truncated)```'`。这个兜底串**自带三反引号**，而 coder.js 的判据正是
+//   `res.indexOf('```') !== -1` ⇒ 判成「有代码」；再 `substring(第一个```+3, 最后一个```)`
+//   就抽出 `//no response (truncated)` 这**一行注释**当代码执行。
+//   它跑得通、不抛错，于是 coder.js 返回 `Agent wrote this code: … Code finished.` ——
+//   **一次截断 = 一次什么都没做却记账成功的动作**；而且注释行里没有 `;\n`，
+//   `_stageCode` 的 `interrupt_code` 注入点一个都没命中 ⇒ 连取消都拦不住它。
+//
+// 修法（双保险，两处缺一不可）：
+//   ① 生产端：`promptCoding` 的「没代码」信号改成**不含反引号**的 `noCodeReply(原因)`；
+//   ② 消费端：`coder.js` 抽码前先 `isNoCodeReply()` 显式判掉 —— 判据**不再依赖反引号**这个
+//      弱假设，将来谁把兜底串改回带反引号的形状也不会被当代码执行。
+export const NO_CODE_PREFIX = '[NO_CODE]';
+
+/** 造一条「这一轮没有可执行代码」的信号（保留原因，便于日志排查）。 */
+export function noCodeReply(reason) {
+    return `${NO_CODE_PREFIX} no response${reason ? ` (${String(reason)})` : ''}`;
+}
+
+/** 这条回复是不是「没有可执行代码」的信号。 */
+export function isNoCodeReply(text) {
+    return typeof text === 'string' && text.startsWith(NO_CODE_PREFIX);
+}
+
 /**
  * 这次失败是不是**真的**上下文超限（MOD-001）。
  *
@@ -121,16 +146,28 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
  * @returns {string} 写到日志里的那一行
  */
 export function recordUsage(usage, model, tag) {
+    const n = normalizeUsage(usage);
+    totals.calls++;
+    if (!n) totals.missing++;
+    else { totals.prompt += n.prompt ?? 0; totals.completion += n.completion ?? 0; }
+    const line = `[llm] model=${model || '?'} prompt=${n?.prompt ?? '-'} completion=${n?.completion ?? '-'}${tag ? ` tag=${tag}` : ''}`;
+    if (sink) sink(line);
+    return line;
+}
+
+/**
+ * 把各家的 usage 形状收敛成 `{prompt, completion, missing}`（结果类型的 `usage` 字段用它）。
+ * 拿不到任何一项时返回 **null** —— 「不知道」和「零消耗」必须是两件事。
+ * @param {object|null} usage
+ * @returns {{prompt:number|null, completion:number|null, missing:boolean}|null}
+ */
+export function normalizeUsage(usage) {
     const p = num(usage?.prompt_tokens) ?? num(usage?.input_tokens) ?? num(usage?.prompt_eval_count)
         ?? num(usage?.promptTokenCount) ?? num(usage?.promptTokens);
     const c = num(usage?.completion_tokens) ?? num(usage?.output_tokens) ?? num(usage?.eval_count)
         ?? num(usage?.candidatesTokenCount) ?? num(usage?.completionTokens);
-    totals.calls++;
-    if (p === null && c === null) totals.missing++;
-    else { totals.prompt += p ?? 0; totals.completion += c ?? 0; }
-    const line = `[llm] model=${model || '?'} prompt=${p ?? '-'} completion=${c ?? '-'}${tag ? ` tag=${tag}` : ''}`;
-    if (sink) sink(line);
-    return line;
+    if (p === null && c === null) return null;
+    return { prompt: p, completion: c, missing: p === null || c === null };
 }
 
 // ── 429 判据（三个走裸 fetch / 简单封装的适配器共用）────────────
@@ -176,6 +213,89 @@ export function rateLimitDelayMs(attempt) {
  *          超时抛 AbortError（带 code='LLM_TIMEOUT'）
  */
 export const DEFAULT_LLM_TIMEOUT_MS = 120000;
+
+// ── SDK 适配器的单次调用上限（第四轮复审 H3）────────────────────
+// 缺陷原貌：`new OpenAIApi(config)` / `new Anthropic(config)` 只传了 baseURL/apiKey，
+//   于是吃 SDK **默认值** `timeout=600000` + `maxRetries=2`，而且 `openai/core.js:325-330`
+//   把**超时（AbortError）也算进重试范围** ⇒ 一次对话调用最坏 3×600s = **30 分钟**。
+//   这段时间里 `!stop` / 面板停止 / action_manager 的 10 分钟动作超时**全都拦不住它**，
+//   唯一兜底是杀进程重启（僵尸看门狗）。第四轮复审还发现 19 个适配器的期限是**四档并存**
+//   （600s×11 / 60s×2 / 120s×2 / 无×3）—— 同样是"没人显式写过"的结果。
+// 修法：每个 SDK 适配器**显式**写死这两个值，不依赖 SDK 默认值（默认值会随版本变）。
+//   上限 120s 与裸 fetch 那条路（DEFAULT_LLM_TIMEOUT_MS）对齐，重试 ≤1（最坏 2×120s）。
+export const LLM_MAX_CALL_MS = 120000;
+export const LLM_MAX_RETRIES = 1;
+
+/**
+ * 给「只能传 signal、没有 timeout 选项」的 SDK（huggingface / replicate 的流式接口）
+ * 造一个**单次调用总期限**。
+ *
+ * 为什么不直接用 `AbortSignal.timeout()`：那样拿不到「为什么被中断」的信息，
+ * 清理动作也不可见。这里返回显式句柄，调用方在 `finally` 里 `cancel()`，
+ * 定时器一定被清掉（timer 同时 unref，进程不会因为它挂着）。
+ *
+ * @param {number} [timeoutMs] 期限（毫秒），默认 LLM_MAX_CALL_MS
+ * @param {Function} [onTimeout] 超时时的回调（打日志用）
+ * @returns {{signal: AbortSignal, cancel: () => void}}
+ */
+/**
+ * 把 prompter 下传的 `callOpts`（第 4 参）映射成 **SDK 的 per-call 请求选项**（t19）。
+ *
+ * 为什么要这层映射而不是每个适配器自己拼：各家字段名不同（OpenAI/Groq/Cerebras 用
+ * `timeout`，Mistral 用 `timeoutMs`，Anthropic/OpenAI 的 `signal` 一致），但**语义只有一套**：
+ * 「这一次调用」取消信号 + 期限。per-call 选项会覆盖构造期默认值（t1 设的 120s/1 次重试），
+ * 所以调用方给的更短 deadline 以调用方为准。
+ *
+ * 同时给出 `timeout` 与 `timeoutMs` 两个键：OpenAI 系只认前者、Mistral 只认后者，
+ * 各自会忽略不认识的键（属于 RequestOptions 的宽松形状）。
+ *
+ * @param {{signal?:AbortSignal|null, timeoutMs?:number|null}} [opts]
+ * @returns {{signal?:AbortSignal, timeout?:number, timeoutMs?:number}}
+ */
+export function sdkCallOptions(opts) {
+    const out = {};
+    if (opts?.signal) out.signal = opts.signal;
+    const ms = Number(opts?.timeoutMs);
+    if (Number.isFinite(ms) && ms > 0) {
+        out.timeout = ms;
+        out.timeoutMs = ms;
+    }
+    return out;
+}
+
+/**
+ * 合并多个取消信号（t19）：外部取消（面板停止 / 动作超时）+ 本适配器自己的期限。
+ * 优先 `AbortSignal.any`（Node 20+ 原生），否则手工桥接（任一 abort 就 abort）。
+ * @param {...(AbortSignal|null|undefined)} signals
+ * @returns {AbortSignal|null}
+ */
+export function combineSignals(...signals) {
+    const list = signals.filter((s) => s && typeof s.aborted === 'boolean');
+    if (list.length === 0) return null;
+    if (list.length === 1) return list[0];
+    if (typeof AbortSignal.any === 'function') return AbortSignal.any(list);
+    const ctrl = new AbortController();
+    const kill = () => { try { ctrl.abort(); } catch { /* ignore */ } };
+    for (const s of list) {
+        if (s.aborted) { kill(); break; }
+        try { s.addEventListener('abort', kill, { once: true }); } catch { /* ignore */ }
+    }
+    return ctrl.signal;
+}
+
+export function callDeadlineSignal(timeoutMs = LLM_MAX_CALL_MS, onTimeout) {
+    const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Number(timeoutMs) : LLM_MAX_CALL_MS;
+    const ctrl = new AbortController();
+    let timer = setTimeout(() => {
+        try { onTimeout?.(); } catch { /* ignore */ }
+        try { ctrl.abort(); } catch { /* ignore */ }
+    }, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+    return {
+        signal: ctrl.signal,
+        cancel: () => { if (timer) { clearTimeout(timer); timer = null; } },
+    };
+}
 
 export async function fetchWithDeadline(input, init = {}, opts = {}) {
     const timeoutMs = Number.isFinite(opts.timeoutMs) ? Number(opts.timeoutMs) : DEFAULT_LLM_TIMEOUT_MS;

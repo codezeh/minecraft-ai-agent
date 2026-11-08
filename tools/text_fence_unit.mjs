@@ -91,7 +91,12 @@ check('fenced：system 轮次不包围栏', fenced.includes('System output: 行�
 // ── 3. sanitizeExternalText ─────────────────────────────────────
 const dirty = '第1行\u0000\u0007\n\n\n\n第2行\r\n第3行' + 'x'.repeat(2000);
 const clean = sanitizeExternalText(dirty, 1500);
-check('去掉控制字符', !/[\u0000\u0007]/.test(clean));
+
+// 夹具里的 \u0000 / \u0007 是**要被剥掉的脏数据**（见上面 dirty），不是源码缺陷。
+// 正则改用 String.fromCharCode 拼出来：与 /[\u0000\u0007]/ **完全等价**，
+// 只是 no-control-regex 不会把故意构造的夹具当成源码里的控制字符。断言一条没少。
+const CONTROL_CHARS = new RegExp('[' + String.fromCharCode(0) + String.fromCharCode(7) + ']');
+check('去掉控制字符', !CONTROL_CHARS.test(clean));
 check('折叠多余空行（不出现 3 连空行）', !/\n{3,}/.test(clean));
 check('CRLF 归一为 LF', !clean.includes('\r'));
 check('限长生效', clean.length <= 1500, `len=${clean.length}`);

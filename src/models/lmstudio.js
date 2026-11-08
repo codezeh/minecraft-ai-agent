@@ -1,7 +1,7 @@
 import OpenAIApi from 'openai';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated, LLM_MAX_CALL_MS, LLM_MAX_RETRIES, sdkCallOptions } from './_shared.js';
 
 export class LMStudio {
     static prefix = 'lmstudio';
@@ -11,10 +11,13 @@ export class LMStudio {
         this.openai = new OpenAIApi({
             baseURL: url || 'http://localhost:1234/v1',
             apiKey: 'lm-studio', // LM Studio ignores this but the client requires a non-empty value
+            // ★ H3：本地模型也受同一条约束 —— SDK 默认 600s×3 会让"停止"彻底失效
+            timeout: LLM_MAX_CALL_MS,
+            maxRetries: LLM_MAX_RETRIES,
         });
     }
 
-    async sendRequest(turns, systemMessage, stop_seq='***') {
+    async sendRequest(turns, systemMessage, stop_seq='***', opts = {}) {
         let messages = [{ role: 'system', content: systemMessage }].concat(strictFormat(turns));
         let model = this.model_name || 'andy-4.1';
         let res = null;
@@ -28,7 +31,7 @@ export class LMStudio {
                 stop: stop_seq,
                 ...(this.params || {})
             };
-            const completion = await this.openai.chat.completions.create(pack);
+            const completion = await this.openai.chat.completions.create(pack, sdkCallOptions(opts));
             recordUsage(completion?.usage, model);
             // ★ MOD-001：finish_reason==='length' 是**输出额度**用完，不是上下文超限。
             //   原来直接 throw 'Context length exceeded' → catch 裁历史重发（无效且多花钱；
@@ -47,7 +50,7 @@ export class LMStudio {
         } catch (err) {
             if (isContextLengthError(err) && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
-                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
+                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq, opts);
             } else {
                 console.log(safeErrText(err));
                 res = failedReply(`lmstudio request failed: ${err?.message ?? err}`);

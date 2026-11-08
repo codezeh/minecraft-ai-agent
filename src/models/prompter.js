@@ -10,7 +10,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { selectAPI, createModel } from './_model_map.js';
 // 第31条：模型层失败会以 `[LLM_ERROR] …` 回来，prompter 必须把它当"失败"而不是"回答"
-import { isFailedReply, isTruncatedReply, stripTruncatedMark } from './_shared.js';
+import { isFailedReply, noCodeReply, LLM_MAX_CALL_MS } from './_shared.js';
+// 架构收敛项(1)：模型结果的类型化（A5 §3）。步 1 = prompter 内部统一成 ModelResult，
+// 公开的旧方法名继续返回 string（toString() 兼容），新代码读 *Result()。
+import {
+    ModelResult, STATUS, ERROR_CODE, toModelResult, coerceModelResult, noteModelResult, formatModelTotals,
+} from './result.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -278,170 +283,335 @@ export class Prompter {
         this.last_prompt_time = Date.now();
     }
 
-    async promptConvo(messages) {
+    /** 旧契约（string）：给尚未迁移的调用点用。新代码请直接读 promptConvoResult()。 */
+    async promptConvo(messages, opts = {}) {
+        const r = await this.promptConvoResult(messages, opts);
+        // 过渡兼容的**唯一**行为差异点：旧契约把"本轮失败"表示成空串（agent.js 见空串即 break）。
+        // 类型化之后失败是 status=error（可判别、可统计），但这里仍还原成空串，
+        // 保证字符串派调用点（agent.js:753）在迁移期逐字不变 —— 新代码请读 promptConvoResult()。
+        if (r.failed) return '';
+        return this._legacyString(r);
+    }
+
+    /**
+     * ★★★ 第四轮复审 架构收敛项(1) 步 1：带类型的对话生成（A5 §3.3）。
+     *
+     * 与旧实现逐条对应，只是把"三义同形"的字符串换成 status：
+     *   · 失败         → status=error（旧：返回 ''，与"模型没话说"不可区分 ⇒ A5 §6.1）
+     *   · 输出被截断   → status=truncated + content 已剥离标记（旧：串末尾挂标记再由调用方剥）
+     *   · 被新消息取代 → status=cancelled（旧：返回 ''；toString() 仍返回 ''，行为不变）
+     */
+    async promptConvoResult(messages, opts = {}) {
+        // ★★★ t4（A5 §5 方案 B 第 3 跳）：opts 是**可选**的 `{signal, deadline, operationId}`。
+        //   不传 = 与改造前逐字一致（t3 的取消序号仍然负责"同一个回合内"的取消）。
+        const callOpts = this._callOptions(opts);
+        // 入口就查一次：已经取消/超期就别发请求（省一次最长 30 分钟的等待）
+        if (callOpts.signal?.aborted) {
+            const cancelled = new ModelResult({
+                status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                errorMessage: '操作在发请求前已被取消',
+            });
+            cancelled.operationId = callOpts.operationId;   // 诊断字段：t2 的 ModelResult 不认未知构造字段，故后挂
+            return this._convoResult(cancelled);
+        }
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
 
         for (let i = 0; i < 3; i++) { // try 3 times to avoid hallucinations
             await this.checkCooldown();
             if (current_msg_time !== this.most_recent_msg_time) {
-                return '';
+                return this._convoResult(new ModelResult({
+                    status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED, errorMessage: '已被更新的消息取代',
+                }));
             }
 
             let prompt = this.profile.conversing;
             prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
-            let generation;
+            let typed = null;
+            const started = Date.now();
 
             try {
-                generation = await this.chat_model.sendRequest(messages, prompt);
-                if (typeof generation !== 'string') {
+                // ★ t4 第 4 跳：opts 作为第 4 个可选参数下传（适配器忽略它就是旧行为）。
+                const generation = await this.chat_model.sendRequest(messages, prompt, undefined, callOpts);
+                if (typeof generation !== 'string' && !(generation instanceof ModelResult)) {
                     console.error('Error: Generated response is not a string', generation);
                     throw new Error('Generated response is not a string');
                 }
-                // 第31条：模型层失败会以 `[LLM_ERROR] …` 回来。**它不是模型说的话** ——
-                // 当正常回答处理会：写进 history、真的对玩家说出来、白消费一次 response 预算。
-                // 这里保留日志（便于统计失败率），但不把它当回答。
-                if (isFailedReply(generation)) {
-                    console.warn(`[llm] ${this.agent.name} 本轮模型调用失败，按无响应处理（不写 history、不发玩家）: ${generation}`);
-                    await this._saveLog(prompt, messages, generation, 'conversation-failed');
-                    // **直接返回空串、不再重试**：适配器内部已经把 429 / 上下文超长重试过了，
-                    // 走到这里的失败说明供应商这一轮就是不行；立刻再打三次只会把
-                    // 「一次请求超时」放大成「三次超时」，在游戏里就是几十秒的僵住。
-                    return '';
+                // 第31条：失败**不是模型说的话**。现在由 status 承载（不再靠前缀猜）。
+                // 仍不重试：适配器内部已把 429 / 上下文超长重试过了，立刻再打三次只会把
+                // 「一次超时」放大成「三次超时」，在游戏里就是几十秒的僵住。
+                typed = toModelResult(generation, {
+                    elapsedMs: Date.now() - started, attempts: i + 1,
+                    operationId: callOpts.operationId,
+                });
+                // ★ t4：**迟到的结果不算回答** —— 请求期间这次操作被取消/超期了，
+                //   即使模型已经返回，也按 cancelled 交上去（调用方据此丢弃）。
+                if (callOpts.signal?.aborted) {
+                    console.warn(`[取消] ${this.agent?.name ?? 'agent'} 的模型请求在返回前已被取消，结果按 cancelled 丢弃`);
+                    await this._saveLog(prompt, messages, String(typed.content ?? ''), 'conversation-cancelled');
+                    const cancelled = new ModelResult({
+                        status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                        errorMessage: '操作在请求期间被取消（迟到结果）',
+                        elapsedMs: typed.elapsedMs, attempts: typed.attempts,
+                    });
+                    cancelled.operationId = callOpts.operationId;
+                    return this._convoResult(cancelled);
                 }
-                console.log("Generated response:", generation);
-                await this._saveLog(prompt, messages, generation, 'conversation');
-
+                if (typed.failed) {
+                    console.warn(`[llm] ${this.agent.name} 本轮模型调用失败(${typed.errorCode})，按无响应处理（不写 history、不发玩家）: ${typed.errorMessage}`);
+                    await this._saveLog(prompt, messages, typed.toString(), 'conversation-failed');
+                    return this._convoResult(typed);
+                }
+                console.log("Generated response:", typed.content);
+                await this._saveLog(prompt, messages, typed.content, typed.truncated ? 'conversation-truncated' : 'conversation');
             } catch (error) {
                 console.error('Error during message generation or file writing:', error);
                 continue;
             }
 
             // Check for hallucination or invalid output
-            if (generation?.includes('(FROM OTHER BOT)')) {
+            if (typed.content.includes('(FROM OTHER BOT)')) {
                 console.warn('LLM hallucinated message as another bot. Trying again...');
                 continue;
             }
 
             if (current_msg_time !== this.most_recent_msg_time) {
                 console.warn(`${this.agent.name} received new message while generating, discarding old response.`);
-                return '';
+                return this._convoResult(new ModelResult({
+                    status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED, errorMessage: '生成期间收到新消息',
+                    elapsedMs: typed.elapsedMs, attempts: typed.attempts,
+                }));
             }
 
-            if (generation?.includes('</think>')) {
-                const [_, afterThink] = generation.split('</think>');
-                generation = afterThink;
+            // 思考块：只保留标记之后的正文（与旧实现同语义）。标记**拆成两段拼接**，
+            // 避免编辑器/传输层把它当作标签处理（本文件里其它地方也踩过这个坑）。
+            const thinkClose = '</thi' + 'nk>';
+            if (typed.content.includes(thinkClose)) {
+                const [, afterThink] = typed.content.split(thinkClose);
+                typed.content = afterThink;
             }
 
-            // ★ 2026-11-07 复审（第3B条）：截断标记是**内部诊断信号**，不是对话内容。
-            //   原来它会被原样返回 → 进聊天历史 → 经 routeResponse 说给玩家，
-            //   玩家真的看到 "[LLM_TRUNCATED]" 几个字。这里剥离并单独记日志。
-            if (isTruncatedReply(generation)) {
-                const { text, truncated } = stripTruncatedMark(generation);
-                if (truncated) {
-                    console.warn(`[llm] ${this.agent.name} 本轮回答被输出额度截断：正文已剥离内部标记，仅保留诊断日志`);
-                    this.last_convo_truncated = true;
-                }
-                return text;
+            // ★ 第3B条：截断标记是**内部诊断信号**、不是对话内容 —— 现在它在 status 里，
+            //   content 天然不含标记，不再需要"剥标记"这种补救（缺口 B 的根治）。
+            if (typed.truncated) {
+                console.warn(`[llm] ${this.agent.name} 本轮回答被输出额度截断：status=truncated（正文可读、可能不完整）`);
             }
 
-            return generation;
+            return this._convoResult(typed);
         }
 
-        return '';
+        // 三次都不合格 ⇒ 明确的失败（旧实现返回 ''，把"重试耗尽"伪装成"没话说"）
+        return this._convoResult(new ModelResult({
+            status: STATUS.ERROR, errorCode: ERROR_CODE.BAD_RESPONSE, errorMessage: '连续 3 次没有可用回答',
+        }));
     }
 
-    async promptCoding(messages) {
+    /**
+     * 把"调用方给的 op"折算成**适配器要的东西**（★ t4 第 3 跳的唯一折算点）。
+     *
+     * 时间只有一套：`timeoutMs = min(LLM_MAX_CALL_MS, deadline - now)` ——
+     * 模型请求的剩余时间永远 ≤ 动作的剩余时间（A5 §5.2 末）。
+     * 这样"两套时钟"就合并了：动作还剩 8 秒时，模型调用只有 8 秒，不是 120 秒。
+     *
+     * @param {{signal?:AbortSignal|null, deadline?:number|null, operationId?:string|null}} opts
+     * @returns {{signal:AbortSignal|null, timeoutMs:number, operationId:string|null}}
+     */
+    _callOptions(opts = {}) {
+        const signal = opts?.signal ?? null;
+        const operationId = opts?.operationId ?? null;
+        const deadline = Number.isFinite(opts?.deadline) ? Number(opts.deadline) : null;
+        let timeoutMs = LLM_MAX_CALL_MS;
+        if (deadline) timeoutMs = Math.max(1000, Math.min(LLM_MAX_CALL_MS, deadline - Date.now()));
+        return { signal, timeoutMs, operationId };
+    }
+
+    /**
+     * 结果出口（唯一）：断言不变量 + 分布计数 + 观测字段。
+     * 这也是 `last_convo_truncated` 死标志的**真实消费者**：值由 status 派生，
+     * 并由 logTotals()（记忆落盘时调用）真正读出来打进日志。
+     */
+    _convoResult(result) {
+        const r = coerceModelResult(result, 'promptConvo');
+        this.last_convo_status = r.status;
+        if (r.truncated) this.last_convo_truncated = true;
+        if (r.failed) this.last_convo_error_code = r.errorCode ?? null;
+        noteModelResult(r, 'convo');
+        return r;
+    }
+
+    /**
+     * ★ 真实消费者：把"结果分布 + 用量累计"打进日志 —— 成本/质量第一次可读。
+     * 调用点：记忆落盘（promptMemSaving 成功后）。低频、天然的对账点。
+     * 原来 `usageTotals()` 全仓 0 个生产调用点（A5 §6.2），成本结构上算不出来。
+     */
+    logTotals() {
+        const line = `${formatModelTotals()} lastConvoStatus=${this.last_convo_status ?? '-'}`
+            + ` lastConvoTruncated=${this.last_convo_truncated === true}`
+            + ` lastConvoErrorCode=${this.last_convo_error_code ?? '-'}`;
+        console.log(line);
+        return line;
+    }
+
+    /**
+     * 过渡兼容：把结果还原成"老形状的字符串"。
+     * 关键：**正文不带内部标记**（ok/truncated 都返回 content），失败才变回 `[LLM_ERROR] …`。
+     * 这样字符串派调用点在迁移期行为逐条不变，同时新代码可以只读 status。
+     */
+    _legacyString(result) {
+        const r = result instanceof ModelResult ? result : toModelResult(result);
+        return r.hasContent ? r.content : r.toString();
+    }
+
+    /** 旧契约（string）：见 promptCodingResult。 */
+    async promptCoding(messages, opts = {}) {
+        return this._legacyString(await this.promptCodingResult(messages, opts));
+    }
+
+    /**
+     * 带类型的代码生成（A5 §3.3 步 1）。
+     * 截断 ⇒ status=truncated 且 content 是**无代码信号**（noCodeReply）—— 半截代码绝不进执行路径（H2）。
+     */
+    async promptCodingResult(messages, opts = {}) {
+        // ★ t4：代码生成同样接受可选 {signal, deadline, operationId}（!newAction 路径在动作里跑）。
+        const callOpts = this._callOptions(opts);
+        if (callOpts.signal?.aborted) {
+            const cancelled = new ModelResult({
+                status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                errorMessage: '操作在发请求前已被取消',
+            });
+            cancelled.operationId = callOpts.operationId;
+            return this._codeResult(cancelled);
+        }
         if (this.awaiting_coding) {
             console.warn('Already awaiting coding response, returning no response.');
-            return '```//no response```';
+            // ★ H2：所有「没代码」出口统一走不含反引号的 noCodeReply()（coder.js 只认这个信号）。
+            return this._codeResult(new ModelResult({
+                status: STATUS.OK, content: noCodeReply('already awaiting a coding response'),
+            }));
         }
         this.awaiting_coding = true;
-        // ★★★ MOD-005（2026-11-06 深度检查）：标记的生命周期必须包在 try/finally 里。
-        //
-        //   缺陷原貌：`awaiting_coding = true` 之后，`checkCooldown()` / `replaceStrings()`
-        //   / `sendRequest()` 任何一处抛异常，都会跳过外面的 `awaiting_coding = false`
-        //   ⇒ 之后**每一次**请求都在第一行被拦住返回 `//no response`，
-        //   直到进程重启（报告实测：replaceStrings 抛错后第二次仍返回 no response、
-        //   awaiting_coding 仍是 true）。默认代码执行关闭时不触发，一旦开了代码生成就是"永久哑掉"。
-        //
-        //   修法：try/finally 保证标记一定被清；异常照原样抛给调用方（coder.js 有自己的失败分支），
-        //   不在这里吞掉 —— 吞掉会把"准备失败"伪装成"模型没写代码"。
+        const started = Date.now();
         try {
             await this.checkCooldown();
             let prompt = this.profile.coding;
             prompt = await this.replaceStrings(prompt, messages, this.coding_examples);
 
-            let resp = await this.code_model.sendRequest(messages, prompt);
-            // ★ 2026-11-07 复审（第3B条）：**截断的代码不许进入执行路径。**
-            //   半截代码最坏情况是语法错误（浪费一次执行），更坏是把一句正确指令截成
-            //   另一条危险指令（例如 `!newAction` 里删一半的路径）。这里明确失败：
-            //   原始响应（含标记）已进日志便于排查，返回"没有代码"让 coder.js 走既有的
-            //   「没写代码 → 重试」分支 —— 与第 345 行"正在等待代码"同一约定。
-            const codingTruncated = isTruncatedReply(resp);
-            await this._saveLog(prompt, messages, resp,
-                isFailedReply(resp) ? 'coding-failed' : (codingTruncated ? 'coding-truncated' : 'coding'));
-            if (codingTruncated) {
+            const resp = await this.code_model.sendRequest(messages, prompt, undefined, callOpts);
+            const typed = toModelResult(resp, { elapsedMs: Date.now() - started });
+            await this._saveLog(prompt, messages, typed.hasContent ? typed.content : typed.toString(),
+                typed.failed ? 'coding-failed' : (typed.truncated ? 'coding-truncated' : 'coding'));
+            if (typed.truncated) {
                 console.warn(`[llm] ${this.agent.name} 代码生成被输出额度截断：拒绝执行半截代码（原文已记日志）`);
-                return '```//no response (truncated)```';
+                // H2：这里必须给**不含反引号**的无代码信号 —— coder.js 抽码前认它，
+                // 另有一道 hasStatements() 判据；绝不会有任何东西被拿去执行。
+                return this._codeResult(new ModelResult({
+                    status: STATUS.TRUNCATED, content: noCodeReply('coding reply truncated by output limit'),
+                    elapsedMs: typed.elapsedMs, attempts: typed.attempts,
+                }));
             }
-            // 第31条：失败标记原样往上传（带 `[LLM_ERROR]` 前缀 ⇒ 不会被误当代码）。
-            // coder.js 那边 `res.indexOf('```') === -1` 会走既有的「没写代码→重试」分支，不会把它执行。
-            return resp;
+            return this._codeResult(typed);
         } finally {
             this.awaiting_coding = false;
         }
     }
 
+    _codeResult(result) {
+        const r = coerceModelResult(result, 'promptCoding');
+        this.last_coding_status = r.status;
+        noteModelResult(r, 'coding');
+        return r;
+    }
+
+    /** 旧契约（string）。H4：失败/截断一律返回**旧记忆**（不覆盖 memory.json）。 */
     async promptMemSaving(to_summarize) {
+        const r = await this.promptMemSavingResult(to_summarize);
+        if (!r.hasContent || r.truncated) return this.agent?.history?.memory ?? '';
+        return r.content;
+    }
+
+    /**
+     * 带类型的记忆摘要（A5 §3.3 步 1 + H4）。
+     * 失败 → status=error；截断 → status=truncated（content 仍保留，但 history 的写盘段
+     * 会因为 status 拒绝覆盖 memory.json —— 状态在字段里，不再靠"剥不剥标记"决定）。
+     */
+    async promptMemSavingResult(to_summarize) {
+        // ★ H4：本轮摘要是否被截断（history.js 的写盘段读这个标志做第二道保险）。
+        this.last_memory_summary_truncated = false;
         await this.checkCooldown();
+        const started = Date.now();
         let prompt = this.profile.saving_memory;
         prompt = await this.replaceStrings(prompt, null, null, to_summarize);
-        let resp = await this.chat_model.sendRequest([], prompt);
-        await this._saveLog(prompt, to_summarize, resp, isFailedReply(resp) ? 'memSaving-failed' : 'memSaving');
-        // 第31条：失败**绝不能**当成"新记忆摘要"存进去 —— 那会把这条假台词写进 memory.json，
-        // 而且会覆盖掉上一轮真实摘要。失败时保留原记忆（history.js 会 `this.memory = 返回值`）。
-        if (isFailedReply(resp)) {
-            console.warn(`[llm] ${this.agent.name} 记忆摘要失败，保留原记忆不覆盖: ${resp}`);
-            return this.agent?.history?.memory ?? '';
+        const resp = await this.chat_model.sendRequest([], prompt);
+        const typed = toModelResult(resp, { elapsedMs: Date.now() - started });
+        await this._saveLog(prompt, to_summarize, typed.hasContent ? typed.content : typed.toString(),
+            typed.failed ? 'memSaving-failed' : (typed.truncated ? 'memSaving-truncated' : 'memSaving'));
+        // 第31条：失败**绝不能**当成"新记忆摘要"存进去（会覆盖上一轮真实摘要）。
+        if (typed.failed) {
+            console.warn(`[llm] ${this.agent.name} 记忆摘要失败(${typed.errorCode})，保留原记忆不覆盖: ${typed.errorMessage}`);
+            return this._memResult(typed);
         }
-        if (resp?.includes('</think>')) {
-            const [_, afterThink] = resp.split('</think>');
-            resp = afterThink;
+        const thinkClose = '</thi' + 'nk>';
+        if (typed.content.includes(thinkClose)) typed.content = typed.content.split(thinkClose)[1];
+        if (typed.truncated) {
+            this.last_memory_summary_truncated = true;
+            console.warn(`[llm] ${this.agent.name} 记忆摘要被输出额度截断：**保留旧摘要、不覆盖 memory.json**（原文已记日志）`);
+            return this._memResult(typed);
         }
-        // ★ 2026-11-07 复审（第3B条）：截断标记不许写进 memory.json ——
-        //   记忆是被反复读回的长期内容，混进内部标记等于永久污染。
-        if (isTruncatedReply(resp)) {
-            const { text, truncated } = stripTruncatedMark(resp);
-            if (truncated) console.warn(`[llm] ${this.agent.name} 记忆摘要被输出额度截断：已剥离内部标记`);
-            return text;
-        }
-        return resp;
+        // ★ 真实消费者：记忆落盘是低频、天然的对账点 ⇒ 把结果分布与用量累计打进日志（A5 §6.2）
+        try { this.logTotals(); } catch { /* 日志失败不影响记忆 */ }
+        return this._memResult(typed);
     }
 
+    _memResult(result) {
+        const r = coerceModelResult(result, 'promptMemSaving');
+        this.last_mem_status = r.status;
+        noteModelResult(r, 'memsaving');
+        return r;
+    }
+
+    /** 旧契约（boolean）：见 promptShouldRespondToBotResult。 */
     async promptShouldRespondToBot(new_message) {
+        const r = await this.promptShouldRespondToBotResult(new_message);
+        if (r.failed) return false;
+        return r.content.trim().toLowerCase() === 'respond';
+    }
+
+    /** 带类型：只输出一个词的判断改成读 status + content（截断时 content 已是干净的词）。 */
+    async promptShouldRespondToBotResult(new_message) {
         await this.checkCooldown();
+        const started = Date.now();
         let prompt = this.profile.bot_responder;
         let messages = this.agent.history.getHistory();
-        messages.push({role: 'user', content: new_message});
+        messages.push({ role: 'user', content: new_message });
         prompt = await this.replaceStrings(prompt, null, null, messages);
-        let res = await this.chat_model.sendRequest([], prompt);
-        // 第31条：失败标记不是 "respond" —— 显式判掉，别指望字符串比较碰巧为 false
-        if (isFailedReply(res)) {
-            console.warn(`[llm] ${this.agent.name} bot_responder 调用失败，按「不接话」处理: ${res}`);
-            return false;
+        const res = await this.chat_model.sendRequest([], prompt);
+        const typed = toModelResult(res, { elapsedMs: Date.now() - started });
+        // 第31条：失败标记不是 "respond"（旧实现靠字符串比较，现在靠 status）
+        if (typed.failed) {
+            console.warn(`[llm] ${this.agent.name} bot_responder 调用失败，按「不接话」处理: ${typed.errorMessage}`);
         }
-        // ★ 2026-11-07 复审（第3B条）：截断标记会让 `=== 'respond'` 恒为 false。
-        //   bot_responder 只输出一个词，被截断基本等于不可用 ⇒ 剥掉标记后仍按原逻辑比较。
-        const decision = isTruncatedReply(res) ? stripTruncatedMark(res).text : res;
-        return decision.trim().toLowerCase() === 'respond';
+        const r = coerceModelResult(typed, 'promptShouldRespondToBot');
+        this.last_bot_responder_status = r.status;
+        noteModelResult(r, 'botresponder');
+        return r;
     }
 
+    /** 旧契约（string）：见 promptVisionResult。 */
     async promptVision(messages, imageBuffer) {
+        return this._legacyString(await this.promptVisionResult(messages, imageBuffer));
+    }
+
+    /** 带类型：视觉失败从此不再以 `[LLM_ERROR] …` 字符串进"图像分析"上下文（缺口 C 的根治入口）。 */
+    async promptVisionResult(messages, imageBuffer) {
         await this.checkCooldown();
+        const started = Date.now();
         let prompt = this.profile.image_analysis;
         prompt = await this.replaceStrings(prompt, messages, null, null, null);
-        return await this.vision_model.sendVisionRequest(messages, prompt, imageBuffer);
+        const raw = await this.vision_model.sendVisionRequest(messages, prompt, imageBuffer);
+        const r = coerceModelResult(toModelResult(raw, { elapsedMs: Date.now() - started }), 'promptVision');
+        this.last_vision_status = r.status;
+        noteModelResult(r, 'vision');
+        return r;
     }
 
     async promptGoalSetting(messages, last_goals) {

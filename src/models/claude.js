@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { strictFormat } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, markTruncated, LLM_MAX_CALL_MS, LLM_MAX_RETRIES, sdkCallOptions } from './_shared.js';
 
 export class Claude {
     static prefix = 'anthropic';
@@ -16,10 +16,16 @@ export class Claude {
         
         config.apiKey = getKey('ANTHROPIC_API_KEY');
 
+        // ★ H3：Anthropic SDK 与 openai SDK 同款默认值（timeout=600000、maxRetries=2，
+        //   且**超时也在重试范围内**）⇒ 一次调用最坏 3×600s=30 分钟。
+        //   Claude 是当前项目实际在用的通路，这条优先级最高：单次 ≤120s、重试 ≤1。
+        config.timeout = LLM_MAX_CALL_MS;
+        config.maxRetries = LLM_MAX_RETRIES;
+
         this.anthropic = new Anthropic(config);
     }
 
-    async sendRequest(turns, systemMessage) {
+    async sendRequest(turns, systemMessage, stop_seq, opts = {}) {
         const messages = strictFormat(turns);
         let res = null;
         try {
@@ -37,7 +43,7 @@ export class Claude {
                 system: systemMessage,
                 messages: messages,
                 ...(this.params || {})
-            });
+            }, sdkCallOptions(opts));
 
             console.log('Received.');
             recordUsage(resp?.usage, this.model_name);

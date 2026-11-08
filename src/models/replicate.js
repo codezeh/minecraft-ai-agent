@@ -2,7 +2,11 @@ import Replicate from 'replicate';
 import { toSinglePrompt } from '../utils/text.js';
 import { getKey } from '../utils/keys.js';
 
-import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, safeErrText } from './_shared.js';
+import { failedReply, recordUsage, isRateLimit, rateLimitDelayMs, safeErrText, callDeadlineSignal, LLM_MAX_CALL_MS, combineSignals } from './_shared.js';
+// ★ A) 结果类型化。**老实说明**：Replicate 的 run()/stream() **不提供 finish_reason**
+//   （见 replicate/index.d.ts 的返回类型），所以这里 finishReason 只能是 null，
+//   也就是「无法检测输出截断」——不假装检测得到，也不另编一个字符串标记。
+import { toModelResult } from './result.js';
 
 // llama, mistral, gemini
 export class ReplicateAPI {
@@ -21,7 +25,7 @@ export class ReplicateAPI {
 		});
 	}
 
-	async sendRequest(turns, systemMessage) {
+	async sendRequest(turns, systemMessage, _stop_seq, opts = {}) {
 		const stop_seq = '***';
 		const prompt = toSinglePrompt(turns, null, stop_seq);
 		let model_name = this.model_name || 'meta/meta-llama-3-70b-instruct';
@@ -48,14 +52,19 @@ export class ReplicateAPI {
 		}
 
 		let res = null;
-		const maxAttempts = 4;
+		const started = Date.now();		const maxAttempts = 4;
 		for (let attempt = 1; ; attempt++) {
+		// ★★★ H5（第四轮复审）：`replicate` SDK **没有 timeout 选项**（审计矩阵里属"无期限"那 3 个之一），
+		//   但 `run()/stream()` 都接受 `options.signal`（replicate/index.d.ts:126-149）。
+		//   这里每次尝试一个显式总期限（覆盖流式读体），finally 里一定清掉定时器。
+		const dl = callDeadlineSignal(LLM_MAX_CALL_MS,
+			() => console.warn(`[replicate] 单次调用超过 ${LLM_MAX_CALL_MS}ms 期限，已中断`));
 		try {
 			console.log('Awaiting Replicate API response...');
 
 			if (isGemini) {
 				// Gemini doesn't stream well on Replicate, use run() instead
-				const output = await this.replicate.run(model_name, { input });
+				const output = await this.replicate.run(model_name, { input, signal: combineSignals(opts?.signal, dl.signal) });
 				// Output might be a string or an array
 				if (Array.isArray(output)) {
 					res = output.join('');
@@ -67,7 +76,7 @@ export class ReplicateAPI {
 			} else {
 				// Use streaming for other models
 				let result = '';
-				for await (const event of this.replicate.stream(model_name, { input })) {
+				for await (const event of this.replicate.stream(model_name, { input, signal: combineSignals(opts?.signal, dl.signal) })) {
 					result += event;
 					if (result === '') break;
 					if (result.includes(stop_seq)) {
@@ -93,13 +102,16 @@ export class ReplicateAPI {
 			}
 			console.log(safeErrText(err));
 			res = failedReply(`replicate request failed: ${err?.message ?? err}`);
+		} finally {
+			// H5：成功/失败/429 重试都要清掉期限定时器
+			dl.cancel();
 		}
 			break;
 		}
 		// Replicate 的 run()/stream() 不带 usage 形状 → 明确记成 missing，别假装是 0
 		recordUsage(null, model_name, 'replicate');
 		console.log('Received.');
-		return res;
+		return toModelResult(res, { finishReason: null, elapsedMs: Date.now() - started });
 	}
 
 	async embed(text) {

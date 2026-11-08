@@ -313,6 +313,35 @@ export const CLAIM_BACKOFF_MS = 5000;
 export const HEARTBEAT_MS = 10000;
 
 /**
+ * ★★★ A5-8（S2，第四轮审计 §6.5「任务租约活着的僵尸单」）：**哪些停止原因仍然允许续租**。
+ *
+ * 病根（原文）：`setInterval` 心跳**不看**停止标志，只要 `_runJob` 还没走到 finally
+ *   就每 10 秒续一次租。而 `_runJob` 卡住的最长来源是 30 分钟的模型调用 / 10 分钟动作超时
+ *   ⇒ 面板上单子已经 `paused`，租约仍归自己，**别的 bot 拿不到**，直到进程被杀。
+ *
+ * 判据只能按 `control.STOP_REASONS` 逐档来（07 §4 那张表就是权威）：
+ *   · `brief`    —— 只是被 mode / 即时命令**打断一下**，单还在我手里，租约**必须照常续**；
+ *   · `preempt`  —— 让位给别人：自己已经写了 ready + 清租约，**不许再续**；
+ *   · `player`   —— `!stop`：单转 paused（可恢复），**不许再续**；
+ *   · `timeout`  —— 动作超时：单已按 attempts 处理，**不许再续**；
+ *   · `shutdown` —— 进程退出：靠租约过期回收，**不许再续**；
+ *   · `death`    —— 死亡：单转 paused，**不许再续**。
+ * 换句话说：**只有 brief 允许续租**，别的一律停手。
+ */
+export const LEASE_RENEWABLE_STOP_REASONS = Object.freeze([STOP_REASONS.BRIEF]);
+
+/**
+ * ★ A5-8：**只有这两个状态**代表「这张单现在真的在我手里跑」。
+ * 其余（paused / cancelled / ready / blocked / done / failed）都意味着租约不该续：
+ *   · paused    —— 玩家按停 / 死亡：可恢复，但**此刻不是我在跑**；
+ *   · cancelled —— 取消：终态，租约更不该留着；
+ *   · ready / blocked —— 别人或抢占已经把它退回去了；
+ *   · done / failed   —— 终态。
+ * 用**白名单**而不是黑名单：以后加状态时默认停手（宁可少续一次，也不留僵尸租约）。
+ */
+export const LEASE_RENEWABLE_JOB_STATES = Object.freeze([JOB_STATE.CLAIMED, JOB_STATE.RUNNING]);
+
+/**
  * 读"这张单为什么暂停"。
  *
  * ★ T31 第6条③：老写法把它当**顶层字段** `job.pausedReason`（但 `jobs` 表根本没有这一列，
@@ -364,6 +393,21 @@ export class BoardScheduler {
          */
         this._preemptedJobId = null;
         /**
+         * ★★★ A5-8：**显式停止原因**（null = 没停）。
+         *
+         * 与 `_autoClaim` 的区别（06 §14 的原话是「正在跑的单接着跑」，那不是停）：
+         *   · `setAutoClaim(false)` = 不领新单，**手上这张接着干、照常续租**；
+         *   · `stop(reason)`        = 手上有单也停：**不再续租 + 主动放租约与预约**。
+         * 原来根本没有这个字段 —— 审计 §6.5 的「活着的僵尸单」就是这么来的。
+         */
+        this._stopRequested = null;
+        /**
+         * ★ A5-8：已经被本调度器**主动放掉租约**的单 id（jobId）。
+         * 作用有二：① 幂等（同一个定时器/收尾段不重复释放）；② 收尾时**不许再 finish**
+         * （租约已经放掉，这时 finish 等于以「非主人」身份写别人的单）。
+         */
+        this._leaseDropped = new Set();
+        /**
          * 上一拍**播报过**的 `idle-plan`（`action:reason`），t38。
          *
          * ★ 为什么需要：`decideIdle()` 每拍都会返回一个结论（空闲时恒为 `idle-mode`），
@@ -406,6 +450,39 @@ export class BoardScheduler {
 
     get autoClaim() { return this._autoClaim; }
     get board() { return this.boardClient; }
+
+    // ── A5-8：显式停止 / 恢复 ─────────────────────────────────────────
+    /**
+     * ★★★ A5-8：**显式停止**调度器（与 `setAutoClaim(false)` 不是一回事）。
+     *
+     * 停止之后：
+     *   · `tick()` 直接返回 `reason:'stopped'`（既不领新单，也不 resume 自己的 paused 单）；
+     *   · 心跳**不再续租**（`_shouldRenewLease` 的第一条判据）；
+     *   · 正在跑的单：`_releaseOnStop()` **主动放掉租约与预约**，不再等 30 秒过期。
+     *
+     * @param {string} reason `control.STOP_REASONS` 之一（默认 `player`）
+     * @returns {string} 记下的停止原因
+     */
+    stop(reason = STOP_REASONS.PLAYER) {
+        const next = String(reason ?? STOP_REASONS.PLAYER);
+        if (this._stopRequested !== next) {
+            this._stopRequested = next;
+            this.onEvent({ type: 'scheduler-stopped', reason: next, at: this.now() });
+        }
+        return this._stopRequested;
+    }
+
+    /** ★ A5-8：撤销停止（玩家说「继续」/进程不再退出）。已放掉的租约不会自动拿回。 */
+    resume() {
+        if (this._stopRequested != null) {
+            this._stopRequested = null;
+            this.onEvent({ type: 'scheduler-resumed', at: this.now() });
+        }
+        return null;
+    }
+
+    get stopRequested() { return this._stopRequested; }
+    get stopped() { return this._stopRequested != null; }
 
     /**
      * 主循环跑**一遍**（不内部循环 —— "空闲时不空转"）。
@@ -453,6 +530,14 @@ export class BoardScheduler {
         // ── ③ 开关关着：不领新单、不抢占；正在跑的单接着跑 ──────────────
         if (!this._autoClaim) {
             return { acted: false, reason: 'auto-claim-off', requeued };
+        }
+
+        // ── ★ A5-8：调度器被**显式停止**（玩家按停 / 进程退出 / 死亡）──────
+        //   和上面那条不同：`autoClaim` 关掉只是"不领新单"，**手上这张照跑**；
+        //   这里是真的停手 —— 既然停手，就绝不能再领新单，也不能把自己的 paused 单
+        //   resume 回 ready（那会让"停止"只生效一拍，正是 T31 第6条③ 那个症状）。
+        if (this._stopRequested != null) {
+            return { acted: false, reason: 'stopped', requeued };
         }
 
         // ── A) 手上正有动作在跑 → 看要不要抢占 ──────────────────────────
@@ -660,17 +745,67 @@ export class BoardScheduler {
         let result = null;
 
         // 每 10 秒 heartbeat（06 §6/§8）。用真实定时器包住，但结束一定 clear。
+        //
+        // ★★★ A5-8（S2，第四轮审计 §6.5）：**心跳必须先看"还该不该续租"。**
+        //
+        //   病根：原来这里无条件 `board.heartbeat(job.id)` —— 只要 `_runJob` 还没走到
+        //   finally，被 `paused`（玩家 !stop / 死亡）或者被取消的单**照样每 10 秒续租**。
+        //   而 `_runJob` 卡住的最长来源正是 30 分钟的模型调用 / 10 分钟动作超时
+        //   ⇒ 面板上单子已是 paused，租约仍归自己，**别的 bot 一直到进程被杀都拿不到这张单**。
+        //
+        //   现在分三步：
+        //     ① `_shouldRenewLease()` 本地判据（显式停止 / 停止原因 / 本地镜像状态）；
+        //     ② `_authoritativeStopKind()` 向服务端复核一次（镜像只在自己发起操作或
+        //        `board:changed` 时更新 —— "别人把这张单暂停了"它看不到，这正是要害）；
+        //     ③ 一旦判定不该续租 → `_stopHeartbeat()` + `_releaseOnStop()`：
+        //        **主动放掉租约与预约**，并区分「暂停（可恢复，单留在 paused）」与
+        //        「取消（终态，释放给谁都不该再跑）」。
+        let hbStopped = false;
+        const stopHeartbeat = () => {
+            if (hbStopped) return;
+            hbStopped = true;
+            try { clearInterval(hb); } catch { /* ignore */ }
+        };
+        const startedStopReason = this.actions?.stop_reason ?? this.actions?.stopReason ?? null;
         const hb = setInterval(() => {
-            try {
-                const progress = this._progressOf();
-                board.heartbeat?.(job.id, progress)?.then?.((r) => {
+            if (hbStopped) return;
+            void (async () => {
+                try {
+                    // ① 本地判据
+                    if (!this._shouldRenewLease(job, startedStopReason)) {
+                        stopHeartbeat();
+                        const kind = await this._stopKindOf(job.id);
+                        await this._releaseOnStop(job, ctx, reserved, kind);
+                        return;
+                    }
+                    // ② 服务端复核（最坏多一个 RPC / 10 秒；换掉的是"僵尸租约"）
+                    const kind = await this._authoritativeStopKind(job.id);
+                    if (kind) {
+                        stopHeartbeat();
+                        await this._releaseOnStop(job, ctx, reserved, kind);
+                        return;
+                    }
+                    // ③ 正常续租
+                    const progress = this._progressOf();
+                    const r = await board.heartbeat?.(job.id, progress);
                     // LEASE_LOST：别人已经接手，立刻停手（06 §6）
                     if (r && r.ok === false && r.code === 'LEASE_LOST') {
                         this.onEvent({ type: 'lease-lost', id: job.id });
+                        stopHeartbeat();
+                        this._leaseDropped.add(job.id);
                         this.actions?.stop?.(STOP_REASONS.PREEMPT);
+                        return;
                     }
-                })?.catch?.(() => { });
-            } catch { /* 心跳失败不该弄垮调度 */ }
+                    // 服务端回传的状态已经不是"我在跑"（例如别人把它 paused 了）→ 下一拍起停租
+                    const st = r?.data?.job?.state ?? null;
+                    if (st && !LEASE_RENEWABLE_JOB_STATES.includes(st)) {
+                        this.onEvent({ type: 'lease-renew-server-state', id: job.id, state: st });
+                        stopHeartbeat();
+                        const kind2 = await this._stopKindOf(job.id, st);
+                        await this._releaseOnStop(job, ctx, reserved, kind2);
+                    }
+                } catch { /* 心跳失败不该弄垮调度 */ }
+            })();
         }, this.heartbeatMs);
         try { hb.unref?.(); } catch { /* ignore */ }
 
@@ -727,11 +862,24 @@ export class BoardScheduler {
             //   这跟 `_preemptedJobId` 是同一个道理的第二次出现：**who 写的状态更权威**。
             const pausedByPlayer = await this._jobPausedByPlayer(job.id);
 
+            // ★ A5-8：租约已经主动放掉的单**一律不许 finish** ——
+            //   放租约就是"我不管这张单了"，这时再 finish 等于以非主人身份写别人的单
+            //   （store 会回 LEASE_STALE，即便侥幸写进去也是把新主人的进度洗掉）。
+            const leaseReleased = this._leaseDropped.delete(job.id);
+            if (leaseReleased) {
+                this.onEvent({ type: 'skip-finish-lease-released', id: job.id });
+            }
+
             // step 5：finish（store 按规则决定 done/ready/blocked/failed）
             if (pausedByPlayer) {
                 this.onEvent({ type: 'skip-finish-paused', id: job.id, reason: STOP_REASONS.PLAYER });
             }
-            if (!wasPreempted && !pausedByPlayer) try {
+            // ★ A5-8：权威状态已经是 paused / cancelled / 别人拿走了 → 同样不许 finish。
+            const stopKindAtEnd = await this._authoritativeStopKind(job.id);
+            if (stopKindAtEnd) {
+                this.onEvent({ type: 'skip-finish-stopped', id: job.id, kind: stopKindAtEnd });
+            }
+            if (!wasPreempted && !pausedByPlayer && !leaseReleased && !stopKindAtEnd) try {
                 await board.finish?.(job.id, {
                     ok: result?.ok === true,
                     code: result?.code ?? 'OK',
@@ -761,6 +909,10 @@ export class BoardScheduler {
             for (const key of reserved) {
                 try { await ctx.release(key); } catch { /* ignore */ }
             }
+            // ★ T6：**执行期补占**的预约（`ctx.reserveNow` 占了真实箱子/炉子/工作台）
+            //   不在这份 `reserved` 里（那是 `deriveClaims` 推出来的），必须单独放 ——
+            //   否则只能等 TTL 30 秒自然过期，这 30 秒里别人一直拿不到那个目标。
+            try { await ctx.releaseRuntimeClaims?.(); } catch { /* ignore */ }
         }
     }
 
@@ -779,6 +931,121 @@ export class BoardScheduler {
             if (!j || j.state !== JOB_STATE.PAUSED) return false;
             return pausedReasonOf(j) === 'player';
         } catch { return false; }
+    }
+
+    // ── A5-8：续租守卫 / 主动释放（心跳与收尾共用同一套判据）────────────
+
+    /**
+     * ★★★ A5-8：**这一拍还该不该续租**（本地判据，同步、不花 RPC）。
+     *
+     * 三个判据，任一命中就停手：
+     *   ① 调度器被**显式停止**（`stop(reason)`）；
+     *   ② 代理层的**停止原因**不是 `brief` —— 07 §4 的表里只有 brief 是"打断一下接着做"，
+     *      其余（player/preempt/timeout/shutdown/death）都意味着"这张单不再由我续租"。
+     *      ★ 只认**本次跑单开始之后变化过**的原因：`stop_reason` 是动作层的全局字段，
+     *      上一次动作留下的旧值不能拿来判新单（否则"上一张被玩家停了"会把下一张也停租）。
+     *   ③ 本地镜像里这张单**已经不是 claimed/running**（paused / cancelled / ready / 终态）。
+     */
+    _shouldRenewLease(job, startedStopReason = null) {
+        if (!job?.id) return false;
+        if (this._stopRequested != null) return false;
+        if (this._leaseDropped.has(job.id)) return false;
+        const nowStop = this.actions?.stop_reason ?? this.actions?.stopReason ?? null;
+        if (nowStop && nowStop !== startedStopReason
+            && !LEASE_RENEWABLE_STOP_REASONS.includes(nowStop)) return false;
+        const local = this._localJob(job.id);
+        const state = local?.state ?? null;
+        if (state && !LEASE_RENEWABLE_JOB_STATES.includes(state)) return false;
+        return true;
+    }
+
+    /** 本地镜像里的这张单（取不到返回 null —— 不猜）。 */
+    _localJob(id) {
+        try { return this.boardClient?.get?.(id) ?? null; } catch { return null; }
+    }
+
+    /**
+     * ★ A5-8：**向服务端复核**这张单还归不归我续租。
+     *
+     * 为什么必须打这一枪：本地镜像只会因"自己发起的操作"和 `board:changed` 更新，
+     * 而"**别人**（另一路进程/面板）把这张单暂停或取消了"它一概不知道 ——
+     * 那正是僵尸租约的现场。每 10 秒一次小 RPC 换掉一个死锁，值得。
+     *
+     * @returns {Promise<'paused'|'cancelled'|'lost'|null>}
+     *   'paused'    暂停（可恢复）：停租 + 放预约，**单保持 paused 等玩家说继续**
+     *   'cancelled' 取消（终态）：停租 + 放预约，**不再碰这张单**
+     *   'lost'      已经不在我手上（ready/blocked/done/failed/别人领走）：停手
+     *   null        仍归我续租（或读不到 —— 读不到时按"仍归我"处理，别自己把自己吓停）
+     */
+    async _authoritativeStopKind(id) {
+        if (id == null) return null;
+        let job = null;
+        try {
+            const r = await this.boardClient?.getAsync?.(id);
+            if (r && r.ok === false) return null;                     // 读失败 ≠ 停手
+            job = r?.data?.job ?? this._localJob(id);
+        } catch { return null; }
+        if (!job) return null;
+        return this._stopKindFromState(job.state);
+    }
+
+    /**
+     * 状态 → 停止类别（纯判据，心跳与收尾共用）。
+     *
+     * ★ 这里用**字面量** `'paused'` / `'cancelled'`，不用 `JOB_STATE.CANCELLED`：
+     *   本文件 import 的 `JOB_STATE` 来自 `control.js`，那张表只有
+     *   ready/claimed/running/paused/failed 五个（cancelled/blocked/done 在
+     *   `board_store.JOB_STATE` 全表里）—— 写 `JOB_STATE.CANCELLED` 得到的是
+     *   **undefined**，于是 `cancelled` 会被误判成 `'lost'`（连租约都不摘）。已踩过。
+     */
+    _stopKindFromState(state) {
+        if (!state) return null;
+        if (LEASE_RENEWABLE_JOB_STATES.includes(state)) return null;
+        if (state === JOB_STATE.PAUSED || state === 'paused') return 'paused';
+        if (state === 'cancelled') return 'cancelled';
+        return 'lost';
+    }
+
+    /** 本地判据下的停止类别（`stateHint` 来自服务端刚回的那张单）。 */
+    _stopKindOf(id, stateHint = null) {
+        if (this._stopRequested != null) return 'lost';
+        const state = stateHint ?? this._localJob(id)?.state ?? null;
+        return this._stopKindFromState(state) ?? 'lost';
+    }
+
+    /**
+     * ★★★ A5-8：**停手收尾** —— 主动放掉租约与预约，不等 30 秒过期。
+     *
+     * 区分两种停（审计要求的「暂停（可恢复）」与「取消（释放）」）：
+     *   · `paused`    —— 单**留在 paused**：玩家说"继续"就能接着做（`_resumeOwnPaused`）；
+     *                    这里只把**租约**摘掉（`lease_owner/lease_until = NULL`），
+     *                    于是别的 bot 不会以为它还有主，而单本身不被判失败/重试。
+     *   · `cancelled` —— 终态：同样摘租约 + 放预约，之后一次都不再碰。
+     *   · `lost`      —— 已经不是我的单：只放预约，**绝不再写库**（避免把新主人的东西洗掉）。
+     *
+     * 幂等：同一张单只做一次（`_leaseDropped`）。重复调用直接返回。
+     */
+    async _releaseOnStop(job, ctx = null, reserved = [], kind = 'paused') {
+        const id = job?.id;
+        if (id == null) return false;
+        if (this._leaseDropped.has(id)) return false;
+        this._leaseDropped.add(id);
+        this.onEvent({ type: 'lease-renew-stop', id, kind });
+
+        // ① 租约：主动摘掉（paused/cancelled 才写；lost 时库里的主人已经不是我了）
+        if (kind !== 'lost') {
+            try {
+                // ★ 用 `update` 而不是 `setState`：`setState(paused)` 在已经 paused 的
+                //   单上是**非法转移**（TRANSITIONS.paused 里没有 paused），会失败；
+                //   而 `lease_owner/lease_until` 在 store 的 PATCHABLE 白名单里，正好只动租约。
+                await this.boardClient?.update?.(id, { lease_owner: null, lease_until: null });
+            } catch { /* 放不掉也别把调度弄崩，租约最终会过期 */ }
+        }
+        // ② 预约：不放就是死锁（别人永远拿不到这些资源）
+        for (const key of reserved ?? []) {
+            try { await ctx?.release?.(key); } catch { /* ignore */ }
+        }
+        return true;
     }
 
     /** 从最近一次流程结果里取进度（卡片口径：{count, want}）。 */

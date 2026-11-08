@@ -36,12 +36,30 @@
  *   `MC_BOTS_ROOT=<临时目录>` 即可（测试用 `mkdtempSync` 指过去）。
  *   生产不设这个变量，行为与以前**逐字节一致**（默认仍是 `./bots`）。
  *
- * @returns {string} 形如 `./bots`，或 `MC_BOTS_ROOT` 给的值
+ * ★★★ 2026-11-08（R4 审计 t8）：默认值从 `'./bots'` 改成**锚在包根的绝对路径**。
+ *   为什么：`'./bots'` 是 **cwd 相对**的 —— 同一个仓库因此长出了两个 bots 目录：
+ *     · mindserver 以 `-WorkingDirectory <repo>\mindcraft` 启动 → 用 `mindcraft/bots`（**真实数据**）
+ *     · 任何从仓库根起的进程 → 用 `<repo>/bots`（遗留：`_board` 的 user_version 还是 0，
+ *       `shared` 表 0 行，早就不迁移了）
+ *   结果是"任务板/机器人记忆到底在哪个库里"要靠猜，备份恢复到错库就静默回退到几个月前。
+ *   锚到包根后，**从哪个目录启动都指向同一个 `mindcraft/bots`**，`<repo>/bots` 再也不会被写。
+ *   `MC_BOTS_ROOT` 覆盖行为不变（测试仍能各自隔离）。
+ *
+ * @returns {string} 绝对路径，形如 `E:/.../mindcraft/bots`，或 `MC_BOTS_ROOT` 给的值
  */
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+/** `mindcraft/` 包根 —— 本文件在 `mindcraft/src/agent/library/`，向上三级 */
+const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+
+/** 默认 bots 根：绝对路径，锚在包根，**不随 cwd 变化**（见下方 botsRootOf 的说明） */
+const DEFAULT_BOTS_ROOT = resolve(PKG_ROOT, 'bots').replace(/\\/g, '/');
+
 export function botsRootOf() {
     const override = process.env.MC_BOTS_ROOT;
     if (typeof override === 'string' && override.trim()) return override.trim();
-    return './bots';
+    return DEFAULT_BOTS_ROOT;
 }
 
 /** 该 bot 的地形库目录（terrain3d / path_3d / scanSphere 都用它）。

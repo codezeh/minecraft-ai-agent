@@ -23,6 +23,34 @@ import { holdKey } from './library/atom_input_move.js';
 const SWIM_JUMP_HOLD_MS = 3000;
 
 /**
+ * 超时哨兵（`raceWithTimeout()` 超时返回它）。
+ * ★ R4 §7-⑥：与 act_fish.js 里那份是**同一套语义**的两处实现 ——
+ *   两个文件分属不同 owner，先把行为改对；等 util 层统一时再合并。
+ */
+const TIMED_OUT = Symbol('timed-out');
+
+/**
+ * 超时竞速 —— 到点**必清计时器**，超时以返回值告知。
+ *
+ * 缺陷原貌（R4 §7-⑥）：`Promise.race([skills.moveAway(bot, 5), new Promise(resolve => setTimeout(resolve, 15000))])`
+ *   ① 计时器从不 `clearTimeout`：脱困成功后它还挂 15 秒（批量/频繁卡住时越积越多）；
+ *   ② 超时后 `moveAway` **仍在后台跑**，和下一个动作抢同一个 bot 的寻路；
+ *   ③ 更要命的是它接不下去：`await` 只是不再等，代码照样往下走到
+ *      `say(agent, '我出来啦~')` —— 卡在原地也要报"我出来了"（**假好消息**）。
+ */
+async function raceWithTimeout(promise, ms) {
+    let timer;
+    const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), ms);
+    });
+    try {
+        return await Promise.race([promise, timeout]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/**
  * bot → 正在进行的"保持跳跃"。
  *
  * 存模块作用域而不是挂到 mode 对象 / ModeController 上：
@@ -202,10 +230,14 @@ const modes_list = [
                 fireModeAction(this, agent, async () => {
                     // 原来这里 10 秒内脱困失败会 cleanKill 直接杀掉 bot 进程（历史日志里出现 17 次）。
                     // 改成软超时：超时就放弃这次脱困、继续玩，绝不退出进程。
-                    await Promise.race([
-                        skills.moveAway(bot, 5),
-                        new Promise(resolve => setTimeout(resolve, 15000))
-                    ]);
+                    // ★ R4 §7-⑥：超时不许再喊"我出来啦"（假好消息），也不许让 moveAway
+                    //   在后台继续跑（会和下一个动作抢寻路）。
+                    const r = await raceWithTimeout(skills.moveAway(bot, 5), 15000);
+                    if (r === TIMED_OUT) {
+                        try { bot.pathfinder?.stop?.(); } catch { /* 没有寻路就算了，不掩盖超时 */ }
+                        say(agent, '呜…这次没挣脱，先不管了~');
+                        return;
+                    }
                     say(agent, '我出来啦~');
                 });
             }

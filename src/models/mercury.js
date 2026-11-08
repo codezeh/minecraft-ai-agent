@@ -2,7 +2,7 @@ import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
 
-import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated } from './_shared.js';
+import { failedReply, recordUsage, safeErrText, errMessage, isContextLengthError, markTruncated, LLM_MAX_CALL_MS, LLM_MAX_RETRIES, sdkCallOptions } from './_shared.js';
 
 export class Mercury {
     static prefix = 'mercury';
@@ -17,10 +17,14 @@ export class Mercury {
 
         config.apiKey = getKey('MERCURY_API_KEY');
 
+        // ★ H3：显式压住 openai SDK 默认值（600s × 3 次 ⇒ 最坏 30 分钟）
+        config.timeout = LLM_MAX_CALL_MS;
+        config.maxRetries = LLM_MAX_RETRIES;
+
         this.openai = new OpenAIApi(config);
     }
 
-    async sendRequest(turns, systemMessage, stop_seq='***') {
+    async sendRequest(turns, systemMessage, stop_seq='***', opts = {}) {
         if (typeof stop_seq === 'string') {
             stop_seq = [stop_seq];
         } else if (!Array.isArray(stop_seq)) {
@@ -41,7 +45,7 @@ export class Mercury {
 
         try {
             console.log('Awaiting mercury api response from model', this.model_name);
-            let completion = await this.openai.chat.completions.create(pack);
+            let completion = await this.openai.chat.completions.create(pack, sdkCallOptions(opts));
             recordUsage(completion?.usage, this.model_name);
             // ★ MOD-001：finish_reason==='length' 是**输出额度**用完，不是上下文超限。
             //   原来这里直接 throw 'Context length exceeded' → catch 里裁历史重发：缩短输入对
@@ -59,7 +63,7 @@ export class Mercury {
         catch (err) {
             if (isContextLengthError(err) && turns.length > 1) {
                 console.log('Context length exceeded, trying again with shorter context.');
-                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq);
+                return await this.sendRequest(turns.slice(1), systemMessage, stop_seq, opts);
             } else if (errMessage(err).includes('image_url')) {
                 console.log(safeErrText(err));
                 res = 'Vision is only supported by certain models.';

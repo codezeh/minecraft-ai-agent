@@ -55,19 +55,21 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
         containerItems() {
             return win.slots.slice(0, INV_START).filter(Boolean);
         },
-        async deposit(_type, _m, n) {
-            if (onTransfer && onTransfer('deposit', n) === 'throw') throw new Error('destination full');
+        deposit(_type, _m, n) {
+            if (onTransfer && onTransfer('deposit', n) === 'throw') return Promise.reject(new Error('destination full'));
             const moved = Math.min(n, onTransfer ? 0 : 3);   // 默认最多挪走 3 件（模拟箱子只剩 3 空位）
             const apply = () => { state.inv -= moved; state.chest += moved; win.sync(); };
             if (delayMs > 0) timers.push(setTimeout(apply, delayMs));
             else apply();
+            return Promise.resolve();
         },
-        async withdraw(_type, _m, n) {
-            if (onTransfer && onTransfer('withdraw', n) === 'throw') throw new Error('destination full');
+        withdraw(_type, _m, n) {
+            if (onTransfer && onTransfer('withdraw', n) === 'throw') return Promise.reject(new Error('destination full'));
             const moved = Math.min(n, state.chest);
             const apply = () => { state.chest -= moved; state.inv += moved; win.sync(); };
             if (delayMs > 0) timers.push(setTimeout(apply, delayMs));
             else apply();
+            return Promise.resolve();
         },
         close() { },
     };
@@ -133,8 +135,8 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
     let putBack = 0;
     const h = makeChestBot({ inv: 4, chest: 0, item: 'coal' });
     h.win.selectedItem = { name: 'coal', type: 11, count: 1 };
-    h.win.deposit = async () => { throw new Error('interrupted by user'); };
-    h.win.withdraw = async (_t, _m, n) => { putBack += n; h.win.selectedItem = null; };  // 送回背包
+    h.win.deposit = () => Promise.reject(new Error('interrupted by user'));
+    h.win.withdraw = (_t, _m, n) => { putBack += n; h.win.selectedItem = null; };  // 送回背包
     const r = await deposit(h.bot, 'coal', 2);
     h.cleanup();
     check('第1条·附 中断仍报 INTERRUPTED（契约不变）', r?.code === 'INTERRUPTED', `code=${r?.code}`);
@@ -151,7 +153,7 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
 
     // ① 响应头立即返回，但 body 要 150ms 才读出；期限 35ms ⇒ 必须在期限内中止。
     //    真实 Response 的 body 在 abort 时会 reject，这里如实模拟这一点。
-    globalThis.fetch = async (_input, init) => {
+    globalThis.fetch = (_input, init) => {
         const sig = init?.signal;
         return {
             ok: true,
@@ -180,13 +182,13 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
         err && err.code === 'LLM_TIMEOUT' && cost < 120, `code=${err?.code} 耗时=${cost}ms`);
 
     // ② 不传 parse 时保持旧行为：直接拿到 Response
-    globalThis.fetch = async () => new Response('{}', { status: 200 });
+    globalThis.fetch = () => new Response('{}', { status: 200 });
     const r2 = await fetchWithDeadline('http://x.invalid', {}, { timeoutMs: 60000 });
     check('第2条 未传 parse 时仍返回 Response（旧调用方式不破坏）',
         r2 && r2.ok === true, `ok=${r2?.ok}`);
 
     // ③ parse 内的非超时错误原样抛（不能被误标成 LLM_TIMEOUT）
-    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('bad json'); } });
+    globalThis.fetch = () => ({ ok: true, status: 200, json: () => Promise.reject(new SyntaxError('bad json')) });
     let err3 = null;
     try {
         await fetchWithDeadline('http://x.invalid', {}, { timeoutMs: 60000, parse: async (res) => await res.json() });
@@ -194,7 +196,7 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
     check('第2条 JSON 解析错误不被误判为超时', err3 instanceof SyntaxError, `name=${err3?.name} code=${err3?.code}`);
 
     // ④ 成功路径返回解析结果，且不留残留定时器
-    globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: 1 }) });
+    globalThis.fetch = () => ({ ok: true, status: 200, json: () => Promise.resolve({ ok: 1 }) });
     const v = await fetchWithDeadline('http://x.invalid', {}, { timeoutMs: 60000, parse: async (res) => await res.json() });
     const alive = process.getActiveResourcesInfo?.() ?? [];
     check('第2条 parse 成功路径返回解析结果且无残留定时器',
@@ -208,7 +210,7 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
 // ── 第2条⑤ 补：外部取消（并发写法，避免上面顺序写法的空转） ──
 {
     const realFetch = globalThis.fetch;
-    globalThis.fetch = async (_input, init) => {
+    globalThis.fetch = (_input, init) => {
         const sig = init?.signal;
         return {
             ok: true, status: 200,
@@ -240,7 +242,7 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
 // ══════════════════════════════════════════════════════════════════════
 {
     const or = new OpenRouter('test-model');
-    or.openai = { chat: { completions: { create: async () => ({
+    or.openai = { chat: { completions: { create: () => ({
         choices: [{ finish_reason: 'length', message: { content: '半句回答' } }],
         usage: {},
     }) } } };
@@ -250,28 +252,28 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
     check('第3A OpenRouter 截断被标记为可识别截断', isTruncatedReply(r));
 
     const or2 = new OpenRouter('test-model');
-    or2.openai = { chat: { completions: { create: async () => ({
+    or2.openai = { chat: { completions: { create: () => ({
         choices: [{ finish_reason: 'stop', message: { content: '完整回答' } }], usage: {},
     }) } } };
     const r2 = await or2.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('第3A OpenRouter 正常结束不带截断标记', r2 === '完整回答' && !isTruncatedReply(r2), `r=${r2}`);
 
     const g = new Gemini('test-model');
-    g.genAI = { models: { generateContent: async () => ({
+    g.genAI = { models: { generateContent: () => ({
         text: '半句', candidates: [{ finishReason: 'MAX_TOKENS' }], usageMetadata: {},
     }) } };
     const gr = await g.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('第3A Gemini MAX_TOKENS 被识别为截断', isTruncatedReply(gr));
 
     const g2 = new Gemini('test-model');
-    g2.genAI = { models: { generateContent: async () => ({
+    g2.genAI = { models: { generateContent: () => ({
         text: '完整', candidates: [{ finishReason: 'STOP' }], usageMetadata: {},
     }) } };
     const gr2 = await g2.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
     check('第3A Gemini STOP 不带截断标记', gr2 === '完整', `r=${gr2}`);
 
     const g3 = new Gemini('test-model');
-    g3.genAI = { models: { generateContent: async () => ({
+    g3.genAI = { models: { generateContent: () => ({
         text: '', candidates: [{ finishReason: 'SAFETY' }], usageMetadata: {},
     }) } };
     const gr3 = await g3.sendRequest([{ role: 'user', content: 'hi' }], 'sys');
@@ -299,10 +301,10 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
         p.coding_examples = [];
         p.awaiting_coding = false;
         p.checkCooldown = async () => { };
-        p.replaceStrings = async (x) => x;
+        p.replaceStrings = (x) => Promise.resolve(x);
         p._saveLog = async () => { };
-        p.chat_model = { sendRequest: async () => chatReply };
-        p.code_model = { sendRequest: async () => codeReply };
+        p.chat_model = { sendRequest: () => Promise.resolve(chatReply) };
+        p.code_model = { sendRequest: () => Promise.resolve(codeReply) };
         return p;
     };
 
@@ -319,9 +321,15 @@ function makeChestBot({ inv = 10, chest = 0, delayMs = 0, item = 'iron_sword', o
         code.includes('no response') && !code.includes('await foo()'), `code=${JSON.stringify(code)}`);
     check('第3B 截断代码响应不含原始半截代码', !code.includes('LLM_TRUNCATED'));
 
+    // ★ H4（第四轮复审）：截断的摘要**不许覆盖** memory.json。
+    //   原断言是「剥掉标记后返回前半截摘要」，那正是被 H4 判成缺陷的行为
+    //   （半截摘要覆盖旧摘要 = 两头都亏，且 turns 已 splice、没有重来的机会）。
+    //   新契约：返回**旧摘要**（等于本轮摘要没发生）+ 结构化标志。
     const p3 = mkPrompter('新记忆摘要' + TRUNCATED_SUFFIX, null);
     const mem = await p3.promptMemSaving('to summarize');
-    check('第3B 记忆摘要不写入内部标记', mem === '新记忆摘要', `mem=${mem}`);
+    check('第3B/H4 截断摘要不覆盖旧记忆（返回旧摘要 old）', mem === 'old', `mem=${mem}`);
+    check('第3B/H4 截断摘要留结构化标志', p3.last_memory_summary_truncated === true,
+        `flag=${p3.last_memory_summary_truncated}`);
 
     const p4 = mkPrompter('respond' + TRUNCATED_SUFFIX, null);
     const yes = await p4.promptShouldRespondToBot('hey');

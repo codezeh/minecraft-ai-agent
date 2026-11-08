@@ -411,8 +411,21 @@ export { mapDirOf, botDirOf, botNameOf } from './bot_paths.js';
  * @param {object} [job]  任务单；没有就是"直接从命令调用"（jobId 为 null）
  * @param {object} [manifest] 用来兜底 deadline（单子没给 deadline 时 now + timeoutMs）
  */
-export function makeCtx(agent, job = null, manifest = null) {
-    const bot = agent?.bot ?? agent;
+/**
+ * ★ T6：ctx 层的"同一句 warn 只打一次"。
+ *
+ * 为什么需要：`reserve/release/reserveNow` 会被**每个动作**调用，
+ * 无板时每条都 warn 就是刷屏（刷屏的日志等于没有日志）。
+ * 按 tag 去重，进程内一句一次。
+ */
+const _ctxWarned = new Set();
+function warnCtxOnce(tag, msg) {
+    if (_ctxWarned.has(tag)) return;
+    _ctxWarned.add(tag);
+    try { console.warn(msg); } catch { /* 打不出日志不该抛 */ }
+}
+
+export function makeCtx(agent, job = null, manifest = null) {    const bot = agent?.bot ?? agent;
     const jobId = job?.id ?? null;
 
     // ★★ 2026-11-03（t66）：把**当前任务单 id 写到 bot 上**，供导航层的
@@ -431,6 +444,13 @@ export function makeCtx(agent, job = null, manifest = null) {
 
     // 断点：有单走任务板客户端，没单存内存
     const mem = { checkpoint: null };
+    /**
+     * ★ T6：本 ctx 在**执行期**补占到的预约 key（`reserveNow` 写、`releaseRuntimeClaims` 放）。
+     * 为什么必须记着：执行期补占的 key 不在 `deriveClaims(job)` 里，调度器收尾时
+     * 按推导出来的 key 逐个 release **不会**覆盖它们 ⇒ 只能等 TTL（30 秒）过期，
+     * 那 30 秒里别人一直拿不到。记下来，收尾一次放干净。
+     */
+    const runtimeClaims = new Set();
     // ★ B3 修：原来只认 `agent.boardClient`，而 `agent.js` 里存的是 `this.board` —— 两处字段名不一致，
     //   于是 `ctx.reserve/checkpoint` **永远走 no-board 分支**（恒成功/存内存），
     //   预约从来没真正经过任务板。这类"两个名字指同一个东西"的错在本项目反复出现。
@@ -451,6 +471,40 @@ export function makeCtx(agent, job = null, manifest = null) {
     //   ★ 注意：这段**必须放在 `board` 声明之后** —— 我第一版插在前面，
     //     `const` 暂时性死区抛错被 `catch` 吞掉 → **静默不生效**（又一个"容错不留痕"）。
     try { if (bot && board) bot.board = board; } catch { /* 假 bot 上写不进去就算了 */ }
+
+    /**
+     * ★★★ T6：**执行期二次预约**的唯一实现（ctx 与 bot 两处都指向它）。
+     *
+     * 为什么先在这里定义再分两处挂：
+     *   · `ctx.reserveNow`  —— 有 ctx 的流程（`flow_*` 拿到 ctx 的路径）直接用；
+     *   · `bot.__reserveNow` —— `act_container` / `act_craft` 这类**动作层**拿不到 ctx，
+     *     但它们又**不许 import board**（分层规则：动作层不该知道任务板存在）。
+     *   所以接线放在这里（注册表层），动作层只从 `opts.reserveNow ?? bot.__reserveNow` 取回调，
+     *   取不到就 warn-and-skip。这是本仓既有的"拿不到 ctx 就把句柄挂 bot 上"约定的第三次使用
+     *   （前两次：`bot.__navJobId`、`bot.board`）。
+     */
+    const reserveNowFn = async (_key) => {
+        const keys = Array.isArray(_key) ? _key : [_key];
+        if (!jobId) {
+            warnCtxOnce('reserve-now-no-job', '[ctx.reserveNow] 这次动作不属于任何任务单（jobId=null），'
+                + '没有可归属的预约：未占位（noJob）。');
+            return {
+                ok: false, code: 'NO_JOB', message: '不是任务单，没有预约归属',
+                data: { keys, noJob: true },
+            };
+        }
+        if (!board?.reserve) {
+            warnCtxOnce('reserve-now-no-board', '[ctx.reserveNow] 没有任务板：执行期占位**没有发生**（noBoard）。');
+            return {
+                ok: false, code: 'NO_BOARD', message: '没有任务板，未占位',
+                data: { keys, noBoard: true },
+            };
+        }
+        const r = await board.reserve(jobId, keys);
+        if (r?.ok) for (const k of (r.data?.reserved ?? keys)) runtimeClaims.add(String(k));
+        return r;
+    };
+    try { if (bot) bot.__reserveNow = reserveNowFn; } catch { /* 假 bot 上写不进去就算了 */ }
 
     return {
         jobId,
@@ -532,25 +586,87 @@ export function makeCtx(agent, job = null, manifest = null) {
         },
 
         /**
-         * 资源预约（06 §9.2）：**没有任务板时恒成功**（M8 之前都走这条）。
+         * 资源预约（06 §9.2）。
          *
          * ★ 参数形状（2026-11-02 B3 真机 + 单测两处都抓到过）：
          *   单个 key 是**字符串**，而 `board_client.reserve(id, keys)` 要的是**数组**。
          *   原来直接 `board.reserve(jobId, _key)` → 字符串被当成 owner、keys 变 undefined
          *   → `normalizeClaimKeys` 报"claims 必须是数组" → INTERNAL（或静默 no-op）。
          *   这里统一包成数组，并且**同时接受**单个 key 与 key 数组两种入参。
+         *
+         * ★★★ T6（架构收敛项 3）：**没有任务板时不再 `ok:true`（那是 fail-open）。**
+         *
+         *   审计原文：`composite_registry.reserve` 无板时 `ok:true, noBoard:true`
+         *   ⇒ 调用方以为"占位成功"，其实什么都没协调。`board_scheduler.js:632` 记过
+         *   一次真实事故：85 张单 done、`claims` 表 0 行 —— 正是"静默成功"的样子。
+         *
+         *   现在：`ok:false, code:'NO_BOARD'` + 一行 warn（**只打一次**，别每张单刷屏）。
+         *   `NO_BOARD` 不在 `contract.CODES` 里（那是流程结果码的封闭词汇表），
+         *   所以不走 `fail()` —— 形状仍与 ActionResult 一致（ok/code/message/data）。
+         *   调用方按 `code === 'NO_BOARD'` 分辨"没板"与"真冲突"。
          */
         async reserve(_key) {
             const keys = Array.isArray(_key) ? _key : [_key];
-            if (board?.reserve) return board.reserve(jobId, keys);
-            return { ok: true, code: 'OK', message: '', data: { jobId, keys, noBoard: true } };
+            if (board?.reserve) {
+                const r = await board.reserve(jobId, keys);
+                if (r?.ok) for (const k of (r.data?.reserved ?? keys)) runtimeClaims.add(String(k));
+                return r;
+            }
+            warnCtxOnce('reserve-no-board', '[ctx.reserve] 没有任务板：预约**没有发生**（noBoard）。'
+                + '调用方请不要把 ok:true 当成"占位成功"。');
+            return {
+                ok: false, code: 'NO_BOARD', message: '没有任务板，未预约',
+                data: { jobId, keys, noBoard: true },
+            };
+        },
+
+        /**
+         * ★★★ T6：**执行期二次预约**（按"真实目标"补占位）。
+         *
+         * 为什么需要它：`deriveClaims()` 只能从**任务单参数**推（`args.target` 之类），
+         * 而真实目标是**跑到那儿才知道**的 —— `flow_smelt` 现找附近熔炉、
+         * `flow_store` 现选箱子、`act_craft` 现找工作台。等真打开的那一刻再占位，
+         * 才挡得住"两个 bot 同时开同一个箱子/炉子"。
+         *
+         * 与 `reserve()` 的区别：
+         *   · `reserve`  —— 调度器跑单**前**按单里声明的 key 预占（失败 = 换单/退避）；
+         *   · `reserveNow` —— 动作层**打开真实目标时**补占；冲突要**当场**让调用方换目标
+         *     （`CLAIM_CONFLICT` + `data.conflicts`），不许"记一笔然后继续干"。
+         *
+         * 占到的 key 记在本 ctx 上（`runtimeClaims`），由 `releaseRuntimeClaims()`
+         * 在收尾时释放（调度器 `_runJob` 的 finally 会调）——否则这些 key 只能等
+         * TTL（30 秒）自然过期，期间别人一直拿不到。
+         */
+        reserveNow: reserveNowFn,
+
+        /** ★ T6：本单在执行期**补占**到的 key（诊断/收尾释放用）。 */
+        reservedKeys() { return [...runtimeClaims]; },
+
+        /**
+         * ★ T6：放掉执行期补占的全部 key（幂等；调度器收尾会调）。
+         * @returns {Promise<number>} 真的放掉了几条
+         */
+        async releaseRuntimeClaims() {
+            if (!runtimeClaims.size) return 0;
+            const keys = [...runtimeClaims];
+            runtimeClaims.clear();
+            if (!board?.release) return 0;
+            try {
+                const r = await board.release(jobId, keys);
+                return Number(r?.data?.released ?? 0);
+            } catch { return 0; }
         },
 
         /** 释放预约：同上（形状一致）。 */
         async release(_key) {
             const keys = Array.isArray(_key) ? _key : [_key];
+            for (const k of keys) runtimeClaims.delete(String(k));
             if (board?.release) return board.release(jobId, keys);
-            return { ok: true, code: 'OK', message: '', data: { jobId, keys, noBoard: true } };
+            warnCtxOnce('release-no-board', '[ctx.release] 没有任务板：释放**没有发生**（noBoard）。');
+            return {
+                ok: false, code: 'NO_BOARD', message: '没有任务板，未释放',
+                data: { jobId, keys, noBoard: true },
+            };
         },
     };
 }

@@ -96,9 +96,37 @@ export class AgentProcess {
         this.unregister = null;
         /** 可注入的定时器（用例换成收集器 → 退避序列可逐格断言；生产用全局 setTimeout）。 */
         this._setTimeout = null;
+        /**
+         * ★ R4 S1#3：可注入的 spawn（离线用例换成假子进程，不必真起 node 进程）。
+         * 生产就是 child_process.spawn。
+         */
+        this._spawn = spawn;
+        /**
+         * ★ R4 S1#3：子进程「代号」。每次 spawn 加一；`exit` / `error` 带着代号回来，
+         * 对不上当前代号的事件一律丢弃 —— 否则旧子进程迟到的 exit 会把**新**子进程的状态
+         * 打成 running=false（接着又被退避或面板拉起 = 双开的另一个来源）。
+         */
+        this._gen = 0;
+        /** 进行中的 forceRestart（面板双击时第二个请求直接返回，不再 spawn 第二个进程）。 */
+        this._restarting = null;
+        /**
+         * 停子进程用的等待参数（SIGINT 宽限 / 强杀后再等）。抽成字段是为了
+         * 离线用例能在**毫秒级**验"孤儿拒绝重启"，不必真的等 8 秒。生产就是这两个默认值。
+         */
+        this.stopOpts = { graceMs: 5000, killGraceMs: 3000 };
     }
 
     start(load_memory=false, init_message=null, count_id=0) {
+        // ★★★ R4 S1#3：**同一个 bot 双开的最后一道闸**。
+        //   缺陷原貌：`forceRestart()` 在 `process.killed === true` 时走 else 分支**直接 spawn**，
+        //   而 `killed` 只表示「信号已经发过」，**不代表子进程已经退出**。面板双击（或连点两次重启）
+        //   ⇒ 两个子进程同时活着 ⇒ 同一个 bot 双开：两条 board 连接、两份租约、同名互踢、玩家消息一半丢。
+        //   现在：running 只在「子进程真的退出」（_onChildExit）或「spawn 失败」（'error'）时落回 false，
+        //   所以重复 start() 会被当场拒绝，并**明确返回 false**（调用方可据此告警，而不是静默成功）。
+        if (this.running && this.process) {
+            console.warn(`[agent:${this.name}] 拒绝重复启动：当前子进程仍在运行（pid=${this.process.pid ?? '?'}）`);
+            return false;
+        }
         this.count_id = count_id;
         this.running = true;
         // 主动 start（用户点启动/强制重启）→ 清掉"用户要求停"的标记
@@ -113,7 +141,8 @@ export class AgentProcess {
             args.push('-m', init_message);
         args.push('-p', this.port);
 
-        const agentProcess = spawn(process.execPath, args, {
+        const gen = ++this._gen;               // 「这一代」子进程代号（迟到事件靠它识别）
+        const agentProcess = this._spawn(process.execPath, args, {
             stdio: 'inherit',
             stderr: 'inherit',
             // ★ F-EXEC-102（2026-11-06）：把自己的 pid 告诉子进程，子进程据此做**孤儿自杀**。
@@ -124,14 +153,20 @@ export class AgentProcess {
         this._spawnedAt = Date.now();
         
         agentProcess.on('exit', (code, signal) => {
-            this._onChildExit(code, signal, count_id);
+            this._onChildExit(code, signal, count_id, gen);
         });
     
         agentProcess.on('error', (err) => {
             console.error('Agent process error:', err);
+            // ★ R4 S2#12：spawn 失败时子进程**根本不会跑**（ENOENT / EACCES / 资源不足）。
+            //   原来只打一行日志就完事 ⇒ `running` 永远停在 true ⇒ start/stop/forceRestart
+            //   全都以为「它还在跑」（forceRestart 的老分支甚至会再 spawn 一个 = 双开），
+            //   而退避重启也再也不会被触发（exit 事件同样不会来）。状态必须落回 false。
+            if (gen === this._gen) this.running = false;
         });
 
         this.process = agentProcess;
+        return true;
     }
 
     /**
@@ -144,7 +179,12 @@ export class AgentProcess {
      *
      * @returns {{action:string, delayMs?:number, reason:string}} 本次决策（便于断言）
      */
-    _onChildExit(code, signal, count_id = this.count_id) {
+    _onChildExit(code, signal, count_id = this.count_id, gen = undefined) {
+        // 过期事件（来自已被替换掉的上一代子进程）不许动这一代的状态
+        if (gen !== undefined && gen !== this._gen) {
+            console.warn(`[agent:${this.name}] 忽略过期的子进程事件（gen=${gen}，当前 gen=${this._gen}）`);
+            return { action: 'stale', reason: 'stale-exit' };
+        }
         console.log(`Agent process exited with code ${code} and signal ${signal}`);
         this.running = false;
         logoutAgent(this.name);
@@ -161,7 +201,14 @@ export class AgentProcess {
         if (plan.action === 'unregister') {
             console.warn(`[agent:${this.name}] ${plan.reason}`);
             // 只摘掉自己：注销 + 从 agent_processes 删除（由宿主注入）
-            try { this.unregister?.(); } catch (e) {
+            try {
+                const maybePromise = this.unregister?.();
+                // 宿主注入的摘除函数现在是异步的（destroyAgent 要等子进程确认退出）：
+                // 这里显式接住它的拒绝，别让它变成未处理的 Promise 拒绝把进程带走。
+                if (maybePromise && typeof maybePromise.catch === 'function') {
+                    maybePromise.catch((e) => console.error(`[agent:${this.name}] 摘除失败：`, e));
+                }
+            } catch (e) {
                 console.error(`[agent:${this.name}] 摘除失败：`, e);
             }
             return plan;
@@ -186,8 +233,17 @@ export class AgentProcess {
         this._stoppedByUser = true;
         try { clearTimeout(this._restartTimer); } catch { /* ignore */ }
         this._restartTimer = null;
-        if (!this.running) return;
-        this.process.kill('SIGINT');
+        // ★ R4 S1#4：原来 `if (!this.running) return;` 之后直接 `this.process.kill(...)` ——
+        //   running 为 true 而 process 为空时抛 TypeError，把调用方（destroy-agent）带走。
+        //   现在把结果如实返回（有没有子进程、信号发没发出），调用方据此决定要不要「等」。
+        if (!this.running || !this.process) return { exited: true, sent: false, reason: 'no-child' };
+        try {
+            this.process.kill('SIGINT');
+            return { exited: false, sent: true, reason: 'sent-sigint' };
+        } catch (e) {
+            console.error(`[agent:${this.name}] 发 SIGINT 失败：${e?.message ?? e}`);
+            return { exited: false, sent: false, reason: 'kill-failed' };
+        }
     }
 
     /**
@@ -210,7 +266,7 @@ export class AgentProcess {
         if (!this.running || !this.process) {
             return { exited: true, escalated: false, reason: 'no-child' };
         }
-        const r = await stopChildAndWait(this.process, opts);
+        const r = await stopChildAndWait(this.process, { ...this.stopOpts, ...opts });
         // 无论结果如何，这个句柄都不该再被当成"在跑"
         this.running = false;
         if (!r.exited) {
@@ -219,22 +275,56 @@ export class AgentProcess {
         return r;
     }
 
-    forceRestart() {
-        if (this.running && this.process && !this.process.killed) {
-            console.log(`Agent process for ${this.name} is still running. Attempting to force restart.`);
-            
-            const restartTimeout = setTimeout(() => {
-                console.warn(`Agent ${this.name} did not stop in time. It might be stuck.`);
-            }, 5000); // 5 seconds to exit
-
-            this.process.once('exit', () => {
-                 clearTimeout(restartTimeout);
-                 console.log(`Stopped hanging agent ${this.name}. Now restarting.`);
-                 this.start(true, 'Agent process restarted.', this.count_id);
-            });
-            this.stop(); // sends SIGINT
-        } else {
-             this.start(true, 'Agent process restarted.', this.count_id);
+    /**
+     * ★★★ R4 S1#3：强制重启 —— **先等旧子进程真的退出，再拉起新的**。
+     *
+     * 缺陷原貌（`agent_process.js:222-239`）：
+     *   `if (this.running && this.process && !this.process.killed)` … `else { this.start(...) }`
+     *   · `process.killed === true` 只表示「信号已经发过」，**子进程可能还活着**；
+     *     此时走 else 分支直接 spawn ⇒ **同一个 bot 两个进程同时在线**（双开）；
+     *   · 面板双击 / 连点 ⇒ 两个 forceRestart 并发，各自 `once('exit')` ⇒ 一次退出触发两次 spawn；
+     *   · 旧的 5 秒定时器只打一句 warn，**不等**也不强杀。
+     *
+     * 现在：
+     *   ① 并发保护：第二次调用立刻返回 `{started:false, reason:'in-progress'}`（不 spawn）；
+     *   ② 旧进程一律走 `stopAndWait()`（SIGINT → 等 graceMs → SIGKILL → 再等）；
+     *   ③ **未确认退出就绝不 spawn**（宁可这次不起，也不双开）—— 返回 `exited:false` 让调用方告警。
+     *
+     * @returns {Promise<{started:boolean, exited:boolean, escalated?:boolean, reason:string}>}
+     */
+    async forceRestart() {
+        // ① 并发保护：面板双击时第二个请求直接返回
+        if (this._restarting) {
+            console.warn(`[agent:${this.name}] 已有一次重启在进行，忽略重复请求（面板双击/连点）`);
+            return { started: false, exited: true, reason: 'in-progress' };
         }
+        this._restarting = this._restartAndStart();
+        try {
+            return await this._restarting;
+        } finally {
+            this._restarting = null;
+        }
+    }
+
+    /** forceRestart 的实际流程：等旧进程退出 → 再 spawn。抽出来是为了让并发闸只管排队。 */
+    async _restartAndStart() {
+        const hadChild = !!(this.running && this.process);
+        if (hadChild) {
+            console.log(`Agent process for ${this.name} is still running. Attempting to force restart.`);
+            const r = await this.stopAndWait();
+            if (!r.exited) {
+                console.error(`[agent:${this.name}] 旧子进程未确认退出（${r.reason}）—— **拒绝**拉起新进程：` +
+                    `那等于同一个 bot 双开（两条 board 连接、两份租约、同名互踢）。`);
+                return { started: false, exited: false, escalated: !!r.escalated, reason: r.reason };
+            }
+            console.log(`[agent:${this.name}] 旧子进程已退出（${r.reason}），现在拉起新进程`);
+        }
+        const started = this.start(true, 'Agent process restarted.', this.count_id);
+        return {
+            started: started !== false,
+            exited: true,
+            escalated: false,
+            reason: hadChild ? 'restarted' : 'started',
+        };
     }
 }

@@ -156,7 +156,10 @@ for (const [file, re] of INTERNAL_CALL_SITES) {
 // executeCommand 不再传 internalNames
 const cmdSrc = fs.readFileSync(path.join(SRC, 'commands', 'index.js'), 'utf8');
 check('commands/index.js 不再传 internalNames', !/internalNames:/.test(cmdSrc));
-check('commands/index.js 仍把 internal 传进 resolveLevel', /\b internal,\n/.test(cmdSrc) || /internal,\s*\n\s*\}\)/.test(cmdSrc));
+// R4 t13：resolveLevel 的调用点新增了 uuid / identity 两个参数，
+// 断言不再依赖"internal 后面紧跟 })"，改为"这段调用里确实传了 internal"。
+check('commands/index.js 仍把 internal 传进 resolveLevel',
+    /resolveLevel\(\{[\s\S]{0,500}?\binternal\b/.test(cmdSrc));
 
 // ════════════════════════════════════════════════════════════
 // D. 复现报告里的两条实测路径
