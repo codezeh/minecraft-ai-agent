@@ -84,7 +84,9 @@ param(
     [switch]$KeepPartial,
     [int]$WaitLockSec = 0,
     [int]$LogDays = 7,
-    [switch]$ExcludeSecrets
+    [switch]$ExcludeSecrets,
+    # 从 config/backup.json 取默认值（keep / excludeSecrets / 总开关）；命令行显式参数仍然优先
+    [switch]$FromConfig
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,6 +97,26 @@ $root = Split-Path -Parent $PSScriptRoot
 $rconLib = Join-Path $PSScriptRoot 'lib/rcon.ps1'
 if (-not (Test-Path -LiteralPath $rconLib)) { throw "缺少 RCON 库：$rconLib" }
 . $rconLib
+
+# ── 自动备份配置（用户拍板⑥）────────────────────────────────────────
+# -FromConfig：给"停服后自动备份"和"每日计划任务"用；读 config/backup.json，
+# 但命令行显式给的参数仍然优先（$PSBoundParameters 判断，不靠默认值猜）。
+$backupCfg = $null
+if ($FromConfig) {
+    . (Join-Path $PSScriptRoot 'lib/backup_config.ps1')
+    $backupCfg = Get-BackupConfig -Root $root
+    foreach ($w in $backupCfg.warnings) { Write-Host "WARN $w" -ForegroundColor Yellow }
+
+    if (-not $backupCfg.enabled) {
+        Write-Host 'SKIP 自动备份已关闭（config/backup.json enabled=false）—— 本次不备份' -ForegroundColor Yellow
+        Write-BackupAutoLog -Root $root -Level 'SKIP' -Message '计划任务/自动备份跳过：总开关 enabled=false'
+        exit 0
+    }
+    if (-not $PSBoundParameters.ContainsKey('Keep')) { $Keep = $backupCfg.keep }
+    if (-not $PSBoundParameters.ContainsKey('ExcludeSecrets') -and $backupCfg.excludeSecrets) { $ExcludeSecrets = $true }
+    Write-Host ("自动备份配置：enabled={0} keep={1} excludeSecrets={2} dailyAt={3}（{4}）" -f `
+            $backupCfg.enabled, $Keep, [bool]$ExcludeSecrets, $backupCfg.dailyAt, $backupCfg.configPath) -ForegroundColor DarkGray
+}
 if (-not $OutDir) { $OutDir = Join-Path $root 'backups' }
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -452,6 +474,12 @@ if ($Mode -eq 'Cold') {
         Write-Host '     如果只是瞬时占用（例如另一个终端在跑单元测试）：加 -WaitLockSec 60 再试'
         Write-Host '     注意：任务板库被别的进程（mindserver/测试）开着不会拒绝 —— 一致性靠「VACUUM INTO 快照 + 复制期间零变更」证明。'
         Write-Host '     若确实要在运行期尝试：-Mode Hot -Force（预期失败，见脚本注释 B1）'
+        if ($FromConfig) {
+            # 计划任务不许为了备份去杀服务端：跳过 + 留痕，且把"连续跳过多少天"写出来
+            $n = (Get-ConsecutiveSkipCount -Root $root) + 1
+            Write-BackupAutoLog -Root $root -Level 'SKIP' -Message ("自动备份因服务端运行跳过（第 {0} 次连续跳过；不杀服务端，等服务端停服后由关服流程备份）" -f $n)
+            Write-Host ("     已记录到 logs/backup-auto.log：因服务端运行跳过（第 {0} 次连续）" -f $n) -ForegroundColor Yellow
+        }
         exit 2
     }
 } else {
@@ -819,10 +847,17 @@ try {
     Write-Info "一致性：$(if ($consistent) { '已保证（' + $Mode + '）' } else { '无保证（见 WARN）' })"
     if (-not $ExcludeSecrets) { Write-Warn2 '备份内含 server\server.properties（RCON 口令）—— 备份目录属敏感数据，别外传、别提交进 git。' }
     Write-Info "核验：powershell -File scripts\verify-world-backup.ps1 -BackupDir `"$final`""
+    if ($FromConfig) {
+        Write-BackupAutoLog -Root $root -Level 'OK' -Message ("自动备份成功：{0}（{1:N0} MB，keep={2}）" -f `
+                (Split-Path -Leaf $final), ((Get-ChildItem $final -File | Measure-Object Length -Sum).Sum / 1MB), $Keep)
+    }
     $exitCode = 0
 } catch {
     Write-Fail "备份失败：$($_.Exception.Message)"
     if ($_.ScriptStackTrace) { Write-Info "位置：$($_.ScriptStackTrace)" }
+    if ($FromConfig) {
+        Write-BackupAutoLog -Root $root -Level 'ERROR' -Message "自动备份失败：$($_.Exception.Message)"
+    }
     $exitCode = 1
 } finally {
     if ($savedOff -and $rcon) {

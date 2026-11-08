@@ -1,0 +1,99 @@
+{
+    "createdAt":  "2026-11-08T06:51:42.1326633+08:00",
+    "backupDir":  "E:\\我的世界ai\\backups\\world-20261108-034843",
+    "drillDir":  "E:\\我的世界ai\\tmp\\drill-20261108-065111",
+    "ports":  {
+                  "server":  25567,
+                  "rcon":  25568
+              },
+    "summary":  {
+                    "pass":  12,
+                    "fail":  0,
+                    "total":  12
+                },
+    "verdict":  "PASS",
+    "assertions":  [
+                       {
+                           "id":  1,
+                           "name":  "manifest 可读且 schemaVersion\u003e=3",
+                           "status":  "PASS",
+                           "detail":  "schemaVersion=3 entries=7"
+                       },
+                       {
+                           "id":  2,
+                           "name":  "每个压缩包字节与 SHA256 与 manifest 相等",
+                           "status":  "PASS",
+                           "detail":  "7 个包全部核对通过"
+                       },
+                       {
+                           "id":  3,
+                           "name":  "region/*.mca 数与 manifest 相等",
+                           "status":  "PASS",
+                           "detail":  "世界 3 个维度全部相符"
+                       },
+                       {
+                           "id":  4,
+                           "name":  "playerdata/*.dat 数与 manifest 相等",
+                           "status":  "PASS",
+                           "detail":  "全部相符"
+                       },
+                       {
+                           "id":  5,
+                           "name":  "每个 .mca 头部可解析（扇区表+至少 1 chunk）",
+                           "status":  "PASS",
+                           "detail":  "全部可解析"
+                       },
+                       {
+                           "id":  6,
+                           "name":  "每个 level.dat 是合法 gzip/NBT",
+                           "status":  "PASS",
+                           "detail":  "首字节均为 0x0a（TAG_Compound）"
+                       },
+                       {
+                           "id":  7,
+                           "name":  "任务板 integrity_check=ok",
+                           "status":  "PASS",
+                           "detail":  "integrity=ok user_version=2"
+                       },
+                       {
+                           "id":  8,
+                           "name":  "任务板 jobs/claims/shared 行数与 manifest 相等",
+                           "status":  "PASS",
+                           "detail":  "jobs=0 claims=0 shared=1"
+                       },
+                       {
+                           "id":  9,
+                           "name":  "每个 bot 的 memory.json 可 JSON 解析",
+                           "status":  "PASS",
+                           "detail":  "3 个全部可解析"
+                       },
+                       {
+                           "id":  10,
+                           "name":  "启动日志出现 Done (",
+                           "status":  "PASS",
+                           "detail":  "24.4s"
+                       },
+                       {
+                           "id":  11,
+                           "name":  "启动日志 ERROR 数为 0",
+                           "status":  "PASS",
+                           "detail":  "ERROR=1 Exception=3（豁免离线网络噪音 4 条，见报告）"
+                       },
+                       {
+                           "id":  12,
+                           "name":  "RCON stop 后日志出现 All chunks are saved",
+                           "status":  "PASS",
+                           "detail":  ""
+                       }
+                   ],
+    "ignoredNetworkErrors":  [
+                                 "[06:51:32] [Yggdrasil Key Fetcher/ERROR]: Failed to request yggdrasil public key",
+                                 "com.mojang.authlib.exceptions.MinecraftClientException: Failed to read from https://api.minecraftservices.com/publickeys due to Remote host terminated the handshake",
+                                 "Caused by: javax.net.ssl.SSLHandshakeException: Remote host terminated the handshake",
+                                 "Caused by: java.io.EOFException: SSL peer shut down incorrectly"
+                             ],
+    "evidence":  {
+                     "serverLog":  "（未起服）",
+                     "javaOut":  "（未起服）"
+                 }
+}

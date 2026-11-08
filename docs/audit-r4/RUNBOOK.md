@@ -71,9 +71,56 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup-world.ps1 -Ou
 
 > ⚠️ **备份目录是敏感数据**：默认包含 `server/server.properties`（内含 `rcon.password`）。别外传、别 `git add`。脚本自己也会打这条警告。
 
-### 1.4 定期备份 —— **未实现，需你决定**
+### 1.4 自动备份 —— **已默认开启**（用户拍板⑥）
 
-本轮**没有**做计划任务（`grep schtasks|Register-ScheduledTask scripts\*.ps1` = 0 命中）。要自动化请自行用「任务计划程序」调上面的命令，并注意：**冷备要求先停服**，所以自动化必须包含「停服 → 备份 → 起服」，否则每次都会 `exit 2`。
+从 T28 起，备份不再需要人手动跑脚本。开关在 **`config/backup.json`**（改完立即生效，不用重启任何服务）：
+
+```json
+{ "enabled": true, "onServerStop": true, "dailyAt": "04:30", "keep": 7, "excludeSecrets": true }
+```
+
+| 字段 | 默认 | 含义 |
+|---|---|---|
+| `enabled` | `true` | **总开关**。改成 `false` ⇒ 停服不备份、计划任务也会跳过（只记一条 warn） |
+| `onServerStop` | `true` | **主路径**：用面板优雅关服后自动备份（此时服务端已停，冷备最安全） |
+| `dailyAt` | `"04:30"` | 每日计划任务的触发时间（`HH:mm`） |
+| `keep` | `7` | 保留最近几份（只清理含 `manifest.json` 的目录） |
+| `excludeSecrets` | `true` | 备份里排除 `server/server.properties`（含 RCON 口令）；改成 `false` 则包含 |
+
+**两条触发路径**
+
+1. **停服后自动备份（已接好，默认开）**：`scripts/stop-panel.ps1` 在确认 java 已退出（最多等 60s）之后，
+   若 `enabled && onServerStop` ⇒ 调 `backup-world.ps1 -FromConfig`。
+   **备份失败绝不影响停服**：整个环节被 try/catch 包住，失败只写日志并打印一行提示。
+2. **每日计划任务（兜底，需要你显式装一次）**：
+
+   ```powershell
+   # 装（只需一次，必须是你自己运行；脚本不会自动注册）
+   powershell -ExecutionPolicy Bypass -File scripts\install-backup-task.ps1
+   # 查
+   Get-ScheduledTask -TaskName Minecraft-AutoBackup
+   # 卸
+   powershell -ExecutionPolicy Bypass -File scripts\install-backup-task.ps1 -Uninstall
+   ```
+
+   任务名 `Minecraft-AutoBackup`，动作是 `backup-world.ps1 -FromConfig`，按 `dailyAt` 每日触发。
+
+   > **冷备要求服务端已停**，所以计划任务**不会去杀服务端**：发现服务端在跑就**跳过并留痕**。
+   > 也就是说，如果你从不关服，兜底任务会天天跳过——这是设计，不是故障。真正常态生效的是路径 1。
+
+**日志在哪看**：`logs/backup-auto.log`（每次自动备份一行，含时间/结果/原因）
+
+```
+[2026-11-08 12:46:20] OK    自动备份成功：world-20261108-124614（84 MB，keep=7）
+[2026-11-08 13:05:57] SKIP  自动备份因服务端运行跳过（第 1 次连续跳过；不杀服务端，等服务端停服后由关服流程备份）
+[2026-11-08 13:07:55] SKIP  自动备份因服务端运行跳过（第 2 次连续跳过；…）
+[2026-11-08 12:49:09] SKIP  停服后备份跳过：总开关 enabled=false
+```
+
+**关掉自动备份的两种方式**
+
+- 只停自动、保留手动：`config/backup.json` 里 `enabled: false`（计划任务若已注册会自动跳过并 warn）；
+- 彻底不跑：再执行 `install-backup-task.ps1 -Uninstall` 删掉任务。
 
 ---
 
@@ -328,7 +375,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tests\rcon-regressio
 | D3 | **是否 push 到远端** | 父仓**没有配置任何 remote**；`mindcraft` 有两个：`mine`（你的 fork）、`origin`（upstream `mindcraft-bots/mindcraft`） | 父仓需要先 `git remote add`；`mindcraft` 只能推 `mine`，**不要**推 `origin`（那是上游） |
 | D4 | **`backups/world-20261108-030525` 旧格式备份** | `schemaVersion` 不满足 `>=3` ⇒ `verify` 会 FAIL（预期） | ① 删掉（省 70MB+）；② 留作历史，但**不要再拿它做验证基线**；③ 用新脚本重做一份再删 |
 | D5 | **RCON 口令轮换** | 已从 32 位轮换为 **48 位随机**；`broadcast-rcon-to-ops=false`；防火墙规则 `deny-rcon-25575-in`（Inbound/Block）**已启用** | 仍是**明文**存在 `server.properties` 且走 loopback 明文传输。要更好：定期轮换口令（改完记得 `stop-panel` 重启生效）；或改成仅本机回环 + 不做远程运维 |
-| D6 | **是否做定期备份** | **未实现**（无计划任务） | 见 §1.4：自动化必须包住"停服→备份→起服"，否则每天 `exit 2` |
+| D6 | **是否做定期备份** | **已实现**（T28）：停服后自动备份默认开启 + `install-backup-task.ps1` 每日兜底 | 见 §1.4；关闭方式：`config/backup.json` 的 `enabled:false`，或 `-Uninstall` 删任务 |
 
 ---
 

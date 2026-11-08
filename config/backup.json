@@ -1,0 +1,12 @@
+{
+  "_说明": "地图/机器人数据自动备份开关（用户拍板⑥：默认开启）。改完立即生效，无需重启任何服务。",
+  "_怎么关": "把 enabled 改成 false ⇒ 停服不再自动备份、每日计划任务也会跳过（若已注册则只记一条 warn）。",
+  "_两种触发": "onServerStop=true 走『停服后自动备份』（主路径，最安全）；每日计划任务（install-backup-task.ps1 注册）是兜底，发现服务端在跑会跳过并记日志。",
+  "_日志": "每次自动备份（成功/失败/跳过/因服务端运行跳过）都追加到 logs/backup-auto.log。",
+  "_冷备约束": "备份要求服务端已停：运行期 session.lock 与 region/*.mca 被独占，热备物理上不可能（t7 已实测）。所以计划任务不会为了备份去杀服务端，只会跳过。",
+  "enabled": true,
+  "onServerStop": true,
+  "dailyAt": "04:30",
+  "keep": 7,
+  "excludeSecrets": true
+}

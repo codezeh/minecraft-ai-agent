@@ -1,4 +1,4 @@
-# Minecraft AI 陪玩面板 —— 停止 / 优雅关服
+﻿# Minecraft AI 陪玩面板 —— 停止 / 优雅关服
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -50,4 +50,41 @@ Write-Host '说明：' -ForegroundColor DarkGray
 Write-Host '  · Minecraft 走 RCON stop，会自己刷盘关闭（不是强杀）'
 Write-Host '  · 若 "MC Server" / "Mindcraft" 窗口还在，直接关掉即可'
 Write-Host ''
+
+# ════════════════════════════════════════════════════════════════════
+# 停服后自动备份（用户拍板⑥：默认开启，可在 config/backup.json 关掉）
+#
+# 只有在**确认 java 已经退出**之后才备份 —— 冷备要求服务端已停
+# （运行期 session.lock 与 region/*.mca 被独占，热备物理上不可能，t7 已实测）。
+# 备份失败**绝不能**影响停服流程：这里全部 try/catch 兜住，停服优先。
+# ════════════════════════════════════════════════════════════════════
+if ($stopCode -eq 0) {
+    Write-Host '自动备份：' -ForegroundColor Cyan
+    try {
+        $waitSec = 60
+        $deadline = (Get-Date).AddSeconds($waitSec)
+        $javaLeft = @(Get-Process -Name java, javaw -ErrorAction SilentlyContinue)
+        while ($javaLeft.Count -gt 0 -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+            $javaLeft = @(Get-Process -Name java, javaw -ErrorAction SilentlyContinue)
+        }
+        if ($javaLeft.Count -gt 0) {
+            Write-Host '  · 仍有 java 进程未退出（等 60s）→ 跳过自动备份（不冒险热备）' -ForegroundColor Yellow
+            try {
+                . (Join-Path $PSScriptRoot 'lib/backup_config.ps1')
+                Write-BackupAutoLog -Root $root -Level 'SKIP' -Message ("停服后备份跳过：{0} 个 java 进程在 60s 内未退出" -f $javaLeft.Count)
+            } catch { }
+        } else {
+            . (Join-Path $PSScriptRoot 'lib/backup_config.ps1')
+            $null = Invoke-BackupOnServerStop -Root $root
+        }
+    } catch {
+        Write-Host "  · 自动备份环节异常（已忽略，停服不受影响）：$($_.Exception.Message)" -ForegroundColor Yellow
+    }
+    Write-Host ''
+} else {
+    Write-Host '自动备份：跳过（本次没有成功停服，不做备份）' -ForegroundColor DarkGray
+    Write-Host ''
+}
+
 Read-Host '按回车关闭' | Out-Null
