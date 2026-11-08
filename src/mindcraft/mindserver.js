@@ -20,7 +20,11 @@ import {
     DEFAULT_CODE_TTL_MS,
 } from './identity_store.js';
 // OPS-003（2026-11-06）：离线模式 + 监听所有网卡 ⇒ 名字可冒用为主人。启动时给出可见告警。
-import { assessFromProperties, renderOfflineIdentityWarning } from './offline_identity_risk.js';
+import {
+    assessFromProperties, renderOfflineIdentityWarning,
+    // ★ t27：online-mode 与 offline_owner_mode 合成策略的**唯一判据入口**
+    readServerOnlineMode, resolveIdentityPolicy,
+} from './offline_identity_risk.js';
 import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync, unlinkSync } from 'fs';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
 // 板放 agent 里别的 bot 看不见；放这里就只有一个写者，省掉多进程锁）。
@@ -816,9 +820,31 @@ export function createMindServer(host_public = false, port = 8080) {
                 const idRead = readStore(identityFileOf(name));
                 const st = previewStatus(codeRead.store);
                 const bindings = previewStatus(idRead.store).bindings;
+                // ★ t27：面板要能显示"当前是离线还是正版 + owner 策略"，
+                //   否则用户不知道自己处在哪种状态（也就无从判断要不要去开正版验证）。
+                let modeInfo = null;
+                try {
+                    const online = readServerOnlineMode();
+                    const cfg = (rootSettings?.identity_binding && typeof rootSettings.identity_binding === 'object')
+                        ? rootSettings.identity_binding : {};
+                    const pol = resolveIdentityPolicy({
+                        onlineMode: online.onlineMode,
+                        offlineOwnerMode: cfg.offline_owner_mode,
+                        sessionMinutes: cfg.offline_session_minutes,
+                    });
+                    modeInfo = {
+                        onlineMode: online.onlineMode,          // true/false/null(读不到)
+                        source: online.source,
+                        effective: pol.effective,               // persistent | session | deny
+                        uuidTrusted: pol.uuidTrusted,
+                        sessionMinutes: pol.sessionMinutes,
+                        reason: pol.reason,
+                    };
+                } catch { /* 面板信息拿不到不影响绑定本身 */ }
                 cb({
                     ok: true,
                     agent: name,
+                    mode: modeInfo,
                     // 码本身不在这里回（它只出现在"刚生成"那一次的回执里）——
                     // 免得任何持 token 的客户端随手一拉就能捡走别人还没用的码。
                     pendingCodes: st.codes.map((c) => ({ expiresAt: c.expiresAt, sessionId: c.sessionId })),
@@ -1379,25 +1405,28 @@ export function createMindServer(host_public = false, port = 8080) {
         //   主人的名字，就拿到**同一个 uuid** ⇒ 身份绑定按 uuid 精确命中 ⇒ 直接 owner。
         //   也就是说：**t13 那层保护在离线服上不存在**，能做的只有"识别出来 + 降级 + 说清楚"。
         try {
-            const propsPath = path.join(__dirname, '..', '..', '..', 'server', 'server.properties');
-            let onlineMode = null;
-            if (existsSync(propsPath)) {
-                const m = /^\s*online-mode\s*=\s*(true|false)\s*$/im.exec(readFileSync(propsPath, 'utf8'));
-                if (m) onlineMode = m[1].toLowerCase() === 'true';
-            }
+            // ★ t27：不再自己写正则 —— 走 readServerOnlineMode（唯一判据入口）
+            const online = readServerOnlineMode();
+            const onlineMode = online.onlineMode;
             const identityCfg = (rootSettings?.identity_binding && typeof rootSettings.identity_binding === 'object')
                 ? rootSettings.identity_binding : {};
             const identityOn = identityCfg.enabled !== false;
             if (onlineMode === false && identityOn) {
-                const mode = String(identityCfg.offline_owner_mode ?? 'deny').toLowerCase() === 'session' ? 'session' : 'deny';
-                const minutes = Number(identityCfg.offline_session_minutes ?? 60) || 60;
+                const minutes = Number(identityCfg.offline_session_minutes ?? 720) || 720;
+                const policy = resolveIdentityPolicy({
+                    onlineMode, offlineOwnerMode: identityCfg.offline_owner_mode, sessionMinutes: minutes,
+                });
                 console.warn('[mindserver] ⚠ 离线模式（server.properties: online-mode=false）+ 身份绑定已启用。');
                 console.warn('            ⇒ 离线模式下**uuid 由名字派生**（OfflinePlayer:<名字>）：同名 = 同 uuid，');
                 console.warn('              冒名者改个客户端名就能命中主人的绑定 ⇒ **按身份授权挡不住冒用**。');
-                console.warn(`            ⇒ 当前 identity_binding.offline_owner_mode = "${mode}"：` +
-                    (mode === 'session'
+                console.warn(`            ⇒ 当前生效策略 = "${policy.effective}"（identity_binding.offline_owner_mode = `
+                    + `"${identityCfg.offline_owner_mode ?? 'session'}"，窗口 ${minutes} 分钟）：`
+                    + (policy.effective === 'session'
                         ? `仅刚 !claim 后的 ${minutes} 分钟内授 owner，其余时间只聊天（降低暴露窗口，不是证明身份）。`
                         : '这类"弱绑定"在离线服上一律只聊天（owner 不可达）。'));
+                console.warn('            ⇒ 想切成正版验证（之后 owner 持久有效，且不可被同名冒用）：');
+                console.warn('               ① 改 config/network.json 的 servers.main.onlineMode = true；');
+                console.warn('               ② node tools/server-net.mjs apply  ③ 重启 Minecraft 服务器。');
                 console.warn('            ⇒ 根治只有两条（需要你拍板，代码不会替你改）：');
                 console.warn('               ① 开正版验证：server.properties 设 online-mode=true（客户端须正版登录）；');
                 console.warn('               ② 装登录插件（如 AuthMe）：让玩家用密码注册登录，身份由插件保证。');

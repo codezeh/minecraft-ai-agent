@@ -347,6 +347,89 @@ const now = Date.now();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// E2. ★★★ t27：两档模式自动对齐（用户拍板：允许离线 + 保留正版验证开关）
+//
+//   · online-mode=true  ⇒ uuid 由 Mojang 签发、可信 ⇒ 弱 uuid 也**持久**授 owner；
+//   · online-mode=false ⇒ 走 offline_owner_mode（默认 session / 720 分钟）。
+//   判据只有一处：offline_identity_risk.resolveIdentityPolicy()。
+//   「弱 uuid 在正版服」看起来矛盾，但真会发生：先是离线服绑的弱记录，后来切了正版。
+// ════════════════════════════════════════════════════════════════════════════
+{
+    const { resolveIdentityPolicy, readServerOnlineMode } =
+        await import('../src/mindcraft/offline_identity_risk.js');
+    const { writeFileSync: wf, mkdirSync: mk } = await import('node:fs');
+
+    // 纯判据：两档 × 三策略
+    const pPrem = resolveIdentityPolicy({ onlineMode: true, offlineOwnerMode: 'deny', sessionMinutes: 720 });
+    check('E2-1 正版验证 ⇒ 持久授 owner（即便配置写着 deny/窗口再短也不参与）',
+        pPrem.effective === 'persistent' && pPrem.uuidTrusted === true && pPrem.sessionMinutes === 0);
+    const pOff = resolveIdentityPolicy({ onlineMode: false, offlineOwnerMode: 'session', sessionMinutes: 720 });
+    check('E2-2 离线 + session ⇒ 限时授 owner，窗口按配置（默认 720）',
+        pOff.effective === 'session' && pOff.uuidTrusted === false && pOff.sessionMinutes === 720);
+    const pDeny = resolveIdentityPolicy({ onlineMode: false, offlineOwnerMode: 'deny' });
+    check('E2-3 离线 + deny ⇒ owner 不可达', pDeny.effective === 'deny');
+    check('E2-4 读不到 online-mode（null）⇒ 按离线处理，不当正版',
+        resolveIdentityPolicy({ onlineMode: null }).uuidTrusted === false);
+
+    // 端到端（真文件 + 真 server.properties 副本）：两种 online-mode 下的定级
+    const { setSettings } = await import('../src/agent/settings.js');
+    const { identityContextOf } = await import('../src/agent/commands/index.js');
+    const propsDir = path.join(ROOT, 'props');
+    mk(propsDir, { recursive: true });
+    const writeProps = (online) => {
+        const f = path.join(propsDir, `server-${online ? 'true' : 'false'}.properties`);
+        wf(f, `online-mode=${online}\nserver-ip=\nwhite-list=true\n`);
+        return f;
+    };
+
+    const NAME2 = 'HEAVENZEH';
+    const WEAK = offlineUuidOf(NAME2);                 // 离线派生 ⇒ 弱
+    const weakStore2 = bindFromCode(emptyStore(), { uuid: WEAK, name: NAME2, now: Date.now() }).store;
+    writeStore(identityFileOf(AGENT), weakStore2);
+    const fakeAgent = {
+        name: AGENT,
+        prompter: { profile: { permissions: { owner: NAME2 } } },
+        bot: { username: AGENT, players: {} },
+    };
+    setSettings({ identity_binding: { enabled: true, offline_owner_mode: 'session', offline_session_minutes: 720 } });
+    resetSessionClaims();
+
+    // ① 生产前提核对：读的是真文件
+    const real = readServerOnlineMode();
+    check('E2-5 readServerOnlineMode 读得到 server.properties（唯一判据入口）',
+        real.source === 'file' && typeof real.onlineMode === 'boolean', JSON.stringify(real));
+
+    // ② online-mode=true + 弱 uuid ⇒ **持久** owner（不用 claim、不看窗口）
+    process.env.MC_SERVER_PROPERTIES = writeProps(true);
+    const ctxPrem = identityContextOf(fakeAgent);
+    check('E2-6 ★ online-mode=true + 弱 uuid ⇒ 持久授 owner（uuid 已可信，窗口无意义）',
+        resolveLevel({ author: NAME2, uuid: WEAK, permissions: { owner: NAME2 }, identity: ctxPrem }) === LEVEL.OWNER,
+        `effective=${ctxPrem.effectivePolicy}`);
+    check('E2-7 正版模式下同名不同 uuid 的冒名者仍 guest（持久 ≠ 不校验 uuid）',
+        resolveLevel({ author: NAME2, uuid: 'someone-else', permissions: { owner: NAME2 }, identity: ctxPrem }) === LEVEL.OTHER);
+
+    // ③ online-mode=false + 默认 session + 超过 720 分钟 ⇒ guest
+    process.env.MC_SERVER_PROPERTIES = writeProps(false);
+    resetSessionClaims();
+    recordClaim({ uuid: WEAK, name: NAME2, now: Date.now() - 721 * 60_000 });   // 刚 claim 过，但已过窗口
+    const ctxOff = identityContextOf(fakeAgent);
+    check('E2-8 ★ offline-mode + 默认 session(720) + 超过 720 分钟 ⇒ guest',
+        resolveLevel({ author: NAME2, uuid: WEAK, permissions: { owner: NAME2 }, identity: ctxOff }) === LEVEL.OTHER,
+        `effective=${ctxOff.effectivePolicy} reason=${ctxOff.peek()?.reason}`);
+    check('E2-9 窗口内（比如 719 分钟前 claim 的）仍授 owner',
+        (() => {
+            resetSessionClaims();
+            recordClaim({ uuid: WEAK, name: NAME2, now: Date.now() - 719 * 60_000 });
+            const c = identityContextOf(fakeAgent);
+            return resolveLevel({ author: NAME2, uuid: WEAK, permissions: { owner: NAME2 }, identity: c }) === LEVEL.OWNER;
+        })());
+
+    delete process.env.MC_SERVER_PROPERTIES;
+    resetSessionClaims();
+    setSettings({ identity_binding: { enabled: true, offline_owner_mode: 'session', offline_session_minutes: 720 } });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // D. 接线断言：面板下发 / 幂等命令 / 设置开关
 // ════════════════════════════════════════════════════════════════════════════
 {

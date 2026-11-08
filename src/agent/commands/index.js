@@ -8,6 +8,8 @@ import settings from '../settings.js';
 import { resolveLevel, canRunCommand, permissionDeniedReply, LEVEL } from '../permissions.js';
 // 第四轮审计 ①：身份绑定表（角色 → 等级）。**身份优先，名字只是回退**
 import { identityFileOf, readStore, resolveBinding, sessionFresh } from '../../mindcraft/identity_store.js';
+// ★ t27：online-mode 与 offline_owner_mode 的**唯一合成判据入口**（不在本文件另算一遍）
+import { readServerOnlineMode, resolveIdentityPolicy } from '../../mindcraft/offline_identity_risk.js';
 
 /**
  * 陪玩模式只暴露这几条给模型（方案 §12：60 条 → 7 条）。
@@ -345,10 +347,24 @@ export function identityContextOf(agent) {
 
     const enabled = profileCfg.enabled ?? settingsCfg.enabled ?? true;
     const legacyNames = profileCfg.legacy_profile_names ?? settingsCfg.legacy_profile_names ?? false;
-    // ★ t20：离线服的处置策略（默认 deny = 弱绑定不授 owner）
-    const offlineOwnerMode = String(profileCfg.offline_owner_mode ?? settingsCfg.offline_owner_mode ?? 'deny').toLowerCase();
-    const sessionMinutes = Number(profileCfg.offline_session_minutes ?? settingsCfg.offline_session_minutes ?? 60);
-    const sessionWindowMs = (Number.isFinite(sessionMinutes) && sessionMinutes > 0 ? sessionMinutes : 60) * 60_000;
+    // ★ t20/t27：离线服处置策略。默认 session/720（用户拍板：允许离线），
+    //   并由 resolveIdentityPolicy 与 online-mode 合成 —— **只有这一处算**。
+    const offlineOwnerMode = String(profileCfg.offline_owner_mode ?? settingsCfg.offline_owner_mode ?? 'session').toLowerCase();
+    const sessionMinutes = Number(profileCfg.offline_session_minutes ?? settingsCfg.offline_session_minutes ?? 720);
+    // online-mode 决定"uuid 可不可信"：正版 ⇒ 持久；离线 ⇒ 走 offline_owner_mode。
+    // 每进程读一次即可（server.properties 只在人手改 + apply 后变化），失败按离线处理。
+    let policy;
+    try {
+        const online = readServerOnlineMode();
+        policy = resolveIdentityPolicy({
+            onlineMode: online.onlineMode,
+            offlineOwnerMode,
+            sessionMinutes: Number.isFinite(sessionMinutes) && sessionMinutes > 0 ? sessionMinutes : 720,
+        });
+    } catch {
+        // 读不到配置也不能让"定级"整条崩：按最保守的离线 session 处理
+        policy = resolveIdentityPolicy({ onlineMode: false, offlineOwnerMode, sessionMinutes });
+    }
     if (!enabled) {
         // 关掉绑定 = 老的按名字判级（permissions.resolveLevel 的第 4~5 步）
         return { enabled: false, legacyNames: true, resolve: null };
@@ -358,7 +374,10 @@ export function identityContextOf(agent) {
         enabled: true,
         legacyNames: legacyNames === true,
         offlineOwnerMode: offlineOwnerMode === 'session' ? 'session' : 'deny',
-        sessionMinutes: Number.isFinite(sessionMinutes) && sessionMinutes > 0 ? sessionMinutes : 60,
+        sessionMinutes: policy.sessionMinutes || (Number.isFinite(sessionMinutes) && sessionMinutes > 0 ? sessionMinutes : 720),
+        // 生效策略（persistent/session/deny）+ uuid 是否可信 —— 面板与话术都读它
+        effectivePolicy: policy.effective,
+        uuidTrusted: policy.uuidTrusted,
         /** 最近一次 resolve 的结果（拒绝话术要用 reason，避免再读一次盘）。 */
         lastResolved: null,
         peek: () => ctx.lastResolved,
@@ -384,9 +403,12 @@ export function identityContextOf(agent) {
             //                   其余时间 guest。这是"降低暴露窗口"，**不是**证明身份。
             if (!hit.weak) return settle(hit);
 
-            const mode = String(offlineOwnerMode ?? 'deny').toLowerCase();
-            if (mode === 'session') {
-                const fresh = sessionFresh({ uuid, name, windowMs: sessionWindowMs });
+            // ★★★ t27：弱绑定怎么处置，由**唯一判据入口**决定（online-mode × offline_owner_mode）。
+            //   关键一条：`online-mode=true` ⇒ uuid 可信 ⇒ 即便是"离线派生看起来像弱"的旧记录，
+            //   也按持久授 owner（此时同名冒用已不成立，窗口限时没有意义）。
+            if (policy.effective === 'persistent') return settle(hit);
+            if (policy.effective === 'session') {
+                const fresh = sessionFresh({ uuid, name, windowMs: policy.sessionMinutes * 60_000 });
                 if (fresh) return settle(hit);
                 return settle({ ...hit, level: null, reason: 'offline-weak-session' });
             }

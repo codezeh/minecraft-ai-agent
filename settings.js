@@ -47,11 +47,14 @@ const settings = {
         "binding_ttl_ms": 2592000000, // 绑定有效期 30 天，过期自动降级为 guest
         // ★ t20：离线服（online-mode=false）下服务端下发的 uuid **由名字派生**
         //   （javaUUID('OfflinePlayer:'+name)）⇒ 同名者拿到同一个 uuid ⇒ 绑定可被冒用。
-        //   'deny'（默认）= 这类"弱绑定"在离线服上永不授 owner，只聊天；
-        //   'session'    = 仅在刚 !claim 后的 N 分钟内授 owner（内存态，不落盘），其余时间只聊天。
-        //   两种都只是**降低暴露面**；根治要靠正版验证或登录插件（见 docs/audit-r4/T13-玩家身份.md）。
-        "offline_owner_mode": "deny",
-        "offline_session_minutes": 60
+        //   ★ t27（用户拍板：允许离线 + 保留正版验证开关）：
+        //   'session'（默认）= 仅在刚 !claim 后的 N 分钟内授 owner（内存态，不落盘），其余时间只聊天。
+        //                     离线服日常可用；窗口越短越安全（默认 720 分钟 = 12 小时）。
+        //   'deny'          = 这类"弱绑定"在离线服上永不授 owner（最严，但离线时 owner 完全不可用）。
+        //   ⚠ 若 server.properties 的 online-mode=true（正版验证），本键**不参与判断** ——
+        //     uuid 可信时绑定持久有效（见 offline_identity_risk.resolveIdentityPolicy，唯一判据入口）。
+        "offline_owner_mode": "session",
+        "offline_session_minutes": 720
     },
     "blocked_actions" : [], // commands to disable and remove from docs
     "code_timeout_mins": 20, // minutes code is allowed to run. -1 for no timeout -- 给个上限，防止代码死循环；大工程平地需要更长时间

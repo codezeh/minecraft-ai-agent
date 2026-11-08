@@ -43,14 +43,14 @@
     },
     "identity_binding": {
         "type": "object",
-        "description": "Player identity binding (R4 audit item 1). enabled=true: command levels come from the UUID/name binding table written by !claim (panel issues a one-time code); a name that is merely listed in permissions.owner gets NO rights any more. legacy_profile_names=true reverts to the old 'name == owner' behaviour (unsafe on offline-mode servers). code_ttl_ms is clamped to <= 300000 (5 min) by identity_store.",
+        "description": "Player identity binding (R4 audit item 1). offline_owner_mode applies ONLY when server.properties has online-mode=false (offline server): 'session' (default) = owner only within offline_session_minutes after a successful !claim (in-memory, lost on restart); 'deny' = never grant owner while offline. The window is a security knob: shorter = safer. When online-mode=true the uuid is Mojang-signed and trusted, so the binding is persistent and these two keys are ignored (single judgement entry: offline_identity_risk.resolveIdentityPolicy). enabled=true: command levels come from the UUID/name binding table written by !claim (panel issues a one-time code); a name that is merely listed in permissions.owner gets NO rights any more. legacy_profile_names=true reverts to the old 'name == owner' behaviour (unsafe on offline-mode servers). code_ttl_ms is clamped to <= 300000 (5 min) by identity_store.",
         "default": {
             "enabled": true,
             "legacy_profile_names": false,
             "code_ttl_ms": 300000,
             "binding_ttl_ms": 2592000000,
-            "offline_owner_mode": "deny",
-            "offline_session_minutes": 60
+            "offline_owner_mode": "session",
+            "offline_session_minutes": 720
         }
     },
     "init_message": {

@@ -87,11 +87,91 @@ export function renderOfflineIdentityWarning(r) {
     ].join('\n');
 }
 
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 /** 从 server.properties 文本里取一个键（不存在返回 null）。导出来便于单测。 */
 export function readProperty(text, key) {
     const re = new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*=(.*)$`, 'm');
     const m = re.exec(String(text ?? ''));
     return m ? m[1].trim() : null;
+}
+
+/**
+ * 主服的 server.properties 路径（**唯一一处**算它）。
+ *
+ * 从本文件（`src/mindcraft/`）上溯三级 = 仓库根，再进 `server/`。
+ * `MC_SERVER_PROPERTIES` 可覆盖（单测用临时文件，避免读真机配置）。
+ */
+export function serverPropertiesPath() {
+    const override = process.env.MC_SERVER_PROPERTIES;
+    if (typeof override === 'string' && override.trim()) return override.trim();
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    return path.join(here, '..', '..', '..', 'server', 'server.properties');
+}
+
+/**
+ * ★★★ R4 t27：读"这个服是不是正版验证"—— **全系统唯一判据入口**。
+ *
+ * 为什么必须只有一处：`online-mode` 同时决定两件互相牵连的事 ——
+ *   ① 玩家 uuid 可不可信（离线模式下 uuid = MD5('OfflinePlayer:'+名字) ⇒ 同名同 uuid）；
+ *   ② 身份绑定该不该持久授 owner。
+ * 如果 mindserver 的启动告警、agent 的定级、面板的显示各算一次，迟早三处不一致
+ * （项目里"三套 mode 列表 / 两套斜杠白名单"都是这么烂掉的）。
+ *
+ * @param {{propsPath?: string}} [opts]
+ * @returns {{onlineMode: boolean|null, propsPath: string, source: 'file'|'missing'|'no-key'|'error', detail?: string}}
+ *   `onlineMode=null` 表示**读不到**（没有文件 / 没有这个键 / 解析失败）——
+ *   调用方必须按"未知"处理，**不能当正版**（fail-safe：未知按离线算，反而更严格）。
+ */
+export function readServerOnlineMode({ propsPath = serverPropertiesPath() } = {}) {
+    try {
+        if (!existsSync(propsPath)) return { onlineMode: null, propsPath, source: 'missing' };
+        const text = readFileSync(propsPath, 'utf8');
+        const raw = readProperty(text, 'online-mode');
+        if (raw == null) return { onlineMode: null, propsPath, source: 'no-key' };
+        return { onlineMode: String(raw).toLowerCase() !== 'false', propsPath, source: 'file' };
+    } catch (e) {
+        return { onlineMode: null, propsPath, source: 'error', detail: String(e?.message ?? e) };
+    }
+}
+
+/**
+ * ★★★ R4 t27：把「online-mode」与「offline_owner_mode」合成**一个**生效策略（纯函数）。
+ *
+ * 用户拍板是"允许离线，但保留正版验证开关"，所以两档必须自动对齐、不能互相矛盾：
+ *
+ *   · `online-mode=true`  ⇒ uuid 由 Mojang 签发、可信 ⇒ **无视 session 窗口，持久授 owner**；
+ *     此时 `offline_owner_mode` 不参与判断（它管的是"离线时怎么办"）。
+ *   · `online-mode=false` ⇒ 走 `offline_owner_mode`：
+ *       `session`（默认，720 分钟）⇒ 只有刚 !claim 过的窗口内授 owner；
+ *       `deny`                     ⇒ 一律只聊天。
+ *   · 读不到 online-mode ⇒ 按**离线**处理（未知不当作可信），并沿用 offline_owner_mode。
+ *
+ * @param {object} p
+ * @param {boolean|null} p.onlineMode   readServerOnlineMode().onlineMode
+ * @param {'deny'|'session'} [p.offlineOwnerMode]
+ * @param {number} [p.sessionMinutes]
+ * @returns {{effective:'persistent'|'session'|'deny', uuidTrusted:boolean, sessionMinutes:number, reason:string}}
+ */
+export function resolveIdentityPolicy({ onlineMode = null, offlineOwnerMode = 'session', sessionMinutes = 720 } = {}) {
+    const mins = Number.isFinite(Number(sessionMinutes)) && Number(sessionMinutes) > 0 ? Number(sessionMinutes) : 720;
+    if (onlineMode === true) {
+        return {
+            effective: 'persistent', uuidTrusted: true, sessionMinutes: 0,
+            reason: 'online-mode=true：uuid 由正版验证签发、可信 ⇒ 绑定持久有效（不受 session 窗口限制）',
+        };
+    }
+    const mode = String(offlineOwnerMode ?? 'session').toLowerCase() === 'deny' ? 'deny' : 'session';
+    return {
+        effective: mode === 'deny' ? 'deny' : 'session',
+        uuidTrusted: false,
+        sessionMinutes: mode === 'deny' ? 0 : mins,
+        reason: onlineMode === false
+            ? `online-mode=false：uuid 由名字派生、不可信 ⇒ ${mode === 'deny' ? '一律只聊天' : `仅 claim 后 ${mins} 分钟内授 owner`}`
+            : `读不到 online-mode（按离线处理）：${mode === 'deny' ? '一律只聊天' : `仅 claim 后 ${mins} 分钟内授 owner`}`,
+    };
 }
 
 /**
