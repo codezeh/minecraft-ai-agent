@@ -41,9 +41,10 @@ export const LEVEL = Object.freeze({
 /**
  * 面板上那个按钮的**确切位置与文案**（唯一一处）。
  *
- * R4 t24：t13 的拒绝话术原来写"到面板点生成绑定码"，但面板上**根本没有这个按钮**
- * （web/src 里 identity/绑定/claim 命中 0）⇒ 用户照着做会找不到，等于把人指进死胡同。
- * 现在把它抽成常量：面板改了按钮文案，改这一处即可（单测 D7f 会断言两边一致）。
+ * R4 t24：t13 的拒绝话术原来指向一个**面板上并不存在的按钮**（web/src 里
+ * identity/绑定/claim 命中 0）⇒ 用户照着做会找不到，等于把人指进死胡同。
+ * 现在把它抽成常量：**全仓只有这一个字面量**（定义处），其余地方一律引用它，
+ * 面板改了按钮文案只改这一行（单测会断言话术与面板源码一致）。
  */
 export const PANEL_CODE_LOCATION = '控制台左侧「玩家身份」区的「生成绑定码」按钮';
 
@@ -176,12 +177,12 @@ function warnBindingRequiredOnce() {
     if (globalThis.__bindingRequiredWarned) return;
     globalThis.__bindingRequiredWarned = true;
     console.warn('[permissions] 身份绑定已启用：没绑定的发言者一律按 guest 处理（只聊天）。');
-    // ★ 文案必须是**固定字面量**：这行在"未绑定玩家每次发言"的路径上，
-    //   任何未定义标识符都会让 resolveLevel 抛异常（连降级为 guest 都做不到）。
-    //   按钮名与 web/src/components/IdentityPanel.vue 的实际文案逐字一致：
-    //   「控制台左侧「玩家身份」区的「生成绑定码」按钮」。
-    console.warn('[permissions] 取码：打开面板 → 控制台左侧「玩家身份」区的「生成绑定码」按钮；'
-        + '让玩家在游戏里输入 !claim <那个码> 完成绑定。');
+    // ★ 按钮位置只从 PANEL_CODE_LOCATION 取（**唯一真相**，就是上面那个 export const）。
+    //   为什么强调：这行在"未绑定玩家每次发言"的路径上，任何未定义标识符都会让
+    //   resolveLevel 抛异常（连降级为 guest 都做不到）—— 所以只用**本模块已定义的常量**，
+    //   不要把按钮名再抄一遍字面量（那样改文案时会漏改，退回"话术指向不存在的按钮"）。
+    console.warn('[permissions] 取码：打开面板 → ' + PANEL_CODE_LOCATION
+        + '；让玩家在游戏里输入 !claim <那个码> 完成绑定。');
     console.warn('[permissions] 想退回"按名字"的老行为：profile 里设 '
         + '"permissions": { ..., "identity": { "legacy_profile_names": true } }。');
 }
@@ -337,11 +338,11 @@ export function permissionDeniedReply(level, commandName, author, opts = {}) {
                 + ' 根治：开正版验证，或装登录插件（如 AuthMe）。';
         }
         if (opts.bindingRequired && !opts.isOtherBot) {
-            // 文案必须与面板**实际的按钮**一致（R4 t24：原来指向一个不存在的按钮，用户点不到）
-            // 固定字面量（与 IdentityPanel.vue 的按钮文案逐字一致）；不要用未定义占位符 ——
-            // 这条在"玩家每次被拒"的路径上，抛异常就等于连拒绝都做不到。
-            return base + '要拿权限：打开面板 → 控制台左侧「玩家身份」区的「生成绑定码」按钮，'
-                + '然后在游戏里发 !claim <那个码>。';
+            // 文案必须与面板**实际的按钮**一致（R4 t24：原来指向一个不存在的按钮，用户点不到）。
+            // 位置只从 PANEL_CODE_LOCATION 拼 —— 单一真相，改文案只改那一处；
+            // 这条在"玩家每次被拒"的路径上，所以只用本模块已定义的常量（不要写未定义占位符）。
+            return base + '要拿权限：打开面板 → ' + PANEL_CODE_LOCATION
+                + '，然后在游戏里发 !claim <那个码>。';
         }
         if (opts.bindingRequired && opts.isOtherBot) {
             return base + '别的 bot 不参与身份绑定（分工走任务板）。';
