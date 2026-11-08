@@ -25,12 +25,43 @@
  * 谁来都能让她干活，但没人能用 `!newAction` 和斜杠命令；一配 owner，名单外的人降成「其他玩家」。
  * 名字按原样比、区分大小写（离线模式下 `Zeh` 和 `zeh` 是两个人）。
  */
-/** 三个等级。 */
+/**
+ * 三个等级。
+ *
+ * ★ 第四轮审计 ①（方案 C）：`OTHER` 现在同时表示**未绑定身份的 guest**。
+ *   名字不再直接换权限（见 resolveLevel 的 `identity` 分支），
+ *   所以"名单外的人"与"没拿到绑定的人"是同一档：只聊天。
+ */
 export const LEVEL = Object.freeze({
     OWNER: 'owner',
     TRUSTED: 'trusted',
     OTHER: 'other',
 });
+
+/**
+ * 面板上那个按钮的**确切位置与文案**（唯一一处）。
+ *
+ * R4 t24：t13 的拒绝话术原来写"到面板点生成绑定码"，但面板上**根本没有这个按钮**
+ * （web/src 里 identity/绑定/claim 命中 0）⇒ 用户照着做会找不到，等于把人指进死胡同。
+ * 现在把它抽成常量：面板改了按钮文案，改这一处即可（单测 D7f 会断言两边一致）。
+ */
+export const PANEL_CODE_LOCATION = '控制台左侧「玩家身份」区的「生成绑定码」按钮';
+
+/** guest 就是 OTHER（同一个值，两个叫法：新代码说 guest，老代码说 other）。 */
+export const GUEST = LEVEL.OTHER;
+
+/**
+ * **不需要身份**的命令（谁都能用）。
+ *
+ * 目前只有 `!claim`：它存在的意义就是"让还没身份的人拿到身份"，
+ * 所以它必须对 guest 开放 —— 否则绑定流程从第一步就走不通（先有鸡还是先有蛋）。
+ *
+ * 安全边界：`!claim` 的凭据是**面板下发的一次性码**（短时、单次、绑面板会话），
+ * 不是"谁喊一声就给"。码错/过期/被用过 ⇒ 什么都不变（见 identity_store.consumeCode）。
+ */
+export const OPEN_COMMANDS = Object.freeze(['!claim']);
+
+const OPEN = new Set(OPEN_COMMANDS);
 
 /**
  * 只给主人的命令。
@@ -129,9 +160,30 @@ export const MAX_JOB_LEVEL = Object.freeze({ owner: 9, trusted: 6, other: 0 });
  */
 export function commandLevel(commandName) {
     const name = String(commandName ?? '').trim();
+    if (OPEN.has(name)) return LEVEL.OTHER;       // 不设门槛（canRunCommand 会先放行）
     if (TRUSTED.has(name)) return LEVEL.TRUSTED;
     if (OWNER_ONLY.has(name)) return LEVEL.OWNER;
     return LEVEL.OWNER;
+}
+
+/**
+ * 一次性告警：绑定模式已开，但这个人还没绑定 ⇒ 只聊天。
+ *
+ * 为什么必须说清楚：fail-closed 会让"我最要好的朋友改名进来"看起来像 bot 坏了
+ * （她突然不听话了）。把静默降级变成**有解释的降级**，并且给出下一步（!claim）。
+ */
+function warnBindingRequiredOnce() {
+    if (globalThis.__bindingRequiredWarned) return;
+    globalThis.__bindingRequiredWarned = true;
+    console.warn('[permissions] 身份绑定已启用：没绑定的发言者一律按 guest 处理（只聊天）。');
+    // ★ 文案必须是**固定字面量**：这行在"未绑定玩家每次发言"的路径上，
+    //   任何未定义标识符都会让 resolveLevel 抛异常（连降级为 guest 都做不到）。
+    //   按钮名与 web/src/components/IdentityPanel.vue 的实际文案逐字一致：
+    //   「控制台左侧「玩家身份」区的「生成绑定码」按钮」。
+    console.warn('[permissions] 取码：打开面板 → 控制台左侧「玩家身份」区的「生成绑定码」按钮；'
+        + '让玩家在游戏里输入 !claim <那个码> 完成绑定。');
+    console.warn('[permissions] 想退回"按名字"的老行为：profile 里设 '
+        + '"permissions": { ..., "identity": { "legacy_profile_names": true } }。');
 }
 
 /**
@@ -148,7 +200,7 @@ export function commandLevel(commandName) {
  * @param {boolean} [p.internal] 代码自己发起的命令（不是玩家发言）——**唯一**的内部来源判据
  * @returns {'owner'|'trusted'|'other'}
  */
-export function resolveLevel({ author, permissions, isOtherBot = false, internal = false } = {}) {
+export function resolveLevel({ author, permissions, isOtherBot = false, internal = false, uuid = null, identity = null } = {}) {
     const perms = permissions && typeof permissions === 'object' ? permissions : {};
     const owner = typeof perms.owner === 'string' ? perms.owner.trim() : '';
     const trusted = Array.isArray(perms.trusted) ? perms.trusted.filter(n => typeof n === 'string') : [];
@@ -156,6 +208,18 @@ export function resolveLevel({ author, permissions, isOtherBot = false, internal
 
     // 1) 代码自己发起的命令（!goal 由 NPCController 设置之类）：不是外部输入
     if (internal) return LEVEL.OWNER;
+
+    // 1.5) ★★★ 第四轮审计 ①（方案 C）：**身份绑定优先**。
+    //   绑定表（bots/<agent>/identity.json）里查得到、且没过期 ⇒ 用那条记录里的等级。
+    //   查不到 ⇒ 继续往下走，但"按名字给权限"要不要留由 `identity.legacyNames` 决定。
+    //
+    //   为什么要 uuid 优先：离线服务器（online-mode=false）**不校验名字**，
+    //   名字是客户端自己报的；uuid 至少在"同一个客户端"内稳定（换客户端仍可造假，
+    //   所以这套机制的本质是"面板持有人 = 主人"，而不是"我认得你的 uuid"）。
+    const binding = identity && identity.enabled && typeof identity.resolve === 'function'
+        ? identity.resolve({ uuid, name })
+        : null;
+    if (binding && binding.level) return binding.level;
 
     // 2) 没有发言人（代码路径漏传 author）：给「信任」，不给主人权。
     //    为什么不给主人权：主人级必须伴随真主人的 author；空 author 只可能是内部漏传。
@@ -165,6 +229,13 @@ export function resolveLevel({ author, permissions, isOtherBot = false, internal
 
     // 3) 别的 bot：只聊天（08 §5）。判在 owner 之前，免得同名 bot 混过去
     if (isOtherBot) return LEVEL.OTHER;
+
+    // 4) ★ 身份绑定已启用、且没显式打开"按名字兼容回退" ⇒ **一律 guest**。
+    //    这就是"改客户端名冒充 owner"被堵死的地方：名字在这条路上不再产生任何权限。
+    if (identity && identity.enabled && identity.legacyNames !== true) {
+        warnBindingRequiredOnce();
+        return LEVEL.OTHER;
+    }
 
     // 4) 配了主人：主人 / 信任名单 / 其余
     if (owner) {
@@ -204,8 +275,11 @@ export function resolveLevel({ author, permissions, isOtherBot = false, internal
  * @param {string} commandName
  */
 export function canRunCommand(level, commandName) {
+    // ★ 第四轮审计 ①：OPEN_COMMANDS（目前只有 !claim）**不看等级** ——
+    //   它必须有"还没身份的人"也能用，否则绑定流程第一步就走不通。
+    if (OPEN.has(String(commandName ?? '').trim())) return true;
     if (level === LEVEL.OWNER) return true;
-    if (level === LEVEL.OTHER) return false;         // 其他玩家 / 别的 bot：只聊天
+    if (level === LEVEL.OTHER) return false;         // guest / 其他玩家 / 别的 bot：只聊天
     return commandLevel(commandName) === LEVEL.TRUSTED;  // 信任级
 }
 
@@ -241,13 +315,39 @@ export function levelForJobSource(job, permissions) {
  * 拒绝时回给模型/玩家的一句话（一行，短）。
  * 措辞刻意写成「按发言人算」，让模型知道换个说法也没用，不要反复重试。
  */
-export function permissionDeniedReply(level, commandName, author) {
+export function permissionDeniedReply(level, commandName, author, opts = {}) {
     const who = author ? `「${author}」` : '这条消息';
     const why = level === LEVEL.OTHER
         ? '是其他玩家或别的 bot，只能聊天'
         : '只能使用信任级命令';
-    return `[权限] 没执行 ${commandName}：${who}${why}（等级：${level}）。`
-        + `等级只按说话人算（profile 的 permissions.owner / trusted），跟你说了什么无关。`;
+    const base = `[权限] 没执行 ${commandName}：${who}${why}（等级：${level}）。`;
+
+    // ★ R4 t13：**身份绑定已启用**时的拒绝话术必须可照做。
+    //   升级后老用户会突然"她不听我说话了" —— 只说"你是 other"等于让人去猜。
+    //   这里直接给出下一步：到面板取一次性码，游戏里 !claim。
+    if (level === LEVEL.OTHER) {
+        // ★★ R4 t20：弱绑定（离线服按名字派生 uuid）被拒时，**必须说真话** ——
+        //   不能让玩家以为"再 claim 一次就好了"：在离线服 + 无登录插件的情况下，
+        //   任何按身份的授权都挡不住同名冒用，这是部署层限制，不是再操作一次能解决的。
+        if (opts.offlineWeak) {
+            return base + '离线服无法证明"你是你"（uuid 由名字派生，同名者不可区分）⇒ 这次不给权限。'
+                + (opts.offlineMode === 'session'
+                    ? `（当前策略 session：刚 !claim 后的 ${opts.sessionMinutes ?? 60} 分钟内才有效）`
+                    : '（当前策略 deny：离线服上 owner 不可达）')
+                + ' 根治：开正版验证，或装登录插件（如 AuthMe）。';
+        }
+        if (opts.bindingRequired && !opts.isOtherBot) {
+            // 文案必须与面板**实际的按钮**一致（R4 t24：原来指向一个不存在的按钮，用户点不到）
+            // 固定字面量（与 IdentityPanel.vue 的按钮文案逐字一致）；不要用未定义占位符 ——
+            // 这条在"玩家每次被拒"的路径上，抛异常就等于连拒绝都做不到。
+            return base + '要拿权限：打开面板 → 控制台左侧「玩家身份」区的「生成绑定码」按钮，'
+                + '然后在游戏里发 !claim <那个码>。';
+        }
+        if (opts.bindingRequired && opts.isOtherBot) {
+            return base + '别的 bot 不参与身份绑定（分工走任务板）。';
+        }
+    }
+    return base + '等级只按说话人算（profile 的 permissions.owner / trusted），跟你说了什么无关。';
 }
 
 /**

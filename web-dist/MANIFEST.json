@@ -1,11 +1,11 @@
 {
   "schemaVersion": 2,
   "generatedFrom": "web/dist (Vue3 + Vite console)",
-  "generatedAt": "2026-11-07T23:06:21Z",
+  "generatedAt": "2026-11-07T23:56:40Z",
   "source": {
     "root": "web/",
-    "files": 24,
-    "hash": "sha256:5d6ebc6f5d4e9f3b544956ff0516106ce562d11f063d5f4b9f78066063c6b411",
+    "files": 25,
+    "hash": "sha256:e0c828cf9f1d579aaa1a9572d6eb043865b65f9e7212e741760cffa69aaf197f",
     "inputs": [
       "src",
       "index.html",
@@ -17,22 +17,22 @@
   },
   "artifact": {
     "files": 9,
-    "hash": "sha256:1ad4ae87a82283c3c1b90d7dcbb58b6c2a9d122eb32c3bf851d16908b9d28756"
+    "hash": "sha256:13802e5dc7dd59c01db03df0cfb55a70923f0f2eea04ffed56fc5be69043a5c1"
   },
   "entryAssets": [
-    "assets/index-BTuIIv9S.css",
-    "assets/index-dIW3CqWQ.js"
+    "assets/index-B5AKh35D.css",
+    "assets/index-BYwJZQK-.js"
   ],
   "note": "镜像用的固化产物。改过 web/ 之后必须重新生成；本清单供 web_dist_manifest_unit 做漂移检测。",
   "files": {
+    "assets/DebugView-CSXoc8mk.js": "71de5242880da55b7dcd1e0782b4c3c80f30bbefe29baa7d9e0266cdf02d5cfb",
     "assets/DebugView-Pp-4MEq7.css": "eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087",
-    "assets/DebugView-TbLMdAjQ.js": "4bbc1deaa7c5f99d8a069a093bcc7142841b140627f7ef21e31a31a1f3b1a6b3",
-    "assets/index-BTuIIv9S.css": "04ae0cbfb2a71a9541b1ff29b332cff8d1c72988b9130de566074100bf7c6184",
-    "assets/index-dIW3CqWQ.js": "3f099301f3498bdc4b157e7491360e41df14a4dc45b2696bbbba8fcf31d87ce4",
+    "assets/index-B5AKh35D.css": "8c29768807e5157825a590a04b567f82e1d086a95d72b316b099aa34d8622080",
+    "assets/index-BYwJZQK-.js": "40f802d3e5e0ce1f947fe02471a4544c8f4887ba2390066e4355cc443d7a323a",
     "assets/SetupView-B6mvS54m.css": "99a654b65b3f294869a8a127e71796b264b255785371995145b81360e0d53a01",
-    "assets/SetupView-BJo9qNKO.js": "2f0691ec55259970c7cb29d53b8a34304aa15c9371e54960b13c9a5246bccc6a",
-    "assets/TerrainView-CkWl-KLy.js": "db8d3cb73ec7a388781acee4d53666fe0d47e85ef82116ab8c53311b8ee3e715",
+    "assets/SetupView-CMq9Svfw.js": "47b12fa075258a0722f1948782daad5a09ba434508e341f2ece1491c07441898",
+    "assets/TerrainView-BKZU0cwf.js": "9bb27725d88652d6ab4a53c874d1492bed27b0eaf7d51cb1424100b82b60a4de",
     "assets/TerrainView-Dc9bwTkz.css": "14ea2dce090163293fd77bd008a64eb0d2745f67283e36373780ca25a9163171",
-    "index.html": "1e4942e2b96389b4a20a4aa14d7c1a60717f86dc3da287315f396f9f610e9ce6"
+    "index.html": "acb64b954a762fd86e10c6edf0521a5541f9fa3231f05ce4a087a30c97a3779e"
   }
 }

@@ -13,6 +13,12 @@ import {
 } from './auth_gate.js';
 // 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
 import { validateNameFormat } from '../agent/connection_handler.js';
+// 第四轮审计 ①：玩家身份绑定（面板下发一次性码 / 查看绑定 / 解绑）
+import {
+    identityFileOf, codesFileOf, readStore, writeStore,
+    makeCode, addCode, previewStatus, revokeBinding, revokeSessionCodes,
+    DEFAULT_CODE_TTL_MS,
+} from './identity_store.js';
 // OPS-003（2026-11-06）：离线模式 + 监听所有网卡 ⇒ 名字可冒用为主人。启动时给出可见告警。
 import { assessFromProperties, renderOfflineIdentityWarning } from './offline_identity_risk.js';
 import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync, unlinkSync } from 'fs';
@@ -22,6 +28,10 @@ import { openBoard } from '../agent/library/board_store.js';
 import { attachBoardServer } from '../agent/library/board_server.js';
 // 注册表与参数解析器：服务端复用 **agent 侧同一份**（参数规则只能有一个真相）。
 import * as compositeRegistry from '../agent/library/composite_registry.js';
+// R4 t13：启动时自检"有没有人绑定过身份"（只读目录，用于给一条可照做的升级提示）
+import { botsRootOf } from '../agent/library/bot_paths.js';
+// R4 t20：启动告警要读 identity_binding 的真实配置（离线模式那条限制必须说出来）
+import rootSettings from '../../settings.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Mindserver is:
@@ -115,6 +125,171 @@ function schemaViolation(settings, spec) {
     return null;
 }
 
+function describeShape(v) {
+    if (v === null) return 'null';
+    if (v === undefined) return 'undefined';
+    if (Array.isArray(v)) return 'array';
+    if (typeof v === 'function') return 'function';
+    if (typeof v === 'object') return 'object';
+    return `${typeof v} ${JSON.stringify(v)}`;
+}
+
+/**
+ * ★★★ R4 S1#5：`create-agent` 的 `settings` **先校验形状**，再做默认值/白名单/类型校验。
+ *
+ * 缺陷原貌（`mindserver.js:607-614`）：处理器一上来就
+ *   `for (let key in settings_spec) { if (!(key in settings)) { ... } }`
+ *   · `settings` 是 `null` / 字符串 / 数组 ⇒ `in` 运算符直接抛 TypeError；
+ *   · `settings.profile` 是字符串或数组 ⇒ 后面的 `settings.profile.name` 取到 undefined 或抛；
+ *   · 而且处理器是 `async`：抛出的异常变成**未处理的 Promise 拒绝** ⇒ Node 22 默认
+ *     **退出进程**。实测后果：任何持 token 的客户端发一条畸形 create-agent，
+ *     整套控制面（全部 bot、面板、任务板）一起没。
+ *
+ * 现在把形状检查提到最前面，给出**可读原因**（谁传错了、该传什么），再往下走。
+ * 注意：这里只管"能不能安全地继续"，值域/类型/白名单仍由 schemaViolation 负责（职责分开）。
+ *
+ * @param {unknown} settings 客户端原样传进来的东西
+ * @returns {string|null} 拒绝原因；合法返回 null
+ */
+export function validateSettingsShape(settings) {
+    if (settings === null || settings === undefined) {
+        return 'create-agent 的 settings 不能为空（需要一个 JSON 对象，至少含 profile.name）';
+    }
+    if (typeof settings !== 'object' || Array.isArray(settings)) {
+        return `create-agent 的 settings 必须是对象（JSON object），收到的是 ${describeShape(settings)}`;
+    }
+    const profile = settings.profile;
+    if (profile === null || profile === undefined) {
+        return 'settings.profile 不能为空（必须包含 name）';
+    }
+    if (typeof profile !== 'object' || Array.isArray(profile)) {
+        return `settings.profile 必须是对象，收到的是 ${describeShape(profile)}`;
+    }
+    if (typeof profile.name !== 'string') {
+        return `settings.profile.name 必须是字符串，收到的是 ${describeShape(profile.name)}`;
+    }
+    if (profile.name.trim() === '') {
+        return 'settings.profile.name 不能是空字符串';
+    }
+    return null;
+}
+
+/**
+ * ★★★ R4 S2#9：这个连接是不是「agent 进程自己」？
+ *
+ * 为什么需要区分：agent 进程连回来时会带 `auth: { token }`（见
+ * `src/agent/mindserver_proxy.js` 的 `auth: (cb) => cb({ token })`），
+ * 而面板（浏览器控制台）只用 HttpOnly cookie 过握手门、**不带** auth payload。
+ * 于是"带 auth.token 且等于本次 token"= agent 身份；否则 = 面板/其他客户端。
+ *
+ * 这条判据同时被 `bot-output` / `agent-event`（F-WEB-101）和 `login-agent` 用，
+ * 所以抽成一处，避免三份实现悄悄漂移。
+ */
+export function isAgentIdentity(socket, token = handshakeToken) {
+    const t = socket?.handshake?.auth?.token;
+    return typeof t === 'string' && t !== '' && typeof token === 'string' && t === token;
+}
+
+/**
+ * ★★★ R4 S2#9：agent 通道的**唯一占用**裁决（纯决策，只更新 churn 计数，不碰 socket）。
+ *
+ * 缺陷原貌（`mindserver.js:686-703`）：`login-agent` / `connect-agent-process` 只做
+ * `if (agent_connections[agentName]) { conn.socket = socket; ... }` ——
+ *   · **没有身份校验**：任何持 token 的面板连接都能把自己绑成某个 agent 的通道，
+ *     真正的 agent 下一句话就发不到了（`chat-message` 转发给"最后绑上来的那个 socket"）；
+ *   · **没有唯一性**：两个同名的 agent 进程（双开）互相把对方踢下通道，
+ *     玩家消息一半丢、面板看到 `in_game` 一跳一跳。
+ *
+ * 现在的规则：
+ *   ① 必须是 agent 身份（面板一律拒绝：`identity-required`）；
+ *   ② 同一个 socket 重复声明 = 幂等（`rebind`，`connect-agent-process` 之后紧跟 `login-agent` 就是这条路）；
+ *   ③ 换连接时**允许接管**（agent 进程重启/瞬断重连是常态，硬拒会把 bot 锁在门外），
+ *      但**限速**：同一个 agent 在 `takeoverWindowMs` 内最多接管 `maxTakeovers` 次，
+ *      超了就拒绝（`channel-busy`）。于是"两个进程互相踢"不再无声无息地循环，
+ *      而是几次之后被挡住并在日志里点名。
+ *
+ * @returns {{ok:boolean, takeover:boolean, previous:object|null, reason:string}}
+ */
+export function claimAgentChannel(conn, socket, {
+    agentIdentity = false,
+    now = Date.now(),
+    maxTakeovers = 3,
+    takeoverWindowMs = 30_000,
+} = {}) {
+    if (!conn) return { ok: false, takeover: false, previous: null, reason: 'unknown-agent' };
+    if (!socket) return { ok: false, takeover: false, previous: null, reason: 'no-socket' };
+    if (!agentIdentity) return { ok: false, takeover: false, previous: conn.socket ?? null, reason: 'identity-required' };
+
+    const prev = conn.socket ?? null;
+    if (!prev || prev === socket) {
+        return { ok: true, takeover: false, previous: null, reason: prev ? 'rebind' : 'claim' };
+    }
+    // 旧连接自己已经掉了 ⇒ 这是"接手死连接"，不算抢占，也不计入接管限速
+    if (prev.connected === false) {
+        return { ok: true, takeover: true, previous: prev, reason: 'takeover-stale' };
+    }
+    // 接管限速（状态挂在 conn 上：随 agent 注册/销毁自然重置，不需要单独的清理表）
+    const churn = conn._channelTakeovers ?? (conn._channelTakeovers = { count: 0, since: now });
+    if (now - churn.since > takeoverWindowMs) {
+        churn.since = now;
+        churn.count = 0;
+    }
+    if (churn.count >= maxTakeovers) {
+        return { ok: false, takeover: false, previous: prev, reason: 'channel-busy' };
+    }
+    churn.count += 1;
+    return { ok: true, takeover: true, previous: prev, reason: 'takeover-live' };
+}
+
+/** agent 通道被接管的次数（诊断用：`in_game` 一跳一跳时看它）。 */
+export function channelTakeoverCount(agentName) {
+    return agent_connections[agentName]?._channelTakeovers?.count ?? 0;
+}
+
+/**
+ * ★★★ R4 S1#5（兜底）：控制面**不许被单个畸形事件 / 单个 Promise 带走**。
+ *
+ * 为什么需要：`create-agent` 之类的处理器是 `async`，任何漏出去的异常都会变成
+ * 未处理的 Promise 拒绝，而 Node 22 的默认行为是**直接退出进程**。入口校验（
+ * validateSettingsShape 等）是"堵住已知的那几条"，这里则是**最后一道网**：
+ * 兜住没预料到的，打完整栈，控制面继续运行（bot 不该因为一条坏消息全部掉线）。
+ *
+ * 诚实边界：这不是"修好了异常"，而是"不再让一个异常扩成整机停机"。所以：
+ *   · 一律 `console.error` 带栈（可被抓日志的运维看到）；
+ *   · 需要恢复"崩了就退"的严格语义时设 `MINDSERVER_EXIT_ON_UNCAUGHT=1`。
+ *
+ * @returns {boolean} 本次是否真的装上了（重复调用返回 false，幂等）
+ */
+const guardedProcs = new WeakSet();
+
+export function installCrashGuards({
+    exitOnUncaught = process.env.MINDSERVER_EXIT_ON_UNCAUGHT === '1',
+    proc = globalThis.process,
+} = {}) {
+    // 幂等按**进程对象**判（而不是函数属性）：离线用例可以拿假 EventEmitter 验一遍，
+    // 又不会把"真 process 已经装过"这件事提前占掉。
+    if (guardedProcs.has(proc)) return false;
+    guardedProcs.add(proc);
+
+    proc.on('unhandledRejection', (reason) => {
+        const err = reason instanceof Error ? reason : new Error(String(reason));
+        console.error('[mindserver] 未处理的 Promise 拒绝（已兜住，控制面继续运行；' +
+            '这类问题要修根因，别靠这道网）：', err);
+    });
+
+    proc.on('uncaughtException', (err) => {
+        console.error('[mindserver] 未捕获异常：', err);
+        if (exitOnUncaught) {
+            console.error('[mindserver] MINDSERVER_EXIT_ON_UNCAUGHT=1 ⇒ 按严格语义退出');
+            try { proc.exit(1); } catch { /* ignore */ }
+            return;
+        }
+        console.error('[mindserver] 已兜住该异常并继续运行（bot/面板/任务板不受影响）；' +
+            '若要"崩了就退"请设 MINDSERVER_EXIT_ON_UNCAUGHT=1');
+    });
+    return true;
+}
+
 class AgentConnection {
     constructor(settings, viewer_port) {
         this.socket = null;
@@ -189,6 +364,10 @@ function takeToken(socket, label, capacity, windowMs) {
 export function createMindServer(host_public = false, port = 8080) {
     const app = express();
     server = http.createServer(app);
+
+    // ★★★ R4 S1#5 兜底：先装顶层 unhandledRejection / uncaughtException 处理，
+    //   再往下注册所有事件处理器（任何一个异步处理器漏出去的异常都不再带走整个控制面）。
+    installCrashGuards();
 
     // ── 握手 token（第一轮审查 第1条 ①）────────────────────────────────
     // 为什么需要它：只绑 localhost 挡不住「本机任意进程」，local_only.js 的 Origin 判据挡不住
@@ -562,7 +741,10 @@ export function createMindServer(host_public = false, port = 8080) {
                     }
                 }
                 out.sort((a, b) => a.file.localeCompare(b.file));
-                callback({ ok: true, dir: profilesDir, profiles: out });
+                // ★ R4 S3#20（F-WEB-204 同类第 4 处）：这里原来回 `dir: profilesDir` —— **本机绝对路径**
+                //   （带用户名、目录结构），等于把前置侦察件交给任何持 token 的客户端；
+                //   同一条消息里 `path` 已经改成 basename 了，`dir` 漏了。只回相对名。
+                callback({ ok: true, dir: path.basename(profilesDir), profiles: out });
             } catch (e) {
                 callback({ ok: false, reason: String(e && e.message || e) });
             }
@@ -579,6 +761,122 @@ export function createMindServer(host_public = false, port = 8080) {
                 callback({ ok: true, file: safe, path: path.basename(full), raw, json: JSON.parse(raw) });
             } catch (e) {
                 callback({ ok: false, reason: String(e && e.message || e) });
+            }
+        });
+
+        // ---- 第四轮审计 ①：玩家身份绑定（面板 → 一次性码 → 游戏内 !claim）----
+        //
+        // 为什么由**面板**签发：面板持有人已经过握手 token 门（= 本机/可信客户端），
+        // 是这套系统里唯一"能证明自己是谁"的一方。游戏内做不到（离线服务器不校验名字）。
+        // 所以链路是：面板点"生成绑定码" → 这里造码写盘 → 人把码在游戏里输 `!claim ABCD-EFGH`
+        // → agent 子进程核销并写 identity.json → 之后按 uuid 优先定级。
+        //
+        // 码的三条硬约束（都在 identity_store 里，这里只负责走流程）：
+        //   ① 短时：TTL ≤ 5 分钟（传更大也会被压到 5 分钟）
+        //   ② 单次：核销即删
+        //   ③ 绑面板会话：码上记 socket.id；该 socket 断开 ⇒ 它签发的未核销码全部作废
+        //
+        // 诚实边界：码是**明文**写在 bots/<agent>/identity-codes.json 里。能读这个文件的人
+        // 可以先自己核销（= 冒充主人）。本机制解决的是"游戏里改个名就冒充"，不是本机提权
+        // （后者见 OPS-003 / F-RT-001；token 门与它同级，也不是权限边界）。
+
+        /**
+         * ★★ R4 t24：这三个身份事件**只给"已认证的面板连接"**。
+         *
+         * 为什么需要这一层（不只是握手 token 门）：
+         *   · token 门对**所有**连接一视同仁 —— agent 子进程也带 token（它要发 bot-output）；
+         *   · 但"签发绑定码"是**主人的权力**：agent 进程自己（或任何被拿去当 agent 通道的
+         *     连接）不该能凭空造一个能把自己升成 owner 的码。
+         *   判据与 bot-output 相反：**带 auth.token 的 agent 身份 = 拒绝**；面板走 cookie，不带 auth。
+         *
+         * @returns {boolean} 这条连接能不能签发/查看/解绑身份
+         */
+        const isPanelConnection = () => !isAgentIdentity(socket) && socket.handshake?.auth?.token == null;
+
+        /**
+         * 只接受已注册的 agent 名；返回规范化名字或 null。
+         * （不是"任意字符串"—— 否则可以拿它当路径拼接的入口去碰别的目录。）
+         */
+        const knownAgent = (agentName) => {
+            const name = typeof agentName === 'string' ? agentName.trim() : '';
+            return name && Object.prototype.hasOwnProperty.call(agent_connections, name) ? name : null;
+        };
+
+        socket.on('identity-status', (agentName, callback) => {
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!isPanelConnection()) {
+                console.warn(`[mindserver] 拒绝 identity-status：只允许面板连接（agent 通道不能签发/查看/解绑身份）`);
+                cb({ ok: false, reason: 'panel_only' }); return;
+            }
+            const name = knownAgent(agentName);
+            if (!name) { cb({ ok: false, reason: 'unknown_agent' }); return; }
+            if (!takeToken(socket, 'identity-status', 30, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            try {
+                const codeRead = readStore(codesFileOf(name));
+                const idRead = readStore(identityFileOf(name));
+                const st = previewStatus(codeRead.store);
+                const bindings = previewStatus(idRead.store).bindings;
+                cb({
+                    ok: true,
+                    agent: name,
+                    // 码本身不在这里回（它只出现在"刚生成"那一次的回执里）——
+                    // 免得任何持 token 的客户端随手一拉就能捡走别人还没用的码。
+                    pendingCodes: st.codes.map((c) => ({ expiresAt: c.expiresAt, sessionId: c.sessionId })),
+                    bindings,
+                });
+            } catch (e) {
+                cb({ ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('identity-issue-code', (agentName, callback) => {
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!isPanelConnection()) {
+                console.warn(`[mindserver] 拒绝 identity-issue-code：只允许面板连接（agent 通道不能签发/查看/解绑身份）`);
+                cb({ ok: false, reason: 'panel_only' }); return;
+            }
+            const name = knownAgent(agentName);
+            if (!name) { cb({ ok: false, reason: 'unknown_agent' }); return; }
+            if (!takeToken(socket, 'identity-issue-code', 5, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            try {
+                const code = makeCode();
+                const file = codesFileOf(name);
+                const read = readStore(file);
+                const added = addCode(read.store, {
+                    code, agent: name, sessionId: socket.id ?? null, ttlMs: DEFAULT_CODE_TTL_MS,
+                });
+                const wrote = writeStore(file, added.store);
+                if (!wrote.ok) { cb({ ok: false, reason: `写码失败：${wrote.reason}` }); return; }
+                console.log(`[mindserver] 为 ${name} 生成身份绑定码（5 分钟有效，单次使用，会话 ${socket.id ?? '-'}）`);
+                cb({ ok: true, agent: name, code, expiresAt: added.record.expiresAt, ttlMs: DEFAULT_CODE_TTL_MS });
+            } catch (e) {
+                cb({ ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('identity-unbind', (agentName, who, callback) => {
+            if (typeof who === 'function') { callback = who; who = {}; }
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!isPanelConnection()) {
+                console.warn(`[mindserver] 拒绝 identity-unbind：只允许面板连接（agent 通道不能签发/查看/解绑身份）`);
+                cb({ ok: false, reason: 'panel_only' }); return;
+            }
+            const name = knownAgent(agentName);
+            if (!name) { cb({ ok: false, reason: 'unknown_agent' }); return; }
+            if (!takeToken(socket, 'identity-unbind', 10, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            try {
+                const file = identityFileOf(name);
+                const read = readStore(file);
+                const uuid = typeof who?.uuid === 'string' ? who.uuid : null;
+                const person = typeof who?.name === 'string' ? who.name : null;
+                if (!uuid && !person) { cb({ ok: false, reason: 'need_uuid_or_name' }); return; }
+                const out = revokeBinding(read.store, { uuid, name: person });
+                const wrote = writeStore(file, out.store);
+                if (!wrote.ok) { cb({ ok: false, reason: `写绑定表失败：${wrote.reason}` }); return; }
+                console.log(`[mindserver] 已解绑 ${name} 的玩家 ${person ?? uuid}（移除 ${out.removed} 条）`);
+                cb({ ok: true, agent: name, removed: out.removed });
+            } catch (e) {
+                cb({ ok: false, reason: String(e?.message ?? e) });
             }
         });
 
@@ -605,16 +903,37 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('create-agent', async (settings, callback) => {            console.log('API create agent...');
+            // 客户端可能只带一个 ack 函数（畸形事件也要能安全应答）
+            if (typeof settings === 'function' && callback === undefined) { callback = settings; settings = undefined; }
+            // ★ R4 S1#5：**ack 必须永远安全**。原来是裸 `callback(...)`：客户端 emit 时
+            //   不带 ack ⇒ TypeError: callback is not a function ⇒ async 处理器抛 ⇒
+            //   （Node 22）未处理的 Promise 拒绝 ⇒ 整个控制面退出。现在统一走 ack()。
+            const ack = (payload) => {
+                if (typeof callback !== 'function') return;
+                try { callback(payload); } catch (e) {
+                    console.warn(`[mindserver] create-agent 回执失败（客户端可能已断开）：${e?.message ?? e}`);
+                }
+            };
             // ★ F-WEB-203：`create-agent` 会 **spawn 一个新 bot 进程**（连 MC 服务器、吃内存与 LLM 配额），
             // 原来完全无限流 ⇒ 单连接可无限拉起 agent。按来源限 5 次/60 秒。
             if (!takeToken(socket, 'create-agent', 5, 60000)) {
-                try { callback?.({ success: false, error: '太频繁：create-agent 限 5 次/分钟' }); } catch { }
+                ack({ success: false, error: '太频繁：create-agent 限 5 次/分钟' });
                 return;
+            }
+            // ★★★ R4 S1#5：**先校验形状**（null / 字符串 / 数组 / profile 不是对象 ⇒ 当场拒绝）。
+            //   不做这一步的话，下面 `key in settings` 会抛 TypeError ⇒ 打挂整个控制面。
+            {
+                const shapeErr = validateSettingsShape(settings);
+                if (shapeErr) {
+                    console.warn(`[mindserver] create-agent 拒绝非法 settings：${shapeErr}`);
+                    ack({ success: false, error: shapeErr });
+                    return;
+                }
             }
             for (let key in settings_spec) {
                 if (!(key in settings)) {
                     if (settings_spec[key].required) {
-                        callback({ success: false, error: `Setting ${key} is required` });
+                        ack({ success: false, error: `Setting ${key} is required` });
                         return;
                     }
                     else {
@@ -641,7 +960,7 @@ export function createMindServer(host_public = false, port = 8080) {
                 const bad = schemaViolation(settings, settings_spec);
                 if (bad) {
                     console.warn(`[mindserver] create-agent 拒绝非法 settings：${bad}`);
-                    try { callback({ success: false, error: bad }); } catch { }
+                    ack({ success: false, error: bad });
                     return;
                 }
             }
@@ -653,25 +972,34 @@ export function createMindServer(host_public = false, port = 8080) {
                 const nameCheck = validateNameFormat(settings.profile.name);
                 if (!nameCheck.success) {
                     console.warn(`[mindserver] create-agent 拒绝非法 profile.name: ${JSON.stringify(settings.profile.name)}`);
-                    callback({ success: false, error: nameCheck.msg });
+                    ack({ success: false, error: nameCheck.msg });
                     return;
                 }
                 if (settings.profile.name in agent_connections) {
-                    callback({ success: false, error: 'Agent already exists' });
+                    ack({ success: false, error: 'Agent already exists' });
                     return;
                 }
-                let returned = await mindcraft.createAgent(settings);
-                callback({ success: returned.success, error: returned.error });
+                let returned;
+                try {
+                    returned = await mindcraft.createAgent(settings);
+                } catch (e) {
+                    console.error('[mindserver] create-agent 失败：', e);
+                    ack({ success: false, error: String(e?.message ?? e) });
+                    return;
+                }
+                ack({ success: returned.success, error: returned.error });
                 let name = settings.profile.name;
                 if (!returned.success && agent_connections[name]) {
-                    mindcraft.destroyAgent(name);
+                    // ★ R4 S1#4：确认退出之后才摘掉注册项（destroyAgent 自己会等；这里 await 是因为
+                    //   它现在返回 Promise —— 不 await 就会在子进程还活着时先删 conn，留下孤儿）
+                    await mindcraft.destroyAgent(name);
                     delete agent_connections[name];
                 }
                 agentsStatusUpdate();
             }
             else {
                 console.error('Agent name is required in profile');
-                callback({ success: false, error: 'Agent name is required in profile' });
+                ack({ success: false, error: 'Agent name is required in profile' });
             }
         });
 
@@ -683,27 +1011,56 @@ export function createMindServer(host_public = false, port = 8080) {
             }
         });
 
-        socket.on('connect-agent-process', (agentName) => {
-            if (agent_connections[agentName]) {
-                agent_connections[agentName].socket = socket;
-                agentsStatusUpdate();
+        /**
+         * ★★★ R4 S2#9：把某个 agent 的通道绑到这条连接上 —— **要求 agent 身份 + 唯一占用**。
+         *
+         * 缺陷原貌：这两个事件都没有身份校验，任何持 token 的面板连接都能把自己绑成 agent 通道
+         * （`chat-message` 转发给"最后绑上来的那个 socket"），而且两个同名 agent 会互相踢，
+         * 玩家消息一半丢、`in_game` 一跳一跳。现在统一走 claimAgentChannel 的裁决，
+         * 并且把"被接管"明说给旧连接（不静默换主人）。
+         *
+         * @returns {boolean} 是否绑定成功
+         */
+        function bindAgentChannel(agentName, why) {
+            const conn = agent_connections[agentName];
+            if (!conn) {
+                console.warn(`[mindserver] ${why}: 未注册的 agent ${JSON.stringify(agentName)}（可能已删除）`);
+                return false;
             }
+            const claim = claimAgentChannel(conn, socket, { agentIdentity: isAgentIdentity(socket) });
+            if (!claim.ok) {
+                console.warn(`[mindserver] ${why} 拒绝绑定 ${agentName}（${claim.reason}）：` +
+                    `来源 socket=${socket.id ?? '?'}，当前持有者 socket=${claim.previous?.id ?? '-'}` +
+                    (claim.reason === 'identity-required' ? '（只有 agent 进程自己可以占用 agent 通道）' : ''));
+                try { socket.emit('agent-channel-rejected', { agent: agentName, reason: claim.reason }); } catch { /* 断开中 */ }
+                return false;
+            }
+            if (claim.takeover && claim.previous) {
+                console.warn(`[mindserver] agent 通道接管：${agentName} 旧连接 socket=${claim.previous.id ?? '?'} → ` +
+                    `新连接 socket=${socket.id ?? '?'}（${claim.reason}）—— 旧连接已摘除`);
+                // 明确告诉被顶掉的那条连接（原来是"静默换主人"，面板/旧进程都不知道自己已经不在通道上了）
+                try { claim.previous.emit('agent-channel-taken-over', { agent: agentName }); } catch { /* 断开中 */ }
+                try { claim.previous.disconnect?.(true); } catch { /* 已经断了 */ }
+            }
+            conn.socket = socket;
+            return true;
+        }
+
+        socket.on('connect-agent-process', (agentName) => {
+            if (bindAgentChannel(agentName, 'connect-agent-process')) agentsStatusUpdate();
         });
 
         socket.on('login-agent', (agentName) => {
-            if (agent_connections[agentName]) {
-                agent_connections[agentName].socket = socket;
-                agent_connections[agentName].in_game = true;
-                curAgentName = agentName;
-                agentsStatusUpdate();
-            }
-            else {
-                console.warn(`Unregistered agent ${agentName} tried to login`);
-            }
+            if (!bindAgentChannel(agentName, 'login-agent')) return;
+            agent_connections[agentName].in_game = true;
+            curAgentName = agentName;
+            agentsStatusUpdate();
         });
 
         socket.on('disconnect', () => {
-            if (agent_connections[curAgentName]) {
+            // ★ R4 S2#9：只有**当前持有者**断开才清空 —— 否则被接管的旧连接迟到的 disconnect
+            //   会把新主人的绑定抹掉（表现为"刚起来就 in_game=false、收不到玩家消息"）。
+            if (curAgentName && agent_connections[curAgentName]?.socket === socket) {
                 console.log(`Agent ${curAgentName} disconnected`);
                 agent_connections[curAgentName].in_game = false;
                 agent_connections[curAgentName].socket = null;
@@ -711,6 +1068,25 @@ export function createMindServer(host_public = false, port = 8080) {
             }
             if (agent_listeners.includes(socket)) {
                 removeListener(socket);
+            }
+            // ★ 第四轮审计 ①：面板会话断开 ⇒ 它签发的**未核销**绑定码作废
+            //   （"绑定当前面板会话"的另一半；已绑定成功的条目不受影响）。
+            try {
+                const sid = socket.id;
+                if (sid) {
+                    for (const name of Object.keys(agent_connections)) {
+                        const file = codesFileOf(name);
+                        const read = readStore(file);
+                        if (!read.store.codes.some((c) => c.sessionId === sid)) continue;
+                        const out = revokeSessionCodes(read.store, sid);
+                        if (out.removed > 0) {
+                            writeStore(file, out.store);
+                            console.log(`[mindserver] 面板会话 ${sid} 断开：作废 ${out.removed} 个未核销绑定码（${name}）`);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn(`[mindserver] 作废面板绑定码失败（不影响其他功能）：${e?.message ?? e}`);
             }
         });
 
@@ -757,17 +1133,45 @@ export function createMindServer(host_public = false, port = 8080) {
 
         socket.on('stop-agent', (agentName) => {
             mindcraft.stopAgent(agentName);
+            agentsStatusUpdate();
         });
 
-        socket.on('start-agent', (agentName) => {
-            mindcraft.startAgent(agentName);
-        });
-
-        socket.on('destroy-agent', (agentName) => {
-            if (agent_connections[agentName]) {
-                mindcraft.destroyAgent(agentName);
-                delete agent_connections[agentName];
+        socket.on('start-agent', async (agentName) => {
+            // ★★ R4 S1#3：`start-agent` 原来**完全无限流**，而它会走 forceRestart（= spawn 进程）。
+            //   按来源限 6 次/60 秒（正常使用远低于此：点一次启动/重启算一次）。
+            //   注意限流只是外层；真正的双开闸在 AgentProcess.start()（running 时拒绝）与
+            //   forceRestart()（并发保护 + 等旧进程退出），两层都在。
+            if (!takeToken(socket, 'start-agent', 6, 60000)) {
+                console.warn(`[mindserver] 拒绝 start-agent：触发限流（6 次/60s）`);
+                return;
             }
+            const r = await mindcraft.startAgent(agentName);
+            if (r && r.started === false) {
+                console.warn(`[mindserver] start-agent 未生效（${r.reason}）：${agentName}` +
+                    (r.exited === false ? ' —— 旧进程未确认退出，拒绝再起一个（否则就是双开）' : ''));
+                try { socket.emit('start-agent-failed', { agent: agentName, reason: r.reason }); } catch { /* 断开中 */ }
+            }
+            agentsStatusUpdate();
+        });
+
+        socket.on('destroy-agent', async (agentName) => {
+            // ★★ R4 S1#4：`destroy-agent` 原来 fire-and-forget：`stop()` 发个 SIGINT 就 `delete` 表项。
+            //   忽略 SIGINT 的子进程仍然活着（孤儿）⇒ 继续领单/续租，而控制面**再也管不到它**。
+            //   现在：等确认退出（SIGINT → 等 → SIGKILL → 再等）；没确认就**不删**，
+            //   并把失败原因回给面板（面板据此提示"还在跑，请查进程表"）。
+            if (!takeToken(socket, 'destroy-agent', 3, 60000)) {
+                console.warn(`[mindserver] 拒绝 destroy-agent：触发限流（3 次/60s）`);
+                return;
+            }
+            if (!agent_connections[agentName]) return;
+            const r = await mindcraft.destroyAgent(agentName);
+            if (!r?.ok) {
+                console.error(`[mindserver] destroy-agent ${agentName} 未确认退出（${r?.reason}）—— **保留注册表**（孤儿仍在领单/续租，需要人工查进程表）`);
+                try { socket.emit('destroy-agent-failed', { agent: agentName, reason: r?.reason ?? 'unknown' }); } catch { /* 断开中 */ }
+                return;
+            }
+            delete agent_connections[agentName];
+            console.log(`[mindserver] destroy-agent ${agentName}：已确认退出（${r.reason}${r.escalated ? '，强杀' : ''}），注册项已删除`);
             agentsStatusUpdate();
         });
 
@@ -823,7 +1227,7 @@ export function createMindServer(host_public = false, port = 8080) {
             // 任何持 token 的面板客户端都能伪造"某个 bot 说了某句话"，把排障日志污染成假象。
             // 只有 **agent 自己的连接** 有权发这两类事件：agent 走 `auth:{token}`（见 mindserver_proxy），
             // 面板走 HttpOnly cookie（web/src/api/socket.ts 不带 auth payload）⇒ 两者可区分。
-            if (!(typeof socket.handshake?.auth?.token === 'string' && socket.handshake.auth.token === handshakeToken)) {
+            if (!isAgentIdentity(socket)) {
                 console.warn(`[mindserver] 丢弃伪造的 bot-output：连接未以 agent 身份（auth.token）互联，声称 agent=${JSON.stringify(agentName)}`);
                 return;
             }
@@ -834,7 +1238,7 @@ export function createMindServer(host_public = false, port = 8080) {
         socket.on('agent-event', (agentName, e) => {
             // ★ F-WEB-101：同 bot-output —— 只有 agent 自己的连接能发结构化事件，
             // 否则面板客户端可以伪造"挖矿失败/离线/单子卡住"这类诊断事件，误导排障。
-            if (!(typeof socket.handshake?.auth?.token === 'string' && socket.handshake.auth.token === handshakeToken)) {
+            if (!isAgentIdentity(socket)) {
                 console.warn(`[mindserver] 丢弃伪造的 agent-event：连接未以 agent 身份互联，声称 agent=${JSON.stringify(agentName)}`);
                 return;
             }
@@ -842,6 +1246,11 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('listen-to-agents', () => {
+            // ★★★ R4 S2#10：**幂等**。已经订阅过的连接直接忽略 —— 不消耗限流令牌、不重复注册 relay、
+            //   不会再往 agent_listeners 里塞第二个自己（原来重复 push ⇒ 同一个 socket 被 emit 两次
+            //   `state-update`，而且 removeListener 只摘掉一个，剩下的永远留在集合里 ⇒
+            //   `agent_listeners.length` 归不了零 ⇒ 1 Hz 轮询**永不停止**）。
+            if (agent_listeners.includes(socket)) return;
             // ★ F-WEB-203：`listen-to-agents` 会让这个 socket 进入广播订阅集合（服务端按 socket 计数
             // 起计时器），原来无限流 ⇒ 单连接反复订阅可推高服务端负载。按来源限 10 次/60 秒。
             if (!takeToken(socket, 'listen-to-agents', 10, 60000)) return;
@@ -935,6 +1344,67 @@ export function createMindServer(host_public = false, port = 8080) {
         } catch (e) {
             console.warn('[mindserver] OPS-003 风险自检跳过（读配置失败）：', e?.message ?? e);
         }
+
+        // ★★ R4 t13 升级提示：**这条默认变更是会"立刻生效"的**。
+        //   身份绑定默认开启 ⇒ 以前靠"名字 = permissions.owner"拿权限的人，
+        //   升级后第一条命令就会被拒（这是有意的 fail-closed，不是故障）。
+        //   所以启动时**主动说一次**，并给出两条出路（取码绑定 / 显式退回 legacy）。
+        //   只在"一台都没绑定过"时提示：绑定过就说明用户已经走过流程了，不必再刷屏。
+        try {
+            const botsDir = botsRootOf();
+            let boundTotal = 0;
+            if (existsSync(botsDir)) {
+                for (const d of readdirSync(botsDir)) {
+                    try {
+                        const f = path.join(botsDir, d, 'identity.json');
+                        if (!existsSync(f)) continue;
+                        boundTotal += readStore(f).store.bindings.length;
+                    } catch { /* 单个目录坏了不影响总数判断 */ }
+                }
+            }
+            if (boundTotal === 0) {
+                console.warn('[mindserver] 还没有任何玩家身份绑定。身份绑定默认开启（第四轮审计 ①）：');
+                console.warn('            ⇒ 玩家现在**不会**因为游戏名写在 profile 的 permissions.owner 里就拿到权限。');
+                console.warn('            ⇒ 让玩家在游戏里发 !claim <码>：码在控制台选中 agent 后点「生成绑定码」获取（5 分钟内有效、只能用一次）。');
+                console.warn('            ⇒ 想暂时退回"按名字"的老行为（**等于放弃防冒名**）：profile 里设 '
+                    + '"permissions": { ..., "identity": { "legacy_profile_names": true } }。');
+            }
+        } catch (e) {
+            console.warn('[mindserver] 身份绑定状态自检跳过：', e?.message ?? e);
+        }
+
+        // ★★★ R4 t20：**离线服的根本限制**，启动时必须说一次（不能只写在文档里等人翻）。
+        //   为什么：`online-mode=false` 时服务端给玩家发的 uuid 是 **由名字 MD5 派生**的
+        //   （minecraft-protocol 的 javaUUID('OfflinePlayer:'+name)）⇒ 任何人把客户端名改成
+        //   主人的名字，就拿到**同一个 uuid** ⇒ 身份绑定按 uuid 精确命中 ⇒ 直接 owner。
+        //   也就是说：**t13 那层保护在离线服上不存在**，能做的只有"识别出来 + 降级 + 说清楚"。
+        try {
+            const propsPath = path.join(__dirname, '..', '..', '..', 'server', 'server.properties');
+            let onlineMode = null;
+            if (existsSync(propsPath)) {
+                const m = /^\s*online-mode\s*=\s*(true|false)\s*$/im.exec(readFileSync(propsPath, 'utf8'));
+                if (m) onlineMode = m[1].toLowerCase() === 'true';
+            }
+            const identityCfg = (rootSettings?.identity_binding && typeof rootSettings.identity_binding === 'object')
+                ? rootSettings.identity_binding : {};
+            const identityOn = identityCfg.enabled !== false;
+            if (onlineMode === false && identityOn) {
+                const mode = String(identityCfg.offline_owner_mode ?? 'deny').toLowerCase() === 'session' ? 'session' : 'deny';
+                const minutes = Number(identityCfg.offline_session_minutes ?? 60) || 60;
+                console.warn('[mindserver] ⚠ 离线模式（server.properties: online-mode=false）+ 身份绑定已启用。');
+                console.warn('            ⇒ 离线模式下**uuid 由名字派生**（OfflinePlayer:<名字>）：同名 = 同 uuid，');
+                console.warn('              冒名者改个客户端名就能命中主人的绑定 ⇒ **按身份授权挡不住冒用**。');
+                console.warn(`            ⇒ 当前 identity_binding.offline_owner_mode = "${mode}"：` +
+                    (mode === 'session'
+                        ? `仅刚 !claim 后的 ${minutes} 分钟内授 owner，其余时间只聊天（降低暴露窗口，不是证明身份）。`
+                        : '这类"弱绑定"在离线服上一律只聊天（owner 不可达）。'));
+                console.warn('            ⇒ 根治只有两条（需要你拍板，代码不会替你改）：');
+                console.warn('               ① 开正版验证：server.properties 设 online-mode=true（客户端须正版登录）；');
+                console.warn('               ② 装登录插件（如 AuthMe）：让玩家用密码注册登录，身份由插件保证。');
+            }
+        } catch (e) {
+            console.warn('[mindserver] 离线模式判定跳过：', e?.message ?? e);
+        }
     });
 
     return server;
@@ -959,49 +1429,96 @@ function agentsStatusUpdate(socket) {
 
 
 let listenerInterval = null;
-function addListener(listener_socket) {
+/** ★ R4 S2#10：已经注册过 relay 的 socket（WeakSet：socket 断开即自然回收，不需要清理表）。 */
+const relayedSockets = new WeakSet();
+
+/**
+ * ★★★ R4 S2#10：订阅状态流 + 地图 relay —— **必须幂等**。
+ *
+ * 缺陷原貌（`mindserver.js:962-964`）：`addListener` 无脑
+ *   `registerMapRelay(socket); agent_listeners.push(socket);`
+ *   · 同一个 socket 订阅两次 ⇒ 集合里有两个自己 ⇒ 每秒收到两份 `state-update`；
+ *   · `registerMapRelay` 里的 `socket.on(...)` 是**追加**语义 ⇒ request-map / request-terrain /
+ *     get-events … 各被注册两份，一次请求变成两次 `agent.socket.emit`（重复拉地图/重复读库）；
+ *   · `disconnect` 只 `removeListener` 一次 ⇒ 集合里还剩一个引用 ⇒ `length === 0` 永远不成立
+ *     ⇒ **1 Hz 轮询永不停止**（服务端每秒还在给一个已断开的 socket emit）。
+ *
+ * 现在：同一 socket 重复调用 = 无操作；relay 每个 socket 只注册一次;集合归零就停表。
+ *
+ * @returns {boolean} 这次调用是否真的新增了订阅
+ */
+export function addListener(listener_socket) {
+    if (!listener_socket) return false;
+    if (agent_listeners.includes(listener_socket)) return false;   // 幂等
     registerMapRelay(listener_socket);   // 地图按需拉取，不进每秒 state-update
     agent_listeners.push(listener_socket);
-    if (agent_listeners.length === 1) {
-        // 第一轮审查：原来没有超时 —— 一个 agent 卡住（等模型 API / 跑大段同步代码），
-        // 所有面板的状态一起停，而且每秒再叠一个永远不 resolve 的 Promise。
-        // 现在：单个 agent 5 秒没回就沿用它上一次的状态（新面板 StatusCard 读 `s?.gameplay.health`，
-        // 收到 { error } 会渲染报错，所以超时不发 error）；上一轮还没跑完就跳过这一轮。
-        let polling = false;
-        listenerInterval = setInterval(async () => {
-            if (polling) return;
-            polling = true;
-            try {
-                const states = {};
-                for (let agentName in agent_connections) {
-                    let agent = agent_connections[agentName];
-                    if (agent.in_game) {
-                        try {
-                            const state = await new Promise((resolve, reject) => {
-                                const timer = setTimeout(() => reject(new Error('state timeout')), 5000);
-                                agent.socket.emit('get-full-state', (s) => { clearTimeout(timer); resolve(s); });
-                            });
-                            agent.last_state = state;
-                            states[agentName] = state;
-                        } catch (e) {
-                            states[agentName] = (String(e?.message) === 'state timeout' && agent.last_state)
-                                ? agent.last_state
-                                : { error: String(e) };
-                        }
+    if (agent_listeners.length === 1) startStatePolling();
+    return true;
+}
+
+/** 起 1 Hz 状态轮询（已启动则不动；集合归零时由 stopStatePolling 停掉）。 */
+function startStatePolling() {
+    if (listenerInterval) return false;
+    // 第一轮审查：原来没有超时 —— 一个 agent 卡住（等模型 API / 跑大段同步代码），
+    // 所有面板的状态一起停，而且每秒再叠一个永远不 resolve 的 Promise。
+    // 现在：单个 agent 5 秒没回就沿用它上一次的状态（新面板 StatusCard 读 `s?.gameplay.health`，
+    // 收到 { error } 会渲染报错，所以超时不发 error）；上一轮还没跑完就跳过这一轮。
+    let polling = false;
+    listenerInterval = setInterval(async () => {
+        if (polling) return;
+        polling = true;
+        try {
+            const states = {};
+            for (let agentName in agent_connections) {
+                let agent = agent_connections[agentName];
+                if (agent.in_game) {
+                    try {
+                        const state = await new Promise((resolve, reject) => {
+                            const timer = setTimeout(() => reject(new Error('state timeout')), 5000);
+                            agent.socket.emit('get-full-state', (s) => { clearTimeout(timer); resolve(s); });
+                        });
+                        agent.last_state = state;
+                        states[agentName] = state;
+                    } catch (e) {
+                        states[agentName] = (String(e?.message) === 'state timeout' && agent.last_state)
+                            ? agent.last_state
+                            : { error: String(e) };
                     }
                 }
-                for (let listener of agent_listeners) {
-                    listener.emit('state-update', states);
-                }
-            } finally {
-                polling = false;
             }
-        }, 1000);
-    }
+            for (let listener of agent_listeners) {
+                listener.emit('state-update', states);
+            }
+        } finally {
+            polling = false;
+        }
+    }, 1000);
+    // 不因为这个定时器而让进程退不掉（真正的存活责任在 http server 上）
+    try { listenerInterval?.unref?.(); } catch { /* ignore */ }
+    return true;
+}
+
+/** 停 1 Hz 状态轮询。 */
+function stopStatePolling() {
+    if (!listenerInterval) return false;
+    clearInterval(listenerInterval);
+    listenerInterval = null;
+    return true;
+}
+
+/** 仅供测试/诊断：1 Hz 状态轮询是否还在跑（"轮询永不停止"这条缺陷的判据）。 */
+export function isStatePolling() {
+    return listenerInterval !== null;
 }
 
 // 前端按需请求某只 bot 的地图（低频，不进每秒的 state-update）
 function registerMapRelay(socket) {
+    if (!socket) return false;
+    // ★ R4 S2#10：每个 socket 只注册一次。`socket.on` 是**追加**语义，
+    //   重复调用会把 request-map/request-terrain/诊断 relay 注册成多份 ⇒
+    //   一次请求变成 N 次 `agent.socket.emit`（重复扫库/重复拉地形）。
+    if (relayedSockets.has(socket)) return false;
+    relayedSockets.add(socket);
     socket.on('request-map', async (agentName, opts, callback) => {
         if (typeof opts === 'function') { callback = opts; opts = {}; }
         const agent = agent_connections[agentName];
@@ -1065,14 +1582,22 @@ function registerMapRelay(socket) {
     diagRelay('clear-events', 8000, () => []);                 // ()
     diagRelay('get-task-state', 15000, () => []);              // ()
     diagRelay('get-memory', 8000, () => []);                   // ()
+    return true;
 }
 
-function removeListener(listener_socket) {
-    agent_listeners.splice(agent_listeners.indexOf(listener_socket), 1);
-    if (agent_listeners.length === 0) {
-        clearInterval(listenerInterval);
-        listenerInterval = null;
-    }
+/**
+ * 退订。★ R4 S2#10：**必须容忍"不在集合里"**（断开时可能已经退过、或从未订阅过）。
+ * 原来 `splice(indexOf(x), 1)` 在 indexOf 返回 -1 时是 `splice(-1,1)` —— 删掉的是**最后一个**
+ * 监听者：别人还订阅着，被这一下清掉后就再也收不到状态了（而 1 Hz 轮询还以为在服务）。
+ *
+ * @returns {boolean} 这次调用是否真的移除了一个订阅
+ */
+export function removeListener(listener_socket) {
+    const i = agent_listeners.indexOf(listener_socket);
+    if (i === -1) return false;
+    agent_listeners.splice(i, 1);
+    if (agent_listeners.length === 0) stopStatePolling();
+    return true;
 }
 
 // Optional: export these if you need access to them from other files

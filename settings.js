@@ -37,6 +37,22 @@ const settings = {
     // 打开方式：改这里为 true，或 `INSECURE_CODING=1 node main.js`（启动会打印醒目告警）。
     "allow_insecure_coding": false, // allows newAction command and model can write/run code on your computer (= local root). enable at own risk
     "allow_vision": false, // DISABLED: requires the native `canvas` addon to be built locally
+    // 第四轮审计 ①：玩家身份绑定。**默认开** —— 等级只看绑定表（面板发一次性码，
+    // 游戏里 !claim <码>），名字不再能换权限。legacy_profile_names=true 退回旧行为（不安全，
+    // 离线服务器上改个客户端名就是 owner）。见 src/mindcraft/identity_store.js。
+    "identity_binding": {
+        "enabled": true,
+        "legacy_profile_names": false,
+        "code_ttl_ms": 300000,       // 码有效期上限 5 分钟（identity_store 会再夹一次）
+        "binding_ttl_ms": 2592000000, // 绑定有效期 30 天，过期自动降级为 guest
+        // ★ t20：离线服（online-mode=false）下服务端下发的 uuid **由名字派生**
+        //   （javaUUID('OfflinePlayer:'+name)）⇒ 同名者拿到同一个 uuid ⇒ 绑定可被冒用。
+        //   'deny'（默认）= 这类"弱绑定"在离线服上永不授 owner，只聊天；
+        //   'session'    = 仅在刚 !claim 后的 N 分钟内授 owner（内存态，不落盘），其余时间只聊天。
+        //   两种都只是**降低暴露面**；根治要靠正版验证或登录插件（见 docs/audit-r4/T13-玩家身份.md）。
+        "offline_owner_mode": "deny",
+        "offline_session_minutes": 60
+    },
     "blocked_actions" : [], // commands to disable and remove from docs
     "code_timeout_mins": 20, // minutes code is allowed to run. -1 for no timeout -- 给个上限，防止代码死循环；大工程平地需要更长时间
     "relevant_docs_count": 6, // 全量注入的技能文档数量。-1 = 全部

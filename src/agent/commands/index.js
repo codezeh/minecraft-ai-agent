@@ -1,9 +1,13 @@
 import { getBlockId, getItemId } from "../../utils/mcdata.js";
 import { actionsList } from './actions.js';
 import { queryList } from './queries.js';
+// 第四轮审计 ①：身份绑定命令（!claim）
+import { identityList } from './identity.js';
 import settings from '../settings.js';
 // 发言人分级（M1 安全，08 §5）：命令能不能执行由「谁说的」定，不由模型说了什么定
-import { resolveLevel, canRunCommand, permissionDeniedReply } from '../permissions.js';
+import { resolveLevel, canRunCommand, permissionDeniedReply, LEVEL } from '../permissions.js';
+// 第四轮审计 ①：身份绑定表（角色 → 等级）。**身份优先，名字只是回退**
+import { identityFileOf, readStore, resolveBinding, sessionFresh } from '../../mindcraft/identity_store.js';
 
 /**
  * 陪玩模式只暴露这几条给模型（方案 §12：60 条 → 7 条）。
@@ -51,7 +55,7 @@ export function isVisibleToModel(commandName) {
 
 let suppressNoDomainWarning = true;
 
-const commandList = queryList.concat(actionsList);
+const commandList = queryList.concat(actionsList, identityList);
 const commandMap = {};
 for (let command of commandList) {
     commandMap[command.name] = command;
@@ -301,6 +305,112 @@ export function normalizeArgsCommand(spec) {
 }
 
 /**
+ * 取发言人的 uuid（离线/在线都取服务端给的那个）。
+ *
+ * 为什么不是"名字"：任务 ① 的要害是**名字可随便改**。`bot.players[name].uuid`
+ * 是服务端认的身份；名字只在"还没绑定"时用于显示与兼容回退。
+ *
+ * @param {object} agent
+ * @param {string|null} author
+ * @returns {string|null}
+ */
+export function playerUuidOf(agent, author) {
+    const name = typeof author === 'string' ? author.trim() : '';
+    if (!name) return null;
+    try {
+        const p = agent?.bot?.players?.[name];
+        return p && typeof p.uuid === 'string' ? p.uuid : null;
+    } catch { return null; }
+}
+
+/**
+ * 组装"身份绑定"上下文，交给 `resolveLevel`。
+ *
+ * 三档的来源与优先级（都能被 profile 覆盖，profile 优先于全局 settings）：
+ *   · `enabled`：绑定模式开不开（默认**开** —— 这正是 ① 要的默认安全姿态）
+ *   · `legacy_profile_names`：是否允许退回"按名字给权限"（默认**关**）
+ *   · `resolve({uuid, name})`：查绑定表；查不到返回 null
+ *
+ * 诚实边界：关掉绑定（`enabled:false`）等于回到审计前的行为（名字即权限），
+ * 只留给"还没准备好迁移"的部署，且会在启动日志里由 mindserver 提醒。
+ *
+ * @param {object} agent
+ * @returns {{enabled:boolean, legacyNames:boolean, resolve:Function|null}}
+ */
+export function identityContextOf(agent) {
+    const perms = agent?.prompter?.profile?.permissions ?? {};
+    const profileCfg = (perms && typeof perms.identity === 'object' && perms.identity) ? perms.identity : {};
+    const settingsCfg = (settings && typeof settings.identity_binding === 'object' && settings.identity_binding)
+        ? settings.identity_binding : {};
+
+    const enabled = profileCfg.enabled ?? settingsCfg.enabled ?? true;
+    const legacyNames = profileCfg.legacy_profile_names ?? settingsCfg.legacy_profile_names ?? false;
+    // ★ t20：离线服的处置策略（默认 deny = 弱绑定不授 owner）
+    const offlineOwnerMode = String(profileCfg.offline_owner_mode ?? settingsCfg.offline_owner_mode ?? 'deny').toLowerCase();
+    const sessionMinutes = Number(profileCfg.offline_session_minutes ?? settingsCfg.offline_session_minutes ?? 60);
+    const sessionWindowMs = (Number.isFinite(sessionMinutes) && sessionMinutes > 0 ? sessionMinutes : 60) * 60_000;
+    if (!enabled) {
+        // 关掉绑定 = 老的按名字判级（permissions.resolveLevel 的第 4~5 步）
+        return { enabled: false, legacyNames: true, resolve: null };
+    }
+    const agentName = agent?.name ?? agent?.bot?.username ?? null;
+    const ctx = {
+        enabled: true,
+        legacyNames: legacyNames === true,
+        offlineOwnerMode: offlineOwnerMode === 'session' ? 'session' : 'deny',
+        sessionMinutes: Number.isFinite(sessionMinutes) && sessionMinutes > 0 ? sessionMinutes : 60,
+        /** 最近一次 resolve 的结果（拒绝话术要用 reason，避免再读一次盘）。 */
+        lastResolved: null,
+        peek: () => ctx.lastResolved,
+        // 每执行一条命令读一次表：绑定/解绑是低频事件，而"读到旧表"会让解绑失效很久。
+        resolve: ({ uuid, name }) => {
+            if (!agentName) return null;
+            const read = readStore(identityFileOf(agentName));
+            if (!read.ok && !read.store.bindings.length) return null;
+            const hit = resolveBinding(read.store, { uuid, name });
+            // ★ 记的是**最终裁决**（可能已被下面的 offline 策略降级），
+            //   拒绝话术读它来决定"说真话还是让玩家去 claim"。
+            const settle = (result) => { ctx.lastResolved = result; return result; };
+            if (!hit || !hit.level) return settle(hit);
+
+            // ★★★ R4 t20：**弱绑定（离线服按名字派生 uuid）不许持久授 owner。**
+            //
+            // 为什么必须在这里拦：离线服上"同名 ⇒ 同 uuid"，冒名者改个客户端名就能命中
+            // 这条绑定。不拦的话 t13 在 online-mode=false 下等于没有保护（见 t20 说明）。
+            //
+            // 两种处置：
+            //   · deny（默认）：离线 + 弱绑定 ⇒ 永远 guest，并明确说"无法证明你是你"；
+            //   · session     ：只在"最近 N 分钟内刚 !claim 过"时授 owner（内存态、不落盘），
+            //                   其余时间 guest。这是"降低暴露窗口"，**不是**证明身份。
+            if (!hit.weak) return settle(hit);
+
+            const mode = String(offlineOwnerMode ?? 'deny').toLowerCase();
+            if (mode === 'session') {
+                const fresh = sessionFresh({ uuid, name, windowMs: sessionWindowMs });
+                if (fresh) return settle(hit);
+                return settle({ ...hit, level: null, reason: 'offline-weak-session' });
+            }
+            return settle({ ...hit, level: null, reason: 'offline-weak' });
+        },
+    };
+    return ctx;
+}
+
+/**
+ * 离线服上的 owner 可达性（写进日志/文档/拒绝话术的同一句话，只留一处）。
+ * @param {'deny'|'session'} mode
+ * @param {number} windowMinutes
+ * @returns {string}
+ */
+export function offlineOwnerNote(mode, windowMinutes) {
+    const how = String(mode).toLowerCase() === 'session'
+        ? `仅在刚 !claim 后的 ${windowMinutes} 分钟内有效，其余时间只聊天`
+        : '离线服上一律只聊天（owner 不可达）';
+    return `离线服无法证明"你是你"（uuid 由名字派生，同名者不可区分）：${how}。`
+        + '根治只有两条：开正版验证（online-mode=true），或装登录插件（如 AuthMe）。';
+}
+
+/**
  * 执行一条命令。
  *
  * ★ 2026-11-01 M1 安全改造（08 §5）：加了 `{ author }`。
@@ -337,15 +447,30 @@ export async function executeCommand(agent, message, perm = {}) {
         // —— 权限闸门：按发言人分级（08 §5）——
         // BOT-001：不再传 internalNames —— 「名字等于 bot 名」不再是内部来源的判据，
         // 内部来源只认调用方显式传入的 internal:true。
+        // ★ 第四轮审计 ①：身份上下文只算一次（定级 + 拒绝话术都要用）
+        const identity = identityContextOf(agent);
         const level = resolveLevel({
             author,
             permissions: agent?.prompter?.profile?.permissions,
             isOtherBot,
             internal,
+            // ★ 身份优先 —— uuid 传给绑定表，名字只用于回退/显示
+            uuid: playerUuidOf(agent, author),
+            identity,
         });
         if (!canRunCommand(level, parsed.commandName)) {
             console.warn(`[权限] 拒绝 ${parsed.commandName}：author=${author ?? '(none)'} level=${level}`);
-            return permissionDeniedReply(level, parsed.commandName, author);
+            // 拒绝话术要**可照做**：绑定模式开着时直接告诉玩家去面板取码 !claim，
+            // 而不是只丢一句"你是 other"（升级后老用户会以为 bot 坏了）。
+            const hit = typeof identity.peek === 'function' ? identity.peek() : null;
+            return permissionDeniedReply(level, parsed.commandName, author, {
+                bindingRequired: identity.enabled === true && identity.legacyNames !== true,
+                isOtherBot,
+                // t20：弱绑定被拒时话术要换成"离线服证明不了你是你"，而不是"去 claim 一次"
+                offlineWeak: hit?.weak === true && /^offline-weak/.test(String(hit?.reason ?? '')),
+                offlineMode: identity.offlineOwnerMode,
+                sessionMinutes: identity.sessionMinutes,
+            });
         }
 
         let numArgs = 0;
