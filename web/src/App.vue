@@ -10,6 +10,12 @@ const navItems = computed(() => [
   { to: '/terrain', label: '3D 地形' },
   { to: '/debug', label: '诊断' },
   { to: '/setup', label: '配置' },
+  // R5 t28：设置中心（开关/滑块）。和 /setup 分开：「配置」是建 agent 的向导，
+  // 「设置」是改运行参数的开关面板 —— 两者混在一起会让人以为都得重启才生效。
+  { to: '/settings', label: '设置' },
+  // R5 t15：凭据保管库。导航条目和 router.ts 的 meta.label 必须一致，
+  // 否则"菜单里叫一个名、路由里叫另一个名"，搜文档的人会对不上。
+  { to: '/vault', label: '凭据' },
 ])
 
 const connClass = computed(() => (store.connected ? 'ok' : store.everConnected ? 'warn' : 'bad'))

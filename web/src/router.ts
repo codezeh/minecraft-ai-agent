@@ -24,6 +24,20 @@ export const router = createRouter({
       component: () => import('./views/SetupView.vue'),
       meta: { label: '配置' },
     },
+    // R5 t28：设置中心（网络/身份/备份/运行时四组，带开关与滑块）。
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('./views/SettingsView.vue'),
+      meta: { label: '设置' },
+    },
+    // R5 t15：凭据保管库（加密存 API Key）。懒加载，和其它二级页一致。
+    {
+      path: '/vault',
+      name: 'vault',
+      component: () => import('./views/VaultView.vue'),
+      meta: { label: '凭据' },
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

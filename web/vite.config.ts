@@ -30,6 +30,10 @@ export default defineConfig(({ command }) => ({
       // 而 Node 18+ 的 localhost 会优先解析成 ::1，导致 ECONNREFUSED（踩过）。
       '/socket.io': { target: 'http://127.0.0.1:8080', ws: true, changeOrigin: true },
       '/assets': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      // 凭据保管库（/api/vault/*）等控制面 HTTP 接口：也是 mindserver 提供（8080）。
+      // 缺这条时 `npm run dev`(5173) 下凭据页会直接 404/CORS，prod 不受影响（同源 /console/）。
+      // 同样必须 127.0.0.1，理由见上。
+      '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true },
     },
   },
   build: {
