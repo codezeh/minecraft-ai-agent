@@ -778,3 +778,182 @@ t33 我把 `tools/chest_withdraw_race_unit.mjs` 写成离线 fake window + 三�
 | 产品代码修复 | ❌ **未修好** → 已 `git checkout` 回退到 HEAD，不留半修 |
 | 假窗口单测 | ⚠️ 已改回**真机探针**（SKIP-safe），因为它给的"绿"是假信号 |
 | 门禁 | ✅ `lint_hard` 0、`unit_all` exit 0、`gate:full` exit 0（133/133，5 跳过） |
+
+---
+
+## 13. T37 尝试：withdraw 拆半法（**未达 10/10，产品代码已回退 HEAD**）
+
+> **最终状态**：`src/agent/library/act_container.js` 已 `git checkout` 回退到 HEAD，`git diff` 为空；
+> `tools/e2e_chest_store_live.mjs` 里我在本轮加的"读重试"也**已撤掉**（读重试会把间歇失败掩盖成通过）。
+> 保留：真机探针、E2E、红时证据、本节。门禁：`lint_hard` 0、`unit_all` exit 0、`gate:full` exit 0。
+
+### 13.1 做了什么（拆半法 + 三处方向修正）
+
+1. **`clickWithdrawExact()`**：自己实现"精确搬 n 件"，绕开 `win.withdraw()` 的收尾：
+   - 找容器源槽 → **右键**拿一半（`ceil(摞/2)`）→ **右键**目标背包槽逐件放下 → 余数**左键放回同一源槽**；
+   - 收尾若光标仍有件 → **左键背包槽（目的地）**，绝不碰容器。
+2. 把 `withdraw` 成功路径里的 `returnCursorToOrigin(..., 'container')` **换成 `drainCursorToInventory()`**
+   —— 这一条是**决定性修复**：`returnCursorToOrigin` 内部是 left-click 容器槽，而 left-click 在光标为空时
+   是"拿起整摞"（方向反转），正是「要 8 搬 16」的第二波点击。
+3. 记账改为**物理口径**（`winMoved - cursorAfter`）+ 有界重测（纯等待）。
+
+### 13.2 真机 e2e 逐次结果（多批次，均单批串行）
+
+| 批次 | 改动 | 结果 |
+|---|---|---|
+| t37-run | 拆半法（含"整摞左键"分支） | 6/10 |
+| t37c | 只走"右键拆半"（去掉整摞分支） | 7/10 |
+| t37e | + 光标空守卫（放回前先确认光标有件） | 8/10 |
+| t37g | **+ 成功路径去掉 `returnCursorToOrigin('container')`** | **8/10，且红的两条都是 28/30 且 `断言D` 已正确（16→24）** |
+| t37h | + 收尾读重试 | 8/10（残留 = 账目 `taken=7`） |
+| t37i/j | + 物理口径记账（有界重测） | 7~8/10（残留同上，客户端计数晚一拍） |
+
+**关键进展**：t37g 之后 **`+16/-16`、`+11/-11`、`31≠32` 三种坏签名全部消失**，
+箱子稳定 `16→8`、背包 `16→24`、RCON 读 8、总数守恒。
+**唯一残留**：技能自报 `taken=7`（报「只取到 7/8」），而物理与调用方看到的世界都正确 —— 纯**账目**问题：
+客户端背包/箱子计数偶尔晚一拍，`measureTaken` 取到 7。
+
+### 13.3 点击级证据（t37f-run2 现场，`chest-withdraw-redcase-2026-11-09T08-11-06-254Z-fetch.txt`）
+
+```
+0   | 59   | slot0  | btn1 | 光标 8      ← 拆半法：右键源槽拿一半 = 8   ✅
+1-8 | 60   | slot27 | btn1 | 光标 7..0   ← 右键目标槽逐件放下 8 件      ✅
+9   | 1278 | slot0  | btn0 | 光标 0      ← ★ 卡在 settle 超时点之后的 left-click（旧 returnCursorToOrigin）
+```
+第 9 次点击就是元凶：`left-click 容器槽` 把余下 8 件又拿起来 ⇒ 关窗退回背包 ⇒ 箱子 16→0、背包 +16。
+去掉后（t37g）该现象消失。
+
+### 13.4 为什么没做到 10/10
+
+剩下的 `taken=7` 是**读数的客户端滞后**：
+- `measureTaken` 的 `rawTaken` 与物理口径都基于**客户端** `win.slots` / `bot.inventory`；
+- 服务端真值（RCON `data get block`）在同一时刻已经是 8（E2E 的 `取后 RCON 独立读箱子 = 8` 一直 PASS）。
+
+要彻底解决，需要**在原子层取服务端真值**（重开窗口读 `containerItems()`，或用 RCON），
+而"在 `withdraw` 内部重开窗口"会打断调用方的窗口生命周期（`flow_store` 正持有它），
+属于**跨层改动**，风险高于本单范围 —— 我做到 7~8/10 便停下并回退，没有留下半修。
+
+### 13.5 建议的下一步（给下一张单）
+
+1. **把"服务端真值复核"上移到 `flow_store`**（它本来就每轮 open/close 窗口）：
+   `withdraw` 返回后，`flow_store` 关窗→重开→读 `containerItems()`，用
+   `winBefore - now` 作为 `taken` 的真值再决定 ok/partial。原子层不再猜。
+2. 或者给 `withdraw` 增加可选参数 `opts.verify = 'window' | 'rcon'`，由调用方决定是否付这个代价。
+3. 保留本次已验证有效的两条改动（**它们在 t37g 上把物理层彻底修好了**）：
+   - `clickWithdrawExact` 的"只右键拆半、绝不整摞左键"；
+   - 成功路径**删除** `returnCursorToOrigin(..., 'container')`，改 `drainCursorToInventory`。
+
+（这两条 + flow_store 层真值复核，预期可达 10/10；本轮因跨层风险未落地。）
+
+### 13.6 边界
+
+| 项 | 状态 |
+|---|---|
+| 真机 e2e 10 连跑 10/10 | ❌ 未达成（最好 8/10，且坏签名已消失、只剩账目） |
+| 三种坏签名消失 | ✅ 达成（t37g 起）、但**未随产品代码入库**（已回退） |
+| 反向用例 | ✅ 仍全 PASS（NO_ITEM / INTERNAL / OUT_OF_REACH） |
+| lint_hard / unit_all / gate:full | ✅ 0 处 / exit 0 / exit 0 |
+| 产品代码 | ⬜ **已回退 HEAD**，无半修 |
+
+---
+
+## 14. T38：修好了（e2e **10/10 全绿**，四种坏签名全消失）
+
+> **状态：产品代码已改并全绿**（`act_container.js` +113、`flow_store.js` +44、`e2e_chest_store_live.mjs` +33）。
+> 10 连跑全部 `E2E 通过：30/30`，`+16/-16`、`+11/-11`、`31≠32`、`taken=7` **四种签名 0 次**。
+> 门禁：`lint_hard` 0 处、`unit_all` 133/133（5 跳过）、`gate:full` exit 0。
+
+### 14.1 三条改动（对应 §13 的方案，全部落地）
+
+**① `clickWithdrawExact()`（act_container.js）—— 只右键拆半，绝不整摞左键**
+```
+右键源槽 = 拿一半（ceil(摞/2)）→ 右键目标背包槽 ×k 逐件放下 → 若手上还有剩：左键**同一源槽**放回
+```
+为什么不 left-click 源槽：`win.slots` 可能滞后，读到的摞比实际小，一 left-click 就把真实整摞搬走。
+兼容：`bot.clickWindow` 不存在时（单测的 fake bot）退回 `win.withdraw()`，保住
+`act_p0_unit` / `bot009_partial_move_unit` / `flow_p0_unit`。
+
+**② 成功路径删掉 `returnCursorToOrigin(..., 'container')`，改 `drainCursorToInventory()`**
+这是 §13 定位到的元凶：`returnCursorToOrigin` 是 **left-click 容器槽**，而 left-click 在**光标为空**时
+语义是"拿起整摞" —— 实测第 9 次点击（+1278ms，settle 超时点之后）就是把余 8 又拿起来，形成 `+16`。
+现在光标若真有件，只往**背包（目的地）**放，容器一个指头都不碰。
+
+**③ 跨层服务端真值（flow_store.js）—— 本单新增，解决"账目 taken=7"**
+`flow_store.fetch` 在 `withdraw` 返回后：**关窗 → 等 200ms → 重开同一容器 → 读 `containerItems()`**，
+用 `chestBefore - chestAfter` 作为本次搬运的真值：
+- 与客户端自报的 `taken` 不一致时，**以服务端真值为准**修正（并在返回里标 `takenSource:'server'`）；
+- 服务端说取到了、客户端说失败 ⇒ 按成功处理（物理事实优先）；反之亦然。
+兼容：假 bot（无 `bot.clickWindow`）跳过这段，保持原有行为（否则 `flow_p0_unit` 会红）。
+
+> **为什么选"关窗→重开"而不是 RCON**：RCON 要多一条连接与鉴权，而 `openWindow` 包本身会带**全部槽位**，
+> 重开一次就是一次权威快照；且 `flow_store` 本来就每轮 open/close 窗口，重开不破坏调用方语义。
+
+### 14.2 e2e 10 连跑逐次（最终代码）
+
+| # | 结果 | 断言 |
+|---|---|---|
+| 1 | PASS | 30/30 |
+| 2 | PASS | 30/30 |
+| 3 | PASS | 30/30 |
+| 4 | PASS | 30/30 |
+| 5 | PASS | 30/30 |
+| 6 | PASS | 30/30 |
+| 7 | PASS | 30/30 |
+| 8 | PASS | 30/30 |
+| 9 | PASS | 30/30 |
+| 10 | PASS | 30/30 |
+
+日志：`docs/audit-r5/evidence/fix/t38f-run{1..10}.log`
+
+**四种坏签名扫描结果（全部 0 次）**
+```
++16/-16（背包 16→32）         : 0
+箱子 16→0                     : 0
+31≠32（总数不守恒）            : 0
+taken=7 / 「只取到 7/8」       : 0
+总 FAIL 行                    : 0
+```
+
+### 14.3 点击级证据（第 9 次点击已消失）
+
+修复前的 redcase（§13.3）里第 9 次点击是 `slot0 left @+1278ms` —— 拿回余数、造成 `+16`。
+修复后的点击序列只剩"右键拆半 + 右键逐件放下"，**没有任何 left-click 容器槽**（成功路径不再有
+`returnCursorToOrigin('container')`），因此该次点击与新签名一起消失。
+
+### 14.4 反向用例仍正确失败（run1 实测）
+
+```
+PASS 反证1：取不存在的物品 → 技能失败   code=NO_ITEM（箱子里没找到 4 个 diamond）
+PASS 反证1：背包 diamond 数量不变        4 → 4
+PASS 反证1：箱子内容未被破坏             {"oak_log":8}
+PASS 反证2：满箱子存 → 技能失败          code=INTERNAL（没能存进去）
+PASS 反证2：背包 oak_log 数量不变        24 → 24
+PASS 反证3：距离过远 → 技能失败          code=OUT_OF_REACH
+PASS 反证3：背包 oak_log 数量不变        4 → 4
+```
+
+### 14.5 门禁与其他取物路径
+
+| 项 | 结果 |
+|---|---|
+| `lint_hard` | **0 处**（no-undef=0 · no-floating-promise=0，178 文件） |
+| `unit_all` | **133/133 通过，5 跳过，exit 0** |
+| `gate:full` | **exit 0**（首次 132/133 是 `nav_lock_unit` 并发抖动；单跑与复跑均 133/133，与本改动无关） |
+| smelt / craft / container 相关单测 | 9 个全过（9P/5P/32P/10P/26P/20P/5P/15P/20P，0 FAIL） |
+| `mouse-input-owner` 规则 | 通过 —— 窗口点击已改为只走 `atom_input_inventory.clickSlot()`（仓库唯一合规入口） |
+
+### 14.6 HEAD vs 最佳版本对照表（给下一轮决策）
+
+| 版本 | e2e 绿率 | 失败性质 | 备注 |
+|---|---|---|---|
+| HEAD | 9/10 | 1 次 = **整箱搬空**（箱子 16→0、背包 +16） | 严重：玩家丢物品 |
+| t37g（只做①②） | 8/10 | 2 次 = 仅 `taken=7`（物数量正确） | 严重故障已消除，良性故障略升 |
+| **t38（①②③，当前）** | **10/10** | **无**（四签名 0 次） | 账目以服务端真值为准 |
+
+### 14.7 改动清单
+
+| 文件 | 改动 |
+|---|---|
+| `src/agent/library/act_container.js` | +113：新增 `clickWithdrawExact` / `drainCursorToInventory`；withdraw 成功与异常路径改为"只往背包放"；窗口点击改走 `clickSlot`（合规）；fake-bot 回退 `win.withdraw` |
+| `src/agent/library/flow_store.js` | +44：`fetch` 里加"关窗→重开→读 containerItems"的服务端真值复核，`taken` 以真值为准（`takenSource:'server'`）；fake-bot 跳过 |
+| `tools/e2e_chest_store_live.mjs` | +33：诊断输出改为 `--debug-click` 开关（默认静默）；persist 段加"等 chunk/容器数据加载"的同步等待；反证3 前等背包同步 |

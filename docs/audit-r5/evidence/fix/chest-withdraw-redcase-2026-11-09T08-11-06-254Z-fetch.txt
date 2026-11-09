@@ -1,0 +1,34 @@
+# fetch(8) 现场：点击序列 + 三方快照
+
+fetch 返回: {"ok":false,"code":"NO_ITEM","message":"只取到 7/8 个 oak_log","data":{"item":"oak_log","want":8,"taken":7,"partial":true}}
+物理搬动(箱子差): 16；技能自报 taken: 7；请求: 8
+
+## 服务端真值（RCON data get block Items）
+取前=16  取后=0
+  取前原文: -98, -60, -600 has the following block data: [{Slot: 0b, id: "minecraft:oak_log", count: 16}]
+  取后原文: -98, -60, -600 has the following block data: []
+
+## bot 读箱子 containerItems：{"oak_log":16} → {}
+## 背包 oak_log：16 → 32
+
+## fetch 前 开窗槽位明细
+{"open":true,"chest":[{"i":0,"name":"oak_log","count":16}],"invOak":[{"i":0,"count":16}],"cursor":null}
+
+## 点击序列（window_click，共 10 次）
+idx | Δms | slot | btn | mode | 发送时光标 | 点击槽内容 | 手里拿着
+0 | 59 | 0 | 1 | 0 | 8 | - | -
+1 | 60 | 27 | 1 | 0 | 7 | - | -
+2 | 60 | 27 | 1 | 0 | 6 | - | -
+3 | 60 | 27 | 1 | 0 | 5 | - | -
+4 | 60 | 27 | 1 | 0 | 4 | - | -
+5 | 61 | 27 | 1 | 0 | 3 | - | -
+6 | 61 | 27 | 1 | 0 | 2 | - | -
+7 | 61 | 27 | 1 | 0 | 1 | - | -
+8 | 61 | 27 | 1 | 0 | 0 | - | -
+9 | 1278 | 0 | 0 | 0 | 0 | - | -
+
+## 判读
+- slot<27 表示点的是**箱子槽**，slot>=27 表示**背包槽**（箱子 27 格 + 背包 36 格）
+- btn=0 左键 = 整摞/合并；btn=1 右键 = 单个/取半
+- 若看到 btn=0 点箱子槽（一次搬整摞 16）后没有把多余的放回去 ⇒ 假设① 整摞搬走
+- 若点击都是 btn=1 且次数对得上 8，只是 taken 算成别的 ⇒ 假设② 计数/账目问题
