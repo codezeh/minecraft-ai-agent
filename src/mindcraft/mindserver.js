@@ -35,7 +35,7 @@ import { attachBoardServer } from '../agent/library/board_server.js';
 // 注册表与参数解析器：服务端复用 **agent 侧同一份**（参数规则只能有一个真相）。
 import * as compositeRegistry from '../agent/library/composite_registry.js';
 // R4 t13：启动时自检"有没有人绑定过身份"（只读目录，用于给一条可照做的升级提示）
-import { botsRootOf } from '../agent/library/bot_paths.js';
+import { botsRootOf, boardDirOf } from '../agent/library/bot_paths.js';
 // R5 t15：凭据保管库（AES-256-GCM + sqlite）。**HTTP 门在这一层**，
 // 加密/KDF/存储全在 library 里 —— 分层是故意的：agent 子进程也能 import 那个模块（只读），
 // 但只有 mindserver 挂 HTTP 出口。
@@ -962,7 +962,10 @@ export function createMindServer(host_public = false, port = 8080) {
     // （client 侧会收到 ack 超时 → TIMEOUT → agent 保持 board=null 走降级）。
     let boardHandle = null;
     try {
-        const board = openBoard();
+        // ★ R6 #1：板库目录必须**显式点名**。openBoard() 的默认值曾是 bots/_board（生产库），
+        //   于是任何无参调用（含 tools/*_live.mjs 的 DELETE FROM jobs）都会直接清线上任务与预占。
+        //   现在默认值已取消、无参即抛错；这里由控制面自己声明「我要的就是生产目录」。
+        const board = openBoard(boardDirOf());
         if (board.rebuilt) {
             console.log(`[任务板] 库损坏已重建空库${board.backup ? `（坏文件留在 ${board.backup}）` : ''}`);
         }

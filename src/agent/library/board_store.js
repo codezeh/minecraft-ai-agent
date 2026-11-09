@@ -27,7 +27,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { boardDirOf } from './bot_paths.js';
 // ★ BOARD-003：`attemptSeqOfJob` —— "这张单现在是第几次尝试"的**唯一口径**
 //   （收尾归属校验 attemptGuardSql / 保留序号 / 客户端都读它，避免各判一遍）。
 import { claimsConflict, normalizeClaimKeys, parseClaimKey, attemptSeqOfJob } from './board_claims.js';
@@ -254,10 +253,27 @@ export function isCorruptError(e) {
  *   宁可丢单也不能让整个 agent 起不来。做法：SQLite 打开/建表抛错 → 把坏文件改名留证
  *   （`.corrupt-<时间戳>`）→ 建新库。**不静默删**，坏文件留着能查。
  *
- * @param {string} [dir] 板库目录，默认 `boardDirOf()`（`./bots/_board`）
+ * @param {string} dir 板库目录。**必填，无默认值** —— 见下方 R6 #1 说明。
  * @returns {{db:DatabaseSync, dir:string, path:string, rebuilt:boolean}}
  */
-export function openBoard(dir = boardDirOf()) {
+export function openBoard(dir) {
+    // ★★★ R6 #1（2026-11-10）：**取消默认目录**。
+    //
+    //   原来的签名是 `openBoard(dir = boardDirOf())`，默认指向 `bots/_board` —— 那是**生产库**。
+    //   后果：任何"忘了传参"的调用都会静默操作线上数据。实测 `tools/board_b3_live.mjs:128-131`
+    //   等 12 个 live 工具就是无参调用，随后 `DELETE FROM jobs` / `DELETE FROM claims`；
+    //   生产库当时 jobs=0/claims=0 且目录内无 `.corrupt-*` 备份（正常 DELETE 不留备份，删了就是删了）。
+    //
+    //   现在：谁要生产库，谁就显式写出来（唯一合法调用方是 mindserver.js:965 的 `openBoard(boardDirOf())`）。
+    //   工具/临时脚本一律用 `tools/_tmp_board.mjs` 的 `openTempBoard()`，每次跑一个新临时目录。
+    //   宁可让忘记传参的脚本**当场报错**，也不让它静默清库。
+    if (!dir) {
+        throw new Error(
+            'openBoard(dir) 必须显式传板库目录：默认值 bots/_board 是生产库，' +
+            '无参调用会直接清空线上任务与预占（R6 #1）。' +
+            '生产侧请传 boardDirOf()；临时脚本请用 tools/_tmp_board.mjs 的 openTempBoard()。'
+        );
+    }
     mkdirSync(dir, { recursive: true });
     const path = join(dir, 'board.sqlite');
 
