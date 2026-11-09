@@ -99,4 +99,18 @@ t25_noboard_probe.mjs
 # ── 编辑器/系统垃圾 ────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+# ★ R5（2026-11-08 集成收尾）：凭据保管库 `.secrets.db` 与任务板等 SQLite 库**不该进构建上下文**。
+#   Dockerfile 是显式 COPY 清单，这类文件本来就不会进镜像层；但构建上下文会被整包发给
+#   docker daemon（`docker build .` 时），多一份泄漏面。注意保留 Thumbs.db 这条具名项
+#   （它只是编辑器垃圾，与 `*.db` 语义不同），`*.db` 在其后按通配收口。
+#
+#   为什么两条都写（`*.db` + `**/*.db`）：两种 path 匹配解释不一致 ——
+#     · 真实 Docker（moby patternmatcher，1.13+）对**不含 `/` 的 pattern** 按 basename
+#       在**任意层级**匹配，`*.db` 就够；
+#     · 而本仓 `tools/dockerignore_coverage_unit.mjs` 里的"docker 语义"匹配器是**按整条相对
+#       路径**锚定的，`*.db` 只命中根层（实测 services/vault/.secrets.db 不命中）。
+#   本机没有 docker，无法判定哪个对，所以两条都写：`*.db` 覆盖根层、`**/*.db` 覆盖深层，
+#   在两种解释下都能排除。多余的规则对"本来就未排除的路径"是无操作，不会误伤。
+*.db
+**/*.db
 *.swp

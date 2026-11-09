@@ -7,6 +7,12 @@ scratch.js
 bots/**/action-code/**
 bots/**/
 keys.json
+# ★ R5 t15：凭据保管库（加密后的 API Key + salt/verifier）。**永远不许进版本库**：
+#   它虽然只有密文，但 salt + verifier 是离线爆破的全部材料；而且它是本机运行态数据
+#   （换机/重建时应由人重新录入，不是被 checkout 带过去）。
+#   `*` 后缀一并盖住 sqlite 的 -journal/-wal/-shm 旁文件。
+.secrets.db
+.secrets.db-*
 services/viaproxy/jars/**
 services/viaproxy/logs/**
 services/viaproxy/plugins/**

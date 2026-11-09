@@ -398,8 +398,8 @@ export function identityContextOf(agent) {
             // 这条绑定。不拦的话 t13 在 online-mode=false 下等于没有保护（见 t20 说明）。
             //
             // 两种处置：
-            //   · deny（默认）：离线 + 弱绑定 ⇒ 永远 guest，并明确说"无法证明你是你"；
-            //   · session     ：只在"最近 N 分钟内刚 !claim 过"时授 owner（内存态、不落盘），
+            //   · deny        ：离线 + 弱绑定 ⇒ 永远 guest，并明确说"无法证明你是你"；
+            //   · session（默认）：只在"最近 N 分钟内刚 !claim 过"时授 owner（内存态、不落盘），
             //                   其余时间 guest。这是"降低暴露窗口"，**不是**证明身份。
             if (!hit.weak) return settle(hit);
 

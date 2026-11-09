@@ -419,12 +419,19 @@ export class ActionManager {
             console.error(err.stack);
             // 异常退出也要带原因（07 §4）：沿用这一轮开工时定的原因，不是"没见过"。
             await this.stop(stopReason);
-            err = err.toString();
+            // ★ R5-012（2026-11-08）：**别再把 err 覆盖成字符串**。
+            //   原来这里是 `err = err.toString()`：err 从 Error 变成字符串，
+            //   下一行却还读 `err.stack` ⇒ 恒 undefined，模型拿到的永远是
+            //   "Stack trace:\nundefined"（诊断能力归零，排障时看不到真因）；
+            //   顺带 `'Error: ' + err.toString()` 会拼出 "Error: Error: boom" 的双前缀。
+            //   现在：stack 在覆盖之前就取好，message 只用 err.message。
+            const stack = (err && err.stack) ? String(err.stack) : '';
+            const errMessage = String(err && err.message ? err.message : err);
 
             let message = this.getBotOutputSummary() +
                 '!!Code threw exception!!\n' +
-                'Error: ' + err + '\n' +
-                'Stack trace:\n' + err.stack+'\n';
+                'Error: ' + errMessage + '\n' +
+                'Stack trace:\n' + stack + '\n';
 
             let interrupted = this.agent.bot.interrupt_code;
             this.agent.clearBotLogs();

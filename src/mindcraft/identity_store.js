@@ -66,7 +66,7 @@ export const BOUND_LEVEL = 'owner';
  * 结论（必须诚实写进文档与告警）：**离线服 + 无登录插件时，任何"按身份授权"都只能防君子**。
  * 本文件能做的只有两件事：
  *   · 把这类绑定**标记成 `weak`**（可被同名冒用）；
- *   · 让 weak 绑定**不再持久授 owner**（`offline_owner_mode`：`deny` 默认 / `session` 限时会话）。
+ *   · 让 weak 绑定**不再持久授 owner**（`offline_owner_mode`：**`session` 默认**，限时会话 / `deny` 永不授 owner）。
  * 根治只有两条（都是部署决策，不在代码里自动做）：开正版验证，或装登录插件（AuthMe 等）。
  */
 export function offlineUuidOf(name) {
