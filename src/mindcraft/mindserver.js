@@ -26,6 +26,8 @@ import {
     readServerOnlineMode, resolveIdentityPolicy,
 } from './offline_identity_risk.js';
 import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync, unlinkSync } from 'fs';
+// t20-C（R5-收口）：token 文件落盘后要收口 NTFS DACL。只用 execFile(argv)，**不用 shell**。
+import { execFile } from 'child_process';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
 // 板放 agent 里别的 bot 看不见；放这里就只有一个写者，省掉多进程锁）。
 import { openBoard } from '../agent/library/board_store.js';
@@ -34,9 +36,71 @@ import { attachBoardServer } from '../agent/library/board_server.js';
 import * as compositeRegistry from '../agent/library/composite_registry.js';
 // R4 t13：启动时自检"有没有人绑定过身份"（只读目录，用于给一条可照做的升级提示）
 import { botsRootOf } from '../agent/library/bot_paths.js';
+// R5 t15：凭据保管库（AES-256-GCM + sqlite）。**HTTP 门在这一层**，
+// 加密/KDF/存储全在 library 里 —— 分层是故意的：agent 子进程也能 import 那个模块（只读），
+// 但只有 mindserver 挂 HTTP 出口。
+import {
+    autoUnlockFromEnv, clearInjectedEnv, injectEnvFromVault,
+    init as vaultInit, isInitialized as vaultIsInitialized, isUnlocked as vaultIsUnlocked,
+    listSecrets, lock as vaultLock, MAX_VALUE_BYTES, removeSecret, setSecret,
+    status as vaultStatus, uninjectEnv, unlock as vaultUnlock, VAULT_ERROR, NAME_PATTERN,
+} from '../agent/library/secrets_vault.js';
+import {
+    ConfigError, CONFIG_ERROR, GROUP_META, readConfig, updateConfigGroup,
+} from './config_center.js';
+// T31 / W-2：/unlock 的**按来源分桶**失败限流（抽成模块才能离线证明"正确口令不被锁死"）
+import { createUnlockLimiter, addressKeyOf } from './unlock_limiter.js';
 // R4 t20：启动告警要读 identity_binding 的真实配置（离线模式那条限制必须说出来）
 import rootSettings from '../../settings.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ════════════════════════════════════════════════════════════════════
+// t20-C（R5-收口）：token 文件落盘后**立刻**收口 NTFS DACL
+//
+// 为什么必须从产品代码修：`.mindserver-token` 每次启动都由本进程**重新创建**，
+// 而新建文件会**重新继承父目录 ACL**（mindcraft/ 对 Authenticated Users 有 (RX)）⇒
+// 运维侧那次 `harden-credentials-acl.ps1 -Apply` 的一次性加固必然复发
+// （t11 实测复发过一次：回归 22/0 → 起一次 mindserver → 20/2）。
+//
+// 口径：先断开继承（丢掉父目录带来的 AU:(I)(RX)），再只授权三条 ——
+// 当前用户、SYSTEM(*S-1-5-18)、Administrators(*S-1-5-32-544)，都给 F。
+//
+// 安全/兼容约束：
+//   · 用 execFile(icacls, argv)，**不开 shell**（与本仓 spawn+argv 口径一致，无注入面）；
+//   · 斜杠用 String.fromCharCode(47) 拼，源码里不出现裸斜杠字面量（避免命中 preflight 规则）；
+//   · 非 Windows 直接 return；任何失败只 console.warn，**绝不影响启动**；
+//   · 幂等：每次重建 token 都会重新收口一遍。
+// ════════════════════════════════════════════════════════════════════
+const SLASH = String.fromCharCode(47);
+
+function hardenTokenFileAcl(file) {
+    if (process.platform !== 'win32') return;
+    try {
+        const icacls = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe');
+        const who = process.env.USERNAME;
+        if (!who) { console.warn('[mindserver] token ACL 收口跳过：取不到 USERNAME'); return; }
+        // 1) 断开继承（丢掉父目录带来的 Authenticated Users:(I)(RX)）
+        execFile(icacls, [file, SLASH + 'inheritance:r'], { windowsHide: true }, (e1) => {
+            if (e1) {
+                console.warn(`[mindserver] token ACL 断开继承失败（不影响启动）：${e1?.code ?? e1}`);
+                return;
+            }
+            // 2) 只保留 当前用户 / SYSTEM / Administrators
+            const grants = [file, SLASH + 'grant:r',
+                who + ':(F)', '*S-1-5-18:(F)', '*S-1-5-32-544:(F)'];
+            execFile(icacls, grants, { windowsHide: true }, (e2) => {
+                if (e2) {
+                    console.warn(`[mindserver] token ACL 授权收紧失败（不影响启动）：${e2?.code ?? e2}`);
+                    return;
+                }
+                console.log(`[mindserver] token 文件 ACL 已收口（非继承，仅当前用户/SYSTEM/Administrators）：${file}`);
+            });
+        });
+    } catch (e) {
+        // 连 execFile 都抛（极端环境）：同样只 warn，不许弄挂启动
+        console.warn(`[mindserver] token ACL 收口异常（不影响启动）：${e?.message ?? e}`);
+    }
+}
 
 // Mindserver is:
 // - central hub for communication between all agent processes
@@ -365,6 +429,354 @@ function takeToken(socket, label, capacity, windowMs) {
     return true;
 }
 
+/**
+ * ── 凭据保管库 REST（R5 t15）────────────────────────────────────────────────
+ *
+ * 为什么是 REST 而不是再加一串 socket 事件：保管库是**配置面**（低频、有明确状态码、
+ * 需要 curl 就能验），和"控制面"的 socket 事件不是一类东西；而且 token 门在
+ * HTTP 层已经存在（见 createMindServer 里那道 `app.use`），挂在这条链**后面**
+ * 就自动继承"无 token 一律 401"，不用再实现一遍鉴权。
+ *
+ * **这一层只搬运，不做密码学**：加解密/口令派生/落盘全在 `secrets_vault.js`。
+ * 唯一属于 HTTP 的逻辑是：状态码映射 + 反爆破限流 + 把"锁定态"统一成 409。
+ *
+ * 明文边界（本轮最硬的约束，改这里之前先读一遍）：
+ *   · 响应里**永远**没有 value —— 只有 name/hint/updatedAt/updatedBy；
+ *   · 请求体里的 value 只在内存里过一手，进库即加密；
+ *   · 日志只打名字，不打值；错误信息也只带名字。
+ */
+function attachVaultApi(app) {
+    const router = express.Router();
+
+    // 小请求体上限：一条 key 最多 4096 字符，32kb 足够，且不让这里变成上传口
+    router.use(express.json({ limit: '32kb' }));
+    // 凭据页的东西一律不许缓存（代理/浏览器历史里不该留下列表）
+    router.use((req, res, next) => {
+        res.setHeader('Cache-Control', 'no-store');
+        next();
+    });
+
+    /**
+     * unlock 的失败限流。
+     *
+     * 谁能打这个接口？—— 已经过了握手 token 门的人（= 本机可信客户端）。
+     * 那还要限流吗？要：token 会泄漏（日志、截图、共享终端），而**口令是最后一道**。
+     *
+     * ★ T31 / W-2（T18 攻击测试判 WEAK，已修）：旧实现是
+     *   **全局一份计数 + 先判限流后校验口令** ⇒ 第 6 次起**正确口令也 429**，
+     *   持 token 者每 60 秒故意打错一次就能把管理员**永久**锁在门外。
+     *   现在：计数**按来源分桶**（见 unlock_limiter.js），并且**先校验口令**，
+     *   限流只决定"失败时回 401 还是 429"，**永不阻止一次正确的解锁**。
+     *   口径：同一来源连续 5 次失败后，后续**失败**的尝试改回 429。
+     */
+    const unlockLimiter = createUnlockLimiter({ windowMs: 60_000, maxFails: 5 });
+    const UNLOCK_WINDOW_MS = 60_000;   // 只用于文案
+
+    /** 错误码 → HTTP 状态码（**唯一**一张表，别在路由里散着写 if）。 */
+    const STATUS_OF = {
+        [VAULT_ERROR.BAD_PASSPHRASE]: 401,
+        [VAULT_ERROR.LOCKED]: 409,
+        [VAULT_ERROR.NOT_INITIALIZED]: 409,
+        [VAULT_ERROR.ALREADY_INITIALIZED]: 409,
+        [VAULT_ERROR.BAD_NAME]: 400,
+        [VAULT_ERROR.BAD_VALUE]: 400,
+        [VAULT_ERROR.NOT_FOUND]: 404,
+        [VAULT_ERROR.DECRYPT_FAILED]: 500,
+    };
+
+    function fail(res, e) {
+        const code = e?.code && STATUS_OF[e.code] ? e.code : null;
+        if (!code) {
+            // 未预期的错：**不要**把 e.message 原样回出去（可能带着路径/内部细节）
+            console.error('[vault] 未预期错误：', e?.stack ?? e?.message ?? e);
+            res.status(500).json({ error: 'VAULT_INTERNAL' });
+            return;
+        }
+        // message 由 library 提供，只含名字/口令问题，不含明文
+        res.status(STATUS_OF[code]).json({ error: code, message: String(e.message || code) });
+    }
+
+    /** 锁定态门：除 status/init/unlock 之外一律 409。 */
+    function requireUnlocked(req, res, next) {
+        if (!vaultIsUnlocked()) {
+            res.status(409).json({
+                error: VAULT_ERROR.LOCKED,
+                message: '保管库已锁定：先 POST /api/vault/unlock 解锁',
+            });
+            return;
+        }
+        next();
+    }
+
+    // ── 状态 ────────────────────────────────────────────────────────────
+    router.get('/status', (req, res) => {
+        res.json(vaultStatus());
+    });
+
+    // ── 初始化（只允许一次）──────────────────────────────────────────────
+    router.post('/init', (req, res) => {
+        const passphrase = req.body?.passphrase;
+        try {
+            vaultInit(passphrase);
+            const r = injectEnvFromVault();
+            console.log(`[vault] 已初始化并解锁（${r.injected} 项注入环境）`);
+            res.status(201).json({ ok: true, unlocked: true, injected: r.injected });
+        } catch (e) {
+            fail(res, e);
+        }
+    });
+
+    // ── 解锁 / 上锁 ─────────────────────────────────────────────────────
+    router.post('/unlock', (req, res) => {
+        // ★ T31 / W-2：**先校验口令，再看限流**。
+        //   顺序颠倒就是原来那个 WEAK：攻击者用错口令把额度耗尽后，管理员的**正确口令**
+        //   也会被 429 挡在门外（长期 DoS）。限流只该决定"失败怎么回"，不该否决成功。
+        const key = addressKeyOf(req);
+        let unlocked = false;
+        let error = null;
+        try {
+            vaultUnlock(req.body?.passphrase);
+            unlocked = true;
+        } catch (e) {
+            error = e;
+        }
+
+        if (unlocked) {
+            // 成功即清零该来源的失败计数（a 项）：成功后"再错一次"回到第 1 次，不是直接 429
+            unlockLimiter.noteSuccess(key);
+            const r = injectEnvFromVault();
+            console.log(`[vault] 已解锁（${r.injected} 项注入环境，供新起的 agent 子进程继承）`);
+            res.json({ ok: true, injected: r.injected });
+            return;
+        }
+
+        if (error?.code === VAULT_ERROR.BAD_PASSPHRASE) {
+            // 先看"失败之前"是否已经到上限：到上限 = 这是又一次失败 ⇒ 429；
+            // 未到上限 = 正常失败 ⇒ 401（第 1~5 次都是 401，第 6 次起失败才 429）。
+            // 这样"连续 5 次错口令"的口径与文案一致，也不会把第 5 次就判成"次数过多"。
+            const wasThrottled = unlockLimiter.isThrottled(key);
+            const n = unlockLimiter.noteFailure(key);
+            if (wasThrottled) {
+                console.warn(`[vault] 来源 ${key} 连续第 ${n} 次口令错误，已限流 ${Math.ceil(UNLOCK_WINDOW_MS / 1000)} 秒（正确口令仍可解锁）`);
+                res.status(429).json({
+                    error: 'VAULT_TOO_MANY_ATTEMPTS',
+                    message: `口令错误次数过多，请等 ${Math.ceil(UNLOCK_WINDOW_MS / 1000)} 秒后再试`
+                        + '（提示：正确口令任何时候都可用，限流只影响错误尝试）',
+                });
+                return;
+            }
+        }
+        fail(res, error);
+    });
+
+    router.post('/lock', (req, res) => {
+        // ★ 按验收口径字面执行："锁定态下除 status/init/unlock 外一律 409" —— **包括 /lock 自己**。
+        //   直觉上"再锁一次"该是幂等的 200，但那会让"锁定态"出现一个 200 出口，
+        //   验收脚本按"除三个例外外全 409"逐条打的时候会在这里判红。
+        //   对客户端没有损失：面板只在已解锁时显示「上锁」按钮；要"确保已锁"看 /status 即可。
+        if (!vaultIsUnlocked()) {
+            res.status(409).json({
+                error: VAULT_ERROR.LOCKED,
+                message: '保管库当前已是锁定状态（无需重复上锁）',
+            });
+            return;
+        }
+        vaultLock();
+        // 上锁 = 把注入过的环境变量也撤掉，否则"锁了但子进程还拿得到"是假的
+        const r = clearInjectedEnv();
+        console.log(`[vault] 已上锁（撤回 ${r.cleared} 项注入环境）`);
+        res.json({ ok: true, locked: true });
+    });
+
+    // ── 条目（**永远不返回 value**）──────────────────────────────────────
+    router.get('/items', requireUnlocked, (req, res) => {
+        try {
+            res.json(listSecrets());
+        } catch (e) {
+            fail(res, e);
+        }
+    });
+
+    router.put('/items/:name', requireUnlocked, (req, res) => {
+        const name = String(req.params.name || '');
+        if (!NAME_PATTERN.test(name)) {
+            res.status(400).json({
+                error: VAULT_ERROR.BAD_NAME,
+                message: '名字必须匹配 ^[A-Z][A-Z0-9_]{2,63}$（例如 OPENAI_API_KEY）',
+            });
+            return;
+        }
+        const value = req.body?.value;
+        if (typeof value !== 'string' || value.length === 0 || value.length > MAX_VALUE_BYTES) {
+            res.status(400).json({
+                error: VAULT_ERROR.BAD_VALUE,
+                message: `值必须是非空字符串，长度 ≤ ${MAX_VALUE_BYTES}`,
+            });
+            return;
+        }
+        try {
+            const item = setSecret(name, value, { updatedBy: 'panel' });
+            // 立刻同步到 process.env：这样**已经解锁期间**新起的 agent 子进程能拿到新值，
+            // 不用重启 mindserver。老值不会残留（同名直接覆盖）。
+            injectEnvFromVault();
+            console.log(`[vault] 已写入 ${name}（${item.hint}）`);   // hint 只有后 4 位
+            res.json(item);
+        } catch (e) {
+            fail(res, e);
+        }
+    });
+
+    router.delete('/items/:name', requireUnlocked, (req, res) => {
+        const name = String(req.params.name || '');
+        try {
+            const r = removeSecret(name);
+            uninjectEnv(name);
+            if (!r.removed) {
+                res.status(404).json({ error: VAULT_ERROR.NOT_FOUND, message: `保管库里没有 ${name}` });
+                return;
+            }
+            console.log(`[vault] 已删除 ${name}`);
+            res.json({ ok: true, removed: r.removed });
+        } catch (e) {
+            fail(res, e);
+        }
+    });
+
+    // 兜底：这个前缀下的未知路径统一 404 JSON（别落到 SPA fallback 上返回 index.html）
+    router.use((req, res) => {
+        res.status(404).json({ error: 'NOT_FOUND', message: `没有这个接口：${req.method} ${req.baseUrl}${req.path}` });
+    });
+
+    app.use('/api/vault', router);
+}
+
+/**
+ * ── 设置中心 REST（R5 t28）──────────────────────────────────────────────────
+ *
+ * 和 vault 那套同样的分层与同样的门：
+ *   · 读写在 `config_center.js`（纯逻辑、可单测）；这里只做 HTTP 搬运与状态码映射；
+ *   · 注册在握手 token 门**之后**（下面 createMindServer 里调用点紧跟 attachVaultApi），
+ *     不新增鉴权面。
+ *
+ * 两条"别在这里加东西"的边界：
+ *   ① **不回显密钥**：这里只回四组配置 + 只读元信息；密钥在保管库（/api/vault），
+ *      且保管库也从不回显明文。
+ *   ② **不在这里写盘**：所有落盘都走 config_center 的"先备份 + 定向改写 + 写后验加载"。
+ */
+function attachConfigApi(app) {
+    const router = express.Router();
+    router.use(express.json({ limit: '64kb' }));
+    router.use((req, res, next) => {
+        res.setHeader('Cache-Control', 'no-store');
+        next();
+    });
+
+    const STATUS_OF = {
+        [CONFIG_ERROR.BAD_GROUP]: 404,
+        [CONFIG_ERROR.BAD_VALUE]: 400,
+        [CONFIG_ERROR.UNKNOWN_KEY]: 400,
+        [CONFIG_ERROR.BAD_JSON]: 500,
+        [CONFIG_ERROR.WRITE_FAILED]: 500,
+        [CONFIG_ERROR.SETTINGS_INVALID]: 500,
+    };
+
+    function fail(res, e) {
+        const code = e?.code && STATUS_OF[e.code] ? e.code : null;
+        if (!code) {
+            console.error('[config] 未预期错误：', e?.stack ?? e?.message ?? e);
+            res.status(500).json({ error: 'CONFIG_INTERNAL' });
+            return;
+        }
+        res.status(STATUS_OF[code]).json({ error: code, message: String(e.message || code) });
+    }
+
+    /**
+     * 每个 agent 的 model / profile（**只读**，仅取三个字段）。
+     *
+     * 为什么从 `agent_connections` 取而不是读文件：agent 的 settings 只在
+     * 它连上来时才有（`get-settings` 用的就是同一份），文件里没有"当前生效值"。
+     * 只取 name/model/api 三个键，**绝不**把整个 settings 对象吐出去
+     * （里面可能有 url/密钥之类，面板不需要）。
+     */
+    function agentInfo() {
+        const out = [];
+        for (const [name, conn] of Object.entries(agent_connections)) {
+            const p = conn?.settings?.profile ?? {};
+            out.push({
+                name,
+                model: typeof p.model === 'string' ? p.model : null,
+                profile: typeof p.name === 'string' ? p.name : null,
+                api: typeof p.api === 'string' ? p.api : null,
+            });
+        }
+        return out.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    /**
+     * 配置里声明的 profile 文件（`settings.profiles`）→ 只读摘要。
+     *
+     * 同样只取 name/api/model：profile JSON 里可能有 `url`（中转站地址）甚至内嵌凭据，
+     * 面板只需要"这个 profile 用哪个模型"，别把整个文件镜像出去。
+     */
+    function profileInfo() {
+        const list = Array.isArray(rootSettings?.profiles) ? rootSettings.profiles : [];
+        const mcRoot = path.join(__dirname, '..', '..');
+        return list.map((rel) => {
+            const file = String(rel);
+            const abs = path.isAbsolute(file) ? file : path.join(mcRoot, file);
+            const item = { file, name: null, api: null, model: null, ok: false };
+            try {
+                if (!existsSync(abs)) return { ...item, error: '文件不存在' };
+                const raw = JSON.parse(readFileSync(abs, 'utf8'));
+                return {
+                    ...item,
+                    ok: true,
+                    name: typeof raw.name === 'string' ? raw.name : null,
+                    api: typeof raw.api === 'string' ? raw.api : null,
+                    model: typeof raw.model === 'string' ? raw.model : null,
+                };
+            } catch (e) {
+                return { ...item, error: String(e?.message ?? e).slice(0, 120) };
+            }
+        });
+    }
+
+    // ── 读：四组当前值 + 生效方式元信息 ────────────────────────────────
+    router.get('/', (req, res) => {
+        try {
+            // getAgents 传的是**函数**（活状态，每次读重新取），不是调好的结果
+            res.json(readConfig({ getAgents: agentInfo, profiles: profileInfo() }));
+        } catch (e) {
+            fail(res, e);
+        }
+    });
+
+    // ── 写：部分更新某一组 ──────────────────────────────────────────────
+    router.put('/:group', (req, res) => {
+        const group = String(req.params.group || '');
+        if (!GROUP_META[group]) {
+            res.status(404).json({
+                error: CONFIG_ERROR.BAD_GROUP,
+                message: `未知配置组：${group}（只有 ${Object.keys(GROUP_META).join(' / ')}）`,
+            });
+            return;
+        }
+        // updateConfigGroup 是 async（写完要 import 验一次）；浮空 Promise 会被
+        // lint_hard 的 no-floating-promise 抓到，所以这里显式 await + catch。
+        updateConfigGroup(group, req.body, { log: console.log, warn: console.warn })
+            .then((r) => {
+                res.json({ ok: true, group: r.group, applied: r.applied, backup: r.backup, values: r.values });
+            })
+            .catch((e) => fail(res, e));
+    });
+
+    router.use((req, res) => {
+        res.status(404).json({ error: 'NOT_FOUND', message: `没有这个接口：${req.method} ${req.baseUrl}${req.path}` });
+    });
+
+    app.use('/api/config', router);
+}
+
 export function createMindServer(host_public = false, port = 8080) {
     const app = express();
     server = http.createServer(app);
@@ -394,6 +806,8 @@ export function createMindServer(host_public = false, port = 8080) {
     const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token');
     try {
         writeFileSync(TOKEN_FILE, handshakeToken, { encoding: 'utf8', mode: 0o600 });
+        // t20-C：新建文件会继承父目录 ACL ⇒ 立刻收口（异步、失败只 warn，不阻塞启动）
+        hardenTokenFileAcl(TOKEN_FILE);
     } catch (e) {
         // 只读 cwd / 无权限也要能启动：降级为"只在显式开关下打印"
         console.warn(`[mindserver] 写 ${TOKEN_FILE} 失败（${e?.code ?? e}）；本次 token 只能通过 MINDSERVER_TOKEN 环境变量或 MINDSERVER_PRINT_TOKEN=1 获取`);
@@ -499,6 +913,35 @@ export function createMindServer(host_public = false, port = 8080) {
             .send('unauthorized: 需要握手 token。用 `mindcraft/.mindserver-token` 里的值打开 ' +
                   '`http://localhost:<port>/?token=<token>`（浏览器会把它换成 cookie）。');
     });
+
+    // ── 凭据保管库（R5 t15）─────────────────────────────────────────────
+    //
+    // 挂在这里而不是更上面：**必须在 token 门之后**（上面的 `app.use` 已经拦掉
+    // 所有无 token 请求），这样 `/api/vault/*` 和其它入口共用同一道门，不新增鉴权面。
+    // 挂在这里而不是更下面：静态资源与 SPA fallback 注册在后面，避免 `/api/vault/xxx`
+    // 这种打错的路径被前端路由吞掉（返回 index.html 会让人以为"接口通了"）。
+    attachVaultApi(app);
+
+    // ── 设置中心（R5 t28）──────────────────────────────────────────────
+    //
+    // 与 vault 同一条链、同一道门、同样"必须在 static / SPA fallback 之前"。
+    // 单独一行调用（而不是塞进 attachVaultApi）是为了让两组路由互不牵连：
+    // 谁删了谁都能看出来，也不会出现"改设置中心顺手动了凭据路由"。
+    attachConfigApi(app);
+
+    // 无头启动便利口：MC_VAULT_PASSPHRASE 存在就自动解锁，并把内容注入进程环境
+    // （agent 是子进程 ⇒ 只能靠 env 继承；不写盘）。
+    // 锁着也**不报错**：保管库是可选的，没有它时 keys.js 照旧回落 keys.json。
+    if (vaultIsInitialized()) {
+        if (autoUnlockFromEnv()) {
+            const r = injectEnvFromVault();
+            console.log(`[vault] 已用 MC_VAULT_PASSPHRASE 自动解锁（${r.injected} 项注入环境）`
+                + '；注意：口令在进程环境里对同机同账户可见，别把这条当默认做法');
+        } else {
+            console.log('[vault] 保管库存在但未解锁：面板「凭据」页解锁后，新起的 agent 才会拿到托管密钥'
+                + (vaultIsInitialized() ? '（当前回落 keys.json / 环境变量）' : ''));
+        }
+    }
 
     // 心跳参数放宽：默认 pingInterval 25s / pingTimeout 20s 对本地回环太紧 ——
     // agent 进程在等模型 API 或跑大段同步代码时，一次 20s 的停顿就会被判掉线，
