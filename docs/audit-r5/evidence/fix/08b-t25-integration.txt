@@ -1,0 +1,149 @@
+# [8b] t25 集成收尾：重建 web-dist（带 Vault）+ vite /api 代理 + dockerignore *.db
+
+## 1. 重建产物：Vault chunk 存在（验收点）
+$ ls mindcraft/web-dist/assets/ | grep -i vault
+VaultView-BKt1AB9v.css
+VaultView-D2hCoSQF.js
+$ ls -1 mindcraft/web-dist/assets/
+DebugView-Pp-4MEq7.css
+DebugView-jt6O2eDb.js
+SetupView-BRFWEYB-.js
+SetupView-CQeN4yGC.css
+TerrainView-BkR-DBrX.css
+TerrainView-CPSq1Z9n.js
+VaultView-BKt1AB9v.css
+VaultView-D2hCoSQF.js
+index-BsQBlTfW.js
+index-De2pyrG7.css
+产物文件数（assets + index.html）= 10 + 1
+
+## 2. 清单（重建后）
+{
+ "sourceHash": "sha256:e7ef2670035f522552b5570f1216bd39ce834ecd86aa53dac6c2e60a1b3a4554",
+ "sourceFiles": 27,
+ "artifactHash": "sha256:43b30d43bd71c7d9523a1a524991f9b1f2730687b57b67d8954439cc4b0edf2c",
+ "artifactFiles": 11,
+ "generatedAt": "2026-11-08T12:55:50Z",
+ "entryAssets": [
+  "assets/index-BsQBlTfW.js",
+  "assets/index-De2pyrG7.css"
+ ]
+}
+
+## 3. 独立复算源码指纹（自写实现，不信脚本自报）
+独立复算 = sha256:e7ef2670035f522552b5570f1216bd39ce834ecd86aa53dac6c2e60a1b3a4554
+输入文件数 = 27
+清单登记 = sha256:e7ef2670035f522552b5570f1216bd39ce834ecd86aa53dac6c2e60a1b3a4554
+EQUAL = true
+
+## 4. VerifyOnly 三次（全部 exit 0）
+第1次：|   ALL PASS: 8 passed, 0 failed   PASS  VerifyOnly：清单/产物/源码三方一致
+第2次：|   ALL PASS: 8 passed, 0 failed   PASS  VerifyOnly：清单/产物/源码三方一致
+最终 ：|   ALL PASS: 8 passed, 0 failed   PASS  VerifyOnly：清单/产物/源码三方一致
+
+## 5. 构建确定性：三次构建的产物指纹 + 逐文件比对（build2 vs build3）
+build1 产物指纹：产物指纹 sha256:43b30d43bd71c7d9523a1a524991f9b1f2730687b57b67d8954439cc4b0edf2c
+build2 产物指纹：产物指纹 sha256:43b30d43bd71c7d9523a1a524991f9b1f2730687b57b67d8954439cc4b0edf2c
+build3 产物指纹：产物指纹 sha256:43b30d43bd71c7d9523a1a524991f9b1f2730687b57b67d8954439cc4b0edf2c
+$ diff build2-artifacts build3-artifacts
+（空 = 逐字节相同）
+逐文件：
+./assets/DebugView-Pp-4MEq7.css
+  ./assets/DebugView-jt6O2eDb.js
+  ./assets/SetupView-BRFWEYB-.js
+  ./assets/SetupView-CQeN4yGC.css
+  ./assets/TerrainView-BkR-DBrX.css
+  ./assets/TerrainView-CPSq1Z9n.js
+  ./assets/VaultView-BKt1AB9v.css
+  ./assets/VaultView-D2hCoSQF.js
+  ./assets/index-BsQBlTfW.js
+  ./assets/index-De2pyrG7.css
+  ./index.html
+
+## 6. 最终 11 个产物 sha256
+eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087  ./assets/DebugView-Pp-4MEq7.css
+9cf0aee6b56b23c255c4d84aa707d5cac4821fb9797a46db75f02ea78f00c99d  ./assets/DebugView-jt6O2eDb.js
+c36ef8cbd82898ebcd81ad95a676891ca3a2c89b1d973159a8c2ca918a1affac  ./assets/SetupView-BRFWEYB-.js
+adc453016a946b5f0ca0c642f4252332b51ef12611dbeed5637bdb4c4744f12a  ./assets/SetupView-CQeN4yGC.css
+0039fd6f30ac9c258d0b4a33351f7cf8af95cb6cfd800c1c595dc7da10dfecec  ./assets/TerrainView-BkR-DBrX.css
+9f96abf99a42f9d29f64f2773a2621c1e7ba0275fef51d795c14795e5bd7e2ea  ./assets/TerrainView-CPSq1Z9n.js
+51a8f9a9fd24192253d3edf0c37c95ef21c4bbae4f6a5dc5a216db5795a1edef  ./assets/VaultView-BKt1AB9v.css
+412b67162874b073f5db44df7e4ac7c6e9953db5c90e946e3ef3cf9e0b111e86  ./assets/VaultView-D2hCoSQF.js
+ed9cd7b0b0a24f9bf63b2b6ee289911ab4f1719bd46e0cedf77937cbd7e59f44  ./assets/index-BsQBlTfW.js
+c75a362dc7babc5e2fe016ac69d18d721cf9f800b3d155b76d7b88940a6a37cd  ./assets/index-De2pyrG7.css
+9a27c9f41aa41955591f952e6feec82c1bea01f18305936b269a19e100b03611  ./index.html
+
+## 7. typecheck + build
+$ npm run typecheck  → EXIT_TYPECHECK=0
+$ release.ps1 -SkipDocker 内部执行 npm run build：
+[2/8] 构建前端：web/ → web/dist
+==============================================================================
+  构建源码树: E:\我的世界ai\web
+  WARN  web/ 有 5 处未提交改动：产物将绑定当前工作树（不是某次提交）。
+  WARN    要发布"某次提交"的产物：git worktree add tmp/rel-src <ref>，再 -SourceRoot tmp/rel-src/web
+  | 
+  | > mindcraft-panel@0.1.0 build
+  | > vite build
+  | 
+  | vite v6.4.5 building for production...
+  | transforming...
+  | ✓ 100 modules transformed.
+  | rendering chunks...
+  | computing gzip size...
+
+## 8. vite /api 代理：dev 模式实测透传
+（用临时假后端占据 127.0.0.1:8080，回 JSON；再起 vite dev 于 5173，通过 5173 访问 /api/vault/status）
+$ curl -s http://127.0.0.1:8080/api/vault/status
+{"ok":true,"path":"/api/vault/status","backend":"fake-8080"}
+$ curl -s http://127.0.0.1:5173/api/vault/status   # 经 vite 代理
+{"ok":true,"path":"/api/vault/status","backend":"fake-8080"}
+$ curl -s http://127.0.0.1:5173/socket.io/    # 既有 ws 代理仍工作
+{"ok":true,"path":"/socket.io/","backend":"fake-8080"}
+$ vite dev 日志
+> mindcraft-panel@0.1.0 dev
+> vite --host 127.0.0.1
+
+
+  VITE v6.4.5  ready in 386 ms
+
+  ➜  Local:   http://127.0.0.1:5173/
+
+## 9. .dockerignore 加 *.db（docker 不存在 → CANNOT-RUN）
+$ git -C mindcraft diff -- .dockerignore（节选）
++++ b/.dockerignore
+@@ -99,4 +99,18 @@ t25_noboard_probe.mjs
+ # ── 编辑器/系统垃圾 ────────────────────────────────────────────
+ .DS_Store
+ Thumbs.db
++# ★ R5（2026-11-08 集成收尾）：凭据保管库 `.secrets.db` 与任务板等 SQLite 库**不该进构建上下文**。
++#   Dockerfile 是显式 COPY 清单，这类文件本来就不会进镜像层；但构建上下文会被整包发给
++#   docker daemon（`docker build .` 时），多一份泄漏面。注意保留 Thumbs.db 这条具名项
++#   （它只是编辑器垃圾，与 `*.db` 语义不同），`*.db` 在其后按通配收口。
++#
++#   为什么两条都写（`*.db` + `**/*.db`）：两种 path 匹配解释不一致 ——
++#     · 真实 Docker（moby patternmatcher，1.13+）对**不含 `/` 的 pattern** 按 basename
++#       在**任意层级**匹配，`*.db` 就够；
++#     · 而本仓 `tools/dockerignore_coverage_unit.mjs` 里的"docker 语义"匹配器是**按整条相对
++#       路径**锚定的，`*.db` 只命中根层（实测 services/vault/.secrets.db 不命中）。
++#   本机没有 docker，无法判定哪个对，所以两条都写：`*.db` 覆盖根层、`**/*.db` 覆盖深层，
++#   在两种解释下都能排除。多余的规则对"本来就未排除的路径"是无操作，不会误伤。
++*.db
++**/*.db
+ *.swp
+$ git -C mindcraft check-ignore -v .secrets.db
+.gitignore:14:.secrets.db	.secrets.db
+$ node tools/dockerignore_coverage_unit.mjs
+PASS patches/ 不被误排除 
+
+ALL PASS: 65 passed, 0 failed
+
+## 10. 已知边界：产物绑定的是【工作树】，不是某次提交
+$ git status --porcelain web/
+M web/src/App.vue
+ M web/src/router.ts
+ M web/vite.config.ts
+?? web/src/stores/vault.ts
+?? web/src/views/VaultView.vue
+$ 从 HEAD（提交口径）算的指纹 vs 当前工作树指纹
+HEAD 口径   ：HEAD sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2 25
+工作树口径 ：SOURCE_HASH sha256:e7ef2670035f522552b5570f1216bd39ce834ecd86aa53dac6c2e60a1b3a4554 FILE_COUNT 27

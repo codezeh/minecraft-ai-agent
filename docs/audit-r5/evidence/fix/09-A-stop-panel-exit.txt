@@ -1,0 +1,95 @@
+# t20 A：stop-panel.ps1 透传退出码（改前/改后 + 三条真实 exit code）
+# 生成时间：2026-11-08T20:28:04+08:00  PS 5.1.26100.9711
+
+## 1) 改前（HEAD 版本）
+   全文只有第 14/15 行 `exit 1`（前置检查），末尾是 `Read-Host` ⇒ 进程退出码恒 0。
+$ git show HEAD:scripts/stop-panel.ps1 | grep -n "exit"
+14:if (-not (Test-Path $node))   { Write-Host "[错误] 找不到 Node: $node" -ForegroundColor Red; Read-Host; exit 1 }
+15:if (-not (Test-Path $script)) { Write-Host "[错误] 找不到 $script" -ForegroundColor Red; Read-Host; exit 1 }
+$ git show HEAD:scripts/stop-panel.ps1 | tail -2
+
+Read-Host '按回车关闭' | Out-Null
+
+## 2) 改后 diff（+7 行，只在末尾）
+$ git diff -- scripts/stop-panel.ps1
+diff --git a/scripts/stop-panel.ps1 b/scripts/stop-panel.ps1
+index cbf6bec..1aebbfe 100644
+--- a/scripts/stop-panel.ps1
++++ b/scripts/stop-panel.ps1
+@@ -88,3 +88,10 @@ if ($stopCode -eq 0) {
+ }
+ 
+ Read-Host '按回车关闭' | Out-Null
++
++# ★ t20 A：把停止结果码透传给**进程退出码**。以前本脚本以 Read-Host 结束，
++#   PowerShell 进程恒返回 0（t12 实测：屏幕上写着“[ERROR] 拿不到握手 token”“[ERROR] 关服没有成功”，
++#   但停止面板.bat / 计划任务 / 快捷方式看到的都是“成功”）。
++#   stop-all.mjs 码义：0=已停或本来就没跑，2=拿不到 token，3=握手被拒，4=关服没成功。
++if ($null -eq $stopCode) { exit 1 }   # stop-all 根本没跑成（异常路径）也不能当成功
++exit $stopCode
+
+## 3) 验收 A-1：真实脚本 + 真实 stop-all，失败路径（token 暂时不可见 ⇒ stop-all 退出 2）
+   说明：把 mindcraft/.mindserver-token 临时移到 tmp 约 2 秒，跑完原样放回（sha256 前后一致）。
+$ sha256sum mindcraft/.mindserver-token   →  5d41757a…b325bf（移前 / 放回后相同）
+$ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-panel.ps1   # 期间 token 不可见
+============================================================
+    停止面板 / 优雅关服
+============================================================
+
+[ERROR] 拿不到握手 token：既无 MINDSERVER_TOKEN 环境变量，也无 ./.mindserver-token。
+        这**通常不是** "mindserver 没开"：请从 mindcraft/ 目录运行本脚本
+        （token 文件写在 mindserver 的工作目录），或显式设 MINDSERVER_TOKEN=<token>。
+
+[未完成] 拿不到握手 token。服务器仍在运行，请不要直接关窗口（会丢未刷盘的存档）。
+         token 位置：mindcraft\.mindserver-token
+
+说明：
+  · Minecraft 走 RCON stop，会自己刷盘关闭（不是强杀）
+  · 若 "MC Server" / "Mindcraft" 窗口还在，直接关掉即可
+
+自动备份：跳过（本次没有成功停服，不做备份）
+
+EXITCODE=2
+
+## 4) 验收 A-2：成功路径（harness：root 指向沙箱、备份关掉，避免真的做一次冷备）
+   为什么要 harness：config/backup.json 是 enabled=true/onServerStop=true，
+   真实脚本在 stopCode=0 时会跑一次 84MB 冷备并按 keep=7 删掉最旧备份 —— 那会毁掉其它任务的备份证据。
+   所以把脚本副本的 $root 指向 tmp 沙箱（config 里 enabled=false）、$script 仍指向**真实** stop-all.mjs，
+   跑的仍是同一条停止逻辑与同一段尾部。
+$ powershell -File tmp/r5-close/harness/stop-panel-test.ps1
+============================================================
+    停止面板 / 优雅关服
+============================================================
+
+mindserver 没在跑（8080 连不上），不用停。
+
+说明：
+  · Minecraft 走 RCON stop，会自己刷盘关闭（不是强杀）
+  · 若 "MC Server" / "Mindcraft" 窗口还在，直接关掉即可
+
+自动备份：
+  · 自动备份：已关闭（config/backup.json enabled=false）—— 跳过
+
+EXITCODE=0
+
+## 5) 验收 A-3：STOP_FAILED(4) 桩
+$ powershell -File tmp/r5-close/harness/stop-panel-test4.ps1   # $script 指向 stub-exit4.mjs
+============================================================
+    停止面板 / 优雅关服
+============================================================
+
+[STUB] simulate stop-all.mjs exiting 4 (STOP_FAILED)
+
+[未完成] 关服没有成功（RCON 没配好 / 认证失败 / 服务器没退出）。
+        管理端**仍在运行**，Minecraft 可能也还在运行 —— 别强关窗口（会丢未刷盘的存档）。
+        修好 server.properties 的 enable-rcon / rcon.password 后，重跑本脚本。
+
+说明：
+  · Minecraft 走 RCON stop，会自己刷盘关闭（不是强杀）
+  · 若 "MC Server" / "Mindcraft" 窗口还在，直接关掉即可
+
+自动备份：跳过（本次没有成功停服，不做备份）
+
+EXITCODE=4
+
+## 汇总：改前恒 0 → 改后 2 / 0 / 4 三条都正确

@@ -1,0 +1,42 @@
+============================================================
+  凭据文件 ACL 加固（OPS-004）
+  模式：体检（不改；加 -Apply 才动手）
+  当前账户：LAPTOP-GDE992NS\zeh
+============================================================
+
+[跳过] 不存在：mindcraft\.mindserver-token
+--- E:\我的世界ai\mindcraft\keys.json
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\server\server.properties
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\server-test\server.properties
+  DACL: 继承父目录（需要收口）
+  !! S-1-4-48068235-1068318981 | DeleteSubdirectoriesAndFiles, Write, Delete, Synchronize | Allow | 继承=True
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=True
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=True
+  !! NT AUTHORITY\Authenticated Users | Modify, Synchronize | Allow | 继承=True
+  !! BUILTIN\Users | ReadAndExecute, Synchronize | Allow | 继承=True
+
+--- E:\我的世界ai\mindcraft
+  DACL: 非继承（已收口）
+  !! NT AUTHORITY\Authenticated Users | -536805376 | Allow | 继承=False
+  !! NT AUTHORITY\Authenticated Users | Modify, Synchronize | Allow | 继承=False
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok NT AUTHORITY\SYSTEM | 268435456 | Allow | 继承=False
+  ok BUILTIN\Administrators | 268435456 | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ro BUILTIN\Users | ReadAndExecute, Synchronize | Allow | 继承=False
+  !! BUILTIN\Users | -1610612736 | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+[体检结果] 发现 6 条过宽 ACE。跑一次加 -Apply 收口：
+            powershell -NoProfile -File scripts\harden-credentials-acl.ps1 -Apply
+EXITCODE=3

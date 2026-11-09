@@ -1,0 +1,22 @@
+## 6. 面板 .bat 引用路径
+$ powershell -Command "Get-Content -Encoding Default 启动面板.bat"
+@echo off
+setlocal
+title MC AI Panel - Start
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-panel.ps1"
+if errorlevel 1 pause
+exit /b 0
+--- 停止面板.bat
+@echo off
+setlocal
+title MC AI Panel - Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\stop-panel.ps1"
+if errorlevel 1 pause
+exit /b 0
+
+$ ls -l scripts/start-panel.ps1 scripts/stop-panel.ps1
+-rwxrwxrwx 1 zeh zeh    15706 Nov  8 13:16 scripts/start-panel.ps1
+-rwxrwxrwx 1 zeh zeh     5103 Nov  8 13:16 scripts/stop-panel.ps1
+
+$ ls -l /d/Node/node.exe   # start-panel.ps1:14 硬编码 $node = D:\Node\node.exe
+-rwxrwxrwx 1 SYSTEM SYSTEM 92279112 May 21 00:44 D:\Node\node.exe

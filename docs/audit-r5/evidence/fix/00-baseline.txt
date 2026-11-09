@@ -1,0 +1,13 @@
+=== 基线：check-attr（前）===
+$ git check-attr -a -- web/tsconfig.json
+(以上为空 = 无任何属性)
+
+=== 基线：清单 ===
+source.hash = sha256:7a45c9b2ea63d4a84f41261deba14fdcd4470ec3fdfbf7a1f174c593457c3585
+generatedAt = 2026-11-08T04:47:29Z
+artifact.hash = sha256:55bc9624642a4e4eebe9618c8359ffb51379616266a156d79273967cf0cc2bae
+
+=== 基线：release.ps1 -VerifyOnly ===
+EXIT_BEFORE=1
+  |   PASS  源码指纹 sha256:8a1714aadc5570d216fb2517d145b0cfdd5bc33bbe0953b1d408527554431977（25 个输入文件）
+  |   FAIL  产物与源码不一致：清单记录 sha256:7a45c9b2ea63d4a84f41261deba14fdcd4470ec3fdfbf7a1f174c593457c3585，当前 web/ 源码是 sha256:8a1714aadc5570d216fb2517d145b0cfdd5bc33bbe0953b1d408527554431977

@@ -1,0 +1,44 @@
+T31 / W-2 —— /unlock 限流验收（真实输出，逐条）
+环境：createMindServer(false, 8099)；MC_VAULT_DB=tmp/vault-t31c.db（一次性库）；口令 t31-correct-passphrase
+时间：2026-11-09 02:40:44
+
+--- 准备：init 建库 ---
+{"ok":true,"unlocked":true,"injected":0}
+[201]
+
+--- A. 127.0.0.1 连续 5 次错口令（期望 401 x5）---
+  第1次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+  第2次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+  第3次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+  第4次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+  第5次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+
+--- B. 紧接着用【正确口令】（期望 200 —— W-2 核心：限流不拦成功）---
+{"ok":true,"injected":0}
+[200]
+
+--- C. 成功后计数清零：再错一次（期望 401，不是 429）---
+{"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+
+--- D. 再连错 4 次（本窗口累计 5 次失败，期望 401 x4）---
+  第1次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+  第2次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+  第3次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+  第4次: {"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+
+--- E. 已到上限后再失败一次（期望 429）---
+{"error":"VAULT_TOO_MANY_ATTEMPTS","message":"口令错误次数过多，请等 60 秒后再试（提示：正确口令任何时候都可用，限流只影响错误尝试）"} [429]
+
+--- F. 同一时刻换来源 127.0.0.2 打错（期望 401 = 独立桶）---
+{"error":"VAULT_BAD_PASSPHRASE","message":"口令不正确"} [401]
+
+--- G. 127.0.0.2 正确口令（期望 200）---
+{"ok":true,"injected":0} [200]
+
+--- H. 127.0.0.1 仍然 429（分桶各自独立）---
+{"error":"VAULT_TOO_MANY_ATTEMPTS","message":"口令错误次数过多，请等 60 秒后再试（提示：正确口令任何时候都可用，限流只影响错误尝试）"} [429]
+
+--- 对照（修复前语义）---
+  旧实现：全局计数 + 先判限流后校验 ⇒ 第 6 次起【正确口令】也 429，
+  持 token 者每 60s 打错一次即可永久锁死管理员（T18 判 W-2）。
+  本次 B 步（5 次失败后正确口令）= 200，即为修复的直接证据。

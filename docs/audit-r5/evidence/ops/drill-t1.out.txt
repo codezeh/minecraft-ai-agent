@@ -1,0 +1,1 @@
+FAIL 前置：找不到可演练的备份目录（需要含 manifest.json 的 world-*）

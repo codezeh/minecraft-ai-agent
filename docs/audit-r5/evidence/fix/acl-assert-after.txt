@@ -1,0 +1,13 @@
+PASS R5-009 server-test/server.properties 已断开继承 —— protected=True
+PASS R5-009 不再有 Authenticated Users —— NT AUTHORITY\SYSTEM | BUILTIN\Administrators | LAPTOP-GDE992NS\zeh
+PASS R5-009 不再有 BUILTIN\Users —— NT AUTHORITY\SYSTEM | BUILTIN\Administrators | LAPTOP-GDE992NS\zeh
+PASS R5-009 只剩 当前账户/SYSTEM/Administrators 三条 —— rules=3 → NT AUTHORITY\SYSTEM | BUILTIN\Administrators | LAPTOP-GDE992NS\zeh
+PASS R5-010 mindcraft 仍有 Authenticated Users 条目（保留读/遍历的载体） —— 条数=1
+PASS R5-010 Authenticated Users 在目录上没有任何写/删/改权限位 —— 所有 AU 条目的写类位为 0
+PASS R5-010 Authenticated Users 仅剩 ReadAndExecute 类权限 —— 实际：ReadAndExecute, Synchronize
+PASS R5-010 mindcraft 目录已断开继承 —— protected=True
+PASS R5-010 当前账户仍是 FullControl（没把自己锁死） —— me=LAPTOP-GDE992NS\zeh
+PASS 可用性 mindcraft 目录仍可创建/删除文件 —— create+delete ok
+PASS 可用性 keys.json 仍可读 —— ReadAllBytes ok
+__RESULT__ PASS=11 FAIL=0
+acl-assert EXITCODE=0

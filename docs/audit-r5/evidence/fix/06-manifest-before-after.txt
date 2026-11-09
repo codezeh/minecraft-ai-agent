@@ -1,0 +1,49 @@
+# [3] 产物重建与清单变更 —— 采集 2026-11-08T19:21:11+08:00
+
+## 3.1 清单新旧对照
+### 修复前（HEAD 里提交的那份）
+source.hash  = sha256:7a45c9b2ea63d4a84f41261deba14fdcd4470ec3fdfbf7a1f174c593457c3585
+source.files = 25
+artifact.hash= sha256:55bc9624642a4e4eebe9618c8359ffb51379616266a156d79273967cf0cc2bae
+generatedAt  = 2026-11-08T04:47:29Z
+entryAssets  = ["assets/index-BRGdExsB.js","assets/index-BYekMoBu.css"]
+
+### 修复后（本次重建）
+source.hash  = sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2
+source.files = 25
+artifact.hash= sha256:a7e42b428f565f79952bce3df7ee36fa1358fa550f0757cd12c0fa177bf56d1f
+generatedAt  = 2026-11-08T11:14:46Z
+entryAssets  = ["assets/index-DKGTVhDR.js","assets/index-Hcxgqz-Q.css"]
+
+## 3.2 source.hash 分别对应哪个 commit
+$ node commitfp.mjs <commit>   # 按 git blob（LF）口径复算源码指纹
+HEAD                : sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2 (25 files)
+717308f (t27 前一版) : sha256:cc0c9ab420bff384c2af80f5a2985d1cb3f42346464cf10612577e33f6243649 (25 files)
+ca39e76 (=HEAD 的 web/): sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2 (25 files)
+
+结论：
+  旧 source.hash 7a45c9b2… ≠ 任何 commit 的 blob 口径值（HEAD/ca39e76=824059…，717308f=cc0c9ab4…）
+                ⇒ 它指向一个**未入库的中间工作树**（CRLF 状态），git 里无法核对 ⇒ R5-003
+  新 source.hash 82405964… == HEAD 的 blob 口径值 == 一个干净克隆（eol=lf）会算出的值
+                ⇒ 可复现、可核对
+
+## 3.3 清单里旧哈希是否残留
+grep -c "7a45c9b2" MANIFEST.json → 0
+0
+
+## 3.4 generatedAt 与 web/ 最后改动时间
+清单 generatedAt = 2026-11-08T11:14:46Z
+web/ 最新 mtime  = 2026-11-08T19:06:15 web/tsconfig.json
+
+## 3.5 子仓产物改动（staged）
+$ git -C mindcraft status --porcelain -- web-dist
+M  web-dist/MANIFEST.json
+R  web-dist/assets/DebugView-BkBssVOn.js -> web-dist/assets/DebugView-94geOrTx.js
+D  web-dist/assets/SetupView-B6mvS54m.css
+A  web-dist/assets/SetupView-CQeN4yGC.css
+R  web-dist/assets/SetupView-BqZvFAjd.js -> web-dist/assets/SetupView-FniJwIn7.js
+R  web-dist/assets/TerrainView-CLvOw5wc.js -> web-dist/assets/TerrainView-BH9oWS7R.js
+R  web-dist/assets/TerrainView-Dc9bwTkz.css -> web-dist/assets/TerrainView-BkR-DBrX.css
+R  web-dist/assets/index-BRGdExsB.js -> web-dist/assets/index-DKGTVhDR.js
+R  web-dist/assets/index-BYekMoBu.css -> web-dist/assets/index-Hcxgqz-Q.css
+M  web-dist/index.html

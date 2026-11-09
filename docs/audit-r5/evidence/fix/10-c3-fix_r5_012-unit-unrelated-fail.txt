@@ -1,0 +1,44 @@
+===== R5-012：失败消息必须带真堆栈 =====
+
+executing code...
+
+--- 实际返回值 ---
+success = false | interrupted = false | timedout = false
+message ↓
+Action output:
+!!Code threw exception!!
+Error: Error: boom-from-action
+Stack trace:
+
+
+--- message 结束 ---
+
+PASS (a) message 含 boom-from-action
+FAIL (b) message 含真实 stack（匹配 /at\s/）  （没有堆栈帧）
+FAIL (b2) stack 里带得出被测模块/本文件名
+PASS (c) message 不含 undefined
+FAIL (d) message 不含 "Error: Error:"
+PASS (d2) 失败标记与 error 行结构仍在
+PASS (d3) 返回值契约不变（success=false / interrupted=false / timedout=false）
+executing code...
+
+
+--- 正常路径返回值 ---
+{"success":true,"message":"Action output:\nhello from action\n","interrupted":false,"timedout":false}
+PASS (e) 正常路径 success=true
+PASS (e2) 正常路径 message 仍是 "Action output:\n<原文>" 形态  "Action output:\nhello from action\n"
+PASS (e3) 正常路径不含堆栈字样
+executing code...
+
+
+--- 抛字符串时的返回值 ---
+{"success":false,"tail":"Action output:\n!!Code threw exception!!\nError: just-a-string\nStack trace:\n\n"}
+PASS (f) 抛非 Error 不让 runAction 崩
+PASS (f2) 抛非 Error 时 message 里仍不含 undefined
+PASS (f3) 抛非 Error 时仍带出原始信息
+
+============================================
+10 PASS / 3 FAIL
+============================================
+
+R5-012 未通过：见上面 FAIL 行。

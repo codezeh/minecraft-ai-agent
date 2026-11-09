@@ -1,0 +1,67 @@
+# 静态核对证据（生成于 2026-11-08 15:44:01)
+
+## 5. e2e.ps1 可行性前提
+$ ls -d .tools/jdk*; ls -l .tools/jdk*/bin/java.exe
+.tools/jdk-21.0.12.1+1
+-rwxrwxrwx 1 zeh zeh    50304 Aug 18 18:40 .tools/jdk-21.0.12.1+1/bin/java.exe
+
+$ ./.tools/jdk-21.0.12.1+1/bin/java.exe -version
+openjdk version "21.0.12.1" 2026-08-18 LTS
+OpenJDK Runtime Environment Temurin-21.0.12.1+1 (build 21.0.12.1+1-LTS)
+OpenJDK 64-Bit Server VM Temurin-21.0.12.1+1 (build 21.0.12.1+1-LTS, mixed mode, sharing)
+
+$ ls -l server/server.jar; sha256sum server/server.jar server/paper-1.21.8-60.jar
+-rwxrwxrwx 1 zeh zeh 52811717 Oct 18 19:05 server/server.jar
+8de7c52c3b02403503d16fac58003f1efef7dd7a0256786843927fa92ee57f1e  server/server.jar
+8de7c52c3b02403503d16fac58003f1efef7dd7a0256786843927fa92ee57f1e  server/paper-1.21.8-60.jar
+
+$ du -sh server-test/{libraries,versions,cache}; ls test-template
+75M	server-test/libraries
+28M	server-test/versions
+55M	server-test/cache
+README.md
+server.properties
+world
+
+$ grep -c __E2E_RCON_PASSWORD__ test-template/server.properties; grep -n "rcon\|server-port" test-template/server.properties
+1
+30:level-type=minecraft\:flat
+46:rcon.password=__E2E_RCON_PASSWORD__
+47:rcon.port=25576
+55:server-port=25566
+
+$ ls -l test-template/world/level.dat; ls test-template/world/region
+-rwxrwxrwx 1 zeh zeh     1661 Nov  8 13:16 test-template/world/level.dat
+r.-1.-1.mca
+r.-1.0.mca
+r.0.-1.mca
+r.0.0.mca
+
+$ ls -l mindcraft/tools/e2e_server_ctl.mjs mindcraft/tools/e2e_rcon.mjs
+-rwxrwxrwx 1 zeh zeh     1492 Nov  8 13:16 mindcraft/tools/e2e_rcon.mjs
+-rwxrwxrwx 1 zeh zeh     3111 Nov  8 13:16 mindcraft/tools/e2e_server_ctl.mjs
+
+## PowerShell 5.1 语法解析（[Parser]::ParseFile，与 -File 同一解析/编码路径）
+scripts/e2e.ps1                          errors=0
+scripts/verify-world-backup.ps1          errors=0
+scripts/restore-drill.ps1                errors=0
+scripts/start-panel.ps1                  errors=8
+scripts/stop-panel.ps1                   errors=0
+scripts/backup-world.ps1                 errors=0
+scripts/tests/rcon-regression.ps1        errors=0
+scripts/tests/fake-rcon-server.ps1       errors=0
+scripts/harden-credentials-acl.ps1       errors=0
+scripts/lib/rcon.ps1                     errors=0
+
+## 6. 面板 .bat 引用路径
+$ iconv -f GBK -t UTF-8 启动面板.bat; iconv -f GBK -t UTF-8 停止面板.bat
+niu: line 33: iconv: command not found
+---
+niu: line 33: iconv: command not found
+
+$ ls -l scripts/start-panel.ps1 scripts/stop-panel.ps1
+-rwxrwxrwx 1 zeh zeh    15706 Nov  8 13:16 scripts/start-panel.ps1
+-rwxrwxrwx 1 zeh zeh     5103 Nov  8 13:16 scripts/stop-panel.ps1
+
+$ ls -l /d/Node/node.exe  (start-panel.ps1:14 硬编码 $node = D:\Node\node.exe)
+-rwxrwxrwx 1 SYSTEM SYSTEM 92279112 May 21 00:44 D:\Node\node.exe

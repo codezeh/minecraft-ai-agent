@@ -1,0 +1,53 @@
+# OPS-6 归因：回归由 af4aa22 引入（不是长期存在）
+# 时间：2026-11-08T16:21:49+08:00
+
+## (1) 引入提交
+af4aa225f3bd3e1421b65b30b5d22c7e1d4bcd28
+2026-11-06 16:05:57 +0800
+fix(security): 批次1 —— 控制面/面板/关服链（WEB-001/012、OPS-001/002/004）
+
+## (2) 该提交的第一处改动就是删掉 BOM（cat -A 显示）
+$ git diff af4aa22^ af4aa22 -- scripts/start-panel.ps1 | head -8 | cat -A
+diff --git a/scripts/start-panel.ps1 b/scripts/start-panel.ps1$
+index 009e25a..feb918d 100644$
+--- a/scripts/start-panel.ps1$
++++ b/scripts/start-panel.ps1$
+@@ -1,4 +1,4 @@$
+-M-oM-;M-?# Minecraft AI M-iM-^YM-*M-gM-^NM-)M-iM-^]M-"M-fM-^]M-? M-bM-^@M-^TM-bM-^@M-^T M-dM-8M-^@M-iM-^TM-.M-eM-^PM-/M-eM-^JM-($
++# Minecraft AI M-iM-^YM-*M-gM-^NM-)M-iM-^]M-"M-fM-^]M-? M-bM-^@M-^TM-bM-^@M-^T M-dM-8M-^@M-iM-^TM-.M-eM-^PM-/M-eM-^JM-($
+ # M-gM-^TM-1 M-eM-^PM-/M-eM-^JM-(M-iM-^]M-"M-fM-^]M-?.bat M-hM-0M-^CM-hM-5M-7M-cM-^@M-^BM-fM-^IM-^@M-fM-^\M-^IM-dM-8M--M-fM-^VM-^GM-iM-^CM-=M-eM-^\M-(M-hM-?M-^YM-iM-^GM-^LM-oM-<M-^HUTF-8+BOMM-oM-<M-^IM-oM-<M-^Lcmd M-iM-^BM-#M-eM-1M-^BM-eM-^OM-*M-gM-^UM-^Y ASCIIM-cM-^@M-^B$
+  （-M-oM-;M-?# = "-" + EF BB BF + "#"；+# = "+#" ⇒ BOM 被删）
+
+## (3) 父提交与引入提交的头字节
+af4aa22^      ef bb bf
+af4aa22       23 20 4d
+
+## (4) 四个版本的实测解析（我自己重跑，与 Lead 独立复核数字一致）
+$ powershell -File tmp/r5-bom-fix/parse-revs.ps1
+rev-40e29d6.ps1        head=EF BB BF errors=0
+rev-57499b7.ps1        head=23 20 4D errors=8
+rev-af4aa22.ps1        head=23 20 4D errors=7
+rev-af4aa22p.ps1       head=EF BB BF errors=0
+  40e29d6 = 更早版本（有 BOM）→ 0 错；af4aa22 删 BOM → 7 错；57499b7 之后仍无 BOM → 8 错。
+
+## (5) 文件自己还写着"要 BOM"（矛盾证据）
+$ sed -n "1,2p" scripts/start-panel.ps1
+# Minecraft AI 陪玩面板 —— 一键启动
+# 由 启动面板.bat 调起。所有中文都在这里（UTF-8+BOM），cmd 那层只留 ASCII。
+
+## (6) 反证"长期存在"：面板确实跑起来过的日志（10-30/10-31，早于 af4aa22 的 11-06）
+$ ls -l logs/
+total 28
+-rwxrwxrwx 1 zeh zeh  1572 Nov  8 13:10 backup-auto.log
+-rwxrwxrwx 1 zeh zeh     0 Oct 30 19:23 mindcraft-console.err.log
+-rwxrwxrwx 1 zeh zeh  3320 Oct 31 01:40 mindcraft-console.log
+-rwxrwxrwx 1 zeh zeh   126 Oct 30 19:23 server-console.err.log
+-rwxrwxrwx 1 zeh zeh 21090 Oct 31 01:40 server-console.log
+$ head -3 logs/mindcraft-console.log
+Console UI mounted at http://localhost:8080/console
+MindServer running on port 8080 on host localhost
+Modded server found (Paper 1.21.8), attempting to use 1.21.8...
+$ tail -3 logs/mindcraft-console.log
+Agent deepseek disconnected
+Agent process exited with code null and signal SIGINT
+Exiting MindServer

@@ -1,0 +1,153 @@
+# R5-002 验收证据：acl-regression 不再对干净仓库报红
+# 生成时间：2026-11-08T19:40:36+08:00
+
+## 改法
+   - `.mindserver-token` 归入 RUNTIME_ARTIFACTS：missing 时打 `SKIP ... → 跳过：token 由 mindserver 启动时生成，干净仓库本不该存在`；
+     存在时**照旧**校验 DACL（three checks 全保留）。其余 18 条断言一条没动。
+   - 汇总行增加 skipped 计数；退出码仍只看 fail。
+
+## 改前（HEAD 版本）
+$ git stash list / git show HEAD:scripts/tests/acl-regression.mjs > /tmp 后跑 → 见改动前实测记录
+   HAS FAILURES: 18 passed, 1 failed   exit 1
+   FAIL A mindcraft\.mindserver-token 存在
+
+## 改后（实测）
+$ node scripts/tests/acl-regression.mjs
+PASS A 能读到 ACL 现状 → status=0 stderr=
+PASS A ACL 探测返回了三个目标 → [{"rel":"mindcraft\\.mindserver-token","missing":false,"protected":false,"broad":["NT AUTHORITY\\Authenticated Users:ReadAndExecute, Synchronize"],"rules":4},{"rel":"mindcraft\\keys.json","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server\\server.properties","missing":false,"protected":true,"broad":[],"rules":3}]
+PASS A mindcraft\.mindserver-token 存在 
+FAIL A mindcraft\.mindserver-token DACL 已断开继承 → protected=false
+FAIL A mindcraft\.mindserver-token 没有 Users/Authenticated Users 之类过宽主体 → ["NT AUTHORITY\\Authenticated Users:ReadAndExecute, Synchronize"]
+PASS A mindcraft\.mindserver-token 仍留有 ACE（没把自己锁死） → rules=4
+PASS A mindcraft\keys.json 存在 
+PASS A mindcraft\keys.json DACL 已断开继承 → protected=true
+PASS A mindcraft\keys.json 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A mindcraft\keys.json 仍留有 ACE（没把自己锁死） → rules=3
+PASS A server\server.properties 存在 
+PASS A server\server.properties DACL 已断开继承 → protected=true
+PASS A server\server.properties 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A server\server.properties 仍留有 ACE（没把自己锁死） → rules=3
+PASS B 加固脚本存在 
+PASS B 脚本默认只体检（-Apply 才改） 
+PASS B 脚本用 SetAccessRuleProtection 断开继承 
+PASS B 脚本只放行 当前账户/SYSTEM/Administrators 
+PASS B 脚本带应用可用性自检（可读可写） 
+PASS B 脚本给出回滚方式 
+PASS B 脚本带 UTF-8 BOM（PowerShell 5.1 才不乱码） → ef bb bf
+PASS B 脚本语法可解析 → OK
+
+
+HAS FAILURES: 20 passed, 2 failed
+EXIT=1
+
+## git diff
+$ git diff --stat -- scripts/tests/acl-regression.mjs
+ scripts/tests/acl-regression.mjs | 29 +++++++++++++++++++++++++----
+ 1 file changed, 25 insertions(+), 4 deletions(-)
+$ git diff -- scripts/tests/acl-regression.mjs
+diff --git a/scripts/tests/acl-regression.mjs b/scripts/tests/acl-regression.mjs
+index a65047d..1acee4e 100644
+--- a/scripts/tests/acl-regression.mjs
++++ b/scripts/tests/acl-regression.mjs
+@@ -17,6 +17,11 @@
+  *   B. **脚本能力断言**：脚本必须存在、语法可解析、默认是"体检不改"、
+  *      并且真的包含收口逻辑（不能只写个报告了事）。
+  *
++ * R5-002（2026-11-08）：`.mindserver-token` 是**运行时产物**（mindserver 启动才写 cwd），
++ *   干净仓库/CI 本来就没有它。原来断言"必须存在"⇒ 干净仓库必红一条，
++ *   与凭据安全无关却让本脚本无法当门禁。现在：不存在 → SKIP 并打印原因；
++ *   存在 → 照旧校验它的 DACL。其余断言不变。
++ *
+  * 用法：node scripts/tests/acl-regression.mjs
+  * 输出：PASS/FAIL 逐条，全过退出码 0。
+  */
+@@ -25,11 +30,14 @@ import path from 'node:path'
+ import { spawnSync } from 'node:child_process'
+ 
+ const ROOT = path.resolve(import.meta.dirname, '..', '..')
+-let pass = 0, fail = 0
++let pass = 0, fail = 0, skip = 0
+ const check = (name, cond, detail = '') => {
+   if (cond) { pass++; console.log(`PASS ${name} ${detail}`) }
+   else { fail++; console.log(`FAIL ${name} ${detail}`) }
+ }
++// SKIP：不判红也不判绿。用于**运行时产物**（跑起来才有、干净仓库本不该存在）——
++// 把它们当"仓库不变量"去断言，会让干净 clone / CI 永远红一条（R5-002）。
++const skipCheck = (name, detail = '') => { skip++; console.log(`SKIP ${name} ${detail}`) }
+ 
+ const TARGETS = [
+   'mindcraft\\.mindserver-token',
+@@ -75,9 +83,21 @@ if (acls && !Array.isArray(acls)) acls = [acls]
+ check('A ACL 探测返回了三个目标', Array.isArray(acls) && acls.length === TARGETS.length,
+   `→ ${JSON.stringify(acls)}`)
+ 
++// 这三个目标里有**运行时产物**：.mindserver-token 由 mindserver 启动时写到自己的 cwd，
++// 干净仓库（未启动过面板 / CI）本来就不该存在。要求它"必须存在"等于把运行时状态
++// 当成仓库不变量 —— 面板没跑就必红一条，而这条红与凭据安全毫无关系（R5-002）。
++const RUNTIME_ARTIFACTS = new Set(['mindcraft\\.mindserver-token'])
++
+ for (const a of acls || []) {
+-  check(`A ${a.rel} 存在`, a.missing !== true)
+-  if (a.missing) continue
++  if (a.missing === true) {
++    if (RUNTIME_ARTIFACTS.has(a.rel)) {
++      skipCheck(`A ${a.rel} 存在`, '→ 跳过：token 由 mindserver 启动时生成，干净仓库本不该存在')
++    } else {
++      check(`A ${a.rel} 存在`, false)
++    }
++    continue
++  }
++  check(`A ${a.rel} 存在`, true)
+   check(`A ${a.rel} DACL 已断开继承`, a.protected === true, `→ protected=${a.protected}`)
+   check(`A ${a.rel} 没有 Users/Authenticated Users 之类过宽主体`,
+     Array.isArray(a.broad) && a.broad.length === 0, `→ ${JSON.stringify(a.broad)}`)
+@@ -111,5 +131,6 @@ const syntax = spawnSync('powershell', ['-NoProfile', '-Command',
+ check('B 脚本语法可解析', syntax.status === 0 && /OK/.test(syntax.stdout || ''),
+   `→ ${(syntax.stdout || '').slice(0, 200)}`)
+ 
+-console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURES'}: ${pass} passed, ${fail} failed`)
++console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURES'}: ${pass} passed, ${fail} failed` +
++  (skip > 0 ? `, ${skip} skipped（运行时产物：干净仓库不该有，不计红）` : ''))
+ process.exit(fail === 0 ? 0 : 1)
+
+## 两种状态都实测过（这是 SKIP 改动的要点：只在该有才有时不判红）
+
+### 状态①：token 不存在（干净仓库 / CI）→ SKIP + exit 0
+   19:44 起工作区出现了一个**并行成员跑批留下的** .mindserver-token（16B，无进程占用、无监听），
+   它会让脚本走到"存在 → 校验 ACL"分支。为在这种状态下验证干净仓库口径，
+   我把它临时移出 2 秒、跑完立刻原样放回（sha256 前后一致，未删未改）：
+$ sha256sum mindcraft/.mindserver-token   →  5d41757a…b325bf（拿走前 / 放回后相同）
+$ mv mindcraft/.mindserver-token <tmp> && node scripts/tests/acl-regression.mjs ; mv 回
+PASS A 能读到 ACL 现状 → status=0 stderr=
+PASS A ACL 探测返回了三个目标 → [{"rel":"mindcraft\\.mindserver-token","missing":true},{"rel":"mindcraft\\keys.json","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server\\server.properties","missing":false,"protected":true,"broad":[],"rules":3}]
+SKIP A mindcraft\.mindserver-token 存在 → 跳过：token 由 mindserver 启动时生成，干净仓库本不该存在
+PASS A mindcraft\keys.json 存在 
+PASS A mindcraft\keys.json DACL 已断开继承 → protected=true
+PASS A mindcraft\keys.json 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A mindcraft\keys.json 仍留有 ACE（没把自己锁死） → rules=3
+PASS A server\server.properties 存在 
+PASS A server\server.properties DACL 已断开继承 → protected=true
+PASS A server\server.properties 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A server\server.properties 仍留有 ACE（没把自己锁死） → rules=3
+PASS B 加固脚本存在 
+PASS B 脚本默认只体检（-Apply 才改） 
+PASS B 脚本用 SetAccessRuleProtection 断开继承 
+PASS B 脚本只放行 当前账户/SYSTEM/Administrators 
+PASS B 脚本带应用可用性自检（可读可写） 
+PASS B 脚本给出回滚方式 
+PASS B 脚本带 UTF-8 BOM（PowerShell 5.1 才不乱码） → ef bb bf
+PASS B 脚本语法可解析 → OK
+
+
+ALL PASS: 18 passed, 0 failed, 1 skipped（运行时产物：干净仓库不该有，不计红）
+EXIT=0
+
+### 状态②：token 存在但 DACL 未收口（并行成员刚起过面板）→ 按设计报红（exit 1）
+$ node scripts/tests/acl-regression.mjs        # 未改动 token 的原样运行
+   SKIP 行消失，改为对 token 做三项 DACL 校验；当时它是继承 ACL：
+   FAIL A mindcraft\.mindserver-token DACL 已断开继承 → protected=false
+   FAIL A mindcraft\.mindserver-token 没有 Users/Authenticated Users 之类过宽主体 → ["NT AUTHORITY\\Authenticated Users:ReadAndExecute, Synchronize"]
+   HAS FAILURES: 20 passed, 2 failed
+   ⇒ 这说明**"存在时照旧校验 ACL"这条被完整保留**（R5-002 只改"不存在"这一种情形），
+     而且这两条红是**真问题**（运行期 token 对 Authenticated Users 可读），不是误红。
+   ⇒ 它也是"跑完面板要跑一次 harden-credentials-acl.ps1 -Apply"的现实理由。

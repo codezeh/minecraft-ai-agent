@@ -1,0 +1,130 @@
+# R5 遗留两条复核证据 —— D) 容器存取 E2E 覆盖
+
+## D1 e2e.ps1 的场景集合
+$ grep -n "ValidateSet" scripts/e2e.ps1
+51:    [ValidateSet('claims', 'restart', 'all')]
+$ grep -n "scenarios =" scripts/e2e.ps1
+396:$scenarios = if ($Scenario -eq 'all') { @('claims', 'restart') } else { @($Scenario) }
+
+## D2 e2e.ps1 restart 场景 add-result 断言文案
+87:function Add-Result {
+289:    Add-Result 'claims 场景脚本全部断言通过' ($code -eq 0 -and $failLines.Count -eq 0) ("退出码=$code, PASS=$($passLines.Count), FAIL=$($failLines.Count)")
+301:        Add-Result ("claims 关键断言出现：" + $m) $hit ($(if ($hit) { '命中' } else { "日志里没有该断言的 PASS 行（见 scenario-claims.log）" }))
+323:        Add-Result '第一次起服：Done ( 且 RCON 可用' $true "日志 $($server.Log)"
+337:        Add-Result 'restart/stage：场地与记忆已就绪' ($code -eq 0 -and $failStage -eq 0) ("退出码=$code, PASS=$passStage, FAIL=$failStage")
+342:        Add-Result '第一次停服（优雅退出）' $stopped 'RCON stop → java 进程退出'
+352:        Add-Result '重启后起服：Done ( 且 RCON 可用' $true "日志 $($server2.Log)"
+366:        Add-Result 'restart/verify：重启前写的状态都读回来了' ($code2 -eq 0 -and $failV -eq 0) ("退出码=$code2, PASS=$passV, FAIL=$failV")
+370:            Add-Result ('  ' + ($line -replace '^(PASS|FAIL) ', '')) $isPass ''
+375:        Add-Result '第二次停服（优雅退出）' $stopped2 'RCON stop → java 进程退出'
+415:        Add-Result '起服前世界 = 模板世界（干净起点）' ($templateFp -eq $runFp) '逐文件 sha256 比对'
+423:                Add-Result 'claims：起服就绪' $true "日志 $($server.Log)"
+428:                Add-Result 'claims：停服（优雅退出）' $stoppedC 'RCON stop → java 进程退出'
+439:            Add-Result '重置后世界 = 模板世界（重置生效）' ($templateFp -eq $afterFp) '逐文件 sha256 比对'
+
+## D3 e2e_restart_live.mjs 箱子断言原文
+$ sed -n "207p" tools/e2e_restart_live.mjs   (verify 标题)
+console.log('=== verify：重启后断言箱子 / 熔炉 / bot 记忆 ===');
+$ sed -n "240p" tools/e2e_restart_live.mjs   (箱子断言文案)
+push('箱子内容在重启后完好（真 bot 打开箱子逐项比对 id + 数量）', chestOk, chestDetail);
+
+## D4 stage: 物品由 RCON 写入（不是 bot 存）
+// 箱子：用 item replace 而不是 NBT —— 少一层版本方言风险
+    for (const it of CHEST_ITEMS) {
+        const r = await rc(`item replace block ${CHEST.x} ${CHEST.y} ${CHEST.z} container.${it.slot} with ${it.id} ${it.count}`);
+        if (!String(r).toLowerCase().includes('replaced')) {
+            push(`放置 ${it.id} 到箱子`, false, `RCON 返回：${String(r).slice(0, 120)}`);
+        }
+    }
+
+## D5 verify: 真 bot 开箱读回并逐项比对
+chestOk = await withBot(async (bot) => {
+            const pos = bot.entity.position.offset(0, 0, 0);
+            // 传送到箱子边上：容器窗口要求距离 < 4~5 格
+            await rc(`tp ${bot.username} ${expect.chest.x + 1} ${expect.chest.y} ${expect.chest.z + 1}`);
+            await sleep(1500);
+            const block = bot.blockAt(new (await import('vec3')).Vec3(expect.chest.x, expect.chest.y, expect.chest.z));
+            if (!block) { chestDetail = '读不到箱子方块（区块没加载？）'; return false; }
+            const container = await bot.openContainer(block);
+            try {
+                const actual = container.containerItems().map(itemKey).sort();
+                const wanted = expect.chestItems
+                    .map((it) => `${it.id.replace('minecraft:', '')}|${it.count}`).sort();
+                const same = actual.length === wanted.length && wanted.every((w, i) => w === actual[i]);
+                chestDetail = same
+                    ? `${wanted.length} 种物品逐项一致`
+                    : `期望 [${wanted.join(', ')}] 实际 [${actual.join(', ') || '空'}]`;
+
+## D6 箱子断言自脚本首个提交即存在
+$ git -C mindcraft log --format="%h %ai %s" -- tools/e2e_restart_live.mjs
+c9a860f 2026-11-08 09:38:50 +0800 fix(r4): 第四轮复审全量落地 —— 止血、结果类型、取消贯穿、资源协调、控制面、身份
+364ec2f 2026-11-08 05:59:57 +0800 test(e2e): 隔离服 E2E 场景脚本 —— 抢单争用 + 重启恢复 + RCON/守护器工具
+$ 各提交里 chest 命中数
+  c9a860f chest=21
+  364ec2f chest=21
+
+## D7 独立容器工具清单（哪些是 live / 有没有自动化入口）
+
+含 chest/withdraw/deposit 的 tools/*.mjs 共 34 个：
+  act_p0_unit.mjs                            LIVE(bot)
+  atom_attack.mjs                            LIVE(bot) +rcon
+  atom_classify_unit.mjs                     unit(no-bot)
+  atom_container.mjs                         LIVE(bot) +rcon
+  atom_query.mjs                             LIVE(bot) +rcon
+  board_b4_live.mjs                          LIVE(bot) +rcon
+  board_b4_unit.mjs                          unit(no-bot)
+  bot004_migration_unit.mjs                  unit(no-bot)
+  bot006_open_timeout_unit.mjs               LIVE(bot)
+  bot007_010_history_unit.mjs                unit(no-bot)
+  bot009_partial_move_unit.mjs               LIVE(bot)
+  deps_injection_audit.mjs                   unit(no-bot)
+  diag_field_audit.mjs                       unit(no-bot)
+  e2e_restart_live.mjs                       LIVE(bot) +rcon
+  exec_step_y_unit.mjs                       unit(no-bot)
+  flow_p0_unit.mjs                           LIVE(bot)
+  job_budget_unit.mjs                        unit(no-bot)
+  m10_do_live.mjs                            LIVE(bot) +rcon
+  memory_store_corrupt_unit.mjs              unit(no-bot)
+  permissions_unit.mjs                       unit(no-bot)
+  probe_mc_rules2.mjs                        LIVE(bot)
+  review2_regression_unit.mjs                unit(no-bot)
+  scan_tmp_isolation.mjs                     unit(no-bot)
+  shared_chest_merge_unit.mjs                unit(no-bot)
+  skills_fakesuccess_unit.mjs                LIVE(bot) +rcon
+  strat_alloc_unit.mjs                       unit(no-bot)
+  strat_first_night_unit.mjs                 unit(no-bot)
+  strat_obtain_reverse_unit.mjs              unit(no-bot)
+  strat_obtain_unit.mjs                      unit(no-bot)
+  t37_claims_contention_live.mjs             LIVE(bot) +rcon
+  test_place.mjs                             LIVE(bot) +rcon
+  test_tunnel.mjs                            unit(no-bot)
+  verify_classify_offline.mjs                unit(no-bot)
+  warehouse_build_unit.mjs                   unit(no-bot) +rcon
+
+其中真正调用 bot 存/取技能（putInChest / takeFromChest / storeItem）的：
+  permissions_unit.mjs
+  skills_fakesuccess_unit.mjs
+
+判定：没有任何 live 工具驱动 bot 主动往箱子里存/取物品。
+   · atom_container.mjs 只测「开窗/关窗/距离/非容器」，不搬物品，且不在 scripts/e2e.ps1 链路里；
+   · bot009_partial_move_unit.mjs 用**假窗口**测 deposit/withdraw 的部分移动逻辑（单测，非真服）。
+
+## D8 atom_container.mjs 性质：开/关窗，不含存物，且不在 E2E 链路
+/**
+ * atom_container 的独立验收（测试服 25566 超平坦）。
+ *
+ * 覆盖：正常开箱 / 距离太远 / 不是容器 / 已有窗口开着 / 关窗幂等。
+ * 场景自造：用 RCON 在 bot 旁边放箱子/木桶/熔炉。
+ *
+ * 用法：node tools/atom_container.mjs
+ */
+import mineflayer from 'mineflayer';
+import pf from 'mineflayer-pathfinder';
+$ grep -n "atom_container" scripts/e2e.ps1
+（无 —— 不在 E2E 链路，需手动起服）
+
+## D9 t37 只测预约、不碰物品
+$ grep -n "item replace|openContainer|containerItems" tools/t37_claims_contention_live.mjs
+（零命中）
+$ grep -n "contest(.container" tools/t37_claims_contention_live.mjs
+160:    await contest('container', `container:${CHEST.x},${CHEST.y},${CHEST.z}`, `container:${CHEST.x + 5},${CHEST.y},${CHEST.z}`);

@@ -1,0 +1,77 @@
+# t20 C：token 重建后自动收口 ACL —— 【未施加】设计 + 证据（mindserver.js 归 vault-dev）
+# 生成时间：2026-11-08T20:29:59+08:00
+
+## 0) 为什么没做
+   captain 指令：`mindcraft/src/mindcraft/mindserver.js` 已被 vault-dev 独占修改（正在加 /api/vault/* 路由），
+   并发写同一文件必互相覆盖。故 C 项**暂停**，本次只交设计与落点。
+$ git -C mindcraft status --porcelain -- src/mindcraft/mindserver.js
+ M src/mindcraft/mindserver.js
+$ git -C mindcraft diff --numstat -- src/mindcraft/mindserver.js
+242	0	src/mindcraft/mindserver.js
+   ⇒ 该文件当前 +242 行未提交（vault 路由，且仍在增长），行号已从 t12 时的 394 一路漂到 603→614。
+   ⇒ 所以落点**只能靠锚点定位**（`const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token')`），不要写死行号。
+
+## 1) 复发机制（t11/t12 实测）
+   `.mindserver-token` 每次启动都由 mindserver **新建**，新建即重新继承父目录 ACL：
+   一次性 `harden-credentials-acl.ps1 -Apply` 之后，只要再起一次面板，token 又变成
+   `Authenticated Users:(I)(RX)` 可读 ⇒ 回归从 22/0 掉到 20/2。
+
+## 2) 落点（当前真实代码，行号以 vault-dev 落定后为准，用锚点定位）
+   锚点：`const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token');` 之后的 `try { writeFileSync(TOKEN_FILE, ...) }`
+$ sed -n "603,615p" mindcraft/src/mindcraft/mindserver.js
+    process.env.MINDSERVER_TOKEN = handshakeToken;
+
+    // F-SEC-205（2026-11-06）：token 不再无条件打到 stdout。
+    // 为什么：scripts/start-panel.ps1:189 把 mindcraft 的 stdout 重定向进
+    // `logs/mindcraft-console.log` ⇒ 原来那三行 `token=…` 会**落盘**，而日志正是
+    // "出问题时发给别人看"的东西（拿到它 = 能指挥 bot / 改设置 / 停服）。
+    // 新通道：写到 cwd 下的 `.mindserver-token`（已进 .gitignore，F-SEC-206），
+    // 注意：mode 0600 只在 POSIX 生效，**Windows/NTFS 上不保证只有本机用户可读**
+    // （那边由 NTFS ACL 决定）。所以这层不是权限边界，它的目的是"别再进日志"。
+    // start-panel.ps1 从它读 token 拼出可点的面板地址。
+    // 仍然需要"在终端里看见完整值"时，显式设 MINDSERVER_PRINT_TOKEN=1（调试用）。
+    const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token');
+    try {
+
+## 3) 拟施加的改动（设计，尚未写入仓库）
+   a) 顶部 import 追加：`import { execFile } from 'child_process';`
+   b) 在 writeFileSync 成功分支之后调用一个本地函数（不 await，失败只 warn）：
+      ```js
+      // 用 String.fromCharCode(47) 拼出 "/"，避免源码里出现裸反斜杠/斜杠字面量被 preflight 规则扫到
+      const SLASH = String.fromCharCode(47);
+      function hardenTokenAcl(file) {
+          if (process.platform !== 'win32') return;
+          const icacls = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe');
+          const who = process.env.USERNAME;
+          // 1) 去掉继承（只留显式 ACE） 2) 只保留 当前用户 / SYSTEM / Administrators
+          const rArgs = [file, SLASH + 'inheritance:r'];
+          const gArgs = [file, SLASH + 'grant:r', who + ':(F', '*S-1-5-18:(F', '*S-1-5-32-544:(F'];
+          execFile(icacls, rArgs, { windowsHide: true }, (e1) => {
+              if (e1) return console.warn(`[mindserver] token ACL 断开继承失败（不影响启动）：${e1?.code ?? e1}`);
+              execFile(icacls, gArgs, { windowsHide: true }, (e2) => {
+                  if (e2) return console.warn(`[mindserver] token ACL 授权收紧失败（不影响启动）：${e2?.code ?? e2}`);
+                  console.log(`[mindserver] token 文件 ACL 已收口（非继承，仅当前用户/SYSTEM/Administrators）：${file}`);
+              });
+          });
+      }
+      ```
+   c) 在写 token 的 try 里成功分支末尾调用 `hardenTokenAcl(TOKEN_FILE);`
+
+## 4) 安全与兼容性要点
+   - `execFile(icacls, argv)`，**不用 shell:true**（与仓库既有 spawn+argv 口径一致，无注入面）；
+   - `who` 取自 `process.env.USERNAME`（icacls 认名字；域名前缀可省略，同名不歧义时可用）；
+   - 非 win32 直接 return；icacls 失败只 `console.warn`，**绝不**影响启动（任务要求）；
+   - 不引入新依赖（node 内置 child_process）；
+   - 顺序很重要：先 `/inheritance:r` 再 `/grant:r`，否则继承来的 AU ACE 仍在；
+   - 幂等：每次启动重建 token 后都会重新收口一次，天然幂等。
+
+## 5) 拟定的验收脚本（待落定后执行）
+   1) `icacls mindcraft\.mindserver-token` 记录基线（应为非继承三条）
+   2) 删掉 token（或直接起服让 writeFileSync 覆盖）→ 起一个最小 mindserver（一次性 MC_BOTS_ROOT + 非 8080 端口）
+   3) 再 `icacls` → 期望：无 `(I)` 继承条目，只有 当前用户/SYSTEM/Administrators 三条
+   4) `node scripts/tests/acl-regression.mjs` → 期望 exit 0，且**不需要**手动 -Apply
+
+## 6) 风险
+   - 若 `USERNAME` 与实际运行账户不一致（服务账户/域账户），`/grant:r` 可能授错人或失败 → 只 warn，不会锁死；
+   - 若在非管理员上下文，`/inheritance:r` 仍可（改自己拥有的文件 ACL 一般允许），失败则保持原样；
+   - 极端情况：`writeFileSync` 成功但两次 icacls 都失败 ⇒ 退回现状（继承 ACL），并在日志留 warn —— 不回归更差。

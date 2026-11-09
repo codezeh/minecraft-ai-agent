@@ -1,0 +1,27 @@
+============================================================
+  凭据文件 ACL 加固（OPS-004）
+  模式：体检（不改；加 -Apply 才动手）
+  当前账户：LAPTOP-GDE992NS\zeh
+============================================================
+
+[跳过] 不存在：mindcraft\.mindserver-token
+--- E:\我的世界ai\mindcraft\keys.json
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\server\server.properties
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\server-test\server.properties
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+[体检结果] 已经是收口状态，无需改动。
+EXITCODE=0

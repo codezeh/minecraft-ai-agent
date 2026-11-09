@@ -1,0 +1,20 @@
+--- A-old-empty-ip（server-port=25580, rcon.port=25590）
+    netstat 中 25590 的 LISTENING 行：
+      TCP 0.0.0.0:25590 0.0.0.0:0 LISTENING 26064
+      TCP [::]:25590 [::]:0 LISTENING 26064
+    使用配置里的口令跑 list → OK: There are 0 of a max of 10 players online:
+--- B-new-127（server-port=25581, rcon.port=25591）
+    netstat 中 25591 的 LISTENING 行：
+      TCP 127.0.0.1:25591 0.0.0.0:0 LISTENING 11488
+    使用配置里的口令跑 list → OK: There are 0 of a max of 10 players online:
+    用**旧口令**跑 list → rejected: auth-failed
+
+=== 结论 ===
+A（server-ip= 空）绑定：TCP 0.0.0.0:25590 0.0.0.0:0 LISTENING 26064
+B（server-ip=127.0.0.1）绑定：TCP 127.0.0.1:25591 0.0.0.0:0 LISTENING 11488
+A 为全网卡监听（0.0.0.0/[::]）: PASS
+B 为仅本机监听（127.0.0.1）: PASS
+B 组新口令可通: PASS
+B 组旧口令被拒: PASS
+RESULT=ALL PASS
+EXITCODE=0

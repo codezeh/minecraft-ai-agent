@@ -1,0 +1,126 @@
+# t32 取证：20:42 生产目录被起服事件 —— 原始证据
+# 生成时间：2026-11-09T01:42:36+08:00  工作目录 E:\我的世界ai  只读 server/
+
+## 1) 事件窗口内被改写的文件（server/ 下，20:35–20:50）
+$ find server -type f -newermt "2026-11-08 20:35:00" ! -newermt "2026-11-08 20:50:00" -printf "%TH:%TM:%TS %8s %p\n" | sort
+20:42:35     4040 server/logs/2026-11-07-1.log.gz
+20:42:41        3 server/world/session.lock
+20:42:41      127 server/world/datapacks/bukkit/pack.mcmeta
+20:42:41     1513 server/server.properties.bak-2026-11-08131859
+20:42:44      491 server/commands.yml
+20:42:44      585 server/plugins/spark/tmp-client/about.txt
+20:42:44     1148 server/bukkit.yml
+20:42:45        2 server/banned-ips.json
+20:42:45        2 server/banned-players.json
+20:42:45     4384 server/config/paper-global.yml
+20:42:45     4901 server/spigot.yml
+20:42:45     8549 server/config/paper-world-defaults.yml
+20:42:45    47692 server/usercache.json
+20:42:46     2868 server/help.yml
+20:42:46     3408 server/logs/latest.log
+
+## 2) 服务端日志时间线（server/logs/latest.log）
+[20:42:36] [ServerMain/INFO]: [bootstrap] Running Java 21 (OpenJDK 64-Bit Server VM 21.0.12.1+1-LTS; Eclipse Adoptium Temurin-21.0.12.1+1) on Windows 11 10.0 (amd64)
+[20:42:36] [ServerMain/INFO]: [bootstrap] Loading Paper 1.21.8-60-main@29c8822 (2025-09-06T21:49:13Z) for Minecraft 1.21.8
+[20:42:36] [ServerMain/INFO]: [PluginInitializerManager] Initializing plugins...
+[20:42:37] [ServerMain/INFO]: [PluginInitializerManager] Initialized 6 plugins
+[20:42:37] [ServerMain/INFO]: [PluginInitializerManager] Bukkit plugins (6):
+ - BlueMap (5.16), Chunky (1.4.40), ChunkyBorder (1.2.23), CoreProtect (24.1), OnePlayerSleep (4.0.1), SkinsRestorer (15.12.6)
+[20:42:41] [ServerMain/INFO]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, name=PROD]
+[20:42:43] [ServerMain/INFO]: Loaded 1407 recipes
+...
+[20:42:46] [Server thread/INFO]: [SkinsRestorer] Loading server plugin SkinsRestorer v15.12.6
+[20:42:46] [Server thread/INFO]: [OnePlayerSleep] Loading server plugin OnePlayerSleep v4.0.1
+[20:42:46] [Server thread/INFO]: [CoreProtect] Loading server plugin CoreProtect v24.1
+[20:42:46] [Server thread/INFO]: [ChunkyBorder] Loading server plugin ChunkyBorder v1.2.23
+[20:42:46] [Server thread/INFO]: Server permissions file permissions.yml is empty, ignoring it
+[20:42:46] [Server thread/INFO]: [SkinsRestorer] Enabling SkinsRestorer v15.12.6
+
+## 3) 真正的入口证据：另一个成员的 t17 复核跑了**真实** 启动面板.bat
+$ ls -l --time-style=full-iso tmp/r5-verify-t17/r5-001-bat-run.log
+-rwxrwxrwx 1 zeh zeh     7457 2026-11-08 20:42:46.830126000 +0800 tmp/r5-verify-t17/r5-001-bat-run.log
+$ head -12 tmp/r5-verify-t17/r5-001-bat-run.log
+============================================================
+    Minecraft AI 陪玩面板   一键启动
+============================================================
+
+[0/4] 构建面板（约 1~2 秒）...
+      面板已构建
+[1/4] Minecraft 服务器
+      正在启动（冷启动约 15~40 秒）
+...      Minecraft 端口已就绪（6s）
+
+      [错误] 服务器进程已经退出了，没能启动成功
+      ---- E:\我的世界ai\logs\server-console.log 末尾 ----
+
+## 4) 配置 diff：Paper 重写的四个 yml vs server-test（Paper 默认）
+### spigot.yml 逐字节：
+bytes differ（见下 normalized 对比）
+### spigot.yml 归一化（去注释/空白、排序后）diff：
+  ⇒ 无差异：键与值完全相同（170 行），只是顺序/注释不同
+### bukkit.yml：
+byte-identical
+### commands.yml / help.yml：
+commands.yml byte-identical
+help.yml byte-identical
+### config/paper-global.yml / paper-world-defaults.yml：
+paper-global.yml byte-identical
+paper-world-defaults.yml byte-identical
+
+## 5) 世界完好性
+  drwxrwxrwx 1 zeh zeh     4096 2026-11-07 16:02:03.330866400 +0800 server/world
+    -rwxrwxrwx 1 zeh zeh     1680 2026-11-07 16:02:03.330866400 +0800 server/world/level.dat
+    -rwxrwxrwx 1 zeh zeh        3 2026-11-08 20:42:41.470951600 +0800 server/world/session.lock
+  drwxrwxrwx 1 zeh zeh     4096 2026-11-07 16:02:03.336494900 +0800 server/world_nether
+    -rwxrwxrwx 1 zeh zeh     1654 2026-11-07 16:02:03.336494900 +0800 server/world_nether/level.dat
+    -rwxrwxrwx 1 zeh zeh        3 2026-11-07 15:21:59.134711300 +0800 server/world_nether/session.lock
+  drwxrwxrwx 1 zeh zeh     4096 2026-11-07 16:02:03.351783200 +0800 server/world_the_end
+    -rwxrwxrwx 1 zeh zeh     1658 2026-11-07 16:02:03.348771400 +0800 server/world_the_end/level.dat
+    -rwxrwxrwx 1 zeh zeh        3 2026-11-07 15:21:59.250601200 +0800 server/world_the_end/session.lock
+  world 下 11-08 后被写的文件（排除 session.lock / pack.mcmeta）：
+    （无）
+  level.dat 可读性（gzip + NBT 首字节 0x0a）：
+    server/world/level.dat bytes=1680 gzip=true NBT_Compound=true
+    server/world_nether/level.dat bytes=1654 gzip=true NBT_Compound=true
+    server/world_the_end/level.dat bytes=1658 gzip=true NBT_Compound=true
+
+## 6) whitelist/ops 复核（uuid 独立复算 + 结构）
+recomputed : 3f680b9f-53a9-34c1-900a-6ba8f0262175
+expected   : 3f680b9f-53a9-34c1-900a-6ba8f0262175
+MATCH      : true
+---
+whitelist.json raw = [{"uuid":"3f680b9f-53a9-34c1-900a-6ba8f0262175","name":"HEAVENZEH"}]
+ops.json raw       = [{"uuid":"3f680b9f-53a9-34c1-900a-6ba8f0262175","name":"HEAVENZEH","level":4,"bypassesPlayerLimit":true}]
+whitelist 结构 [{name,uuid}] : true
+ops 结构 [{bypassesPlayerLimit,level,name,uuid}] : true
+whitelist uuid == 复算值 : true
+ops uuid == 复算值       : true
+
+## 7) 清空前副本（Lead 补前）
+$ cat tmp/r5-收口/whitelist.json.before-restore
+[]$ cat tmp/r5-收口/ops.json.before-restore
+[]
+## 8) 更早的历史副本（11-06，事件前）
+$ cat server/whitelist.json.bak-by-audit-20261106
+[
+  {
+    "uuid": "eefd0c8a-58c3-3c50-b833-1eb501fbda71",
+    "name": "probe1"
+  },
+  {
+    "uuid": "3683511a-896e-34f9-975a-48df7dd38b15",
+    "name": "probe2"
+  }
+]
+## 9) 相关玩家/机器人在 usercache 的存在性（说明谁曾进过服）
+   HEAVENZEH -> 3f680b9f-53a9-34c1-900a-6ba8f0262175  expiresOn 2026-12-02 12:15:40 +0800
+   deepseek -> d44c22a0-5412-38a0-9d92-59e6f0fc81b9  expiresOn 2026-11-30 19:23:32 +0800
+   probe1 -> eefd0c8a-58c3-3c50-b833-1eb501fbda71  expiresOn 2026-12-06 19:52:34 +0800
+   probe2 -> 3683511a-896e-34f9-975a-48df7dd38b15  expiresOn 2026-12-07 15:43:26 +0800
+
+## 10) server.properties：20:42 事件**没有**改写它（不在窗口列表内）；但当前值与 20:42 的 .bak 有一个差异
+$ grep -n "^server-ip" server/server.properties server/server.properties.bak-2026-11-08131859
+server/server.properties:54:server-ip=
+server/server.properties.bak-2026-11-08131859:54:server-ip=127.0.0.1
+$ ls -l --time-style=full-iso server/server.properties
+-rwxrwxrwx 1 zeh zeh     1440 2026-11-08 21:18:59.208286400 +0800 server/server.properties

@@ -1,0 +1,44 @@
+# [2] 锁文件与 npm ci —— 采集时间 2026-11-08T15:35:57+08:00
+
+$ git ls-files mindcraft/package-lock.json | wc -l   # 父仓
+0
+
+$ git -C mindcraft ls-files package-lock.json
+package-lock.json
+
+$ git check-ignore -v mindcraft/package-lock.json   # 父仓
+.gitignore:13:/mindcraft/	mindcraft/package-lock.json
+
+$ git -C mindcraft check-ignore -v package-lock.json   # 子仓（无输出=不忽略）
+(无输出)
+
+$ git -C mindcraft .gitignore 第4行与第137行
+package-lock.json
+!package-lock.json
+
+$ sha256sum HEAD:package-lock.json vs 工作树
+6674185ec3f794673c8e49271c62a068aa9bd241a2a502bb4d5396663da08a8f  -
+6674185ec3f794673c8e49271c62a068aa9bd241a2a502bb4d5396663da08a8f  mindcraft/package-lock.json
+
+$ node -v; npm -v
+v24.16.0
+11.13.0
+
+### 场景 A：干净克隆（git clone，含 patches/、不含 node_modules）后真实 npm ci
+$ git clone --no-hardlinks E:/我的世界ai/mindcraft tmp/r5-deploy/clone2
+$ npm ci --no-audit --no-fund
+→ 见 02-npm-ci-clean-clone.log（EXIT_CODE=0，548 包，10 分钟，5 个 patch 全部应用）
+
+### 场景 B：只拷 package.json + package-lock.json（无 patches/）后真实 npm ci
+$ cp mindcraft/package.json mindcraft/package-lock.json tmp/r5-deploy/clean-checkout/
+$ npm ci --no-audit --no-fund
+→ 见 02-npm-ci-minimal.log（EXIT_CODE=0，548 包，postinstall 打印 'No patch files found' 后仍成功）
+
+$ git -C mindcraft ls-files patches
+patches/SHA256SUMS
+patches/minecraft-data+3.97.0.patch.disabled
+patches/mineflayer+4.39.0.patch
+patches/mineflayer-pathfinder+2.4.5.patch
+patches/mineflayer-pvp+1.3.2.patch
+patches/prismarine-viewer+1.33.0.patch
+patches/protodef+1.19.0.patch

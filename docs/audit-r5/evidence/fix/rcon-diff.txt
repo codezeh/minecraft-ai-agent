@@ -1,0 +1,24 @@
+=== diff（旧 -> 新，口令行脱敏）===
+--- tmp/r5-fix-rcon/server.properties.bak-20261108-195535	2026-11-07 15:21:51.556129100 +0800
++++ server/server.properties	2026-11-08 19:56:33.984058900 +0800
+@@ -43,7 +43,7 @@
+ pvp=true
+ query.port=25565
+ rate-limit=0
+-rcon.password=<REDACTED>
++rcon.password=<REDACTED>
+ rcon.port=25575
+ region-file-compression=deflate
+ require-resource-pack=false
+@@ -51,7 +51,7 @@
+ resource-pack-id=
+ resource-pack-prompt=
+ resource-pack-sha1=
+-server-ip=
++server-ip=127.0.0.1
+ server-port=25565
+ simulation-distance=6
+ spawn-monsters=true
+
+=== 统计 ===
+被改动的行数（不含 ---/+++ 头）：4

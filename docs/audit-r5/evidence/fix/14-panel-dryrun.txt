@@ -1,0 +1,155 @@
+# t34：面板演练开关（-DryRun / MC_PANEL_NO_SPAWN）—— 实测证据
+# 生成时间：2026-11-09T02:20:30+08:00  工作目录 E:\我的世界ai  PS 5.1
+
+## 0) 改动面（相对 HEAD，含 t12 的 BOM 行）
+$ git diff --numstat -- scripts/start-panel.ps1
+74	10	scripts/start-panel.ps1
+$ git diff --stat -- scripts/start-panel.ps1
+ scripts/start-panel.ps1 | 84 +++++++++++++++++++++++++++++++++++++++++++------
+ 1 file changed, 74 insertions(+), 10 deletions(-)
+文件大小：19760 B；头字节： ef bb bf
+
+## 1) 验收①：-DryRun 零副作用
+### 运行前快照
+root=E:\我的世界ai
+java_procs=1
+node_procs=8
+listen_25565=0
+listen_25575=0
+listen_8080=0
+file=server\logs\latest.log size=3408 mtimeUtc=2026-11-08T12:42:46.5838814Z
+file=logs\server-console.log size=6952 mtimeUtc=2026-11-08T12:42:46.8331307Z
+file=logs\mindcraft-console.log size=3320 mtimeUtc=2026-10-30T17:40:52.5660066Z
+### 命令：powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-panel.ps1 -DryRun
+============================================================
+    Minecraft AI 陪玩面板   一键启动
+============================================================
+
+[0/4] 构建面板（约 1~2 秒）...
+      [DRYRUN] & "D:\Node\node.exe" "E:\我的世界ai\web\node_modules\vite\bin\vite.js" build     # cwd=E:\我的世界ai\web
+[1/4] Minecraft 服务器
+      [ctx] 将启动 Minecraft 服务端   cwd=E:\我的世界ai\server
+      [ctx] 启动者=zeh   时间=2026-11-09T02:07:36.5394758+08:00
+      [ctx] 该目录 logs\latest.log 上次写入=2026-11-08T20:42:46.5838814+08:00  (3408 B)
+      [DRYRUN] 本应启动（已短路，不会 spawn）
+      [DRYRUN] Start-Process -FilePath "E:\我的世界ai\.tools\jdk-21.0.12.1+1\bin\java.exe" -ArgumentList "-Xms1G","-Xmx2G","-XX:+UseG1GC","-jar","server.jar","nogui" -WorkingDirectory "E:\我的世界ai\server" -RedirectStandardOutput "E:\我的世界ai\logs\server-console.log" -WindowStyle Hidden
+      [DRYRUN] 端口：25565（RCON 25575）
+[2/4] mindserver + bot
+      [ctx] 将启动 mindserver（node main.js）   cwd=E:\我的世界ai\mindcraft
+      [ctx] 启动者=zeh   时间=2026-11-09T02:07:38.5796890+08:00
+      [DRYRUN] 本应启动（已短路，不会 spawn）
+      [DRYRUN] Start-Process -FilePath "D:\Node\node.exe" -ArgumentList "main.js" -WorkingDirectory "E:\我的世界ai\mindcraft" -RedirectStandardOutput "E:\我的世界ai\logs\mindcraft-console.log" -WindowStyle Hidden
+      [DRYRUN] 端口：8080（面板 /console）
+[3/4] 等她进游戏
+      [DRYRUN] 本应等待 bot 进游戏（Wait-BotSpawned 120s，已跳过）
+[4/4] 打开面板（演练：不打开浏览器）
+      [DRYRUN] Start-Process http://localhost:8080/console?token=<运行时从 mindcraft\.mindserver-token 读取>
+
+------------------------------------------------------------
+  [DRYRUN] 演练完成：前置检查全部通过，未启动任何进程、未打开浏览器。
+  生产启动请去掉 -DryRun（并确保没有设 MC_PANEL_NO_SPAWN=1）。
+------------------------------------------------------------
+EXITCODE=0
+### 运行后快照
+root=E:\我的世界ai
+java_procs=0
+node_procs=8
+listen_25565=0
+listen_25575=0
+listen_8080=0
+file=server\logs\latest.log size=3408 mtimeUtc=2026-11-08T12:42:46.5838814Z
+file=logs\server-console.log size=6952 mtimeUtc=2026-11-08T12:42:46.8331307Z
+file=logs\mindcraft-console.log size=3320 mtimeUtc=2026-10-30T17:40:52.5660066Z
+### 前后 diff（忽略 time 行）
+2c2
+< java_procs=1
+---
+> java_procs=0
+   ⇒ 除 java/node 计数受**其他成员并行跑批**影响外，三份日志的 size 与 mtime **完全一致**，25565/25575/8080 无监听。
+
+## 2) 验收②：环境变量 MC_PANEL_NO_SPAWN=1 同样生效
+$ MC_PANEL_NO_SPAWN=1 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-panel.ps1
+============================================================
+    Minecraft AI 陪玩面板   一键启动
+============================================================
+
+[0/4] 构建面板（约 1~2 秒）...
+      [DRYRUN] & "D:\Node\node.exe" "E:\我的世界ai\web\node_modules\vite\bin\vite.js" build     # cwd=E:\我的世界ai\web
+[1/4] Minecraft 服务器
+      检测到上一个服务器还在关闭中（pid=9860），等它退干净…
+...................................
+      旧服务器已退出（70s）
+      [ctx] 将启动 Minecraft 服务端   cwd=E:\我的世界ai\server
+      [ctx] 启动者=zeh   时间=2026-11-09T02:10:59.4052748+08:00
+      [ctx] 该目录 logs\latest.log 上次写入=2026-11-08T20:42:46.5838814+08:00  (3408 B)
+      [DRYRUN] 本应启动（已短路，不会 spawn）
+      [DRYRUN] Start-Process -FilePath "E:\我的世界ai\.tools\jdk-21.0.12.1+1\bin\java.exe" -ArgumentList "-Xms1G","-Xmx2G","-XX:+UseG1GC","-jar","server.jar","nogui" -WorkingDirectory "E:\我的世界ai\server" -RedirectStandardOutput "E:\我的世界ai\logs\server-console.log" -WindowStyle Hidden
+      [DRYRUN] 端口：25565（RCON 25575）
+[2/4] mindserver + bot
+      [ctx] 将启动 mindserver（node main.js）   cwd=E:\我的世界ai\mindcraft
+      [ctx] 启动者=zeh   时间=2026-11-09T02:11:01.4554788+08:00
+      [DRYRUN] 本应启动（已短路，不会 spawn）
+      [DRYRUN] Start-Process -FilePath "D:\Node\node.exe" -ArgumentList "main.js" -WorkingDirectory "E:\我的世界ai\mindcraft" -RedirectStandardOutput "E:\我的世界ai\logs\mindcraft-console.log" -WindowStyle Hidden
+      [DRYRUN] 端口：8080（面板 /console）
+[3/4] 等她进游戏
+      [DRYRUN] 本应等待 bot 进游戏（Wait-BotSpawned 120s，已跳过）
+[4/4] 打开面板（演练：不打开浏览器）
+      [DRYRUN] Start-Process http://localhost:8080/console?token=<运行时从 mindcraft\.mindserver-token 读取>
+
+------------------------------------------------------------
+  [DRYRUN] 演练完成：前置检查全部通过，未启动任何进程、未打开浏览器。
+  生产启动请去掉 -DryRun（并确保没有设 MC_PANEL_NO_SPAWN=1）。
+------------------------------------------------------------
+EXITCODE=0
+### 前后快照 diff
+2,3c2,3
+< java_procs=0
+< node_procs=6
+---
+> java_procs=1
+> node_procs=8
+### 决定性指纹：面板起的 java 一定是 -Xms1G；当前 -Xms1G 进程数 =
+0
+   ⇒ 0 个 -Xms1G 进程 = 面板从没起过服。旁证：机器上的 java 是别人测试实例（-Xms512M -Xmx1024M）。
+
+## 3) 验收③：反向验证（真模式 + 假 java ⇒ 确实会尝试 spawn）
+   做法：把脚本复制成 scripts/start-panel-revtest.tmp.ps1，只改两处——
+         $java = 'X:\no-such-java\java.exe'（指向不存在）；Wait-Port 180 → 5（缩短等待）
+         跑完已删除该临时副本（当前存在？NO）
+$ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-panel-revtest.tmp.ps1
+============================================================
+    Minecraft AI 陪玩面板   一键启动
+============================================================
+
+[0/4] 构建面板（约 1~2 秒）...
+      面板已构建
+[1/4] Minecraft 服务器
+      检测到上一个服务器还在关闭中（pid=34288），等它退干净…
+..................................................
+      旧服务器已退出（100s）
+      [ctx] 将启动 Minecraft 服务端   cwd=E:\我的世界ai\server
+      [ctx] 启动者=zeh   时间=2026-11-09T02:15:39.9924806+08:00
+      [ctx] 该目录 logs\latest.log 上次写入=2026-11-08T20:42:46.5838814+08:00  (3408 B)
+      正在启动（冷启动约 15~40 秒）
+Start-Process : This command cannot be run due to the error: The system cannot find the file specified.
+At E:\我的世界ai\scripts\start-panel-revtest.tmp.ps1:230 char:5
++     Start-Process -FilePath $java `
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [Start-Process], InvalidOperationException
+    + FullyQualifiedErrorId : InvalidOperationException,Microsoft.PowerShell.Commands.StartProcessCommand
+ 
+EXITCODE=124
+   ⇒ 真模式**走到了 Start-Process 并尝试启动**（报 cannot find the file），而 -DryRun 那次完全相同的位置只打印 [DRYRUN]。
+   ⇒ 注：EXITCODE=124 是我外层 timeout 120s 掐断（脚本先等了 100s 旧 java），不是脚本自身退出码。
+
+## 4) 验收④：ParseFile 与 BOM
+$ [Parser]::ParseFile(scripts/start-panel.ps1)
+ERRORS=0
+$ head -c 3 scripts/start-panel.ps1 | od -An -tx1   →  ef bb bf（BOM 仍在）
+ ef bb bf
+
+## 5) 验收⑤：ops-regression 未被打破
+$ node scripts/tests/ops-regression.mjs
+PASS OPS-002 stop-panel.ps1 明确"管理端仍在运行" 
+
+ALL PASS: 29 passed, 0 failed

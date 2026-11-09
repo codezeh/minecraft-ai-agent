@@ -1,0 +1,53 @@
+# [1] 仓库拓扑 —— 采集时间 2026-11-08T15:35:04+08:00
+
+$ git -C /e/我的世界ai rev-parse --show-toplevel
+E:/我的世界ai
+
+$ git ls-files mindcraft | wc -l
+0
+
+$ git -C mindcraft ls-files | wc -l
+645
+
+$ git status --porcelain（父仓）
+?? docs/audit-r5/
+（空输出 = 工作树干净）
+
+$ git -C mindcraft status --porcelain
+（空输出 = 工作树干净）
+
+$ git remote -v（父仓）
+（空输出 = 无任何远端）
+
+$ git for-each-ref refs/remotes | wc -l
+0
+
+$ git rev-list --count HEAD（父仓本地提交总数）
+79
+
+$ git branch -vv（父仓）
+  audit/night-20261106 92d405c feat(ops): 地图备份做成开关且默认开启（用户拍板⑥）+ 工作区整理
+* main                 92d405c feat(ops): 地图备份做成开关且默认开启（用户拍板⑥）+ 工作区整理
+
+$ git -C mindcraft remote -v
+mine	git@github.com:codezeh/minecraft-ai-agent.git (fetch)
+mine	git@github.com:codezeh/minecraft-ai-agent.git (push)
+origin	git@github.com:mindcraft-bots/mindcraft.git (fetch)
+origin	git@github.com:mindcraft-bots/mindcraft.git (push)
+
+$ git -C mindcraft rev-parse --abbrev-ref --symbolic-full-name @{u}
+fatal: no upstream configured for branch 'main'
+
+$ git -C mindcraft rev-list --count mine/main..HEAD
+302
+
+$ git -C mindcraft rev-parse HEAD mine/main
+33b432703ccf2a4b8c2b47f3cbc44825defed602
+129bcffa3ceedd5d081db58baf56f4e21a472cfd
+
+$ grep -n mindcraft .gitignore
+10:# ---------- 独立子仓库：mindcraft 自带 .git，禁止嵌套纳入 ----------
+11:# 若不加此条，git 会把 mindcraft/ 记成一个 gitlink（伪子模块），
+13:/mindcraft/
+83:#                     （同 /mindcraft/ 那条的理由）。所以**必须**排除。
+112:# 本仓侧重 config/ 与 *.bat；mindcraft 子仓有自己的一份（含 keys.json）。

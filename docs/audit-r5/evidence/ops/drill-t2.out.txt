@@ -1,0 +1,14 @@
+==> 演练备份：E:\我的世界ai\tmp\r5-ops\fake-backup-v2
+    演练目录：E:\我的世界ai\tmp\drill-20261108-151425
+    java：E:\我的世界ai\.tools\jdk-21.0.12.1+1\bin\java.exe
+FAIL #1  manifest 可读且 schemaVersion>=3 schemaVersion=2 entries=1
+演练中断：断言 1 失败：manifest 不可用，后续断言无意义
+FAIL #99 演练完整跑完（未被中断） 中断于：断言 1 失败：manifest 不可用，后续断言无意义
+
+────────────────────────────────────────────
+恢复演练 FAIL：0 通过 / 2 失败
+   ✗ #1 manifest 可读且 schemaVersion>=3 — schemaVersion=2 entries=1
+   ✗ #99 演练完整跑完（未被中断） — 中断于：断言 1 失败：manifest 不可用，后续断言无意义
+证据：E:\我的世界ai\tmp\drill-20261108-151425\report.json
+      E:\我的世界ai\tmp\drill-20261108-151425\report.md
+（骨架已清理；要保留现场请加 -KeepArtefacts）

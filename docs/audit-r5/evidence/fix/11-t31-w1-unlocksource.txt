@@ -1,0 +1,20 @@
+T31 / W-1 —— /api/vault/status 的 unlockSource（真实输出）
+环境：同一库 tmp/vault-t31c.db；本次进程带 MC_VAULT_PASSPHRASE=<正确口令> 启动
+时间：2026-11-09 02:41:57
+
+--- 1) env 模式下 status（期望 unlockSource=env、locked=false）---
+{"initialized":true,"locked":false,"count":0,"kdf":"scrypt","unlockSource":"env"} [200]
+
+--- 2) env 模式下**不调用** unlock 直接读 items（W-1 现象本身，行为按用户决定不改）---
+[] [200]
+
+--- 3) 手动 POST /unlock 一次（来源应变为 manual）---
+{"ok":true,"injected":0} [200]
+
+--- 4) 再看 status（期望 unlockSource=manual）---
+{"initialized":true,"locked":false,"count":0,"kdf":"scrypt","unlockSource":"manual"} [200]
+
+--- 5) 面板行为（前端）：unlockSource==='env' 时「上锁」按钮 disabled + 说明条 ---
+  web/src/views/VaultView.vue：const envUnlocked = computed(() => vault.status?.unlockSource === 'env')
+  <button v-if="unlocked" :disabled="vault.busy || envUnlocked" ...>上锁</button>
+  说明条文案：当前由环境变量 MC_VAULT_PASSPHRASE 自动解锁，上锁对本进程无效……

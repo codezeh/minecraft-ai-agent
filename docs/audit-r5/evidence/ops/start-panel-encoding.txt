@@ -1,0 +1,61 @@
+# start-panel.ps1 缺 UTF-8 BOM —— PS 5.1 解析失败（实测证据）
+
+## (1) 文件头字节（无 BOM）
+$ head -c 3 scripts/start-panel.ps1 | od -An -tx1
+ 23 20 4d
+   （有 BOM 应为: ef bb bf）
+
+## (2) 全仓 .ps1 的 BOM 普查
+$ for f in scripts/*.ps1 scripts/tests/*.ps1 scripts/lib/*.ps1; do head -c3 "$f" | od -An -tx1; done
+BOM    scripts/backup-world.ps1
+BOM    scripts/deny-rcon-25575-in.ps1
+BOM    scripts/e2e.ps1
+BOM    scripts/harden-credentials-acl.ps1
+BOM    scripts/install-backup-task.ps1
+BOM    scripts/release.ps1
+BOM    scripts/restore-drill.ps1
+NO-BOM scripts/start-panel.ps1
+BOM    scripts/stop-panel.ps1
+BOM    scripts/verify-world-backup.ps1
+BOM    scripts/tests/fake-rcon-server.ps1
+BOM    scripts/tests/rcon-regression.ps1
+BOM    scripts/lib/backup_config.ps1
+BOM    scripts/lib/rcon.ps1
+
+## (3) 系统 ANSI 代码页 + 同一文件两种解码下的解析结果
+DefaultEncoding = gb2312 (CodePage 936)
+按 ANSI/936 解码后解析 -> errors = 8
+按 UTF-8  解码后解析 -> errors = 0
+
+按 ANSI 解码后的报错（= powershell -File 实际会看到的）：
+  line 73 col 17 : Array index expression is missing or not valid.
+  line 92 col 43 : Missing type name after '['.
+  line 152 col 46 : Array index expression is missing or not valid.
+  line 306 col 39 : The string is missing the terminator: '.
+  line 81 col 35 : Missing closing '}' in statement block or type definition.
+  line 78 col 65 : Missing closing '}' in statement block or type definition.
+  line 66 col 35 : Missing closing '}' in statement block or type definition.
+  line 64 col 63 : Missing closing '}' in statement block or type definition.
+
+## (4) 坏在哪：第 73 行 ANSI 解码后丢掉了字符串结束引号
+ANSI 解码 line 73 :     Write-Bad "[閿欒] 绛変簡 $seconds 绉?$label 绔彛杩樻病璧?
+ANSI 解码 line 73 的字符数 : 51（正确的 UTF-8 原文见下）
+UTF-8 line 73 :     Write-Bad "[错误] 等了 $seconds 秒 $label 端口还没起"
+UTF-8 line 73 的字符数 : 47
+
+## (5) 对照实验：同机制的最小复现（no-BOM UTF-8 + 一个汉字）
+文件 tmp/r5-ops/enc-probe.ps1 内容（字节）：
+ 24 74 20 3d 20 27 e4 b8 ad 27 0a 57 72 69 74 65
+ 2d 4f 75 74 70 75 74 20 28 22 6c 65 6e 3d 22 20
+$ powershell -NoProfile -ExecutionPolicy Bypass -File tmp/r5-ops/enc-probe.ps1
+At E:\我的世界ai\tmp\r5-ops\enc-probe.ps1:1 char:6
++ $t = '涓?
++      ~~~
+The string is missing the terminator: '.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString
+ 
+
+## (6) 交叉验证：Parser::ParseFile 与 -File 走同一条编码路径
+ParseFile 对同一个探针文件 -> errors = 1
+  line 1 : The string is missing the terminator: '.

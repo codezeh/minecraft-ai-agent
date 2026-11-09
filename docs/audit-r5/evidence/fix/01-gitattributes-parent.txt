@@ -1,0 +1,40 @@
+# ============================================================
+# 我的世界ai —— 根仓库 .gitattributes
+#
+# 只做一件事：把**换行**钉死，让发布产物可跨平台复现。
+# 背景（第五轮审计 R5-003 / R5-011）：
+#   `web/` 是控制台源码，`mindcraft/web-dist/` 是它构建出的固化产物，两者靠
+#   `scripts/release.ps1` 算的 sha256 指纹绑定。而 PowerShell/Node 算指纹是**按字节**的，
+#   Git 在 `core.autocrlf=true`（Windows 默认）时会把文本文件检出成 CRLF、
+#   在 Linux/docker/CI 上却是 LF ⇒ 同一份源码在两台机器上算出**不同的指纹**，
+#   于是「产物与源码一致」这道门跨平台必然失败（实测：CRLF 版 8a1714aa… vs LF 版 82405964…）。
+#   更糟的是构建产物本身也随换行变化（同一份源码，LF 构建与 CRLF 构建 8/9 个 chunk 哈希不同），
+#   所以这不是"门太严"，而是发布链路在字节层面本来就不可复现。
+#
+# 修法：源码统一按 LF 存进仓库、按 LF 检出（`text eol=lf`），
+#   与 docker 里 `node:22-bookworm-slim` 的 Linux 构建环境对齐。
+# ============================================================
+
+# ---------- 控制台源码：统一 LF ----------
+# 这一条是修复 R5-011 的核心。没有它，`web/tsconfig.json` 这类文件在
+# Windows 上是 CRLF、在 Linux 上是 LF，指纹与产物都跟着漂。
+web/** text eol=lf
+
+# ---------- 二进制/图片：不做任何换行处理 ----------
+# （显式写出来，避免以后有人把上面的 `web/**` 放宽成全局 text 规则时误伤）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# ---------- 说明：发布产物目录不在本仓库内 ----------
+# `mindcraft/` 是**独立的嵌套 git 仓库**，父仓 `.gitignore` 第 13 行 `/mindcraft/` 明确排除，
+# 所以这里写 `mindcraft/web-dist/**` 之类的规则**不会生效**（父仓根本不跟踪这些路径）。
+# 产物侧的换行钉在子仓自己的文件里：`mindcraft/.gitattributes` 的
+#   web-dist/** -text
+#   patches/** -text
+# 已存在，本仓库不改动它们。

@@ -1,0 +1,34 @@
+PASS A 能读到 ACL 现状 → status=0 stderr=
+PASS A ACL 探测返回了三个目标 → [{"rel":"mindcraft\\.mindserver-token","missing":false,"protected":false,"broad":["NT AUTHORITY\\Authenticated Users:ReadAndExecute, Synchronize"],"rules":4},{"rel":"mindcraft\\keys.json","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server\\server.properties","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server-test\\server.properties","missing":false,"protected":true,"broad":[],"rules":3}]
+PASS A mindcraft\.mindserver-token 存在 
+FAIL A mindcraft\.mindserver-token DACL 已断开继承 → protected=false
+FAIL A mindcraft\.mindserver-token 没有 Users/Authenticated Users 之类过宽主体 → ["NT AUTHORITY\\Authenticated Users:ReadAndExecute, Synchronize"]
+PASS A mindcraft\.mindserver-token 仍留有 ACE（没把自己锁死） → rules=4
+PASS A mindcraft\keys.json 存在 
+PASS A mindcraft\keys.json DACL 已断开继承 → protected=true
+PASS A mindcraft\keys.json 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A mindcraft\keys.json 仍留有 ACE（没把自己锁死） → rules=3
+PASS A server\server.properties 存在 
+PASS A server\server.properties DACL 已断开继承 → protected=true
+PASS A server\server.properties 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A server\server.properties 仍留有 ACE（没把自己锁死） → rules=3
+PASS A server-test\server.properties 存在 
+PASS A server-test\server.properties DACL 已断开继承 → protected=true
+PASS A server-test\server.properties 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A server-test\server.properties 仍留有 ACE（没把自己锁死） → rules=3
+PASS A2 能读到 mindcraft/ 目录的 ACL → status=0 stderr=
+PASS A2 mindcraft/ 存在 
+PASS A2 mindcraft/ 非白名单主体没有写类权限（防删除重建 keys.json） → 写类过宽 ACE []（只读类可接受，如 Authenticated Users:(RX)）
+PASS A2 mindcraft/ 当前账户仍 FullControl（应用自己别被锁在外面） → meFull=true
+PASS A2 mindcraft/ 仍留有 ACE（没把自己锁死） → rules=7
+PASS B 加固脚本存在 
+PASS B 脚本默认只体检（-Apply 才改） 
+PASS B 脚本用 SetAccessRuleProtection 断开继承 
+PASS B 脚本只放行 当前账户/SYSTEM/Administrators 
+PASS B 脚本带应用可用性自检（可读可写） 
+PASS B 脚本给出回滚方式 
+PASS B 脚本带 UTF-8 BOM（PowerShell 5.1 才不乱码） → ef bb bf
+PASS B 脚本语法可解析 → OK
+
+
+HAS FAILURES: 29 passed, 2 failed

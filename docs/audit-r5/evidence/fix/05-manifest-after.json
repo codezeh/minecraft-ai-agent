@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "generatedFrom": "web/dist (Vue3 + Vite console)",
+  "generatedAt": "2026-11-08T11:14:46Z",
+  "source": {
+    "root": "web/",
+    "files": 25,
+    "hash": "sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2",
+    "inputs": [
+      "src",
+      "index.html",
+      "vite.config.ts",
+      "tsconfig.json",
+      "package.json",
+      "package-lock.json"
+    ]
+  },
+  "artifact": {
+    "files": 9,
+    "hash": "sha256:a7e42b428f565f79952bce3df7ee36fa1358fa550f0757cd12c0fa177bf56d1f"
+  },
+  "entryAssets": [
+    "assets/index-DKGTVhDR.js",
+    "assets/index-Hcxgqz-Q.css"
+  ],
+  "note": "镜像用的固化产物。改过 web/ 之后必须重新生成；本清单供 web_dist_manifest_unit 做漂移检测。",
+  "files": {
+    "assets/DebugView-94geOrTx.js": "635c8c4f263e8db656fa721cb0b5bc7825c1532e57c1351ff0382770e2d40518",
+    "assets/DebugView-Pp-4MEq7.css": "eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087",
+    "assets/index-DKGTVhDR.js": "02debb27f56bf85eeb3cf690bb5e6ff53b9655393f54069ef8273a4dd68c2a5f",
+    "assets/index-Hcxgqz-Q.css": "be7f5826de4f7f8d47e7ff96265f2eaba70dcaf2a557c071da14314c668b558a",
+    "assets/SetupView-CQeN4yGC.css": "adc453016a946b5f0ca0c642f4252332b51ef12611dbeed5637bdb4c4744f12a",
+    "assets/SetupView-FniJwIn7.js": "8a801e20177368dfc59689d68633d53b74dd5046158957392cf93f19c79cb9c1",
+    "assets/TerrainView-BH9oWS7R.js": "6511c678a8f5663c6019be2195522023fe5050c5cc2974cfb85eb0d962fa2002",
+    "assets/TerrainView-BkR-DBrX.css": "0039fd6f30ac9c258d0b4a33351f7cf8af95cb6cfd800c1c595dc7da10dfecec",
+    "index.html": "e1bc39d516480a081a13fb02d2128b3c12f4beb730e9d0f6a8c17193717ce5e1"
+  }
+}

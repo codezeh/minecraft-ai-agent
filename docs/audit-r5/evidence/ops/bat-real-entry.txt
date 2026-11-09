@@ -1,0 +1,50 @@
+# 真实入口「启动面板.bat」实测（用户双击等价路径：cmd /c 启动面板.bat）
+# 时间：2026-11-08T16:20:08+08:00  主机 ANSI 代码页：gb2312/936  PowerShell：5.1.26100.9711
+
+## 命令
+$ MSYS_NO_PATHCONV=1 printf "\n\n" | MSYS_NO_PATHCONV=1 cmd.exe /c "启动面板.bat"
+  （printf 的两个换行是给 .bat 末尾 pause 喂回车；实际等价于用户双击后按一次键）
+
+## 真实输出（stdout+stderr，原样）
+At E:\我的世界ai\scripts\start-panel.ps1:73 char:17
++     Write-Bad "[閿欒] 绛変簡 $seconds 绉?$label 绔彛杩樻病璧?
++                 ~
+Array index expression is missing or not valid.
+At E:\我的世界ai\scripts\start-panel.ps1:92 char:43
++                 if ($tail -match 'Done \([\d.]+s\)!') {
++                                           ~
+Missing type name after '['.
+At E:\我的世界ai\scripts\start-panel.ps1:152 char:46
++ if (-not (Test-Path $node))    { Write-Bad "[閿欒] 鎵句笉鍒?Node: $node";  ...
++                                              ~
+Array index expression is missing or not valid.
+At E:\我的世界ai\scripts\start-panel.ps1:306 char:39
++ Read-Host '鎸夊洖杞﹀叧闂繖涓獥鍙ｏ紙涓嶅奖鍝嶅悗鍙拌繍琛岋級' | Out-Null
++                                       ~~~~~~~~~~~~
+The string is missing the terminator: '.
+At E:\我的世界ai\scripts\start-panel.ps1:81 char:35
++     while ($elapsed -lt $seconds) {
++                                   ~
+Missing closing '}' in statement block or type definition.
+At E:\我的世界ai\scripts\start-panel.ps1:78 char:65
++ function Wait-ServerReady([datetime]$launchedAt, [int]$seconds) {
++                                                                 ~
+Missing closing '}' in statement block or type definition.
+At E:\我的世界ai\scripts\start-panel.ps1:66 char:35
++     while ($elapsed -lt $seconds) {
++                                   ~
+Missing closing '}' in statement block or type definition.
+At E:\我的世界ai\scripts\start-panel.ps1:64 char:63
++ function Wait-Port([int]$port, [int]$seconds, [string]$label) {
++                                                               ~
+Missing closing '}' in statement block or type definition.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : MissingArrayIndexExpression
+ 
+Press any key to continue . . . 
+BAT_EXITCODE=0
+
+## 说明
+- EXITCODE=0：这是 .bat 自己的退出码（末尾 exit /b 0 强制 0），并不代表启动成功。
+- 窗口里 8 段 ParserError 来自 powershell -File scripts\start-panel.ps1；随后出现 'Press any key to continue . . .' 说明 .bat 的 if errorlevel 1 pause 被触发 —— 反证 PowerShell 侧退出码非 0（直接调用实测为 1）。
+- 用户看到的现象：黑窗口刷 8 段红字 → 停在 'Press any key to continue . . .' → 按任意键窗口关闭 → 面板没打开。

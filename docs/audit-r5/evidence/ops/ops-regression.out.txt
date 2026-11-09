@@ -1,0 +1,31 @@
+PASS OPS-001 找到 $panelUrl 赋值行 → $panelUrl = "${panel}?token=$tok"
+PASS OPS-001 赋值行用 ${panel} 划定变量边界（不再是裸 $panel?） → $panelUrl = "${panel}?token=$tok"
+PASS OPS-001 脚本里不再有裸 `$panel?token` 写法 
+PASS OPS-001 PowerShell 求值成功 → status=0 stderr=
+PASS OPS-001 求值结果带完整 host（不是 /?token= 相对地址） → "http://127.0.0.1:8080/?token=TOK123"
+PASS OPS-001 求值结果不是报告里的 bug 形态（=TOK123） → "http://127.0.0.1:8080/?token=TOK123"
+PASS OPS-001 旧写法确实产出坏的 URL（说明这条断言有效） → "=TOK123"
+PASS OPS-002 有独立的"关服失败"退出码（不是 0） → {"OK":0,"NO_TOKEN":2,"AUTH_REJECTED":3,"STOP_FAILED":4}
+PASS OPS-002 ok=true → proceed 
+PASS OPS-002 not_running → proceed（本来就没跑，跳过是对的） 
+PASS OPS-002 rcon_failed → fail（不许继续关管理端） → {"action":"fail","reason":"rcon_failed","hint":"hint"}
+PASS OPS-002 rcon_disabled → fail（不许继续关管理端） → {"action":"fail","reason":"rcon_disabled","hint":"hint"}
+PASS OPS-002 超时（mindserver 可能没开） → fail（不许继续关管理端） → {"action":"fail","reason":"超时（mindserver 可能没开）","hint":"hint"}
+PASS OPS-002 空响应 → fail（不许继续关管理端） → {"action":"fail","reason":"空响应","hint":"hint"}
+PASS OPS-002 unknown → fail（不许继续关管理端） → {"action":"fail","reason":"unknown","hint":"hint"}
+PASS OPS-002 报告复现：rcon_failed 判为失败 
+PASS OPS-002 null 响应 → fail 
+PASS OPS-002 undefined 响应 → fail 
+PASS OPS-002 端口仍开着（没退出）→ fail 
+PASS OPS-002 端口已关（真退出）→ proceed 
+PASS OPS-002 stop-all 引入决策模块 
+PASS OPS-002 stop-all 用 decideAfterStop 
+PASS OPS-002 stop-all 用 decideAfterExitWait 
+PASS OPS-002 stop-all 失败时非零退出 
+PASS OPS-002 stop-all 在失败分支里不 emit shutdown 
+PASS OPS-002 stop-all 有端口探测（确认真的退出） 
+PASS OPS-002 旧文案"跳过：rcon_failed 后照样完成"已消失 
+PASS OPS-002 stop-panel.ps1 处理退出码 4 
+PASS OPS-002 stop-panel.ps1 明确"管理端仍在运行" 
+
+ALL PASS: 29 passed, 0 failed

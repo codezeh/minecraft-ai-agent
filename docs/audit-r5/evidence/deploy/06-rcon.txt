@@ -1,0 +1,61 @@
+# [6] RCON 明文口令 —— 采集时间 2026-11-08T15:44:29+08:00
+# 口径：本文件内 rcon.password 的值一律脱敏，不落明文。
+
+## 6.1 server/server.properties 现状
+$ grep -nE "^broadcast-rcon|^enable-rcon|^rcon\\.password|^rcon\\.port|^server-ip|^server-port|^online-mode" server/server.properties
+7:broadcast-rcon-to-ops=false
+14:enable-rcon=true
+38:online-mode=false
+46:rcon.password=<REDACTED>
+47:rcon.port=25575
+54:server-ip=
+55:server-port=25565
+  口令长度 = 48 字符（值已脱敏）
+
+## 6.2 server-test/server.properties 现状
+7:broadcast-rcon-to-ops=false
+14:enable-rcon=true
+38:online-mode=false
+46:rcon.password=<REDACTED>
+47:rcon.port=25576
+54:server-ip=127.0.0.1
+55:server-port=25566
+  口令长度 = 32 字符（值已脱敏）
+
+## 6.3 是否被 git 跟踪 / 是否被忽略
+$ git ls-files server/server.properties server-test/server.properties
+(空输出 = 两份都未入库)
+$ git check-ignore -v server/server.properties server-test/server.properties
+.gitignore:74:/server/server.properties	server/server.properties
+.gitignore:26:/server-test/	server-test/server.properties
+
+## 6.4 口令是否出现在被 git 跟踪的文件里（只报 文件:行号）
+# 用两份口令的前 12 个字符当检索串（足够唯一定位，且不足以还原）
+$ git grep -n -I -F "<前12字符>" -- .   # 父仓
+[父仓命中数 = 0]
+$ 同上（mindcraft 子仓）
+[mindcraft 命中数 = 0]
+
+## 6.5 已入库的示例文件里是占位符
+$ grep -n "rcon" server/server.properties.example
+7:broadcast-rcon-to-ops=false
+14:enable-rcon=true
+46:rcon.password=CHANGE_ME
+47:rcon.port=25575
+
+## 6.6 两份配置的实际 ACL
+$ icacls server\server.properties
+server\server.properties NT AUTHORITY\SYSTEM:(F)
+                         BUILTIN\Administrators:(F)
+                         LAPTOP-GDE992NS\zeh:(F)
+
+Successfully processed 1 files; Failed processing 0 files
+$ icacls server-test\server.properties
+server-test\server.properties S-1-4-48068235-1068318981:(I)(W,D,DC)
+                              BUILTIN\Administrators:(I)(F)
+                              NT AUTHORITY\SYSTEM:(I)(F)
+                              NT AUTHORITY\Authenticated Users:(I)(M)
+                              BUILTIN\Users:(I)(RX)
+                              Mandatory Label\Low Mandatory Level:(I)(NW)
+
+Successfully processed 1 files; Failed processing 0 files

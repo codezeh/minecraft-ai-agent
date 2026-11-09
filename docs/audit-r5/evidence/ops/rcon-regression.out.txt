@@ -1,0 +1,10 @@
+PASS 假 RCON 服务器已启动 127.0.0.1:25599
+PASS ①正确密码+命令 ⇒ 成功并拿到应答 ok=True body=Handled: save-all flush err=
+PASS ②错误密码 ⇒ 判失败（不能被当成成功） ok=False err=RCON 认证失败（服务端回 id=-1：密码不对，或把命令当密码发了）
+PASS ③反向：auth 正文写成命令 ⇒ 必须失败（老 bug 的写法） ok=False err=RCON 认证失败（服务端回 id=-1：密码不对，或把命令当密码发了）
+PASS ④假服务器收到的 auth 正文是密码（说明协议对） auth 正文样本：regress-pass / wrong-password / save-all flush
+PASS ⑤用例③里 auth 正文确实是命令（证明这条反例真的走到了错误分支） 共收到 3 个 auth 包
+PASS ⑥端口没人监听 ⇒ 快速判失败（不卡死） ok=False err=连接超时：127.0.0.1:1
+
+ALL PASS：7 项通过（RCON 协议回归）
+证据：E:\我的世界ai\tmp\rcon-regression.log

@@ -1,0 +1,60 @@
+# 无副作用断言：跑完真实入口后「面板没起来」且未写凭据
+# 时间：2026-11-08T16:22:47+08:00
+
+## (0) 安全前提：解析阶段就失败 ⇒ 语句块从未执行（因此跑 .bat 不会起 mindserver、不会写 token）
+$ powershell -Command "[Parser]::ParseFile(scripts/start-panel.ps1,...); $e.Count"
+  errorCount=8（见 ops6-real-entry-bat.txt）
+
+## (0b) 机制证明：带解析错的脚本，其可执行语句确实一行都不执行
+tmp/r5-bom-fix/parse-abort-probe.ps1 内容：
+0000000   $   n   u   l   l       =       1  \n   N   e   w   -   I   t
+0000020   e   m       -   I   t   e   m   T   y   p   e       F   i   l
+0000040   e       -   P   a   t   h       "   E   :   \ 346 210 221 347
+0000060 232 204 344 270 226 347 225 214   a   i   \   t   m   p   \   r
+0000100   5   -   b   o   m   -   f   i   x   \   s   h   o   u   l   d
+0000120   -   n   o   t   -   e   x   i   s   t   .   t   x   t   "    
+  第 2 行是 New-Item ... should-not-exist.txt（若被执行就会建文件），第 3 行故意含 no-BOM 汉字造成解析错。
+$ powershell -File tmp/r5-bom-fix/parse-abort-probe.ps1
+At E:\我的世界ai\tmp\r5-bom-fix\parse-abort-probe.ps1:3 char:6
++ $t = '娑?
++      ~~~
+The string is missing the terminator: '.
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString
+ 
+  结果：报 TerminatorExpectedAtEndOfString；且 should-not-exist.txt 未生成 ⇒ 解析失败 = 零执行。
+ls: cannot access 'tmp/r5-bom-fix/should-not-exist.txt': No such file or directory
+
+## (1) 运行前快照
+BEFORE 2026-11-08T16:08:28.6985879+08:00
+--- java/node ---
+pid=29900 name=node start=2026-11-07T21:16:52.1354018+08:00
+pid=30520 name=node start=2026-11-07T21:16:52.0951569+08:00
+--- listeners 25565/25566/8080/18093/25576 ---
+--- token ---
+mindcraft/.mindserver-token exists = False
+
+## (2) 运行后快照
+AFTER 2026-11-08T16:11:00.2426955+08:00
+--- java/node ---
+pid=23764 name=node start=2026-11-08T16:10:46.7297314+08:00
+pid=29900 name=node start=2026-11-07T21:16:52.1354018+08:00
+pid=30520 name=node start=2026-11-07T21:16:52.0951569+08:00
+--- listeners ---
+--- token ---
+mindcraft/.mindserver-token exists = False
+
+## (3) 结论
+- mindcraft/.mindserver-token：运行前后都是 False ⇒ 未写凭据、mindserver 未启动。
+- 监听端口：运行前后 25565/25566/25576/8080/18093 均为空 ⇒ 面板与服都没起来。
+- 无 java 进程；无新增常驻 node 进程（详见下方说明）。
+- 直接调用 powershell -File 的退出码实测为 1（见 ops6-real-entry-bat.txt 的 pause 反证）。
+
+## (4) 关于运行后出现的 node pid=23764（诚实记录，非本 .bat 产物）
+- 该进程 start=2026-11-08T16:10:46，在两次采样之间出现，但：①无 8080 监听 ②未写 token ③其 CommandLine 不属于面板（见下）④数秒后自行消失。
+- 该机常驻 node 是两个 OpenAI Codex runtime（pid 29900/30520，启动于 11-07 21:16），与本项目无关。
+- 复核命令与输出：
+pid=30520 created=11/07/2026 21:16:52 | "C:\Users\zeh\AppData\Local\OpenAI\Codex\runtimes\cua_node\c4873bdffed0b168\bin\node.exe" --import file:///C:/Users/zeh/.codex/plugins/cache/openai-bundled/unified-computer-use/26.1103.31037/require-browser-access.mjs C:\Users\zeh\AppData\Local\OpenAI\Codex\runtimes\cua_node\c4873bdffed0b168\bin\node_modules\@oai\cua-repl\bin\cua-repl.mjs
+pid=29900 created=11/07/2026 21:16:52 | "C:\Users\zeh\AppData\Local\OpenAI\Codex\runtimes\cua_node\c4873bdffed0b168\bin\node.exe"  ./server.mjs
+pid=32980 created=11/08/2026 16:19:02 | node  server.js
+pid=30500 created=11/08/2026 16:21:48 | "D:\Node\node.exe" docs/audit-r5/evidence/ingame/s3_natural.mjs

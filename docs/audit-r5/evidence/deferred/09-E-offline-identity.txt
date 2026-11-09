@@ -1,0 +1,122 @@
+# R5 遗留两条复核证据 —— E) 离线服身份：uuid 由名字派生
+
+## E1 绑定机制是否已实现（面板发码 → !claim → identity.json）
+$ ls src/agent/commands/identity.js src/mindcraft/identity_store.js
+mindcraft/src/agent/commands/identity.js
+mindcraft/src/mindcraft/identity_store.js
+$ grep -n "identityList|claim" src/agent/commands/index.js（命令注册）
+5:import { identityList } from './identity.js';
+60:const commandList = queryList.concat(actionsList, identityList);
+$ identity_store.js 头部设计说明
+/**
+ * 玩家身份绑定（第四轮审计 ①，方案 C）—— **纯逻辑 + 两次读写盘**，不碰 socket / express。
+ *
+ * 缺陷原貌：`permissions.js` 的等级只由**游戏名字符串**与 profile 名单比对，
+ * 而离线服务器（`online-mode=false`）根本不校验"你是不是真的叫这个名字" ⇒
+ * 改个客户端名就是 owner。控制面的 token 认证也**完全不传导**到游戏内权限。
+ *
+ * 现在：面板（已过 token 门）下发**一次性绑定码**；玩家在游戏里 `!claim <码>`；
+ * 码核销后写 `bots/<agent>/identity.json`，之后按 **uuid 优先、名字其次** 定级。
+ * 名字只在"没启用绑定"（或显式打开兼容回退）时才有意义。
+ *
+ * 为什么是这个文件（而不是塞进 mindserver.js）：**两个进程都要用它**
+ *  —— 面板侧签发/吊销码（mindserver，父进程）、游戏侧核销/定级（agent，子进程）。
+ * 所以它必须是**零业务依赖**的（只有 node 内置 + bot_paths 的目录真相），
+ * 否则 agent 侧 import 会经 mindserver 把 express/socket.io 拖进来。
+ *
+ * 诚实边界：
+ *   · 码文件（identity-codes.json）落在本机磁盘上 ⇒ **能读文件的人能冒充**。
+ *     本层解决的是"改游戏名冒充"，不是"本机提权"（后者见 OPS-003 / F-RT-001）。
+ *   · 绑定默认有效期 30 天，过期即自动降级为 guest（fail-closed）。
+
+## E2 绑定记录真实字段名
+$ sed -n "337,352p" src/mindcraft/identity_store.js（bindFromCode 构造的 binding）
+const binding = {
+        uuid: u,
+        name: n,
+        level: String(level || BOUND_LEVEL),
+        boundAt: now,
+        expiresAt: now + Math.max(Number(ttlMs) || 0, 1000),
+        sessionId: code?.sessionId ?? null,
+        // ★ t20：离线服发的 uuid 由名字派生 ⇒ 同名即可冒用 ⇒ 标记成弱绑定。
+        //   标记只是**记录事实**；要不要据此降级由调用方的 offline_owner_mode 决定。
+        weak: isWeakBinding({ uuid: u, name: n }),
+    };
+    next.bindings = next.bindings.filter((b) => !((u && b.uuid === u) || (!u && n && b.name === n)));
+    next.bindings.push(binding);
+    return { store: next, binding, reason: 'ok' };
+}
+
+## E3 定级顺序：uuid 优先、名字其次（且名字回退只认无 uuid 的绑定）
+$ sed -n "365,381p" src/mindcraft/identity_store.js（resolveBinding）
+export function resolveBinding(store, { uuid = null, name = null, now = Date.now() } = {}) {
+    const s = sanitizeStore(store);
+    const u = typeof uuid === 'string' && uuid ? uuid : null;
+    const n = typeof name === 'string' && name ? name.trim() : null;
+    let binding = null;
+    if (u) binding = s.bindings.find((b) => b.uuid === u) ?? null;
+    // ★★★ 名字回退**只认"没有 uuid 的绑定"**。
+    //   否则：主人绑定了 uuid+name，冒名者改个客户端名字叫 Zeh（uuid 不同）就能命中
+    //   这条 fallback ⇒ 直接拿 owner —— 那等于把本机制要堵的洞又开了一遍。
+    //   名字只有在"当初就没拿到 uuid"时才是身份（并在 !claim 的回执里明确警告过）。
+    if (!binding && n) binding = s.bindings.find((b) => !b.uuid && (b.name ?? '') === n) ?? null;
+    if (!binding) return { level: null, binding: null, weak: false, reason: 'unbound' };
+    if (Number(binding.expiresAt) > 0 && Number(binding.expiresAt) <= now) {
+        return { level: null, binding, weak: isWeakBinding(binding), reason: 'expired' };
+    }
+    return { level: binding.level, binding, weak: isWeakBinding(binding), reason: 'ok' };
+}
+
+## E4 绑定码有效期：常量 + 硬上限实测
+$ grep -n "DEFAULT_CODE_TTL_MS|DEFAULT_BINDING_TTL_MS|MAX_PENDING_CODES" src/mindcraft/identity_store.js
+39:export const DEFAULT_CODE_TTL_MS = 5 * 60_000;
+42:export const DEFAULT_BINDING_TTL_MS = 30 * 24 * 60 * 60_000;
+45:export const MAX_PENDING_CODES = 8;
+281: * 总条数受 `MAX_PENDING_CODES` 限制（满了丢最旧的）。
+287:export function addCode(store, { code, agent = null, sessionId = null, now = Date.now(), ttlMs = DEFAULT_CODE_TTL_MS } = {}) {
+295:        expiresAt: now + Math.min(Math.max(Number(ttlMs) || 0, 1000), DEFAULT_CODE_TTL_MS),
+$ node -e "实测 TTL 常量，并尝试传 60 分钟看是否被压到 5 分钟"
+DEFAULT_CODE_TTL_MS   = 300000 = 5 分钟
+DEFAULT_BINDING_TTL_MS= 2592000000 = 30 天
+MAX_PENDING_CODES     = 8
+请求 ttlMs=60 分钟 → 实际有效 = 5 分钟（被压到上限）
+
+## E5 过期 → 降级 guest
+$ node 实测 resolveBinding 过期返回 level:null + reason:expired
+binding 字段 = uuid, name, level, boundAt, expiresAt, sessionId, weak
+  值 = {"uuid":"3f680b9f-53a9-34c1-900a-6ba8f0262175","name":"HEAVENZEH","level":"owner","boundAt":1000000,"expiresAt":2593000000,"sessionId":"x","weak":true}
+未过期 → level = owner
+过期后 → level = null , reason = expired , weak = true
+
+## E6 离线 UUID 派生（同名 ⇒ 同 uuid）
+$ server.properties online-mode
+server/server.properties:38:online-mode=false
+server-test/server.properties:38:online-mode=false
+$ node_modules/minecraft-protocol 的实现
+14:function nameToMcOfflineUUID (name) {
+15-  return (new UUID(javaUUID('OfflinePlayer:' + name))).toString()
+16-}
+--
+24:module.exports = { nameToMcOfflineUUID, fromIntArray }
+
+## E7 PANEL_CODE_LOCATION 文案 vs 面板 UI 实际位置
+$ sed -n "49p" src/agent/permissions.js
+49:export const PANEL_CODE_LOCATION = '控制台左侧「玩家身份」区的「生成绑定码」按钮';
+$ grep -n "玩家身份|生成绑定码" web/src/components/IdentityPanel.vue
+3: * 面板侧「玩家身份绑定」入口（R4 t24）。
+137:      <span class="label">玩家身份</span>
+139:        {{ busy ? '生成中…' : '生成绑定码' }}
+161:        <span v-else class="bad">已失效 —— 重新点「生成绑定码」</span>
+$ grep -n "IdentityPanel" web/src/views/ConsoleView.vue（确认在左侧栏 aside.left）
+4:import IdentityPanel from '../components/IdentityPanel.vue'
+27:      <IdentityPanel />
+
+## E8 相关单测
+$ node tools/identity_binding_unit.mjs
+（结果见下方 09-E 日志：80/80 通过，含 D8d 面板位置一致性断言）
+
+## E6b 同名冒名者实测（离线服 uuid 由名字派生 ⇒ 撞同一个 binding）
+主人 uuid        = 3f680b9f-53a9-34c1-900a-6ba8f0262175
+同名冒名者 uuid  = 3f680b9f-53a9-34c1-900a-6ba8f0262175   同uuid? true
+冒名者命中结果   = {"level":"owner","weak":true,"reason":"ok"}
+→ 绑定表按 uuid 命中；离线服上同名 ⇒ 同 uuid ⇒ 冒名者直接命中主人的 binding（weak=true 后由 offline_owner_mode 再拦一道）

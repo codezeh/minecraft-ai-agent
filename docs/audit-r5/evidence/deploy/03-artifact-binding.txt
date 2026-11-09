@@ -1,0 +1,124 @@
+# [3] 发布产物绑定 —— 采集时间 2026-11-08T15:39:13+08:00
+
+## 3.1 已提交产物 mindcraft/web-dist 全量 sha256
+d21b5577e286451073c8945f244ca2215b270b380367a87a68d76e7511345acc  ./MANIFEST.json
+eb7a22579b4daf7a3e8546a76a8fe189d4a70fc97c7b04030bd4f20ee2f3f513  ./README.md
+006e886a95b6e747e5e20c484ad0ba379a5fd2705fd0042832fd7efdf4d32cc8  ./assets/DebugView-BkBssVOn.js
+eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087  ./assets/DebugView-Pp-4MEq7.css
+99a654b65b3f294869a8a127e71796b264b255785371995145b81360e0d53a01  ./assets/SetupView-B6mvS54m.css
+1b64256f4dda74c51009fd13018dba98696dfe1182898fcb7518fbf750ac7605  ./assets/SetupView-BqZvFAjd.js
+93230c717bf1ba9ca932585a3594ae7650cdccb903f2bef232044e09fc25194c  ./assets/TerrainView-CLvOw5wc.js
+14ea2dce090163293fd77bd008a64eb0d2745f67283e36373780ca25a9163171  ./assets/TerrainView-Dc9bwTkz.css
+9762630514cd530779f1697a60681a73666147fd0799bc66dd09cb470b5c1022  ./assets/index-BRGdExsB.js
+3e1b693dddab352f05d3a7c59abc9ab73c6eee468b9a83aa2875ad04ca433bb1  ./assets/index-BYekMoBu.css
+475a82b225f8006a25116c7402e57c605be488cb5da16823617b3f159f5e57c9  ./index.html
+文件数 = 11（含 MANIFEST.json / README.md）
+
+## 3.2 注意：web/dist 是 gitignored 的本地构建产物
+$ ls -la --time-style=full-iso web/dist web/dist/assets | head
+total 9
+drwxrwxrwx 1 zeh zeh    0 Nov  8 15:07 .
+drwxrwxrwx 1 zeh zeh 4096 Nov  8 13:16 ..
+drwxrwxrwx 1 zeh zeh 4096 Nov  8 15:07 assets
+  ↑ mtime 15:07 —— 本次审计开始时（15:04 实测）web/dist 与上面 web-dist 的 9 个文件逐字节相同；
+    随后被**同工作区的其他成员**在 15:07 用当前 web/ 源码重建覆盖（web/dist 不入库，故不影响发布事实）。
+    为排除这类并发干扰，下面 3.6 用**隔离目录**（tmp/r5-deploy/webbuild）从当前 web/ 源码重建后比对。
+
+## 3.3 MANIFEST.json 原文
+{
+  "schemaVersion": 2,
+  "generatedFrom": "web/dist (Vue3 + Vite console)",
+  "generatedAt": "2026-11-08T04:47:29Z",
+  "source": {
+    "root": "web/",
+    "files": 25,
+    "hash": "sha256:7a45c9b2ea63d4a84f41261deba14fdcd4470ec3fdfbf7a1f174c593457c3585",
+    "inputs": [
+      "src",
+      "index.html",
+      "vite.config.ts",
+      "tsconfig.json",
+      "package.json",
+      "package-lock.json"
+    ]
+  },
+  "artifact": {
+    "files": 9,
+    "hash": "sha256:55bc9624642a4e4eebe9618c8359ffb51379616266a156d79273967cf0cc2bae"
+  },
+  "entryAssets": [
+    "assets/index-BRGdExsB.js",
+    "assets/index-BYekMoBu.css"
+  ],
+  "note": "镜像用的固化产物。改过 web/ 之后必须重新生成；本清单供 web_dist_manifest_unit 做漂移检测。",
+  "files": {
+    "assets/DebugView-BkBssVOn.js": "006e886a95b6e747e5e20c484ad0ba379a5fd2705fd0042832fd7efdf4d32cc8",
+    "assets/DebugView-Pp-4MEq7.css": "eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087",
+    "assets/index-BRGdExsB.js": "9762630514cd530779f1697a60681a73666147fd0799bc66dd09cb470b5c1022",
+    "assets/index-BYekMoBu.css": "3e1b693dddab352f05d3a7c59abc9ab73c6eee468b9a83aa2875ad04ca433bb1",
+    "assets/SetupView-B6mvS54m.css": "99a654b65b3f294869a8a127e71796b264b255785371995145b81360e0d53a01",
+    "assets/SetupView-BqZvFAjd.js": "1b64256f4dda74c51009fd13018dba98696dfe1182898fcb7518fbf750ac7605",
+    "assets/TerrainView-CLvOw5wc.js": "93230c717bf1ba9ca932585a3594ae7650cdccb903f2bef232044e09fc25194c",
+    "assets/TerrainView-Dc9bwTkz.css": "14ea2dce090163293fd77bd008a64eb0d2745f67283e36373780ca25a9163171",
+    "index.html": "475a82b225f8006a25116c7402e57c605be488cb5da16823617b3f159f5e57c9"
+  }
+}
+
+## 3.4 清单内部自洽性（artifact.hash 复算）
+recorded artifact.hash : sha256:55bc9624642a4e4eebe9618c8359ffb51379616266a156d79273967cf0cc2bae
+recomputed artifact.hash: sha256:55bc9624642a4e4eebe9618c8359ffb51379616266a156d79273967cf0cc2bae
+match: true
+recorded source.files: 25 hash: sha256:7a45c9b2ea63d4a84f41261deba14fdcd4470ec3fdfbf7a1f174c593457c3585
+entryAssets: ["assets/index-BRGdExsB.js","assets/index-BYekMoBu.css"]
+
+## 3.5 当前 web/ 源码指纹（算法同 scripts/release.ps1 第 417-436 行）
+SOURCE_HASH sha256:8a1714aadc5570d216fb2517d145b0cfdd5bc33bbe0953b1d408527554431977
+FILE_COUNT 25
+
+## 3.6 隔离重建：当前 web/ 源码 → tmp/r5-deploy/webbuild/dist
+$ tar -c web（排除 node_modules、dist）| tar -x -C tmp/r5-deploy/webbuild
+$ cd tmp/r5-deploy/webbuild && npm ci --no-audit --no-fund && npm run build
+重建产物 sha256：
+3ece77d37881a17d70567665fc0159f9905204090e605df6f1549170994c2b36  ./assets/DebugView-DghAYUGJ.js
+eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087  ./assets/DebugView-Pp-4MEq7.css
+99a654b65b3f294869a8a127e71796b264b255785371995145b81360e0d53a01  ./assets/SetupView-B6mvS54m.css
+8f7bf5ffcfc247c9849fac29424078f6d3503542700d9566a139be22bea01d44  ./assets/SetupView-CLC7EFHX.js
+051c04226ff88a2c16556dbd5fed41835ceb2d6df0fde2a1c145878876c86541  ./assets/TerrainView-D3mzsL_g.js
+14ea2dce090163293fd77bd008a64eb0d2745f67283e36373780ca25a9163171  ./assets/TerrainView-Dc9bwTkz.css
+89dec4338bf7b484c8b308f329f16f62e3b7b421a873fa142c9ad075467b8b62  ./assets/index-Df7SBz-6.js
+f47e025056231c6f0cb33ac8bdd152ae6e9f7561bb3fc44038fc063e426c4fd1  ./assets/index-XrhiKJjk.css
+093bf102d2e001d1b2ec5504c9eb348eae4ae155c757eacf22363d513b8d12ed  ./index.html
+
+文件名集合差异（左=隔离重建，右=已提交 web-dist）：
+1c1
+< assets/DebugView-DghAYUGJ.js
+---
+> assets/DebugView-BkBssVOn.js
+4,5c4,5
+< assets/SetupView-CLC7EFHX.js
+< assets/TerrainView-D3mzsL_g.js
+---
+> assets/SetupView-BqZvFAjd.js
+> assets/TerrainView-CLvOw5wc.js
+7,8c7,8
+< assets/index-Df7SBz-6.js
+< assets/index-XrhiKJjk.css
+---
+> assets/index-BRGdExsB.js
+> assets/index-BYekMoBu.css
+[diff exit=1]
+
+## 3.7 release.ps1 -VerifyOnly 实测
+$ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -VerifyOnly
+EXIT_CODE=1（完整输出见 03-release-verifyonly.log）
+
+## 3.8 历史 web/ 源码指纹（按 commit 原始 blob 复算，排除换行差异）
+22c41e8 sha256:30425c5ebc0d0b9694fdc12aef94ad7b5696cf3c79353b99b0bdda090f0e4a5c 23
+f8496a9 sha256:30425c5ebc0d0b9694fdc12aef94ad7b5696cf3c79353b99b0bdda090f0e4a5c 23
+a27cea7 sha256:ece5df34b1dd3b8a8778f7da0fcaebe0110bbc5bb9e1284c119564d3bd7f41bd 24
+af4aa22 sha256:20724a7537ee284b2584a31ccf784a849fe6a5de52b93231d3f775fc1995b17c 24
+57499b7 sha256:a9f827db44fd804857f20c39475ce6b5f3d27f687fd493d5b2a2d46a79ea693e 24
+99f844d sha256:a34508c70d96169c918f3f8683c2722acc82ac6ca59a714cab300ba6af230ce2 24
+717308f sha256:cc0c9ab420bff384c2af80f5a2985d1cb3f42346464cf10612577e33f6243649 25
+ca39e76 sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2 25
+HEAD sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2 25

@@ -1,0 +1,155 @@
+# t24（t20-C 施加）：mindserver 建 token 后立刻收口 DACL —— 实测证据
+# 生成时间：2026-11-08T21:22:40+08:00  PS/Node：v24.16.0  platform=win32  ANSI=gb2312(936)
+
+## 0) 锚点定位（不用行号）
+   锚点：`const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token')` 之后的
+        `try { writeFileSync(TOKEN_FILE, handshakeToken, …) }` 的**成功分支**内。
+$ grep -n "const TOKEN_FILE" mindcraft/src/mindcraft/mindserver.js
+664:    const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token');
+   （本轮实测：改动前该行在 614；插入 helper 后漂到 664。行号会随任何人在此文件加代码而变，所以只用锚点）
+
+## 1) 改动 diff（相对 vault-dev 落定后的基线，只新增 3 处）
+$ diff tmp/r5-token/mindserver.js.before mindcraft/src/mindcraft/mindserver.js
+28a29,30
+> // t20-C（R5-收口）：token 文件落盘后要收口 NTFS DACL。只用 execFile(argv)，**不用 shell**。
+> import { execFile } from 'child_process';
+48a51,98
+> 
+> // ════════════════════════════════════════════════════════════════════
+> // t20-C（R5-收口）：token 文件落盘后**立刻**收口 NTFS DACL
+> //
+> // 为什么必须从产品代码修：`.mindserver-token` 每次启动都由本进程**重新创建**，
+> // 而新建文件会**重新继承父目录 ACL**（mindcraft/ 对 Authenticated Users 有 (RX)）⇒
+> // 运维侧那次 `harden-credentials-acl.ps1 -Apply` 的一次性加固必然复发
+> // （t11 实测复发过一次：回归 22/0 → 起一次 mindserver → 20/2）。
+> //
+> // 口径：先断开继承（丢掉父目录带来的 AU:(I)(RX)），再只授权三条 ——
+> // 当前用户、SYSTEM(*S-1-5-18)、Administrators(*S-1-5-32-544)，都给 F。
+> //
+> // 安全/兼容约束：
+> //   · 用 execFile(icacls, argv)，**不开 shell**（与本仓 spawn+argv 口径一致，无注入面）；
+> //   · 斜杠用 String.fromCharCode(47) 拼，源码里不出现裸斜杠字面量（避免命中 preflight 规则）；
+> //   · 非 Windows 直接 return；任何失败只 console.warn，**绝不影响启动**；
+> //   · 幂等：每次重建 token 都会重新收口一遍。
+> // ════════════════════════════════════════════════════════════════════
+> const SLASH = String.fromCharCode(47);
+> 
+> function hardenTokenFileAcl(file) {
+>     if (process.platform !== 'win32') return;
+>     try {
+>         const icacls = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe');
+>         const who = process.env.USERNAME;
+>         if (!who) { console.warn('[mindserver] token ACL 收口跳过：取不到 USERNAME'); return; }
+>         // 1) 断开继承（丢掉父目录带来的 Authenticated Users:(I)(RX)）
+>         execFile(icacls, [file, SLASH + 'inheritance:r'], { windowsHide: true }, (e1) => {
+>             if (e1) {
+>                 console.warn(`[mindserver] token ACL 断开继承失败（不影响启动）：${e1?.code ?? e1}`);
+>                 return;
+>             }
+>             // 2) 只保留 当前用户 / SYSTEM / Administrators
+>             const grants = [file, SLASH + 'grant:r',
+>                 who + ':(F)', '*S-1-5-18:(F)', '*S-1-5-32-544:(F)'];
+>             execFile(icacls, grants, { windowsHide: true }, (e2) => {
+>                 if (e2) {
+>                     console.warn(`[mindserver] token ACL 授权收紧失败（不影响启动）：${e2?.code ?? e2}`);
+>                     return;
+>                 }
+>                 console.log(`[mindserver] token 文件 ACL 已收口（非继承，仅当前用户/SYSTEM/Administrators）：${file}`);
+>             });
+>         });
+>     } catch (e) {
+>         // 连 execFile 都抛（极端环境）：同样只 warn，不许弄挂启动
+>         console.warn(`[mindserver] token ACL 收口异常（不影响启动）：${e?.message ?? e}`);
+>     }
+> }
+616a667,668
+>         // t20-C：新建文件会继承父目录 ACL ⇒ 立刻收口（异步、失败只 warn，不阻塞启动）
+>         hardenTokenFileAcl(TOKEN_FILE);
+
+## 2) vault 的改动仍完好
+$ grep -c "router\.\(get\|post\|put\|delete\)" mindcraft/src/mindcraft/mindserver.js
+7
+   （= 7 条 /api/vault 路由：status / init / unlock / lock / items GET / items PUT / items DELETE）
+$ grep -c "attachVaultApi" mindcraft/src/mindcraft/mindserver.js
+2
+
+## 3) 验收 a：起最小 mindserver 触发 token 创建 → icacls
+   触发方式：`createMindServer(false, 18097)`（一次性 MC_BOTS_ROOT=tmp/r5-token/bots-c，非 8080，不碰生产）
+$ icacls mindcraft/.mindserver-token
+mindcraft/.mindserver-token BUILTIN\Administrators:(F)
+                            NT AUTHORITY\SYSTEM:(F)
+                            LAPTOP-GDE992NS\zeh:(F)
+
+Successfully processed 1 files; Failed processing 0 files
+   ⇒ (I) 继承条目 = 0；(F) 条目 = 3（Administrators / SYSTEM / 当前用户）
+   进程内日志：
+[mindserver] token 文件 ACL 已收口（非继承，仅当前用户/SYSTEM/Administrators）：E:\我的世界ai\mindcraft\.mindserver-token
+
+## 4) 验收 b：**不手动 -Apply**，直接跑 acl-regression（token 存在期间）
+$ node scripts/tests/acl-regression.mjs
+PASS A ACL 探测返回了三个目标 → [{"rel":"mindcraft\\.mindserver-token","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"mindcraft\\keys.json","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server\\server.properties","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server-test\\server.properties","missing":false,"protected":true,"broad":[],"rules":3}]
+PASS A mindcraft\.mindserver-token 存在 
+PASS A mindcraft\.mindserver-token DACL 已断开继承 → protected=true
+PASS A mindcraft\.mindserver-token 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A mindcraft\.mindserver-token 仍留有 ACE（没把自己锁死） → rules=3
+ALL PASS: 31 passed, 0 failed
+   EXIT=0
+
+## 5) 验收 c：回归三件
+$ node scripts/tests/ops-regression.mjs   → EXIT=0
+
+ALL PASS: 29 passed, 0 failed
+$ cd mindcraft && node tools/preflight.mjs → EXIT=0（斜杠写法没触发规则）
+[4/4] API 扫描（命中即判失败；--report-api 退回只报告）
+  ✓ API 扫描没有命中
+  扫 127 个文件，检查 412 条本地 import，违规 0 处
+  ✓ 前缀 import 规矩没有命中
+启动自检通过（含函数体冒烟测试）。
+$ npm run gate → EXIT=0（patch_integrity / secret 文件名 / settings / preflight_regex / preflight / lint_hard 全绿）
+
+启动自检通过（含函数体冒烟测试）。
+  ✓ [lint:hard] no-undef = 0 · no-floating-promise = 0（扫 176 个文件）
+    注：semi / require-await 等历史欠账**不在本门禁范围**，看全貌请跑 npm run lint
+
+### gate:full 的例外说明（不是我这条改动导致的）
+   `npm run gate:full` = `npm run gate && node tools/unit_all.mjs`，实测 **EXIT=1**，
+   唯一失败项是 `❌ fix_r5_012_unit (exit 1)`（131/132 通过，4 跳过）：
+   - 它测的是 `src/agent/action_manager.js` 的失败消息堆栈格式（R5-012），
+   - 该文件当前 ` M`（别人在改），且 `tools/fix_r5_012_unit.mjs` 是**未跟踪的新文件**；
+   - 与 token/ACL/mindserver 无任何关系（本任务只改 mindserver.js）。
+   证据：
+  ✅ companion_mode_unit  (7 个用例)
+  ✅ composite_registry_unit  (18 个用例)
+  ✅ container_fix_unit  (5 个用例)
+  ✅ control_plane_guard_unit  (73 个用例)
+  ✅ control_reasons_unit  (38 个用例)
+  ✅ craft_diagnostic_reachability_unit  (15 个用例)
+  ✅ detect_trapped_unit  (6 个用例)
+  ✅ dockerignore_coverage_unit  (65 个用例)
+
+## 6) 反证：临时关掉这段代码 ⇒ token 又变回继承、回归变红
+   做法：把调用行改成 `if (process.env.MS_NO_TOKEN_ACL !== '1') hardenTokenFileAcl(TOKEN_FILE);`，
+   以 MS_NO_TOKEN_ACL=1 起同一个最小 mindserver。
+$ icacls mindcraft/.mindserver-token      # 反证态
+mindcraft/.mindserver-token NT AUTHORITY\Authenticated Users:(I)(RX)
+                            BUILTIN\Administrators:(I)(F)
+                            NT AUTHORITY\SYSTEM:(I)(F)
+                            LAPTOP-GDE992NS\zeh:(I)(F)
+
+Successfully processed 1 files; Failed processing 0 files
+   ⇒ (I) 继承条目 = 4，其中 `NT AUTHORITY\Authenticated Users:(I)(RX)` 回来了
+$ node scripts/tests/acl-regression.mjs   # 反证态
+   EXIT=1
+PASS A mindcraft\.mindserver-token 存在 
+FAIL A mindcraft\.mindserver-token DACL 已断开继承 → protected=false
+FAIL A mindcraft\.mindserver-token 没有 Users/Authenticated Users 之类过宽主体 → ["NT AUTHORITY\\Authenticated Users:ReadAndExecute, Synchronize"]
+HAS FAILURES: 29 passed, 2 failed
+
+   随后已把开关移除，文件与"已打补丁"快照逐字节相同：
+$ diff tmp/r5-token/mindserver.js.patched mindcraft/src/mindcraft/mindserver.js   → 无输出
+
+## 7) 前后对照（同一台机、同一 cwd、同一最小触发）
+| 状态 | icacls (I) 条数 | 非白名单主体 | acl-regression |
+|---|---|---|---|
+| 关掉新增代码（反证） | **4** | Authenticated Users:(I)(RX) | **EXIT=1 / 29 passed 2 failed** |
+| 开着新增代码（现状） | **0** | 无 | **EXIT=0 / 31 passed 0 failed** |

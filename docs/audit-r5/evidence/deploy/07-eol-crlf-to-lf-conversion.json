@@ -1,0 +1,155 @@
+[
+ {
+  "rel": "poc/render-check.png",
+  "crlfPairs": 1,
+  "bytesBefore": 56910,
+  "bytesAfter": 56910,
+  "shaBefore": "accd20ebda28b695211660ae7d9097cb79d6a1b04b0a7daa599c0c42d1a5c841",
+  "shaAfter": "accd20ebda28b695211660ae7d9097cb79d6a1b04b0a7daa599c0c42d1a5c841"
+ },
+ {
+  "rel": "poc/terrain3d-preview.html",
+  "crlfPairs": 225,
+  "bytesBefore": 538809,
+  "bytesAfter": 538584,
+  "shaBefore": "a00393e91c48080af200e15b66b6c8d5e3580a301d1e77951f5a50d5a10878d5",
+  "shaAfter": "126b67aec4737d2adfdc323253086ccf6181bfc5f50af21975cd26dee62f8132"
+ },
+ {
+  "rel": "scripts/offline-audit-web-batch2.mjs",
+  "crlfPairs": 167,
+  "bytesBefore": 12278,
+  "bytesAfter": 12111,
+  "shaBefore": "2d6c6f02af24a3e4bffc91b8944510f869255b0819a6812733410c45a3988cd9",
+  "shaAfter": "7b779b4e0f099bfb9b4a7ea1028050d4592861898cb574a1ce21766459747571"
+ },
+ {
+  "rel": "scripts/offline-audit-web001.mjs",
+  "crlfPairs": 167,
+  "bytesBefore": 9980,
+  "bytesAfter": 9813,
+  "shaBefore": "a18669bed13e2b5188fa221b62f8bbf3af1ea75eca6b5831183eb9828eab31a2",
+  "shaAfter": "987013f76f232c18562fd65f5dca37a1ed2d2b4966179098d615440cc01e4f0c"
+ },
+ {
+  "rel": "scripts/stop-all.mjs",
+  "crlfPairs": 152,
+  "bytesBefore": 7406,
+  "bytesAfter": 7254,
+  "shaBefore": "20acede56298a6652484069ed83fe5bea8a04714e9833bc84062ec7902904717",
+  "shaAfter": "00a76675e7f6b1d8483765f332ae565002bd4d0c94e81dfb3ee8c2dfb9084d60"
+ },
+ {
+  "rel": "scripts/stop-policy.mjs",
+  "crlfPairs": 59,
+  "bytesBefore": 2784,
+  "bytesAfter": 2725,
+  "shaBefore": "17541f3c6c894242abd84d525c94585b3c71bbacedfeaab202a94fd8c89e190b",
+  "shaAfter": "9361b51d9d23234bd8d8132025ab0f6062923e57873be71b9a0604c0a7830674"
+ },
+ {
+  "rel": "src/api/socket.ts",
+  "crlfPairs": 98,
+  "bytesBefore": 3907,
+  "bytesAfter": 3809,
+  "shaBefore": "5b1bffaa3ea43ae1d14c80e435fb9479457046b93432b7aaf8d4ae9b3ae39f58",
+  "shaAfter": "59bebc3bd36240e3d663d58cbd3451c4a546428daf2be0062abdd60c6b67a0b2"
+ },
+ {
+  "rel": "src/components/ChatStream.vue",
+  "crlfPairs": 174,
+  "bytesBefore": 7064,
+  "bytesAfter": 6890,
+  "shaBefore": "6fef85d8605cd2db71a1fd7654d140988d013b2eaf1e4e558b458f468d5a9983",
+  "shaAfter": "29ef5ae80b74cec354ecf1c3dc84c31181ca75f5dbda3bd8b85f4c9d7b88cc04"
+ },
+ {
+  "rel": "src/components/IdentityPanel.vue",
+  "crlfPairs": 228,
+  "bytesBefore": 10453,
+  "bytesAfter": 10225,
+  "shaBefore": "b58fafba5f2f8f69d22781b5b69be899030e42c1572a9bdbe5aa92bb23aedb0d",
+  "shaAfter": "0a5d0bbb662dfbc357d516d0cc63aebeafa24fc667307eaa054de5adf977bf46"
+ },
+ {
+  "rel": "src/components/InventoryGrid.vue",
+  "crlfPairs": 110,
+  "bytesBefore": 4014,
+  "bytesAfter": 3904,
+  "shaBefore": "0ed6937650ccf67164b296bf813ba739c1913488abe63c6f3c1fd2188edc2606",
+  "shaAfter": "1989a31359bac768ffa68cada4a07b8cc3e89c2e4cb258e9da9c3b0b20f812db"
+ },
+ {
+  "rel": "src/components/StatusCard.vue",
+  "crlfPairs": 129,
+  "bytesBefore": 5533,
+  "bytesAfter": 5404,
+  "shaBefore": "81a8cfbf0d0eda3552bda2b1b59097fb879d9beb3ab0cf7c32d6ff2fe4618f03",
+  "shaAfter": "f7c48c9ffb22ec2537a758523f20d3ab7f0ede7e0e4069dcada1b27ae2dbf8da"
+ },
+ {
+  "rel": "src/components/TerrainCanvas.vue",
+  "crlfPairs": 413,
+  "bytesBefore": 13696,
+  "bytesAfter": 13283,
+  "shaBefore": "947b60bb2b9110d02c4d87ed417ab3d728daebcabad9ff8c202d8a8104750812",
+  "shaAfter": "b9211f61604c27e0abc6bf2e47e9dc06a5ee1b76bc5cf4c5d3985862fc073d5d"
+ },
+ {
+  "rel": "src/stores/agents.ts",
+  "crlfPairs": 309,
+  "bytesBefore": 11532,
+  "bytesAfter": 11223,
+  "shaBefore": "6f241e4ac7b09f32b5e011ca35c973901326728495fc8aa9563ee61b9c70ca69",
+  "shaAfter": "f010d5736cba4f4c4f73ef2580111efef74d0735210cc2051941eea911992a8b"
+ },
+ {
+  "rel": "src/stores/diag.ts",
+  "crlfPairs": 207,
+  "bytesBefore": 7683,
+  "bytesAfter": 7476,
+  "shaBefore": "a6fb833cc84e171417868bdc1a99c05dc36d6e53340510b81c9c800a46df87ce",
+  "shaAfter": "65d278861571142002cd8d5aea4fc6c9c8a8f79fdc3bd6fb118da4eed99522a5"
+ },
+ {
+  "rel": "src/stores/terrain.ts",
+  "crlfPairs": 162,
+  "bytesBefore": 6668,
+  "bytesAfter": 6506,
+  "shaBefore": "d190b7550c312dff6baf1b399024de63ddba7a67c07162627b47b3cd09ea5406",
+  "shaAfter": "dc081887bff94cc05c3323cf27ab11f34b19387068aac482d3711b7ade0c8096"
+ },
+ {
+  "rel": "src/types/three-shim.d.ts",
+  "crlfPairs": 120,
+  "bytesBefore": 5567,
+  "bytesAfter": 5447,
+  "shaBefore": "3d3a0f37ed92f8ed2d63c2538e21ba54e9158f5891022abae344d3346d726313",
+  "shaAfter": "5a2cdd3660a2f0375e3522162f7971290fc05d95b20ec8fb88c6e161185c1a66"
+ },
+ {
+  "rel": "src/views/ConsoleView.vue",
+  "crlfPairs": 64,
+  "bytesBefore": 2180,
+  "bytesAfter": 2116,
+  "shaBefore": "96a2b709600749154e29aac26b2a049e1ac7ffab0fe78ec4f05b685cb9e3db6b",
+  "shaAfter": "7ad99563206082a95540173f7ae17bdc482225811149a1ca6033ad0e66ce70c4"
+ },
+ {
+  "rel": "src/views/SetupView.vue",
+  "crlfPairs": 380,
+  "bytesBefore": 17238,
+  "bytesAfter": 16858,
+  "shaBefore": "7e69d404f0de7e6c628a5fd06a63299adf83ea52c2500d9dc381e60b6e71a0aa",
+  "shaAfter": "b88c16f39818640e5b7af13fdcb324081a2491530f9417ad19104812628407ca"
+ },
+ {
+  "rel": "tsconfig.json",
+  "crlfPairs": 27,
+  "bytesBefore": 1479,
+  "bytesAfter": 1452,
+  "shaBefore": "9e07faa8bc17371c4f2b9bc14a0c79dfe6ab76f9d0df653b58d0255c61381330",
+  "shaAfter": "d38aa06ae46e4c7adba54e785d05149670029e1de01baf77a41928161dce6bab"
+ }
+]
+CONVERTED_FILES=19

@@ -1,0 +1,5 @@
+启动自检通过（含函数体冒烟测试）。
+  ✓ [lint:hard] no-undef = 0 · no-floating-promise = 0（扫 178 个文件）
+===== vault_unit =====
+  ✅ vault_unit  (24 个用例)
+  134/134 个脚本通过，4 个跳过

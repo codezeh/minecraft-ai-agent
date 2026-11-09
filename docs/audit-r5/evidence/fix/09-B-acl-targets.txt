@@ -1,0 +1,288 @@
+# t20 B：acl-regression 补两个已加固目标（server-test/server.properties + mindcraft/ 目录）
+# 生成时间：2026-11-08T20:28:59+08:00
+
+## 1) 改前：TARGETS 只有三个文件，server-test/server.properties 与 mindcraft/ 完全没覆盖
+$ git show HEAD:scripts/tests/acl-regression.mjs | sed -n "/^const TARGETS/,/^]/p"
+const TARGETS = [
+  'mindcraft\\.mindserver-token',
+  'mindcraft\\keys.json',
+  'server\\server.properties',
+]
+
+## 2) 改后 diff
+$ git diff -- scripts/tests/acl-regression.mjs
+diff --git a/scripts/tests/acl-regression.mjs b/scripts/tests/acl-regression.mjs
+index a65047d..045f112 100644
+--- a/scripts/tests/acl-regression.mjs
++++ b/scripts/tests/acl-regression.mjs
+@@ -17,6 +17,11 @@
+  *   B. **脚本能力断言**：脚本必须存在、语法可解析、默认是"体检不改"、
+  *      并且真的包含收口逻辑（不能只写个报告了事）。
+  *
++ * R5-002（2026-11-08）：`.mindserver-token` 是**运行时产物**（mindserver 启动才写 cwd），
++ *   干净仓库/CI 本来就没有它。原来断言"必须存在"⇒ 干净仓库必红一条，
++ *   与凭据安全无关却让本脚本无法当门禁。现在：不存在 → SKIP 并打印原因；
++ *   存在 → 照旧校验它的 DACL。其余断言不变。
++ *
+  * 用法：node scripts/tests/acl-regression.mjs
+  * 输出：PASS/FAIL 逐条，全过退出码 0。
+  */
+@@ -25,16 +30,23 @@ import path from 'node:path'
+ import { spawnSync } from 'node:child_process'
+ 
+ const ROOT = path.resolve(import.meta.dirname, '..', '..')
+-let pass = 0, fail = 0
++let pass = 0, fail = 0, skip = 0
+ const check = (name, cond, detail = '') => {
+   if (cond) { pass++; console.log(`PASS ${name} ${detail}`) }
+   else { fail++; console.log(`FAIL ${name} ${detail}`) }
+ }
++// SKIP：不判红也不判绿。用于**运行时产物**（跑起来才有、干净仓库本不该存在）——
++// 把它们当"仓库不变量"去断言，会让干净 clone / CI 永远红一条（R5-002）。
++const skipCheck = (name, detail = '') => { skip++; console.log(`SKIP ${name} ${detail}`) }
+ 
++// t20 B（R5-收口）：原来只覆盖三个**文件**，t11 刚加固的 `server-test/server.properties`
++//   （RCON 口令）却没被回归覆盖 ⇒ 有人一把 `icacls <文件> /inheritance:e` 就能让它静默复发、
++//   而回归仍全绿。`mindcraft/`（目录）同理，判据不同，单独在下面 A2 段里查。
+ const TARGETS = [
+   'mindcraft\\.mindserver-token',
+   'mindcraft\\keys.json',
+   'server\\server.properties',
++  'server-test\\server.properties',   // t11 加固（R5-009）：测试服 RCON 口令
+ ]
+ 
+ // ════════════════════════════════════════════════════════════
+@@ -75,15 +87,81 @@ if (acls && !Array.isArray(acls)) acls = [acls]
+ check('A ACL 探测返回了三个目标', Array.isArray(acls) && acls.length === TARGETS.length,
+   `→ ${JSON.stringify(acls)}`)
+ 
++// 这三个目标里有**运行时产物**：.mindserver-token 由 mindserver 启动时写到自己的 cwd，
++// 干净仓库（未启动过面板 / CI）本来就不该存在。要求它"必须存在"等于把运行时状态
++// 当成仓库不变量 —— 面板没跑就必红一条，而这条红与凭据安全毫无关系（R5-002）。
++const RUNTIME_ARTIFACTS = new Set(['mindcraft\\.mindserver-token'])
++
+ for (const a of acls || []) {
+-  check(`A ${a.rel} 存在`, a.missing !== true)
+-  if (a.missing) continue
++  if (a.missing === true) {
++    if (RUNTIME_ARTIFACTS.has(a.rel)) {
++      skipCheck(`A ${a.rel} 存在`, '→ 跳过：token 由 mindserver 启动时生成，干净仓库本不该存在')
++    } else {
++      check(`A ${a.rel} 存在`, false)
++    }
++    continue
++  }
++  check(`A ${a.rel} 存在`, true)
+   check(`A ${a.rel} DACL 已断开继承`, a.protected === true, `→ protected=${a.protected}`)
+   check(`A ${a.rel} 没有 Users/Authenticated Users 之类过宽主体`,
+     Array.isArray(a.broad) && a.broad.length === 0, `→ ${JSON.stringify(a.broad)}`)
+   check(`A ${a.rel} 仍留有 ACE（没把自己锁死）`, (a.rules || 0) > 0, `→ rules=${a.rules}`)
+ }
+ 
++// ════════════════════════════════════════════════════════════
++// A2. 目录目标：mindcraft/（t20 B；判据与文件不同）
++//   目录必须允许别的进程"读+穿过"，所以不能要求"无过宽主体"；
++//   真正要守住的是：**非白名单主体没有任何写类位**（否则能删/换 keys.json 再放一个假文件），
++//   以及**当前账户仍是 FullControl**（别把应用自己锁在外面）。
++// ════════════════════════════════════════════════════════════
++const dirProbe = `
++$ErrorActionPreference = 'Stop'
++$p = Join-Path '${ROOT.replace(/'/g, "''")}' 'mindcraft'
++if (-not (Test-Path -LiteralPath $p)) { '{"missing":true}' ; exit 0 }
++$acl = Get-Acl -LiteralPath $p
++$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
++$writeWords = @('Write', 'Modify', 'FullControl', 'Delete', 'ChangePermissions', 'TakeOwnership', 'AppendData', 'CreateFiles', 'CreateDirectories')
++$broad = @()
++$broadWrite = @()
++$meFull = $false
++foreach ($r in $acl.Access) {
++    $id = $r.IdentityReference.Value
++    $rights = $r.FileSystemRights.ToString()
++    if (($id -eq $me) -and ($r.AccessControlType -eq 'Allow') -and ($rights -match 'FullControl')) { $meFull = $true }
++    $allowed = ($id -eq $me) -or ($id -eq 'NT AUTHORITY\\SYSTEM') -or ($id -eq 'BUILTIN\\Administrators')
++    if (-not $allowed -and $r.AccessControlType -ne 'Deny') {
++        $broad += ($id + ':' + $rights)
++        $hasWrite = $false
++        foreach ($w in $writeWords) { if ($rights -like ('*' + $w + '*')) { $hasWrite = $true } }
++        if ($hasWrite) { $broadWrite += ($id + ':' + $rights) }
++    }
++}
++[pscustomobject]@{
++    missing = $false
++    protected = $acl.AreAccessRulesProtected
++    broad = $broad
++    broadWrite = $broadWrite
++    meFull = $meFull
++    rules = $acl.Access.Count
++} | ConvertTo-Json -Compress -Depth 5
++`
++const dr = spawnSync('powershell', ['-NoProfile', '-Command', dirProbe], { encoding: 'utf8' })
++let dacl = null
++try { dacl = JSON.parse((dr.stdout || '').trim()) } catch { /* ignore */ }
++check('A2 能读到 mindcraft/ 目录的 ACL', dr.status === 0 && dacl !== null,
++  `→ status=${dr.status} stderr=${(dr.stderr || '').slice(0, 200)}`)
++if (dacl) {
++  check('A2 mindcraft/ 存在', dacl.missing !== true)
++  if (dacl.missing !== true) {
++    check('A2 mindcraft/ 非白名单主体没有写类权限（防删除重建 keys.json）',
++      Array.isArray(dacl.broadWrite) && dacl.broadWrite.length === 0,
++      `→ 写类过宽 ACE ${JSON.stringify(dacl.broadWrite)}（只读类可接受，如 Authenticated Users:(RX)）`)
++    check('A2 mindcraft/ 当前账户仍 FullControl（应用自己别被锁在外面）',
++      dacl.meFull === true, `→ meFull=${dacl.meFull}`)
++    check('A2 mindcraft/ 仍留有 ACE（没把自己锁死）', (dacl.rules || 0) > 0, `→ rules=${dacl.rules}`)
++  }
++}
++
+ // ════════════════════════════════════════════════════════════
+ // B. 脚本能力
+ // ════════════════════════════════════════════════════════════
+@@ -111,5 +189,6 @@ const syntax = spawnSync('powershell', ['-NoProfile', '-Command',
+ check('B 脚本语法可解析', syntax.status === 0 && /OK/.test(syntax.stdout || ''),
+   `→ ${(syntax.stdout || '').slice(0, 200)}`)
+ 
+-console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURES'}: ${pass} passed, ${fail} failed`)
++console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURES'}: ${pass} passed, ${fail} failed` +
++  (skip > 0 ? `, ${skip} skipped（运行时产物：干净仓库不该有，不计红）` : ''))
+ process.exit(fail === 0 ? 0 : 1)
+
+## 3) 绿：全量跑（31 PASS / 0 FAIL / exit 0）
+$ node scripts/tests/acl-regression.mjs
+PASS A 能读到 ACL 现状 → status=0 stderr=
+PASS A ACL 探测返回了三个目标 → [{"rel":"mindcraft\\.mindserver-token","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"mindcraft\\keys.json","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server\\server.properties","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server-test\\server.properties","missing":false,"protected":true,"broad":[],"rules":3}]
+PASS A mindcraft\.mindserver-token 存在 
+PASS A mindcraft\.mindserver-token DACL 已断开继承 → protected=true
+PASS A mindcraft\.mindserver-token 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A mindcraft\.mindserver-token 仍留有 ACE（没把自己锁死） → rules=3
+PASS A mindcraft\keys.json 存在 
+PASS A mindcraft\keys.json DACL 已断开继承 → protected=true
+PASS A mindcraft\keys.json 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A mindcraft\keys.json 仍留有 ACE（没把自己锁死） → rules=3
+PASS A server\server.properties 存在 
+PASS A server\server.properties DACL 已断开继承 → protected=true
+PASS A server\server.properties 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A server\server.properties 仍留有 ACE（没把自己锁死） → rules=3
+PASS A server-test\server.properties 存在 
+PASS A server-test\server.properties DACL 已断开继承 → protected=true
+PASS A server-test\server.properties 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A server-test\server.properties 仍留有 ACE（没把自己锁死） → rules=3
+PASS A2 能读到 mindcraft/ 目录的 ACL → status=0 stderr=
+PASS A2 mindcraft/ 存在 
+PASS A2 mindcraft/ 非白名单主体没有写类权限（防删除重建 keys.json） → 写类过宽 ACE []（只读类可接受，如 Authenticated Users:(RX)）
+PASS A2 mindcraft/ 当前账户仍 FullControl（应用自己别被锁在外面） → meFull=true
+PASS A2 mindcraft/ 仍留有 ACE（没把自己锁死） → rules=7
+PASS B 加固脚本存在 
+PASS B 脚本默认只体检（-Apply 才改） 
+PASS B 脚本用 SetAccessRuleProtection 断开继承 
+PASS B 脚本只放行 当前账户/SYSTEM/Administrators 
+PASS B 脚本带应用可用性自检（可读可写） 
+PASS B 脚本给出回滚方式 
+PASS B 脚本带 UTF-8 BOM（PowerShell 5.1 才不乱码） → ef bb bf
+PASS B 脚本语法可解析 → OK
+
+
+ALL PASS: 31 passed, 0 failed
+
+## 4) 造回归：icacls server-test/server.properties /inheritance:e
+### icacls 前（备份态）
+server-test/server.properties NT AUTHORITY\SYSTEM:(F)
+                              BUILTIN\Administrators:(F)
+                              LAPTOP-GDE992NS\zeh:(F)
+                              Mandatory Label\Low Mandatory Level:(I)(NW)
+
+Successfully processed 1 files; Failed processing 0 files
+### 注入命令 + 输出
+processed file: server-test/server.properties
+Successfully processed 1 files; Failed processing 0 files
+### icacls 后（多了 (I) 条目，含 Authenticated Users:(I)(M) / Users:(I)(RX)）
+server-test/server.properties NT AUTHORITY\SYSTEM:(F)
+                              BUILTIN\Administrators:(F)
+                              LAPTOP-GDE992NS\zeh:(F)
+                              S-1-4-48068235-1068318981:(I)(W,D,DC)
+                              BUILTIN\Administrators:(I)(F)
+                              NT AUTHORITY\SYSTEM:(I)(F)
+                              NT AUTHORITY\Authenticated Users:(I)(M)
+                              BUILTIN\Users:(I)(RX)
+                              Mandatory Label\Low Mandatory Level:(I)(NW)
+
+Successfully processed 1 files; Failed processing 0 files
+
+### 跑回归 → 必须变红
+$ node scripts/tests/acl-regression.mjs
+PASS A server-test\server.properties 存在 
+FAIL A server-test\server.properties DACL 已断开继承 → protected=false
+FAIL A server-test\server.properties 没有 Users/Authenticated Users 之类过宽主体 → ["S-1-4-48068235-1068318981:DeleteSubdirectoriesAndFiles, Write, Delete, Synchronize","NT AUTHORITY\\Authenticated Users:Modify, Synchronize","BUILTIN\\Users:ReadAndExecute, Synchronize"]
+PASS A server-test\server.properties 仍留有 ACE（没把自己锁死） → rules=8
+HAS FAILURES: 29 passed, 2 failed
+   （完整输出见本文件 §7 的负例全文）
+
+## 5) 回滚：icacls <file> /inheritance:r
+   注：先试 `icacls E:\我的世界ai /restore <save>` 失败（"Not all privileges or groups referenced are assigned to the caller"，
+   因为 /restore 还想恢复 owner/完整性标签，普通用户做不到），改用 /inheritance:r 精确回到备份态的 3 条显式 ACE。
+### icacls 恢复后
+server-test/server.properties NT AUTHORITY\SYSTEM:(F)
+                              BUILTIN\Administrators:(F)
+                              LAPTOP-GDE992NS\zeh:(F)
+                              Mandatory Label\Low Mandatory Level:(I)(NW)
+
+Successfully processed 1 files; Failed processing 0 files
+### 与注入前逐行对比
+$ diff <(icacls-before) <(icacls-restored)
+   → 输出为空（IDENTICAL to before）
+
+## 6) 回滚后复跑 → 回绿（exit 0）
+$ node scripts/tests/acl-regression.mjs
+PASS A server-test\server.properties 存在 
+PASS A server-test\server.properties DACL 已断开继承 → protected=true
+PASS A server-test\server.properties 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A server-test\server.properties 仍留有 ACE（没把自己锁死） → rules=3
+PASS A2 能读到 mindcraft/ 目录的 ACL → status=0 stderr=
+PASS A2 mindcraft/ 存在 
+PASS A2 mindcraft/ 非白名单主体没有写类权限（防删除重建 keys.json） → 写类过宽 ACE []（只读类可接受，如 Authenticated Users:(RX)）
+PASS A2 mindcraft/ 当前账户仍 FullControl（应用自己别被锁在外面） → meFull=true
+PASS A2 mindcraft/ 仍留有 ACE（没把自己锁死） → rules=7
+ALL PASS: 31 passed, 0 failed
+
+## 7) 负例全文（注入后）
+PASS A 能读到 ACL 现状 → status=0 stderr=
+PASS A ACL 探测返回了三个目标 → [{"rel":"mindcraft\\.mindserver-token","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"mindcraft\\keys.json","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server\\server.properties","missing":false,"protected":true,"broad":[],"rules":3},{"rel":"server-test\\server.properties","missing":false,"protected":false,"broad":["S-1-4-48068235-1068318981:DeleteSubdirectoriesAndFiles, Write, Delete, Synchronize","NT AUTHORITY\\Authenticated Users:Modify, Synchronize","BUILTIN\\Users:ReadAndExecute, Synchronize"],"rules":8}]
+PASS A mindcraft\.mindserver-token 存在 
+PASS A mindcraft\.mindserver-token DACL 已断开继承 → protected=true
+PASS A mindcraft\.mindserver-token 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A mindcraft\.mindserver-token 仍留有 ACE（没把自己锁死） → rules=3
+PASS A mindcraft\keys.json 存在 
+PASS A mindcraft\keys.json DACL 已断开继承 → protected=true
+PASS A mindcraft\keys.json 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A mindcraft\keys.json 仍留有 ACE（没把自己锁死） → rules=3
+PASS A server\server.properties 存在 
+PASS A server\server.properties DACL 已断开继承 → protected=true
+PASS A server\server.properties 没有 Users/Authenticated Users 之类过宽主体 → []
+PASS A server\server.properties 仍留有 ACE（没把自己锁死） → rules=3
+PASS A server-test\server.properties 存在 
+FAIL A server-test\server.properties DACL 已断开继承 → protected=false
+FAIL A server-test\server.properties 没有 Users/Authenticated Users 之类过宽主体 → ["S-1-4-48068235-1068318981:DeleteSubdirectoriesAndFiles, Write, Delete, Synchronize","NT AUTHORITY\\Authenticated Users:Modify, Synchronize","BUILTIN\\Users:ReadAndExecute, Synchronize"]
+PASS A server-test\server.properties 仍留有 ACE（没把自己锁死） → rules=8
+PASS A2 能读到 mindcraft/ 目录的 ACL → status=0 stderr=
+PASS A2 mindcraft/ 存在 
+PASS A2 mindcraft/ 非白名单主体没有写类权限（防删除重建 keys.json） → 写类过宽 ACE []（只读类可接受，如 Authenticated Users:(RX)）
+PASS A2 mindcraft/ 当前账户仍 FullControl（应用自己别被锁在外面） → meFull=true
+PASS A2 mindcraft/ 仍留有 ACE（没把自己锁死） → rules=7
+PASS B 加固脚本存在 
+PASS B 脚本默认只体检（-Apply 才改） 
+PASS B 脚本用 SetAccessRuleProtection 断开继承 
+PASS B 脚本只放行 当前账户/SYSTEM/Administrators 
+PASS B 脚本带应用可用性自检（可读可写） 
+PASS B 脚本给出回滚方式 
+PASS B 脚本带 UTF-8 BOM（PowerShell 5.1 才不乱码） → ef bb bf
+PASS B 脚本语法可解析 → OK
+
+
+HAS FAILURES: 29 passed, 2 failed
+
+## 8) 目录判据不是"空判"的两条证据
+### (a) mindcraft/ 现在只有一条非白名单 ACE，且是只读类 ⇒ broad 有值但 broadWrite 为空
+non-whitelist: NT AUTHORITY\Authenticated Users              rights=ReadAndExecute, Synchronize    writeClass=False
+### (b) 分类器对有写类位的权限会返回 True（证明它不会永远给 False）
+ReadAndExecute, Synchronize      writeClass=False
+Modify, Synchronize              writeClass=True
+FullControl                      writeClass=True
+Write, Delete, Synchronize       writeClass=True

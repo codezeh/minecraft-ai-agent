@@ -1,0 +1,95 @@
+# R5-001 验收证据②：真实入口 启动面板.bat 的退出码与输出
+# 生成时间：2026-11-08T19:39:38+08:00
+
+## 改法（两个 .bat 同一 4 行尾巴；只在失败分支透传，成功仍是 0）
+$ git diff -- 启动面板.bat | sed -n "5,20p"
+@@ -2,5 +2,7 @@
+ setlocal
+ title MC AI Panel - Start
+ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-panel.ps1"
+-if errorlevel 1 pause
+-exit /b 0
++if not errorlevel 1 exit /b 0
++set "RC=%errorlevel%"
++pause
++exit /b %RC%
+$ git diff -- 停止面板.bat | sed -n "5,20p"
+@@ -2,5 +2,7 @@
+ setlocal
+ title MC AI Panel - Stop
+ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\stop-panel.ps1"
+-if errorlevel 1 pause
+-exit /b 0
++if not errorlevel 1 exit /b 0
++set "RC=%errorlevel%"
++pause
++exit /b %RC%
+
+## 设计要点：为什么不用 if errorlevel 1 ( ... exit /b %errorlevel% )
+   cmd 会在进入括号块**之前**就把 %errorlevel% 展开，块内拿到的是旧值。
+   这里改成：先 if not errorlevel 1 exit /b 0（成功路径直出 0），
+   失败时 set "RC=%errorlevel%" 在**块外**执行（展开时即当前值），再 pause、再 exit /b %RC%。
+   全程不需要 enabledelayedexpansion，也不影响 setlocal。
+
+## 测试 A：真实入口 + dry-run（证明不再有 ParserError、脚本主体真的被执行）
+   做法（任务允许的 dry-run 变体）：临时在 scripts/start-panel.ps1 的
+   三行前置检查之后插入两行 —— Write-Host '[DRYRUN] 已进入脚本主体…' + exit 0，
+   这样既证明解析通过且正文开始执行，又**不会**真的去建面板/起 MC 服（25565）/起 mindserver（8080）。
+   跑完立即用备份还原，最终 sha256 与修复版完全一致（见证据①）。
+$ MSYS_NO_PATHCONV=1 printf "\n\n" | MSYS_NO_PATHCONV=1 cmd.exe /c "启动面板.bat"
+============================================================
+    Minecraft AI 陪玩面板   一键启动
+============================================================
+
+[DRYRUN] 已进入脚本主体（起服步骤被临时替换为 echo）
+BAT_EXITCODE=0
+
+## 测试 B：故意失败（脚本里临时 exit 9）——验证退出码透传
+$ MSYS_NO_PATHCONV=1 printf "\n\n" | MSYS_NO_PATHCONV=1 cmd.exe /c "启动面板.bat"
+============================================================
+    Minecraft AI 陪玩面板   一键启动
+============================================================
+
+[DRYRUN] 故意失败，用于验证 .bat 退出码透传
+Press any key to continue . . . 
+BAT_EXITCODE=9
+   ⇒ 旧版这里会是 0（被 exit /b 0 吞掉）；现在 9 原样透出。
+
+## 测试 C：停止面板.bat —— 真实运行（当前无面板在跑）
+$ MSYS_NO_PATHCONV=1 printf "\n\n" | MSYS_NO_PATHCONV=1 cmd.exe /c "停止面板.bat"
+============================================================
+    停止面板 / 优雅关服
+============================================================
+
+[ERROR] 拿不到握手 token：既无 MINDSERVER_TOKEN 环境变量，也无 ./.mindserver-token。
+        这**通常不是** "mindserver 没开"：请从 mindcraft/ 目录运行本脚本
+        （token 文件写在 mindserver 的工作目录），或显式设 MINDSERVER_TOKEN=<token>。
+
+[未完成] 拿不到握手 token。服务器仍在运行，请不要直接关窗口（会丢未刷盘的存档）。
+         token 位置：mindcraft\.mindserver-token
+
+说明：
+  · Minecraft 走 RCON stop，会自己刷盘关闭（不是强杀）
+  · 若 "MC Server" / "Mindcraft" 窗口还在，直接关掉即可
+
+自动备份：跳过（本次没有成功停服，不做备份）
+
+
+BAT_EXITCODE=0
+   ⚠ 观察到 BAT_EXITCODE=0，但脚本明显未完成。原因**不在 .bat**：
+     scripts/stop-panel.ps1 从头到尾没有 exit $stopCode（只有第 14/15 行的 exit 1），
+     脚本以 Read-Host '按回车关闭' 结束 ⇒ PowerShell 进程退出码恒为 0，
+     所以 .bat 即便完美透传也只能拿到 0。这是**上游脚本**的缺口（R5-002 之外的独立发现，未在本任务改动范围内）。
+
+## 测试 D：停止面板.bat 的透传本身是否有效（用同尾部的副本 + 一个 exit 2 探针）
+$ sed "s|%~dp0scripts\\stop-panel.ps1|%~dp0probe-exit2.ps1|" 停止面板.bat > tmp/r5-fix/stop-probe.bat
+$ cd tmp/r5-fix && MSYS_NO_PATHCONV=1 printf "\n\n" | MSYS_NO_PATHCONV=1 cmd.exe /c "stop-probe.bat"
+[PROBE] simulating stop-panel.ps1 failing with 2 (NO_TOKEN)
+Press any key to continue . . . 
+PROBE_BAT_EXITCODE=2
+   ⇒ 2 原样透出 ⇒ 同一 4 行尾巴在停止面板.bat 上也是有效的。
+
+## 测试 E（意外收获）：ParserError 路径现在也返回非 0
+   我第一次写探针时用 heredoc 写了 no-BOM UTF-8 + 中文，正撞上同一个坑，PowerShell 报 ParserError 并返回 1，
+   .bat 把这个 1 原样透出（当时输出见下）——恰好证明解析失败这类错误现在也不会被吞。
+   （该次输出：PROBE_BAT_EXITCODE=1 + The string is missing the terminator）

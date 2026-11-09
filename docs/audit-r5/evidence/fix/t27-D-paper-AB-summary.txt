@@ -1,0 +1,14 @@
+=== t27-D: Paper 真跑 A/B（自带 JDK .tools/jdk-21.0.12.1+1）===
+时间: 2026-11-08 22:14–22:32
+
+--- A: server-ip=(空), server-port=25590 ---
+  [Server thread/INFO]: Starting Minecraft server on *:25590
+  netstat LISTENING 本地地址:
+  (A 进程已在记录快照后停止)
+
+--- B: server-ip=127.0.0.1, server-port=25591 ---
+  [Server thread/INFO]: Starting Minecraft server on 127.0.0.1:25591
+  netstat LISTENING 本地地址:
+    127.0.0.1:25591
+
+结论: server-ip 空 ⇒ 0.0.0.0 + [::]（全网卡双栈）；server-ip=127.0.0.1 ⇒ 仅 127.0.0.1。真 Paper 1.21.8-60 实测。

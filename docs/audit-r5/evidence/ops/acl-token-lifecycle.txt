@@ -1,0 +1,33 @@
+# acl-regression 断言 A 的 .mindserver-token 为何不存在（运行时生成、已 gitignore）
+
+$ ls -a mindcraft | grep -i token
+（无匹配：mindcraft 下没有 .mindserver-token）
+
+$ grep -n "mindserver-token" mindcraft/.gitignore .gitignore
+mindcraft/.gitignore:96:.mindserver-token
+mindcraft/.gitignore:98:# （原来只有 `.mindserver-token` 这一个精确项）。任何 `*.token` 一律不入库。
+.gitignore:132:.mindserver-token
+
+$ git ls-files --error-unmatch mindcraft/.mindserver-token
+error: pathspec 'mindcraft/.mindserver-token' did not match any file(s) known to git
+Did you forget to 'git add'?
+
+$ sed -n "386,396p" mindcraft/src/mindcraft/mindserver.js   # token 只在启动时写盘
+    // 为什么：scripts/start-panel.ps1:189 把 mindcraft 的 stdout 重定向进
+    // `logs/mindcraft-console.log` ⇒ 原来那三行 `token=…` 会**落盘**，而日志正是
+    // "出问题时发给别人看"的东西（拿到它 = 能指挥 bot / 改设置 / 停服）。
+    // 新通道：写到 cwd 下的 `.mindserver-token`（已进 .gitignore，F-SEC-206），
+    // 注意：mode 0600 只在 POSIX 生效，**Windows/NTFS 上不保证只有本机用户可读**
+    // （那边由 NTFS ACL 决定）。所以这层不是权限边界，它的目的是"别再进日志"。
+    // start-panel.ps1 从它读 token 拼出可点的面板地址。
+    // 仍然需要"在终端里看见完整值"时，显式设 MINDSERVER_PRINT_TOKEN=1（调试用）。
+    const TOKEN_FILE = path.join(process.cwd(), '.mindserver-token');
+    try {
+        writeFileSync(TOKEN_FILE, handshakeToken, { encoding: 'utf8', mode: 0o600 });
+
+$ grep -n "mindserver-token" scripts/start-panel.ps1
+257:# F-SEC-205（2026-11-06）：token 不再打印进日志，改从 mindcraft/.mindserver-token 读。
+264:$tokenFile = Join-Path $root 'mindcraft/.mindserver-token'
+280:    Write-Host '         排查：看日志里有没有「写 .mindserver-token 失败」（F-RT-002 起该开关在重定向下会被忽略）。' -ForegroundColor Yellow
+
+结论：该文件由 mindserver 启动时写到其 cwd，进程未运行时不存在；因此 acl-regression 的『存在』断言与运行状态耦合。

@@ -1,0 +1,15 @@
+# 「一行 BOM 之差」对照实验 + 同入口路径对照
+# 时间：2026-11-08T16:20:08+08:00
+
+## 命令（副本只加 3 字节 BOM，内容逐字节相同）
+$ python/powershell 写 tmp/r5-bom-fix/start-panel-fixed.ps1 = EF BB BF + 原文件 15706 字节（合计 15709）
+$ powershell -File tmp/r5-bom-fix/parse-compare3.ps1
+
+scripts/start-panel.ps1 (original)       head=23 20 4D errors=8
+tmp/r5-bom-fix/start-panel-fixed.ps1 (+BOM) head=EF BB BF errors=0
+scripts/stop-panel.ps1                   head=EF BB BF errors=0
+scripts/e2e.ps1                          head=EF BB BF errors=0
+
+## 结论
+- 原文件 23 20 4D -> 8 错；同一份内容前面加 EF BB BF -> 0 错。
+- scripts/stop-panel.ps1（有 BOM，同一 .bat 入口路径的对照）-> 0 错；scripts/e2e.ps1 -> 0 错。

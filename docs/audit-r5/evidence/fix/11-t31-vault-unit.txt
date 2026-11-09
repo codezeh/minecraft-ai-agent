@@ -1,0 +1,28 @@
+PASS 1. init 建 salt/verifier，并把 kdf 参数写进 vault_meta
+PASS 2. 重复 init 被拒绝（不许悄悄换口令）
+PASS 3. 名字白名单 / 值校验：非法 name 与空值都拒绝
+PASS 4. 往返：set → get 得到原文
+PASS 5. 替换：created_at 保留、updated_at 前移，明文换成新值
+PASS 6. 同一 value 存两次：nonce 与 ciphertext 完全不同（nonce 不复用）
+PASS 7. 改 1 字节 ciphertext ⇒ 解密抛 VAULT_DECRYPT_FAILED（GCM 认证失败）
+PASS 8. 改 1 字节 tag 同样被拒（认证标签也是保护面）
+PASS 9. 跨名挪用：(a) 整行搬运被 nonce UNIQUE 挡住；(b) 换 AAD 解密必然失败
+PASS 10. list() 只有 name/hint/时间：没有 value，hint 里没有明文子串
+PASS 11. status() 只给 locked/count/kdf/unlockSource，不含任何条目内容
+PASS 12. lock() 之后 get/list/remove 一律 VAULT_LOCKED，status 仍可读
+PASS 13. 错口令 unlock 抛 VAULT_BAD_PASSPHRASE（不泄露"盐错了/密文错了"的区别）
+PASS 14. 正确口令 unlock 后数据还在（密文跨锁定不失效）
+PASS 15. 短口令在 init/derive 阶段就被拒（不给离线爆破一个弱口令）
+PASS 16. removeSecret 删掉条目；再取变成 VAULT_NOT_FOUND
+PASS 17. 明文不落盘：读 .db 原始字节，搜不到任何一把 key
+[vault] 跳过解不开的条目 TAMPER_TAG_KEY（VAULT_DECRYPT_FAILED）
+[vault] 跳过解不开的条目 TAMPER_TEST_KEY（VAULT_DECRYPT_FAILED）
+PASS 18. 环境变量注入：只注入没被用户占用的名字，clearInjectedEnv 能撤回
+PASS 19. W-1 unlockSource：lock → null；手动 unlock → manual
+PASS 20. W-1 unlockSource：MC_VAULT_PASSPHRASE 自动解锁 → env
+PASS 21. W-2 限流：连续 5 次失败后 isThrottled 生效，但**成功路径不受限**
+PASS 22. W-2 限流：不同来源互不影响（一个来源打错不连累另一个）
+PASS 23. W-2 限流：窗口过期自动解锁；桶数量有上限不会无限涨
+PASS 24. W-2 限流：IPv4-mapped IPv6 与 IPv4 归一成同一个桶
+
+24 个用例通过，0 个失败

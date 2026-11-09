@@ -1,0 +1,129 @@
+PASS 备份目录存在 E:\我的世界ai\tmp\r5-ops\bad-backup
+PASS manifest.json 可解析 createdAt=2026-11-08T13:10:32.8076589+08:00
+PASS manifest 含计数/清单摘要/来源（schemaVersion>=3） schemaVersion=3 mode=Cold
+PASS 备份时保证了一致性 冷备：Minecraft 服务端已停止（java/session.lock 检测通过）；每个组件复制前后比对 (大小,mtime) 零变更；SQLite 用 VACUUM INTO 取一致快照
+PASS 复制期间源目录零变更（快照是同一时刻的） 
+PASS 存在 world.zip 
+FAIL world.zip 大小一致 manifest=74208854 实际=74207854
+FAIL world.zip SHA256 一致 manifest=D848D155989F45853BDA8D3B8458EE90E88F171F40C073901444C22396829EEE 实际=5208F8E5AD2B2B34BAD8E1C3324B615D1993B3FEFA61BA4D1B68CB4CCF45C635
+PASS world.zip 记录了来源路径 server/world
+FAIL world.zip 可打开 Exception calling "OpenRead" with "1" argument(s): "End of Central Directory record could not be found."
+PASS 存在 world_nether.zip 
+PASS world_nether.zip 大小一致 454607 字节
+PASS world_nether.zip SHA256 一致 
+PASS world_nether.zip 记录了来源路径 server/world_nether
+PASS world_nether.zip 可打开 条目数=11
+PASS world_nether.zip 文件数一致 11
+PASS world_nether.zip 解压总字节一致 475468
+PASS world_nether.zip 清单摘要一致 4106d029d114
+PASS world_nether.zip 含 region/*.mca 数量相等 1
+PASS world_nether.zip 含 playerdata/*.dat 数量相等 0
+PASS world_nether.zip 含 memory.json 数量相等 0
+PASS world_nether.zip 含 bot 目录 数量相等 0
+PASS world_nether.zip 含 *.mca 总数 数量相等 1
+PASS world_nether.zip level.dat 大小一致 1654
+PASS world_nether.zip level.dat 是合法 gzip/NBT 首字节 0x0a（TAG_Compound）
+PASS world_nether.zip 每个 region/*.mca 头部可解析 1 个都至少有 1 个 chunk
+PASS 存在 world_the_end.zip 
+PASS world_the_end.zip 大小一致 10943 字节
+PASS world_the_end.zip SHA256 一致 
+PASS world_the_end.zip 记录了来源路径 server/world_the_end
+PASS world_the_end.zip 可打开 条目数=11
+PASS world_the_end.zip 文件数一致 11
+PASS world_the_end.zip 解压总字节一致 217426
+PASS world_the_end.zip 清单摘要一致 58f0c008e760
+PASS world_the_end.zip 含 region/*.mca 数量相等 1
+PASS world_the_end.zip 含 playerdata/*.dat 数量相等 0
+PASS world_the_end.zip 含 memory.json 数量相等 0
+PASS world_the_end.zip 含 bot 目录 数量相等 0
+PASS world_the_end.zip 含 *.mca 总数 数量相等 1
+PASS world_the_end.zip level.dat 大小一致 1658
+PASS world_the_end.zip level.dat 是合法 gzip/NBT 首字节 0x0a（TAG_Compound）
+PASS world_the_end.zip 每个 region/*.mca 头部可解析 1 个都至少有 1 个 chunk
+PASS 存在 bots.zip 
+PASS bots.zip 大小一致 8745110 字节
+PASS bots.zip SHA256 一致 
+PASS bots.zip 记录了来源路径 mindcraft/bots
+PASS bots.zip 可打开 条目数=493
+PASS bots.zip 文件数一致 493
+PASS bots.zip 解压总字节一致 33884273
+PASS bots.zip 清单摘要一致 d77a11aea94b
+PASS bots.zip 含 region/*.mca 数量相等 0
+PASS bots.zip 含 playerdata/*.dat 数量相等 0
+PASS bots.zip 含 memory.json 数量相等 3
+PASS bots.zip 含 bot 目录 数量相等 79
+PASS bots.zip 含 *.mca 总数 数量相等 0
+PASS bots.zip level.dat 大小一致 0
+PASS bots.zip 含任务板快照 bots/_board/board.sqlite 
+PASS bots.zip 含 bots/_board/board.sqlite 45056 字节
+PASS bots/_board/board.sqlite 用 VACUUM INTO 取快照 
+PASS bots/_board/board.sqlite 大小一致 45056
+PASS bots/_board/board.sqlite SHA256 一致 
+PASS bots/_board/board.sqlite integrity_check=ok 
+PASS bots/_board/board.sqlite user_version 一致 2
+PASS bots/_board/board.sqlite 表 jobs 行数与快照一致 0
+PASS bots/_board/board.sqlite 表 claims 行数与快照一致 0
+PASS bots/_board/board.sqlite 表 shared 行数与快照一致 1
+PASS 存在 plugins.zip 
+PASS plugins.zip 大小一致 4823799 字节
+PASS plugins.zip SHA256 一致 
+PASS plugins.zip 记录了来源路径 server/plugins
+PASS plugins.zip 可打开 条目数=589
+PASS plugins.zip 文件数一致 589
+PASS plugins.zip 解压总字节一致 53208084
+PASS plugins.zip 清单摘要一致 068bf7072155
+PASS plugins.zip 含 region/*.mca 数量相等 0
+PASS plugins.zip 含 playerdata/*.dat 数量相等 0
+PASS plugins.zip 含 memory.json 数量相等 0
+PASS plugins.zip 含 bot 目录 数量相等 0
+PASS plugins.zip 含 *.mca 总数 数量相等 0
+PASS plugins.zip level.dat 大小一致 0
+PASS plugins.zip 含 plugins/CoreProtect/database.db 45150208 字节
+PASS plugins/CoreProtect/database.db 用 VACUUM INTO 取快照 
+PASS plugins/CoreProtect/database.db 大小一致 45150208
+PASS plugins/CoreProtect/database.db SHA256 一致 
+PASS plugins/CoreProtect/database.db integrity_check=ok 
+PASS plugins/CoreProtect/database.db user_version 一致 0
+PASS 存在 server-config.zip 
+PASS server-config.zip 大小一致 29839 字节
+PASS server-config.zip SHA256 一致 
+PASS server-config.zip 记录了来源路径 server/*.json|*.yml|*.properties + server/config + config
+PASS server-config.zip 可打开 条目数=16
+PASS server-config.zip 文件数一致 16
+PASS server-config.zip 解压总字节一致 74758
+PASS server-config.zip 清单摘要一致 0f7553bafbd8
+PASS server-config.zip 含 region/*.mca 数量相等 0
+PASS server-config.zip 含 playerdata/*.dat 数量相等 0
+PASS server-config.zip 含 memory.json 数量相等 0
+PASS server-config.zip 含 bot 目录 数量相等 0
+PASS server-config.zip 含 *.mca 总数 数量相等 0
+PASS server-config.zip level.dat 大小一致 0
+PASS 存在 logs.zip 
+PASS logs.zip 大小一致 31926 字节
+PASS logs.zip SHA256 一致 
+PASS logs.zip 记录了来源路径 server/logs（最近 7 天）
+PASS logs.zip 可打开 条目数=11
+PASS logs.zip 文件数一致 11
+PASS logs.zip 解压总字节一致 55990
+PASS logs.zip 清单摘要一致 05fb15bff5be
+PASS logs.zip 含 region/*.mca 数量相等 0
+PASS logs.zip 含 playerdata/*.dat 数量相等 0
+PASS logs.zip 含 memory.json 数量相等 0
+PASS logs.zip 含 bot 目录 数量相等 0
+PASS logs.zip 含 *.mca 总数 数量相等 0
+PASS logs.zip level.dat 大小一致 0
+PASS 备份含 world 组件 
+PASS 备份含 bots 组件 
+PASS 任务板/记忆来自唯一真相 mindcraft/bots mindcraft/bots
+PASS manifest 声明了 bots 唯一真相 mindcraft/bots
+    遗留目录 bots 未纳入备份：仓库根的 bots\ 是 11-02 之前的遗留目录，脚本不备份它；其 _board 已过期（user_version=0，shared=0 行）
+FAIL 组件 world 有对应压缩包 components 声明了 world，但 entries 里没有 world.zip
+PASS 组件 world_nether 有对应压缩包 
+PASS 组件 world_the_end 有对应压缩包 
+PASS 组件 bots 有对应压缩包 
+PASS 组件 plugins 有对应压缩包 
+PASS 组件 server-config 有对应压缩包 
+PASS 组件 logs 有对应压缩包 
+PASS 排除项已显式记录 10×*.jar：插件/服务端 jar 可重新下载（约 53MB），恢复时按同名部署即可; 20×*-shm：SQLite 共享内存索引，可重建（恢复时只还原 db + -wal）; 3×session.lock：服务端运行期的独占锁文件，恢复后由服务端重建; 6×活跃 SQLite 库原文件：改用 VACUUM INTO 快照入包（-wal 语义由快照消化）; 1×server/server.properties：-ExcludeSecrets：含 rcon.password 等口令，按要求不备份
+
+HAS FAILURES: 122 项通过，4 项失败（0 项警告）

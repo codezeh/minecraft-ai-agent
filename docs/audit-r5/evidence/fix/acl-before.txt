@@ -1,0 +1,55 @@
+### icacls server-test\server.properties
+  E:\�ҵ�����ai\server-test\server.properties S-1-4-48068235-1068318981:(I)(W,D,DC)
+                                          BUILTIN\Administrators:(I)(F)
+                                          NT AUTHORITY\SYSTEM:(I)(F)
+                                          NT AUTHORITY\Authenticated Users:(I)(M)
+                                          BUILTIN\Users:(I)(RX)
+                                          Mandatory Label\Low Mandatory Level:(I)(NW)
+  
+  Successfully processed 1 files; Failed processing 0 files
+
+### icacls server\server.properties
+  E:\�ҵ�����ai\server\server.properties NT AUTHORITY\SYSTEM:(F)
+                                     BUILTIN\Administrators:(F)
+                                     LAPTOP-GDE992NS\zeh:(F)
+  
+  Successfully processed 1 files; Failed processing 0 files
+
+### icacls server-test
+  E:\�ҵ�����ai\server-test Everyone:(I)(CI)(DENY)(DC)
+                        S-1-4-48068235-1068318981:(I)(OI)(CI)(W,D,DC)
+                        BUILTIN\Administrators:(I)(F)
+                        BUILTIN\Administrators:(I)(OI)(CI)(IO)(F)
+                        NT AUTHORITY\SYSTEM:(I)(F)
+                        NT AUTHORITY\SYSTEM:(I)(OI)(CI)(IO)(F)
+                        NT AUTHORITY\Authenticated Users:(I)(M)
+                        NT AUTHORITY\Authenticated Users:(I)(OI)(CI)(IO)(M)
+                        BUILTIN\Users:(I)(RX)
+                        BUILTIN\Users:(I)(OI)(CI)(IO)(GR,GE)
+                        Mandatory Label\Low Mandatory Level:(I)(OI)(CI)(NW)
+  
+  Successfully processed 1 files; Failed processing 0 files
+
+### icacls mindcraft
+  E:\�ҵ�����ai\mindcraft NT AUTHORITY\Authenticated Users:(OI)(CI)(IO)(M)
+                      NT AUTHORITY\Authenticated Users:(M)
+                      NT AUTHORITY\SYSTEM:(F)
+                      NT AUTHORITY\SYSTEM:(OI)(CI)(IO)(F)
+                      BUILTIN\Administrators:(OI)(CI)(IO)(F)
+                      BUILTIN\Administrators:(F)
+                      BUILTIN\Users:(RX)
+                      BUILTIN\Users:(OI)(CI)(IO)(GR,GE)
+                      LAPTOP-GDE992NS\zeh:(F)
+  
+  Successfully processed 1 files; Failed processing 0 files
+
+### icacls mindcraft\keys.json
+  E:\�ҵ�����ai\mindcraft\keys.json NT AUTHORITY\SYSTEM:(F)
+                                BUILTIN\Administrators:(F)
+                                LAPTOP-GDE992NS\zeh:(F)
+  
+  Successfully processed 1 files; Failed processing 0 files
+
+### icacls mindcraft\.mindserver-token
+  [NOT FOUND] E:\我的世界ai\mindcraft\.mindserver-token
+

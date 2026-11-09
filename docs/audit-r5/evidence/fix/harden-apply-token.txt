@@ -1,0 +1,91 @@
+============================================================
+  凭据文件 ACL 加固（OPS-004）
+  模式：APPLY（会真的改）
+  当前账户：LAPTOP-GDE992NS\zeh
+============================================================
+
+--- E:\我的世界ai\mindcraft\.mindserver-token
+  DACL: 继承父目录（需要收口）
+  !! NT AUTHORITY\Authenticated Users | ReadAndExecute, Synchronize | Allow | 继承=True
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=True
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=True
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=True
+
+--- E:\我的世界ai\mindcraft\keys.json
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\server\server.properties
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\server-test\server.properties
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\mindcraft
+  DACL: 非继承（已收口）
+  ro NT AUTHORITY\Authenticated Users | ReadAndExecute, Synchronize | Allow | 继承=False
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok NT AUTHORITY\SYSTEM | 268435456 | Allow | 继承=False
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | 268435456 | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+[加固] E:\我的世界ai\mindcraft\.mindserver-token
+[已是收口] E:\我的世界ai\mindcraft\keys.json
+[已是收口] E:\我的世界ai\server\server.properties
+[已是收口] E:\我的世界ai\server-test\server.properties
+[已是收口] E:\我的世界ai\mindcraft
+
+--- 复验 ---
+--- E:\我的世界ai\mindcraft\.mindserver-token
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\mindcraft\keys.json
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\server\server.properties
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\server-test\server.properties
+  DACL: 非继承（已收口）
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- E:\我的世界ai\mindcraft
+  DACL: 非继承（已收口）
+  ro NT AUTHORITY\Authenticated Users | ReadAndExecute, Synchronize | Allow | 继承=False
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok NT AUTHORITY\SYSTEM | 268435456 | Allow | 继承=False
+  ok NT AUTHORITY\SYSTEM | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | FullControl | Allow | 继承=False
+  ok BUILTIN\Administrators | 268435456 | Allow | 继承=False
+  ok LAPTOP-GDE992NS\zeh | FullControl | Allow | 继承=False
+
+--- 应用可用性自检 ---
+  ok  可读可写：.mindserver-token
+  ok  可读可写：keys.json
+  ok  可读可写：server.properties
+  ok  可读可写：server.properties
+
+[完成] 凭据文件已只允许 当前账户/SYSTEM/Administrators。
+       回滚：icacls <文件> /inheritance:e
+APPLY EXITCODE=0

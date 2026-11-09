@@ -1,0 +1,23 @@
+=== 1) 配置三项现状（口令脱敏）===
+14:enable-rcon=true
+47:rcon.port=25575
+54:server-ip=127.0.0.1
+rcon.password 行数: 1
+口令长度: 32
+口令前 4 位: 434d
+
+=== 2) 口令泄漏扫描（限定文本文件，跳过 world/region 等二进制）===
+docs/ 命中新口令: 0
+tmp/r5-fix-rcon 命中新口令: 0
+docs/ 命中允许的前缀 434d 的文件数: 1
+
+=== 3) 残留进程 / 端口 ===
+java 进程数: 0
+25565/25575 监听:
+  无（生产服未运行）
+
+=== 4) 备份件 ===
+total 6
+drwxrwxrwx 1 zeh zeh    0 Nov  8 20:06 .
+drwxrwxrwx 1 zeh zeh 4096 Nov  8 20:12 ..
+-rwxrwxrwx 1 zeh zeh 1520 Nov  7 15:21 server.properties.bak-20261108-195535

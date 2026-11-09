@@ -1,0 +1,162 @@
+# [8] clone-all.ps1 端到端实测 —— 采集 2026-11-08T19:48:16+08:00
+
+## 8.1 脚本本体约定（与其余脚本一致）
+$ head -c 3 scripts/clone-all.ps1 | od -An -tx1
+ ef bb bf
+$ file scripts/clone-all.ps1
+scripts/clone-all.ps1: Unicode text, UTF-8 text, with CRLF line terminators
+$ PS 5.1 解析器语法检查
+PARSE OK: 0 errors
+
+## 8.2 主路径：-LocalSource 端到端（tmp/r5-bootstrap/repo）
+$ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/clone-all.ps1 -LocalSource -Dest tmp/r5-bootstrap/repo
+
+==============================================================================
+[1] 环境前置：git 可用性与参数解析
+==============================================================================
+  PASS  git 2.56.0.windows.4.niugit
+  INFO  -LocalSource：父仓 ← E:/我的世界ai
+  INFO  -LocalSource：子仓 ← E:\我的世界ai\mindcraft
+  INFO  目标目录：E:\我的世界ai\tmp\r5-bootstrap\repo
+  INFO  目标 ref：（各仓默认分支）
+
+==============================================================================
+[2] 建立目标目录（已存在且非空则拒绝，绝不覆盖）
+==============================================================================
+  PASS  已创建 E:\我的世界ai\tmp\r5-bootstrap\repo
+
+==============================================================================
+[3] clone 父仓
+==============================================================================
+  PASS  父仓已 clone 到 E:\我的世界ai\tmp\r5-bootstrap\repo
+
+==============================================================================
+[4] 检查父仓克隆里是否自带 mindcraft/（这就是 R5-004 的坑）
+==============================================================================
+  INFO  父仓克隆里没有可用的 mindcraft/ —— 符合预期（父仓 .gitignore:13 排除了 /mindcraft/）。
+  INFO  → 只 clone 父仓 = 有控制脚本、没有业务代码，跑不起来。这一步必须补，下面补。
+
+==============================================================================
+[5] clone mindcraft 子仓到 <Dest>/mindcraft
+==============================================================================
+  PASS  子仓已 clone 到 E:\我的世界ai\tmp\r5-bootstrap\repo\mindcraft
+
+==============================================================================
+[6] 校验：两个仓都已就位，HEAD 与 ref 一致
+==============================================================================
+  PASS  [父仓] HEAD 92d405c (main) · branch main · 79 commits · feat(ops): 地图备份做成开关且默认开启（用户拍板⑥）+ 工作区整理
+  PASS  [子仓] HEAD 33b4327 (main) · branch main · 302 commits · feat(identity): 允许离线 + 保留正版验证开关 (R4 t27)
+  PASS  父仓：92d405c  子仓：33b4327
+  PASS  子仓自带 web-dist/（含 index.html）—— 镜像所需的固化产物随仓库到位
+  PASS  web-dist/MANIFEST.json 存在
+
+==============================================================================
+[7] 下一步（照抄即可）
+==============================================================================
+
+  # 1) 进目录
+  cd "E:\我的世界ai\tmp\r5-bootstrap\repo"
+
+  # 2) 只校验：产物 ↔ 清单 ↔ 源码指纹 是否一致（秒级，不需要 docker）
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -VerifyOnly
+
+  # 3) 装运行时依赖（548 个包，首次约 10 分钟）
+  cd mindcraft; npm ci
+
+  # 4) 改了 web/ 源码后：重建产物并校验（不建镜像）
+  cd "E:\我的世界ai\tmp\r5-bootstrap\repo"; powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -SkipDocker
+
+  # 5) 有 docker 时全链路（构建镜像 + 运行时 200 断言）
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1
+
+  两个仓都就位：E:\我的世界ai\tmp\r5-bootstrap\repo
+
+EXIT_CLONEALL=0
+
+## 8.3 干净克隆里的目录清单
+$ ls -1 tmp/r5-bootstrap/repo
+README.md
+bugs
+config
+docs
+mindcraft
+scripts
+server
+test-template
+web
+停止面板.bat
+启动面板.bat
+收紧RCON.bat
+文件
+
+$ ls -d tmp/r5-bootstrap/repo/mindcraft
+tmp/r5-bootstrap/repo/mindcraft
+
+$ ls -1 tmp/r5-bootstrap/repo/mindcraft/web-dist
+MANIFEST.json
+README.md
+assets
+index.html
+
+$ ls -1 tmp/r5-bootstrap/repo/mindcraft/web-dist/assets
+DebugView-BkBssVOn.js
+DebugView-Pp-4MEq7.css
+SetupView-B6mvS54m.css
+SetupView-BqZvFAjd.js
+TerrainView-CLvOw5wc.js
+TerrainView-Dc9bwTkz.css
+index-BRGdExsB.js
+index-BYekMoBu.css
+
+## 8.4 干净克隆里 .gitattributes 是否存在（T14 未提交 ⇒ 应缺失）
+$ ls -l .gitattributes
+ls: cannot access '.gitattributes': No such file or directory
+
+## 8.5 干净克隆里 release.ps1 -VerifyOnly
+$ cd tmp/r5-bootstrap/repo && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -VerifyOnly
+  |   PASS  源码指纹 sha256:0085a9700f69e3cd63ee2a607dea05b20690940be8c298d8a38a0b55f5ff978c（25 个输入文件）
+  |   FAIL  产物与源码不一致：清单记录 sha256:7a45c9b2ea63d4a84f41261deba14fdcd4470ec3fdfbf7a1f174c593457c3585，当前 web/ 源码是 sha256:0085a9700f69e3cd63ee2a607dea05b20690940be8c298d8a38a0b55f5ff978c
+  FAIL  命令失败（退出码 1）：C:\Users\zeh\AppData\Local\Temp\t10-manifest-f3b4d46720e246a0b925cda57b4ee6e7.mjs verify E:\我的世界ai\tmp\r5-bootstrap\repo\mindcraft\web-dist\MANIFEST.json E:\我的世界ai\tmp\r5-bootstrap\repo\web
+EXIT_VERIFY_IN_CLONE=1
+
+## 8.6 干净克隆里 npm ci
+$ cd tmp/r5-bootstrap/repo/mindcraft && npm ci
+patch-package 8.0.1
+Applying patches...
+mineflayer@4.39.0 ✔
+mineflayer-pathfinder@2.4.5 ✔
+mineflayer-pvp@1.3.2 ✔
+prismarine-viewer@1.33.0 ✔
+protodef@1.19.0 ✔
+
+added 548 packages in 2m
+EXIT_NPMCI=0
+
+## 8.7 半成品状态（父仓成功、子仓失败）检测
+$ powershell ... -ParentUrl E:/我的世界ai -MindcraftUrl E:/我的世界ai/没有这个子仓 -Dest tmp/r5-bootstrap/half/repo
+[5] clone mindcraft 子仓到 <Dest>/mindcraft
+==============================================================================
+
+  FAIL  子仓 clone 失败，当前处于**半成品状态**：父仓已就位（E:\我的世界ai\tmp\r5-bootstrap\half\repo），但 E:\我的世界ai\tmp\r5-bootstrap\half\repo\mindcraft 缺失/不可用，这样跑不起来。
+fatal: 'E:/我的世界ai/没有这个子仓' does not appear to be a git repository
+fatal: Could not read from remote repository.
+Please make sure you have the correct access rights
+and the repository exists.
+        修复：补跑：git clone E:/我的世界ai/没有这个子仓 "E:\我的世界ai\tmp\r5-bootstrap\half\repo\mindcraft"；或清空 E:\我的世界ai\tmp\r5-bootstrap\half\repo 后重跑本脚本。
+
+
+## 8.8 -Ref 正常
+  INFO  目标 ref：audit/night-20261106
+  PASS  [父仓] 已检出 origin/audit/night-20261106
+  PASS  [子仓] 已检出 origin/audit/night-20261106
+[7] 校验：两个仓都已就位，HEAD 与 ref 一致
+  PASS  [父仓] HEAD 92d405c (HEAD) · branch HEAD · 79 commits · feat(ops): 地图备份做成开关且默认开启（用户拍板⑥）+ 工作区整理
+  PASS  [子仓] HEAD 33b4327 (HEAD) · branch HEAD · 302 commits · feat(identity): 允许离线 + 保留正版验证开关 (R4 t27)
+
+## 8.9 -Ref 不存在（明确报错）
+  FAIL  [父仓] 里不存在 ref：33b4327
+        修复：确认该 ref 存在于对应仓库；两个仓的 ref 不一定同名。
+
+## 8.10 目标目录非空（拒绝覆盖）
+  FAIL  目标目录已存在且非空：E:\我的世界ai\tmp\r5-bootstrap\repo
+        修复：换一个 -Dest，或先自行清理该目录（脚本不替你删东西）。

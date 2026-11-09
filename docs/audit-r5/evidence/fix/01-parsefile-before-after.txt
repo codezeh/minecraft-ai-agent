@@ -1,0 +1,55 @@
+# R5-001 验收证据①：ParseFile 前后 + 只加 BOM（正文零改动）
+# 生成时间：2026-11-08T19:35:21+08:00  主机：PS 5.1.26100.9711 / ANSI=gb2312(936)
+
+## 1) 修复前（HEAD 版本，无 BOM）
+$ git show HEAD:scripts/start-panel.ps1 | head -c 3 | od -An -tx1
+ 23 20 4d
+   （= 23 20 4d，无 BOM）
+$ powershell -File tmp/r5-fix/measure-prefix.ps1     # 实测：改前副本 vs 改后工作区
+[tmp/r5-fix/start-panel.ps1.orig] bytes=15706 head=23 20 4D (no BOM) ERRORS=8
+    line 73 col 17 : Array index expression is missing or not valid.
+    line 92 col 43 : Missing type name after '['.
+    line 152 col 46 : Array index expression is missing or not valid.
+    line 306 col 39 : The string is missing the terminator: '.
+    line 81 col 35 : Missing closing '}' in statement block or type definition.
+    line 78 col 65 : Missing closing '}' in statement block or type definition.
+    line 66 col 35 : Missing closing '}' in statement block or type definition.
+    line 64 col 63 : Missing closing '}' in statement block or type definition.
+[scripts/start-panel.ps1] bytes=15709 head=EF BB BF (BOM) ERRORS=0
+
+## 2) 修复后（工作区版本，EF BB BF 开头）
+$ head -c 3 scripts/start-panel.ps1 | od -An -tx1
+ ef bb bf
+$ powershell -Command "[Parser]::ParseFile(scripts/start-panel.ps1); $e.Count"
+ERRORS=0
+
+## 3) 正文零改动证明（工作区对工作区；去 BOM 后逐字节相同）
+   注意：仓库 blob 是 LF、工作区因 core.autocrlf 是 CRLF，所以只能"工作区改前 vs 改后"比；
+         与 git show HEAD: 的字节数不同属正常（换行被转换）。
+$ ls -l tmp/r5-fix/start-panel.ps1.orig scripts/start-panel.ps1
+-rwxrwxrwx 1 zeh zeh    15709 Nov  8 19:15 scripts/start-panel.ps1
+-rwxrwxrwx 1 zeh zeh    15706 Nov  8 19:05 tmp/r5-fix/start-panel.ps1.orig
+$ sha256sum tmp/r5-fix/start-panel.ps1.orig          # 改前工作区副本
+744b097b99b565fdec8ebd2959dae91d46bcbb6811d4f76e01d08206707bf2b0  tmp/r5-fix/start-panel.ps1.orig
+$ tail -c +4 scripts/start-panel.ps1 | sha256sum     # 改后去掉 3 字节 BOM
+744b097b99b565fdec8ebd2959dae91d46bcbb6811d4f76e01d08206707bf2b0  -
+   ⇒ 两个 sha256 完全相同 = 除 BOM 外一个字节都没动；文件仅 15706 → 15709（+3）
+
+## 4) git diff 双重确认（--stat / --numstat / -w）
+$ git diff --stat -- scripts/start-panel.ps1
+ scripts/start-panel.ps1 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+$ git diff --numstat -- scripts/start-panel.ps1
+1	1	scripts/start-panel.ps1
+$ git diff -w -- scripts/start-panel.ps1
+diff --git a/scripts/start-panel.ps1 b/scripts/start-panel.ps1
+index 7e96430..6f802cb 100644
+--- a/scripts/start-panel.ps1
++++ b/scripts/start-panel.ps1
+@@ -1,4 +1,4 @@
+-# Minecraft AI 陪玩面板 —— 一键启动
++﻿# Minecraft AI 陪玩面板 —— 一键启动
+ # 由 启动面板.bat 调起。所有中文都在这里（UTF-8+BOM），cmd 那层只留 ASCII。
+ #
+ # 设计要点（都是实测踩出来的）：
+   ⇒ 只有首行变化，正是 BOM（-w 不会把 BOM 当空白）。除该行外无任何增删。

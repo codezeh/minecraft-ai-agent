@@ -1,0 +1,81 @@
+# [1] 换行钉 + 归一化证据 —— 采集 2026-11-08T19:09:55+08:00
+
+## 1.1 新建父仓 .gitattributes（此前不存在）
+$ ls -l .gitattributes   # 修复前：No such file or directory
+-rwxrwxrwx 1 zeh zeh     2196 Nov  8 19:02 .gitattributes
+
+## 1.2 check-attr 前后对照（验收点）
+### 修复前：
+$ git check-attr -a -- web/tsconfig.json
+（空输出 —— 无任何属性）
+
+### 修复后：
+$ git check-attr -a -- web/tsconfig.json
+web/tsconfig.json: text: set
+web/tsconfig.json: eol: lf
+
+$ git check-attr -a -- web/src/api/socket.ts
+web/src/api/socket.ts: text: set
+web/src/api/socket.ts: eol: lf
+
+$ git check-attr text eol -- web/src/views/SetupView.vue
+web/src/views/SetupView.vue: text: set
+web/src/views/SetupView.vue: eol: lf
+
+## 1.3 子仓产物侧属性未被破坏
+$ git -C mindcraft check-attr -a -- web-dist/index.html
+web-dist/index.html: text: unset
+$ git -C mindcraft check-attr -a -- patches/mineflayer+4.39.0.patch
+patches/mineflayer+4.39.0.patch: text: unset
+$ git -C mindcraft status --porcelain
+ M src/agent/action_manager.js
+ M web-dist/MANIFEST.json
+ D web-dist/assets/DebugView-BkBssVOn.js
+ D web-dist/assets/SetupView-B6mvS54m.css
+ D web-dist/assets/SetupView-BqZvFAjd.js
+ D web-dist/assets/TerrainView-CLvOw5wc.js
+ D web-dist/assets/TerrainView-Dc9bwTkz.css
+ D web-dist/assets/index-BRGdExsB.js
+ D web-dist/assets/index-BYekMoBu.css
+ M web-dist/index.html
+?? web-dist/assets/DebugView-94geOrTx.js
+?? web-dist/assets/SetupView-CQeN4yGC.css
+?? web-dist/assets/SetupView-FniJwIn7.js
+?? web-dist/assets/TerrainView-BH9oWS7R.js
+?? web-dist/assets/TerrainView-BkR-DBrX.css
+?? web-dist/assets/index-DKGTVhDR.js
+?? web-dist/assets/index-Hcxgqz-Q.css
+（空 = 子仓未被改动）
+
+## 1.4 归一化：19 个 CRLF 文件的处理
+修复前：web/ 受跟踪文件 47 个，含 CR 的 19 个（其中 13 个落在 SOURCE_ENTRIES）
+$ git add --renormalize .    # 无输出（HEAD blob 本已是 LF，索引无需变更）
+$ git checkout-index -a -f   # 未生效：Git 认为文件已是最新，不重走 smudge
+$ rm <19 个含 CR 的文件> && git checkout -- web/   # 强制重走 smudge/eol 过滤
+修复后：
+  仍含 CR: web/poc/render-check.png
+  web/ 受跟踪文件中含 CR 的个数 = 1（仅 web/poc/render-check.png，它是 PNG 二进制，已由 .gitattributes 的 *.png binary 排除，不参与换行归一）
+
+$ file web/tsconfig.json
+web/tsconfig.json: JSON text data
+$ file web/src/api/socket.ts
+web/src/api/socket.ts: Unicode text, UTF-8 text
+
+## 1.5 二进制未被改（PNG 字节不变）
+$ sha256sum web/poc/render-check.png
+accd20ebda28b695211660ae7d9097cb79d6a1b04b0a7daa599c0c42d1a5c841  web/poc/render-check.png
+$ git cat-file -p HEAD:web/poc/render-check.png | sha256sum
+accd20ebda28b695211660ae7d9097cb79d6a1b04b0a7daa599c0c42d1a5c841  -
+
+## 1.6 归一化后源码指纹
+$ node <srcfp.mjs> web
+SOURCE_HASH sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2
+FILE_COUNT 25
+
+## 1.7 本次改动清单（git status）
+$ git status --porcelain
+ M scripts/start-panel.ps1
+ M "\345\201\234\346\255\242\351\235\242\346\235\277.bat"
+ M "\345\220\257\345\212\250\351\235\242\346\235\277.bat"
+?? .gitattributes
+?? docs/audit-r5/

@@ -1,0 +1,142 @@
+# [7] 决定性实验：换行是否影响源码指纹与构建产物（钉实/修正 D-17）—— 采集 2026-11-08T16:11:50+08:00
+
+## 7.0 前置：本机检出状态
+$ git config --get core.autocrlf
+true
+$ git ls-files "web/*" | wc -l
+47
+
+## 7.1 受跟踪 web/ 文件中含 CRLF 的清单
+$ for f in $(git ls-files "web/*"); do grep -qU $\x27\\r\x27 "$f" && echo "$f"; done
+web/poc/render-check.png                                   CR行=106
+web/poc/terrain3d-preview.html                             CR行=225
+web/scripts/offline-audit-web-batch2.mjs                   CR行=167
+web/scripts/offline-audit-web001.mjs                       CR行=167
+web/scripts/stop-all.mjs                                   CR行=152
+web/scripts/stop-policy.mjs                                CR行=59
+web/src/api/socket.ts                                      CR行=98
+web/src/components/ChatStream.vue                          CR行=174
+web/src/components/IdentityPanel.vue                       CR行=228
+web/src/components/InventoryGrid.vue                       CR行=110
+web/src/components/StatusCard.vue                          CR行=129
+web/src/components/TerrainCanvas.vue                       CR行=413
+web/src/stores/agents.ts                                   CR行=309
+web/src/stores/diag.ts                                     CR行=207
+web/src/stores/terrain.ts                                  CR行=162
+web/src/types/three-shim.d.ts                              CR行=120
+web/src/views/ConsoleView.vue                              CR行=64
+web/src/views/SetupView.vue                                CR行=380
+web/tsconfig.json                                          CR行=27
+
+落入 release.ps1 SOURCE_ENTRIES 的 13 个（真正影响指纹）：
+  web/src/api/socket.ts
+  web/src/components/ChatStream.vue
+  web/src/components/IdentityPanel.vue
+  web/src/components/InventoryGrid.vue
+  web/src/components/StatusCard.vue
+  web/src/components/TerrainCanvas.vue
+  web/src/stores/agents.ts
+  web/src/stores/diag.ts
+  web/src/stores/terrain.ts
+  web/src/types/three-shim.d.ts
+  web/src/views/ConsoleView.vue
+  web/src/views/SetupView.vue
+  web/tsconfig.json
+
+## 7.2 把 web/ 拷成 LF 副本（只删 CR，不动内容）
+$ node tmp/r5-deploy-2/make_lf.mjs web tmp/r5-deploy-2/web-lf
+CONVERTED_FILES=19（见 07-eol-crlf-to-lf-conversion.json 逐文件前后 sha256）
+语义等价性核对（去 CR 后与非二进制原文件逐字节比对）：
+LF副本文件数=47 去CR后逐字节相同=47 不同=0
+
+## 7.3 同一套算法（release.ps1 第417-436行）算两边源码指纹
+$ node <srcfp.mjs> web
+SOURCE_HASH sha256:8a1714aadc5570d216fb2517d145b0cfdd5bc33bbe0953b1d408527554431977
+FILE_COUNT 25
+$ node <srcfp.mjs> tmp/r5-deploy-2/web-lf
+SOURCE_HASH sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2
+FILE_COUNT 25
+
+## 7.4 真实 release.ps1 -VerifyOnly：A=原 web/（CRLF），B=-SourceRoot LF 副本
+$ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -VerifyOnly
+  |   PASS  源码指纹 sha256:8a1714aadc5570d216fb2517d145b0cfdd5bc33bbe0953b1d408527554431977（25 个输入文件）
+  |   FAIL  产物与源码不一致：清单记录 sha256:7a45c9b2ea63d4a84f41261deba14fdcd4470ec3fdfbf7a1f174c593457c3585，当前 web/ 源码是 sha256:8a1714aadc5570d216fb2517d145b0cfdd5bc33bbe0953b1d408527554431977
+EXIT_A=1
+
+$ powershell ... -VerifyOnly -SourceRoot tmp/r5-deploy-2/web-lf
+  源码树      : E:\我的世界ai\tmp\r5-deploy-2\web-lf
+  |   PASS  源码指纹 sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2（25 个输入文件）
+  |   FAIL  产物与源码不一致：清单记录 sha256:7a45c9b2ea63d4a84f41261deba14fdcd4470ec3fdfbf7a1f174c593457c3585，当前 web/ 源码是 sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2
+EXIT_B=1
+
+## 7.5 红/绿翻转（同一份产物，用 release.ps1 内嵌的同一段 helper，逐字提取）
+$ 提取：awk/node 从 scripts/release.ps1 的 $metaScript 单引号 here-string 中逐字取出（127 行，见 07-eol-helper-extracted.mjs）
+$ cp -r mindcraft/web-dist tmp/r5-deploy-2/web-dist-lf   # 产物副本，9 个产物字节不变
+$ node helper stamp tmp/r5-deploy-2/web-dist-lf/MANIFEST.json tmp/r5-deploy-2/web-lf
+  → 按 LF 源码盖章：source.hash=sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2
+  → artifact.hash 保持不变：sha256:55bc9624642a4e4eebe9618c8359ffb51379616266a156d79273967cf0cc2bae
+$ node helper verify <该清单> tmp/r5-deploy-2/web-lf     # 同一产物 + LF 源码
+  PASS  9 个产物文件与清单逐条一致
+  PASS  产物目录没有清单未记录的野文件
+  PASS  index.html 的 2 个入口引用都能在产物里找到
+  PASS  源码指纹 sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2（25 个输入文件）
+  PASS  产物指纹 sha256:55bc9624642a4e4eebe9618c8359ffb51379616266a156d79273967cf0cc2bae（9 个产物文件）
+  PASS  产物与 web/ 源码指纹一致（产物确实是这份源码构建出来的）
+  PASS  产物指纹与清单一致
+  PASS  入口引用与清单一致
+  INFO  generatedAt = 2026-11-08T08:02:36Z
+
+  ALL PASS: 8 passed, 0 failed
+  EXIT_C=0（绿）
+$ node helper verify <该清单> web                        # 同一产物 + 原 web/（CRLF）
+  PASS  9 个产物文件与清单逐条一致
+  PASS  产物目录没有清单未记录的野文件
+  PASS  index.html 的 2 个入口引用都能在产物里找到
+  PASS  源码指纹 sha256:8a1714aadc5570d216fb2517d145b0cfdd5bc33bbe0953b1d408527554431977（25 个输入文件）
+  PASS  产物指纹 sha256:55bc9624642a4e4eebe9618c8359ffb51379616266a156d79273967cf0cc2bae（9 个产物文件）
+  FAIL  产物与源码不一致：清单记录 sha256:824059647d14761ffbddbb80f5e6b291500eb14ff859baf401a92da131e79ab2，当前 web/ 源码是 sha256:8a1714aadc5570d216fb2517d145b0cfdd5bc33bbe0953b1d408527554431977
+        修复：web/ 改过但产物没重新生成 → 运行 scripts/release.ps1 重新构建并同步。
+  EXIT_D=1（红）
+
+## 7.6 构建产物本身也随换行变化
+$ cd tmp/r5-deploy-2/web-lf && npm ci && npm run build（LF 源码）
+635c8c4f263e8db656fa721cb0b5bc7825c1532e57c1351ff0382770e2d40518  ./assets/DebugView-94geOrTx.js
+eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087  ./assets/DebugView-Pp-4MEq7.css
+adc453016a946b5f0ca0c642f4252332b51ef12611dbeed5637bdb4c4744f12a  ./assets/SetupView-CQeN4yGC.css
+8a801e20177368dfc59689d68633d53b74dd5046158957392cf93f19c79cb9c1  ./assets/SetupView-FniJwIn7.js
+6511c678a8f5663c6019be2195522023fe5050c5cc2974cfb85eb0d962fa2002  ./assets/TerrainView-BH9oWS7R.js
+0039fd6f30ac9c258d0b4a33351f7cf8af95cb6cfd800c1c595dc7da10dfecec  ./assets/TerrainView-BkR-DBrX.css
+02debb27f56bf85eeb3cf690bb5e6ff53b9655393f54069ef8273a4dd68c2a5f  ./assets/index-DKGTVhDR.js
+be7f5826de4f7f8d47e7ff96265f2eaba70dcaf2a557c071da14314c668b558a  ./assets/index-Hcxgqz-Q.css
+e1bc39d516480a081a13fb02d2128b3c12f4beb730e9d0f6a8c17193717ce5e1  ./index.html
+
+$ cd tmp/r5-deploy/webbuild && npm run build（CRLF 源码，重跑一次验证确定性）
+3ece77d37881a17d70567665fc0159f9905204090e605df6f1549170994c2b36  ./assets/DebugView-DghAYUGJ.js
+eb7df7a3b8cc9cac12a6e7a1620f5c391972411d245596c93028eb0b43734087  ./assets/DebugView-Pp-4MEq7.css
+99a654b65b3f294869a8a127e71796b264b255785371995145b81360e0d53a01  ./assets/SetupView-B6mvS54m.css
+8f7bf5ffcfc247c9849fac29424078f6d3503542700d9566a139be22bea01d44  ./assets/SetupView-CLC7EFHX.js
+051c04226ff88a2c16556dbd5fed41835ceb2d6df0fde2a1c145878876c86541  ./assets/TerrainView-D3mzsL_g.js
+14ea2dce090163293fd77bd008a64eb0d2745f67283e36373780ca25a9163171  ./assets/TerrainView-Dc9bwTkz.css
+89dec4338bf7b484c8b308f329f16f62e3b7b421a873fa142c9ad075467b8b62  ./assets/index-Df7SBz-6.js
+f47e025056231c6f0cb33ac8bdd152ae6e9f7561bb3fc44038fc063e426c4fd1  ./assets/index-XrhiKJjk.css
+093bf102d2e001d1b2ec5504c9eb348eae4ae155c757eacf22363d513b8d12ed  ./index.html
+
+## 7.7 构建确定性对照：同一棵 CRLF 树连跑两次结果一致
+（见 7.6 第二段与 T2 的 03-web-rebuild.log，两者逐行相同 ⇒ 构建确定，差异只来自换行）
+
+## 7.8 git 属性对照
+$ git check-attr -a -- web/tsconfig.json
+（空输出 = 源码侧没有任何属性 = 无换行约束）
+$ git -C mindcraft check-attr -a -- web-dist/index.html
+web-dist/index.html: text: unset
+$ git -C mindcraft check-attr -a -- web-dist/assets/index-BRGdExsB.js
+web-dist/assets/index-BRGdExsB.js: text: unset
+$ ls .gitattributes
+ls: cannot access '.gitattributes': No such file or directory
+（父仓没有 .gitattributes）
+$ grep -n "text" mindcraft/.gitattributes（非注释行）
+8:#   ⇒ 产物目录必须声明 `-text`（不做任何换行转换），保证"克隆出来的字节 == 构建出来的字节"。
+13:web-dist/** -text
+14:web-dist/* -text
+17:patches/** -text
+18:patches/* -text
