@@ -95,7 +95,7 @@ export class Gemini {
         }
     }
 
-    async sendVisionRequest(turns, systemMessage, imageBuffer) {
+    async sendVisionRequest(turns, systemMessage, imageBuffer, opts = {}) {
         const imagePart = {
             inlineData: {
                 data: imageBuffer.toString('base64'),
@@ -126,7 +126,9 @@ export class Gemini {
                 generationConfig: {
                     ...(this.params || {})
                 },
-                systemInstruction: systemMessage
+                systemInstruction: systemMessage,
+                // ★ t29：取消信号（与 sendRequest 同口径：abortSignal 属于 config；无 signal 时不加这个键）
+                ...(opts?.signal ? { config: { abortSignal: opts.signal } } : {}),
             });
             recordUsage(result?.usageMetadata, this.model_name, 'vision');
             res = await result.text;

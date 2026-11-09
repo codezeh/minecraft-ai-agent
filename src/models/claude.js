@@ -76,7 +76,7 @@ export class Claude {
         return res;
     }
 
-    sendVisionRequest(turns, systemMessage, imageBuffer) {
+    sendVisionRequest(turns, systemMessage, imageBuffer, opts = {}) {
         const imageMessages = [...turns];
         imageMessages.push({
             role: "user",
@@ -96,7 +96,7 @@ export class Claude {
             ]
         });
 
-        return this.sendRequest(imageMessages, systemMessage);
+        return this.sendRequest(imageMessages, systemMessage, undefined, opts);
     }
 
     embed(_text) {

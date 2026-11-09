@@ -523,8 +523,8 @@ export class Prompter {
     }
 
     /** 旧契约（string）。H4：失败/截断一律返回**旧记忆**（不覆盖 memory.json）。 */
-    async promptMemSaving(to_summarize) {
-        const r = await this.promptMemSavingResult(to_summarize);
+    async promptMemSaving(to_summarize, opts = {}) {
+        const r = await this.promptMemSavingResult(to_summarize, opts);
         if (!r.hasContent || r.truncated) return this.agent?.history?.memory ?? '';
         return r.content;
     }
@@ -534,17 +534,37 @@ export class Prompter {
      * 失败 → status=error；截断 → status=truncated（content 仍保留，但 history 的写盘段
      * 会因为 status 拒绝覆盖 memory.json —— 状态在字段里，不再靠"剥不剥标记"决定）。
      */
-    async promptMemSavingResult(to_summarize) {
+    async promptMemSavingResult(to_summarize, opts = {}) {
+        // ★ t29（R5）：**接取消信号**。原来这里只有 2 个形参 ⇒ 模型层收不到 signal，
+        //   玩家 `!stop` / 面板停止 / 动作超时都拦不住一次记忆摘要，只能等适配器自身 120s 上限。
+        const callOpts = this._callOptions(opts);
+        if (callOpts.signal?.aborted) {
+            const cancelled = new ModelResult({
+                status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                errorMessage: '操作在发请求前已被取消',
+            });
+            cancelled.operationId = callOpts.operationId;
+            return this._memResult(cancelled);
+        }
         // ★ H4：本轮摘要是否被截断（history.js 的写盘段读这个标志做第二道保险）。
         this.last_memory_summary_truncated = false;
         await this.checkCooldown();
         const started = Date.now();
         let prompt = this.profile.saving_memory;
         prompt = await this.replaceStrings(prompt, null, null, to_summarize);
-        const resp = await this.chat_model.sendRequest([], prompt);
+        // ★ t29：第 4 参把 {signal,timeoutMs,operationId} 交给适配器（与 promptConvo/Coding 同口径）
+        const resp = await this.chat_model.sendRequest([], prompt, undefined, callOpts);
         const typed = toModelResult(resp, { elapsedMs: Date.now() - started });
         await this._saveLog(prompt, to_summarize, typed.hasContent ? typed.content : typed.toString(),
             typed.failed ? 'memSaving-failed' : (typed.truncated ? 'memSaving-truncated' : 'memSaving'));
+        // ★ t29：生成期间被取消 ⇒ 这段内容不作数（否则"停下来了"却照样把摘要写进 memory）
+        if (callOpts.signal?.aborted) {
+            console.warn(`[llm] ${this.agent.name} 记忆摘要期间被取消 ⇒ 丢弃本次摘要`);
+            return this._memResult(new ModelResult({
+                status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                errorMessage: '记忆摘要期间被取消',
+            }));
+        }
         // 第31条：失败**绝不能**当成"新记忆摘要"存进去（会覆盖上一轮真实摘要）。
         if (typed.failed) {
             console.warn(`[llm] ${this.agent.name} 记忆摘要失败(${typed.errorCode})，保留原记忆不覆盖: ${typed.errorMessage}`);
@@ -570,25 +590,45 @@ export class Prompter {
     }
 
     /** 旧契约（boolean）：见 promptShouldRespondToBotResult。 */
-    async promptShouldRespondToBot(new_message) {
-        const r = await this.promptShouldRespondToBotResult(new_message);
+    async promptShouldRespondToBot(new_message, opts = {}) {
+        const r = await this.promptShouldRespondToBotResult(new_message, opts);
         if (r.failed) return false;
         return r.content.trim().toLowerCase() === 'respond';
     }
 
     /** 带类型：只输出一个词的判断改成读 status + content（截断时 content 已是干净的词）。 */
-    async promptShouldRespondToBotResult(new_message) {
+    async promptShouldRespondToBotResult(new_message, opts = {}) {
+        // ★ t29：接取消信号（原来 2 个形参 ⇒ "要不要回话"这一问也拦不住）
+        const callOpts = this._callOptions(opts);
+        if (callOpts.signal?.aborted) {
+            const cancelled = new ModelResult({
+                status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                errorMessage: '操作在发请求前已被取消',
+            });
+            cancelled.operationId = callOpts.operationId;
+            return coerceModelResult(cancelled, 'promptShouldRespondToBot');
+        }
         await this.checkCooldown();
         const started = Date.now();
         let prompt = this.profile.bot_responder;
         let messages = this.agent.history.getHistory();
         messages.push({ role: 'user', content: new_message });
         prompt = await this.replaceStrings(prompt, null, null, messages);
-        const res = await this.chat_model.sendRequest([], prompt);
+        const res = await this.chat_model.sendRequest([], prompt, undefined, callOpts);
         const typed = toModelResult(res, { elapsedMs: Date.now() - started });
         // 第31条：失败标记不是 "respond"（旧实现靠字符串比较，现在靠 status）
         if (typed.failed) {
             console.warn(`[llm] ${this.agent.name} bot_responder 调用失败，按「不接话」处理: ${typed.errorMessage}`);
+        }
+        // ★ t29：生成期间被取消 ⇒ 按"不接话"处理（cancelled 不是 ok，调用方不会因它去回话）
+        if (callOpts.signal?.aborted) {
+            const cancelled = coerceModelResult(new ModelResult({
+                status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                errorMessage: '决定是否回话期间被取消',
+            }), 'promptShouldRespondToBot');
+            this.last_bot_responder_status = cancelled.status;
+            noteModelResult(cancelled, 'botresponder');
+            return cancelled;
         }
         const r = coerceModelResult(typed, 'promptShouldRespondToBot');
         this.last_bot_responder_status = r.status;
@@ -597,17 +637,38 @@ export class Prompter {
     }
 
     /** 旧契约（string）：见 promptVisionResult。 */
-    async promptVision(messages, imageBuffer) {
-        return this._legacyString(await this.promptVisionResult(messages, imageBuffer));
+    async promptVision(messages, imageBuffer, opts = {}) {
+        return this._legacyString(await this.promptVisionResult(messages, imageBuffer, opts));
     }
 
     /** 带类型：视觉失败从此不再以 `[LLM_ERROR] …` 字符串进"图像分析"上下文（缺口 C 的根治入口）。 */
-    async promptVisionResult(messages, imageBuffer) {
+    async promptVisionResult(messages, imageBuffer, opts = {}) {
+        // ★ t29：接取消信号（原来 3 个形参；调用适配器时也只给 3 个实参）
+        const callOpts = this._callOptions(opts);
+        if (callOpts.signal?.aborted) {
+            const cancelled = new ModelResult({
+                status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                errorMessage: '操作在发请求前已被取消',
+            });
+            cancelled.operationId = callOpts.operationId;
+            return coerceModelResult(cancelled, 'promptVision');
+        }
         await this.checkCooldown();
         const started = Date.now();
         let prompt = this.profile.image_analysis;
         prompt = await this.replaceStrings(prompt, messages, null, null, null);
-        const raw = await this.vision_model.sendVisionRequest(messages, prompt, imageBuffer);
+        // ★ t29：第 4 参 opts 透传到适配器（11 个实现的签名同步加了 `opts = {}`）
+        const raw = await this.vision_model.sendVisionRequest(messages, prompt, imageBuffer, callOpts);
+        // ★ t29：生成期间被取消 ⇒ 这张图的描述不作数
+        if (callOpts.signal?.aborted) {
+            const cancelled = coerceModelResult(new ModelResult({
+                status: STATUS.CANCELLED, errorCode: ERROR_CODE.CANCELLED,
+                errorMessage: '看图期间被取消',
+            }), 'promptVision');
+            this.last_vision_status = cancelled.status;
+            noteModelResult(cancelled, 'vision');
+            return cancelled;
+        }
         const r = coerceModelResult(toModelResult(raw, { elapsedMs: Date.now() - started }), 'promptVision');
         this.last_vision_status = r.status;
         noteModelResult(r, 'vision');

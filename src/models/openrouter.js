@@ -67,7 +67,7 @@ export class OpenRouter {
         return res;
     }
 
-    sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer, opts = {}) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",
@@ -82,7 +82,7 @@ export class OpenRouter {
             ]
         });
         
-        return this.sendRequest(imageMessages, systemMessage);
+        return this.sendRequest(imageMessages, systemMessage, undefined, opts);
     }
 
     embed(_text) {

@@ -63,7 +63,7 @@ export class LMStudio {
         return res;
     }
 
-    sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer, opts = {}) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: 'user',
@@ -75,7 +75,7 @@ export class LMStudio {
                 }
             ]
         });
-        return this.sendRequest(imageMessages, systemMessage);
+        return this.sendRequest(imageMessages, systemMessage, undefined, opts);
     }
 
     async embed(text) {

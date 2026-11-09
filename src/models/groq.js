@@ -94,7 +94,7 @@ export class GroqCloudAPI {
         });
     }
 
-    sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer, opts = {}) {
         const imageMessages = messages.filter(message => message.role !== 'system');
         imageMessages.push({
             role: "user",
@@ -109,7 +109,7 @@ export class GroqCloudAPI {
             ]
         });
         
-        return this.sendRequest(imageMessages);
+        return this.sendRequest(imageMessages, undefined, undefined, opts);
     }
 
     embed(_text) {

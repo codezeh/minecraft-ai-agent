@@ -87,7 +87,7 @@ export class Mistral {
         });
     }
 
-    sendVisionRequest(messages, systemMessage, imageBuffer) {
+    sendVisionRequest(messages, systemMessage, imageBuffer, opts = {}) {
         const imageMessages = [...messages];
         imageMessages.push({
             role: "user",
@@ -100,7 +100,7 @@ export class Mistral {
             ]
         });
         
-        return this.sendRequest(imageMessages, systemMessage);
+        return this.sendRequest(imageMessages, systemMessage, undefined, opts);
     }
 
     async embed(text) {
