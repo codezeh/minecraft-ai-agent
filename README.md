@@ -7,8 +7,27 @@
 | `./`（仓库根） | 父仓 | 启动/关服脚本、世界备份、控制台前端源码 `web/`、文档与审计台账 |
 | `./mindcraft/` | 独立嵌套仓（父仓 `.gitignore:13` 排除） | Minecraft bot 运行时 + mindserver、Dockerfile、**固化产物 `web-dist/`** |
 
-⚠️ **父仓不跟踪 `mindcraft/`**。只 clone 父仓拿到的是"控制脚本"，没有业务代码；
-新机器上要跑起来必须**两个仓都 clone**（见下）。
+⚠️ **父仓不跟踪 `mindcraft/`**（`.gitignore:13` 排除，因为子仓自带 `.git`，硬纳进来会变成伪子模块）。
+只 clone 父仓拿到的是"控制脚本 + 前端源码"，**没有业务代码，跑不起来**；
+新机器上必须**两个仓都 clone** —— 这件事现在由 `scripts/clone-all.ps1` 一条命令负责，不再靠人记。
+
+## 从零开始（3 条命令）
+
+```powershell
+# 1) 两个仓一起拉下来（父仓 → <Dest>，子仓 → <Dest>/mindcraft）
+#    有远端时：
+pwsh scripts/clone-all.ps1 -ParentUrl <parent-url> -MindcraftUrl <mindcraft-url> -Dest D:\repo
+#    只想在本机复现"干净检出"（没有远端也能真跑）：先 clone 父仓，再用 -LocalSource
+pwsh scripts/clone-all.ps1 -LocalSource -Dest D:\repo
+
+# 2) 装运行时依赖（548 个包，首次约 10 分钟）
+cd D:\repo\mindcraft; npm ci
+
+# 3) 校验"产物 ↔ 清单 ↔ 源码指纹"是否一致（秒级，不需要 docker）
+cd D:\repo; pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -VerifyOnly
+```
+
+`clone-all.ps1` 会做三件容易漏掉的事：**(a)** 检测"父仓 clone 完但没有 `mindcraft/`"的半成品状态并给出明确报错（这正是 R5-004 的用户体感）；**(b)** 校验两个仓的 HEAD 短哈希与 `-Ref` 是否一致；**(c)** 自检 `mindcraft/web-dist/` 与 `MANIFEST.json` 是否随仓库到位（缺了就明说镜像会构建失败）。参数：`-ParentUrl` / `-MindcraftUrl` / `-Dest`（必填）/ `-Ref`（可选）/ `-LocalSource`。
 
 ## 从干净检出到可运行镜像（发布路径）
 
@@ -17,9 +36,7 @@
 现在这条路径被一条命令管住：
 
 ```powershell
-# 1) 两个仓都 clone（mindcraft 不是子模块，父仓不会替你拉）
-git clone <parent-url> repo && cd repo
-git clone <mindcraft-url> mindcraft
+# 1) 两个仓都 clone —— 用上面第 1 条命令（scripts/clone-all.ps1），它会连子仓一起拉
 
 # 2) 一条命令：构建前端 → 同步固化产物 → 校验清单/源码指纹 → docker build
 #    → 起容器 → 断言 /console 与首个静态资源均 200 → 清理
