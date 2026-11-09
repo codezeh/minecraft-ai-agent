@@ -1,4 +1,4 @@
-# Minecraft AI 陪玩面板 —— 一键启动
+﻿# Minecraft AI 陪玩面板 —— 一键启动
 # 由 启动面板.bat 调起。所有中文都在这里（UTF-8+BOM），cmd 那层只留 ASCII。
 #
 # 设计要点（都是实测踩出来的）：
@@ -7,6 +7,21 @@
 #  2. 上一个服关服要等 chunk 系统停（实测 10s+），端口关了进程可能还在。
 #     抢端口会启动失败 → 启动前先等旧 java 退干净
 #  3. 日志全部重定向到文件：弹窗里看不到的错，这里能自己打印出来
+#  4. ★ t34：本脚本有演练模式。-DryRun 或 MC_PANEL_NO_SPAWN=1 ⇒ 走完全部前置检查
+#     （JDK / Node / server.jar / 旧 java / 端口 / 目录），但**一个进程都不 spawn**
+#     （java、node、浏览器都不起），只打印『将要执行的命令 + 工作目录 + 端口』，然后 exit 0。
+#     用途：验证面板脚本本身（编码/语法/依赖/路径）而不产生任何副作用。
+#     ⚠ 生产启动**不要**带它。用法：
+#       powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-panel.ps1 -DryRun
+#       $env:MC_PANEL_NO_SPAWN='1'; .\启动面板.bat
+
+param(
+    [switch]$DryRun
+)
+
+# 演练判定：参数优先，其次环境变量（任一成立即演练）
+$dryRun = [bool]$DryRun -or ($env:MC_PANEL_NO_SPAWN -eq '1')
+
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -22,6 +37,21 @@ function Write-Step($n, $text) { Write-Host "[$n] $text" -ForegroundColor Cyan }
 function Write-Ok($text)       { Write-Host "      $text" -ForegroundColor Green }
 function Write-Warn2($text)    { Write-Host "      $text" -ForegroundColor Yellow }
 function Write-Bad($text)      { Write-Host "      $text" -ForegroundColor Red }
+
+# 演练模式专用输出：[DRYRUN] 前缀 + 将要执行的命令/工作目录（便于脚本化 grep 与人工核对）
+function Write-DryRun([string]$text) { Write-Host ("      [DRYRUN] " + $text) -ForegroundColor Magenta }
+
+# ★ t34：防误起生产服的自检 —— 在任何 spawn 之前把「谁 / 在哪 / 什么时候」打进输出，
+#   让日志本身成为证据链（T32 §8 的要求）。
+function Write-SpawnContext([string]$what, [string]$workDir) {
+    Write-Host ("      [ctx] " + $what + "   cwd=" + $workDir) -ForegroundColor DarkGray
+    Write-Host ("      [ctx] 启动者=" + $env:USERNAME + "   时间=" + (Get-Date).ToString("o")) -ForegroundColor DarkGray
+    $latestLog = Join-Path $workDir "logs\latest.log"
+    if (Test-Path -LiteralPath $latestLog) {
+        $fi = Get-Item -LiteralPath $latestLog
+        Write-Host ("      [ctx] 该目录 logs\latest.log 上次写入=" + $fi.LastWriteTime.ToString("o") + "  (" + $fi.Length + " B)") -ForegroundColor DarkGray
+    }
+}
 
 function Test-Port([int]$port) {
     $c = New-Object Net.Sockets.TcpClient
@@ -158,12 +188,16 @@ $vite = Join-Path $root 'web\node_modules\vite\bin\vite.js'
 if (-not (Test-Path $vite)) {
     Write-Warn2 '跳过：web\node_modules 未安装（先在 web 目录跑一次 npm install）'
 } else {
-    Push-Location (Join-Path $root 'web')
-    & $node $vite build 2>&1 | Out-Null
-    $code = $LASTEXITCODE
-    Pop-Location
-    if ($code -eq 0) { Write-Ok '面板已构建' }
-    else { Write-Warn2 '[警告] 构建失败，将沿用上一次的 dist' }
+    if ($dryRun) {
+        Write-DryRun ('& "' + $node + '" "' + $vite + '" build     # cwd=' + (Join-Path $root 'web'))
+    } else {
+        Push-Location (Join-Path $root 'web')
+        & $node $vite build 2>&1 | Out-Null
+        $code = $LASTEXITCODE
+        Pop-Location
+        if ($code -eq 0) { Write-Ok '面板已构建' }
+        else { Write-Warn2 '[警告] 构建失败，将沿用上一次的 dist' }
+    }
 }
 
 # ---------- 1) Minecraft 服务器 ----------
@@ -184,16 +218,24 @@ if (Test-Port 25565) {
         Write-Ok "旧服务器已退出（${w}s）"
     }
 
+    $srvDir = Join-Path $root 'server'
+    Write-SpawnContext '将启动 Minecraft 服务端' $srvDir
+    if ($dryRun) {
+        Write-Ok '[DRYRUN] 本应启动（已短路，不会 spawn）'
+        Write-DryRun ('Start-Process -FilePath "' + $java + '" -ArgumentList "-Xms1G","-Xmx2G","-XX:+UseG1GC","-jar","server.jar","nogui" -WorkingDirectory "' + $srvDir + '" -RedirectStandardOutput "' + $srvOut + '" -WindowStyle Hidden')
+        Write-DryRun ('端口：25565（RCON 25575）')
+    } else {
     Write-Ok '正在启动（冷启动约 15~40 秒）'
     $launchAt = Get-Date
     Start-Process -FilePath $java `
         -ArgumentList '-Xms1G', '-Xmx2G', '-XX:+UseG1GC', '-jar', 'server.jar', 'nogui' `
-        -WorkingDirectory (Join-Path $root 'server') `
+        -WorkingDirectory $srvDir `
         -RedirectStandardOutput $srvOut `
         -RedirectStandardError (Join-Path $logDir 'server-console.err.log') `
         -WindowStyle Hidden | Out-Null
     if (-not (Wait-Port 25565 180 'Minecraft'))  { exit 1 }
     if (-not (Wait-ServerReady $launchAt 300))   { exit 1 }
+    }
 }
 
 # ---------- 2) mindserver + bot ----------
@@ -240,6 +282,12 @@ if (Test-Port 8080) {
             exit 1
         }
     }
+    Write-SpawnContext '将启动 mindserver（node main.js）' $mcDir
+    if ($dryRun) {
+        Write-Ok '[DRYRUN] 本应启动（已短路，不会 spawn）'
+        Write-DryRun ('Start-Process -FilePath "' + $node + '" -ArgumentList "main.js" -WorkingDirectory "' + $mcDir + '" -RedirectStandardOutput "' + $mcOut + '" -WindowStyle Hidden')
+        Write-DryRun ('端口：8080（面板 /console）')
+    } else {
     Write-Ok '正在启动'
     Start-Process -FilePath $node -ArgumentList 'main.js' `
         -WorkingDirectory $mcDir `
@@ -247,11 +295,27 @@ if (Test-Port 8080) {
         -RedirectStandardError (Join-Path $logDir 'mindcraft-console.err.log') `
         -WindowStyle Hidden | Out-Null
     if (-not (Wait-Port 8080 90 'mindserver')) { exit 1 }
+    }
 }
 
 # ---------- 3) 等 bot 进游戏 ----------
 Write-Step '3/4' '等她进游戏'
-if (-not (Wait-BotSpawned 120)) { exit 1 }
+if ($dryRun) {
+    Write-DryRun '本应等待 bot 进游戏（Wait-BotSpawned 120s，已跳过）'
+} elseif (-not (Wait-BotSpawned 120)) { exit 1 }
+
+# ★ t34：演练到这里收尾。后面的 token 逻辑依赖 mindserver 真的写出 token 文件，
+#   演练没起服必然取不到 token —— 若继续往下走只会以 exit 1 结束，那就失去演练意义了。
+if ($dryRun) {
+    Write-Step '4/4' '打开面板（演练：不打开浏览器）'
+    Write-DryRun ('Start-Process ' + $panel + '?token=<运行时从 mindcraft\.mindserver-token 读取>')
+    Write-Host ''
+    Write-Host '------------------------------------------------------------' -ForegroundColor DarkGray
+    Write-Host '  [DRYRUN] 演练完成：前置检查全部通过，未启动任何进程、未打开浏览器。' -ForegroundColor Green
+    Write-Host '  生产启动请去掉 -DryRun（并确保没有设 MC_PANEL_NO_SPAWN=1）。' -ForegroundColor DarkGray
+    Write-Host '------------------------------------------------------------' -ForegroundColor DarkGray
+    exit 0
+}
 
 # ---------- 4) 打开面板 ----------
 # F-SEC-205（2026-11-06）：token 不再打印进日志，改从 mindcraft/.mindserver-token 读。
@@ -293,7 +357,7 @@ if (-not $tok) {
 #   用户只看到"打不开面板"。改成 ${panel} 显式划定变量边界。
 $panelUrl = "${panel}?token=$tok"
 Write-Step '4/4' "打开面板"
-Start-Process $panelUrl | Out-Null
+if ($dryRun) { Write-DryRun ('将打开浏览器：' + $panelUrl) } else { Start-Process $panelUrl | Out-Null }
 
 Write-Host ''
 Write-Host '------------------------------------------------------------' -ForegroundColor DarkGray

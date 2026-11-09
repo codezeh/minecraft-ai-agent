@@ -24,7 +24,8 @@
 .PARAMETER Scenario
     claims  —— 多 bot 抢单争用（驱动 tools/t37_claims_contention_live.mjs）
     restart —— 重启恢复（箱子 / 熔炉进度 / bot 记忆跨停服存活）
-    all     —— 两个都跑
+    chest   —— bot **主动**存/取箱子 + 物品守恒（驱动 tools/e2e_chest_store_live.mjs，T23 覆盖缺口）
+    all     —— 三个都跑
 
 .PARAMETER KeepRun
     保留运行目录（默认跑完删除，只在排查时用）。
@@ -48,7 +49,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('claims', 'restart', 'all')]
+    [ValidateSet('claims', 'restart', 'chest', 'all')]
     [string]$Scenario = 'restart',
     [switch]$KeepRun,
     [switch]$SkipReset,
@@ -376,6 +377,95 @@ function Invoke-RestartScenario {
     }
 }
 
+# ── 通用：跑一个 live 脚本并把它的 PASS/FAIL 逐条搬进汇总 ──────
+function Invoke-LiveScript {
+    param(
+        [string]$Script,
+        [string]$LogName,
+        [string]$RunDir,
+        [string]$Title,
+        [string[]]$ExtraArgs = @()
+    )
+
+    Push-Location $MindDir
+    try {
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            if ($ExtraArgs.Count -gt 0) { $out = & node $Script @ExtraArgs 2>&1; $code = $LASTEXITCODE }
+            else { $out = & node $Script 2>&1; $code = $LASTEXITCODE }
+        }
+        finally { $ErrorActionPreference = $prevEap }
+    }
+    finally { Pop-Location }
+
+    $text = ($out | Out-String)
+    $text | Set-Content -LiteralPath (Join-Path $RunDir $LogName) -Encoding UTF8
+
+    $passLines = @($text -split "`n" | Where-Object { $_ -match '^\s*PASS\s' })
+    $failLines = @($text -split "`n" | Where-Object { $_ -match '^\s*FAIL\s' })
+    Add-Result ("$Title —— 脚本全部断言通过") ($code -eq 0 -and $failLines.Count -eq 0) ("退出码=$code, PASS=$($passLines.Count), FAIL=$($failLines.Count)")
+
+    # 逐条搬（与 restart 场景风格一致：每条断言一行汇总）
+    foreach ($line in @($passLines + $failLines)) {
+        $isPass = $line -match '^\s*PASS\s'
+        $name = ($line -replace '^\s*(PASS|FAIL)\s+', '').Trim()
+        if ($name.Length -gt 90) { $name = $name.Substring(0, 90) }
+        Add-Result ("  " + $name) $isPass ''
+    }
+
+    if ($code -ne 0 -and $failLines.Count -eq 0) {
+        Add-Result ("$Title —— 退出码非 0 但没有 FAIL 行（脚本异常退出）") $false ("退出码=$code")
+    }
+
+    # ★ 已知缺陷显式告警（**不跳过、不降级**：结果仍是 FAIL，只是把"这不是新问题"说清楚）。
+    #   背景：docs/audit-r5/fixes/09-chest-e2e.md §9/§10 —— fetch(N) 偶尔会多搬并把账目算错，
+    #   表现为「箱子被搬空 / 背包多进 / 技能报只取到 k/N」。在根因修掉之前这里会间歇性红，
+    #   所以失败时额外提示一句，避免每次都被当成新的回归来查；但**不会**因此变绿。
+    if ($code -ne 0 -and $Script -match 'e2e_chest_store_live') {
+        Write-Host '  [已知缺陷] withdraw/fetch 的请求语义被破坏（多搬 + 账目错）—— 见 docs/audit-r5/fixes/09-chest-e2e.md §9/§10' -ForegroundColor Yellow
+        Write-Host '             本条仍按 FAIL 计入，不跳过、不放宽断言；根因修复后应自然转绿。' -ForegroundColor Yellow
+    }
+}
+
+# ── 场景：chest（bot 主动存取 + 物品守恒）────────────────────────
+#
+# T23 查实的覆盖缺口：restart 场景的箱子物品是 RCON `item replace` 塞进去的、bot 只读回；
+# 全仓没有任何 live 工具调用真实技能搬物品。这条补「存 N → 背包-N/箱+N → 守恒 → 取 M → 守恒」，
+# 另加三条反证（取不存在的物品 / 满箱存 / 距离过远），防止"永远返回成功"也能过。
+function Invoke-ChestScenario {
+    param([string]$RunDir, [string]$Java)
+
+    $liveScript = Join-Path $MindDir 'tools/e2e_chest_store_live.mjs'
+    if (-not (Test-Path -LiteralPath $liveScript)) { Stop-E2E "找不到 $liveScript" 'mindcraft 仓库不完整。' }
+    $env:MC_BOTS_ROOT = Join-Path $RunDir 'bots'
+
+    # ── 第一段：起服 → 守恒 + 反证 → 停服 ──
+    $server = Start-TestServer -RunDir $RunDir -Java $Java
+    try {
+        if (-not (Wait-ServerReady -Log $server.Log -TimeoutSec $BootTimeoutSec)) { Stop-E2E '起服超时（chest）' "看 $($server.Log)" }
+        if (-not (Test-RconReady)) { Stop-E2E 'RCON 未就绪（chest）' '' }
+        Add-Result 'chest：起服就绪（第一段）' $true "日志 $($server.Log)"
+        Invoke-LiveScript -Script $liveScript -LogName 'scenario-chest-store.log' -RunDir $RunDir -Title 'chest 主动存取守恒（存16/取8 + 三条反证）'
+    }
+    finally {
+        $stoppedC1 = Stop-TestServer -Server $server
+        Add-Result 'chest：停服（第一段，优雅退出）' $stoppedC1 'RCON stop → java 进程退出'
+    }
+
+    # ── 第二段：重启后只读校验箱子内容没丢（跨重启守恒）──
+    $server2 = Start-TestServer -RunDir $RunDir -Java $Java
+    try {
+        if (-not (Wait-ServerReady -Log $server2.Log -TimeoutSec $BootTimeoutSec)) { Stop-E2E '重启后起服超时（chest）' "看 $($server2.Log)" }
+        if (-not (Test-RconReady)) { Stop-E2E '重启后 RCON 未就绪（chest）' '' }
+        Add-Result 'chest：重启后起服就绪（第二段）' $true "日志 $($server2.Log)"
+        Invoke-LiveScript -Script $liveScript -LogName 'scenario-chest-persist.log' -RunDir $RunDir -Title 'chest 跨重启守恒（箱内 8 个 oak_log 仍在）' -ExtraArgs @('--verify-persist')
+    }
+    finally {
+        $stoppedC2 = Stop-TestServer -Server $server2
+        Add-Result 'chest：停服（第二段，优雅退出）' $stoppedC2 'RCON stop → java 进程退出'
+    }
+}
 # ══════════════════════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════════════════════
@@ -393,7 +483,7 @@ $Java = Resolve-Java
 Write-Host "  JDK       : $Java"
 
 $env:RCON_PORT = $RCON_PORT
-$scenarios = if ($Scenario -eq 'all') { @('claims', 'restart') } else { @($Scenario) }
+$scenarios = if ($Scenario -eq 'all') { @('claims', 'restart', 'chest') } else { @($Scenario) }
 
 try {
     foreach ($sc in $scenarios) {
@@ -428,8 +518,12 @@ try {
                 Add-Result 'claims：停服（优雅退出）' $stoppedC 'RCON stop → java 进程退出'
             }
         }
-        else {
+        elseif ($sc -eq 'restart') {
             Invoke-RestartScenario -RunDir $runDir -Java $Java -RconPassword $rconPass
+        }
+        else {
+            # chest：两段起服 —— 第一段做守恒+反证，第二段验证跨重启不丢
+            Invoke-ChestScenario -RunDir $runDir -Java $Java
         }
 
         # ── 重置：世界回模板，运行目录清掉（下次从零开始）──

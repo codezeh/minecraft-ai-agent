@@ -88,3 +88,10 @@ if ($stopCode -eq 0) {
 }
 
 Read-Host '按回车关闭' | Out-Null
+
+# ★ t20 A：把停止结果码透传给**进程退出码**。以前本脚本以 Read-Host 结束，
+#   PowerShell 进程恒返回 0（t12 实测：屏幕上写着“[ERROR] 拿不到握手 token”“[ERROR] 关服没有成功”，
+#   但停止面板.bat / 计划任务 / 快捷方式看到的都是“成功”）。
+#   stop-all.mjs 码义：0=已停或本来就没跑，2=拿不到 token，3=握手被拒，4=关服没成功。
+if ($null -eq $stopCode) { exit 1 }   # stop-all 根本没跑成（异常路径）也不能当成功
+exit $stopCode

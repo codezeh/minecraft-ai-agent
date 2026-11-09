@@ -29,7 +29,11 @@
 [CmdletBinding()]
 param(
     [switch]$Apply,
-    [switch]$IncludeParents
+    [switch]$IncludeParents,
+    # ★ R5-010：对 $dirTargets 做「去写保读」收口 —— 去掉 Authenticated Users 等非白名单主体的写/删权限
+    #   （否则别人可以删掉 keys.json 再放一个），但**保留 读+遍历**（git / 编辑器 / node 仍要能读）。
+    #   与 -IncludeParents（把目录整体锁成三条 FullControl）是两种强度，互不覆盖。
+    [switch]$GuardParentWrites
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,9 +44,10 @@ $me   = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 # 三个真实存在的凭据/隐私文件（报告点名的位置）
 $fileTargets = @(
-    'mindcraft\.mindserver-token',   # 控制台握手 token
-    'mindcraft\keys.json',           # 模型 API Key
-    'server\server.properties'       # RCON 密码 + 服务器参数
+    'mindcraft\.mindserver-token',     # 控制台握手 token
+    'mindcraft\keys.json',             # 模型 API Key
+    'server\server.properties',        # 主服：RCON 密码 + 服务器参数
+    'server-test\server.properties'    # ★ R5-009：测试服 RCON 密码（原本走继承 ACL，本机任何用户可读）
 )
 $dirTargets = @('mindcraft')
 
@@ -50,32 +55,36 @@ $dirTargets = @('mindcraft')
 $allowed = @($me, 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators')
 
 # 判定"这个 ACE 该不该消失"：主体不在允许清单里就算问题
-function Get-Verdict([System.Security.AccessControl.FileSystemAccessRule]$rule) {
+# 只读类权限（R5-010：目录上保留 读+遍历 是**允许**的，只有写/删才算过宽）
+$readOnlyRights = @('ReadAndExecute', 'Read', 'ReadAndExecute, Synchronize', 'Read, Synchronize')
+
+function Get-Verdict([System.Security.AccessControl.FileSystemAccessRule]$rule, [bool]$allowReadOnlyForOthers = $false) {
     $id = $rule.IdentityReference.Value
     if ($allowed -contains $id) { return 'ok' }
     if ($rule.AccessControlType -eq 'Deny') { return 'ok' }   # 显式拒绝不构成放开
+    if ($allowReadOnlyForOthers -and ($readOnlyRights -contains $rule.FileSystemRights.ToString())) { return 'ok-readonly' }
     return 'too-broad'
 }
 
-function Show-Acl([string]$path) {
+function Show-Acl([string]$path, [bool]$allowReadOnlyForOthers = $false) {
     $acl = Get-Acl -Path $path
     $inherited = -not $acl.AreAccessRulesProtected
     Write-Host ("  DACL: {0}" -f $(if ($inherited) { '继承父目录（需要收口）' } else { '非继承（已收口）' })) `
         -ForegroundColor $(if ($inherited) { 'Yellow' } else { 'Green' })
     foreach ($rule in $acl.Access) {
-        $v = Get-Verdict $rule
-        $mark = if ($v -eq 'ok') { '  ok ' } else { '  !! ' }
-        $color = if ($v -eq 'ok') { 'DarkGray' } else { 'Red' }
+        $v = Get-Verdict $rule $allowReadOnlyForOthers
+        $mark = if ($v -eq 'ok') { '  ok ' } elseif ($v -eq 'ok-readonly') { '  ro ' } else { '  !! ' }
+        $color = if ($v -eq 'ok') { 'DarkGray' } elseif ($v -eq 'ok-readonly') { 'DarkCyan' } else { 'Red' }
         Write-Host ("{0}{1} | {2} | {3} | 继承={4}" -f $mark, $rule.IdentityReference.Value,
             $rule.FileSystemRights, $rule.AccessControlType, $rule.IsInherited) -ForegroundColor $color
     }
-    return ($acl.Access | Where-Object { (Get-Verdict $_) -ne 'ok' }).Count
+    return ($acl.Access | Where-Object { (Get-Verdict $_ $allowReadOnlyForOthers) -notin @('ok', 'ok-readonly') }).Count
 }
 
-function Test-NeedsHardening([string]$path) {
+function Test-NeedsHardening([string]$path, [bool]$allowReadOnlyForOthers = $false) {
     $acl = Get-Acl -Path $path
     if (-not $acl.AreAccessRulesProtected) { return $true }
-    return (@($acl.Access | Where-Object { (Get-Verdict $_) -eq 'too-broad' }).Count -gt 0)
+    return (@($acl.Access | Where-Object { (Get-Verdict $_ $allowReadOnlyForOthers) -eq 'too-broad' }).Count -gt 0)
 }
 
 function Set-HardenedAcl([string]$path, [bool]$isDir) {
@@ -115,6 +124,42 @@ function Set-HardenedAcl([string]$path, [bool]$isDir) {
     Set-Acl -Path $path -AclObject $acl
 }
 
+# ── R5-010：目录的「去写保读」收口 ───────────────────────────────────────────
+#
+# 为什么不能直接用 Set-HardenedAcl：那会把目录锁成「只有三条 FullControl」，
+# 把 读/遍历 也一起收回 —— git、编辑器、node 都可能因为读不到而报错，
+# 属于「修安全问题顺手把工具链弄坏」。
+#
+# R5-010 要挡的是**写**：Authenticated Users:(M) 意味着别人可以把 keys.json
+# 删掉再放一个（文件自身 ACL 收得再紧也没用，因为目录允许 DeleteChild）。
+# 所以这里：断开继承 → 清空 → 白名单三条 FullControl（含子对象）
+#           → 其他已认证账户只留 ReadAndExecute（读+遍历，不含写/删）。
+function Set-DirWriteGuard([string]$path) {
+    # ★ 用 icacls 而不是 Set-Acl：
+    #   Set-Acl 会连 **SACL** 一起写，非管理员进程没有 SeSecurityPrivilege 就会直接失败
+    #   （实测报 "The process does not possess the SeSecurityPrivilege privilege"）。
+    #   而 R5-010 要的本来只是「去掉目录上的写权限」，icacls 只动 DACL，正好够用、也不需要提权。
+    $who = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+    # 1) 断开继承，并且**不保留**继承来的规则
+    & icacls $path /inheritance:r | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw ("icacls /inheritance:r 失败：" + $path) }
+
+    # 2) 摘掉所有「已认证账户 / Users」的 ACE（里面就含着 Modify）
+    #    remove 对"本来就没有"的主体返回非 0，这里不当作失败。
+    & icacls $path /remove:g "NT AUTHORITY\Authenticated Users" "BUILTIN\Users" | Out-Null
+
+    # 3) 白名单三条 FullControl（含子对象）+ 其他已认证账户只读（读+遍历，不含写/删）
+    $grants = @(
+        ($who + ":(OI)(CI)F"),
+        "NT AUTHORITY\SYSTEM:(OI)(CI)F",
+        "BUILTIN\Administrators:(OI)(CI)F",
+        "NT AUTHORITY\Authenticated Users:(OI)(CI)RX"
+    )
+    & icacls $path /grant:r $grants | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw ("icacls /grant:r 失败：" + $path) }
+}
+
 Write-Host '============================================================' -ForegroundColor DarkCyan
 Write-Host '  凭据文件 ACL 加固（OPS-004）' -ForegroundColor White
 Write-Host ("  模式：{0}" -f $(if ($Apply) { 'APPLY（会真的改）' } else { '体检（不改；加 -Apply 才动手）' })) -ForegroundColor $(if ($Apply) { 'Yellow' } else { 'Gray' })
@@ -125,20 +170,24 @@ Write-Host ''
 $targets = @()
 foreach ($rel in $fileTargets) {
     $p = Join-Path $root $rel
-    if (Test-Path -LiteralPath $p) { $targets += [pscustomobject]@{ Path = $p; Dir = $false } }
+    if (Test-Path -LiteralPath $p) { $targets += [pscustomobject]@{ Path = $p; Dir = $false; Mode = 'file' } }
     else { Write-Host ("[跳过] 不存在：{0}" -f $rel) -ForegroundColor DarkYellow }
 }
-if ($IncludeParents) {
+# ★ R5-009/R5-010：文件目标记 Mode='file'；目录目标按开关记 'lockdown' 或 'writeguard'
+if ($IncludeParents -or $GuardParentWrites) {
     foreach ($rel in $dirTargets) {
         $p = Join-Path $root $rel
-        if (Test-Path -LiteralPath $p) { $targets += [pscustomobject]@{ Path = $p; Dir = $true } }
+        if (Test-Path -LiteralPath $p) {
+            $mode = if ($IncludeParents) { 'lockdown' } else { 'writeguard' }
+            $targets += [pscustomobject]@{ Path = $p; Dir = $true; Mode = $mode }
+        }
     }
 }
 
 $problems = 0
 foreach ($t in $targets) {
     Write-Host ("--- {0}" -f $t.Path) -ForegroundColor Cyan
-    $problems += Show-Acl $t.Path
+    $problems += Show-Acl $t.Path ($t.Mode -eq 'writeguard')
     Write-Host ''
 }
 
@@ -153,12 +202,18 @@ if (-not $Apply) {
 }
 
 foreach ($t in $targets) {
-    if (-not (Test-NeedsHardening $t.Path)) {
+    $allowRo = ($t.Mode -eq 'writeguard')
+    if (-not (Test-NeedsHardening $t.Path $allowRo)) {
         Write-Host ("[已是收口] {0}" -f $t.Path) -ForegroundColor Green
         continue
     }
-    Write-Host ("[加固] {0}" -f $t.Path) -ForegroundColor Yellow
-    Set-HardenedAcl -path $t.Path -isDir $t.Dir
+    if ($t.Mode -eq 'writeguard') {
+        Write-Host ("[去写保读] {0}" -f $t.Path) -ForegroundColor Yellow
+        Set-DirWriteGuard $t.Path
+    } else {
+        Write-Host ("[加固] {0}" -f $t.Path) -ForegroundColor Yellow
+        Set-HardenedAcl -path $t.Path -isDir $t.Dir
+    }
 }
 
 Write-Host ''
@@ -166,7 +221,7 @@ Write-Host '--- 复验 ---' -ForegroundColor Cyan
 $after = 0
 foreach ($t in $targets) {
     Write-Host ("--- {0}" -f $t.Path) -ForegroundColor Cyan
-    $after += Show-Acl $t.Path
+    $after += Show-Acl $t.Path ($t.Mode -eq 'writeguard')
     Write-Host ''
 }
 
