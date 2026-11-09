@@ -25,6 +25,7 @@
 import fs from 'node:fs';
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
+import Vec3 from 'vec3';
 import { rcon } from './rcon.mjs';
 import { installPositionGuard } from '../src/sim/position_guard.js';
 import { openContainer, closeContainer } from '../src/agent/library/act_container.js';
@@ -35,6 +36,9 @@ const RC = (c) => rcon(c, { port: 25576 });
 const NAME = 'chs' + (Date.now() % 100000);
 
 const PERSIST_ONLY = process.argv.includes('--verify-persist');
+// ★ 诊断开关：默认**关**。只有显式 --debug-click 才记录点击序列/落盘现场（平时不留调试输出）。
+const DEBUG_CLICK = process.argv.includes('--debug-click');
+const dbg = (...a) => { if (DEBUG_CLICK) console.log(...a); };
 
 // 固定坐标（重启后还要能找回同一个箱子 —— 随机坐标做不到这件事）
 const CHEST1 = { x: -98, y: -60, z: -600 };   // 主箱：守恒 + 重启持久化
@@ -120,7 +124,7 @@ const CLICKS = [];
 let RECORDING = false;
 const _origWrite = bot._client.write.bind(bot._client);
 bot._client.write = (name, params) => {
-    if (name !== 'window_click' || !RECORDING) return _origWrite(name, params);
+    if (!DEBUG_CLICK || name !== 'window_click' || !RECORDING) return _origWrite(name, params);
     const w = bot.currentWindow;
     CLICKS.push({
         t: Date.now() - CLICKS.t0,
@@ -174,6 +178,14 @@ bot.once('spawn', async () => {
         if (PERSIST_ONLY) {
             await RC(`tp ${NAME} ${HOME.x + 0.5} ${HOME.y} ${HOME.z + 0.5}`);
             await sleep(1500);
+            // ★ T38：刚重启/刚 tp，客户端可能还没收到 chunk 与容器数据 —— 先**等同步**再读
+            //   （这是等客户端加载，不是"重试直到断言过"；RCON 的真值断言另行独立）。
+            try { await bot.waitForChunksToLoad(); } catch { /* 老版本没有该 API 就跳过 */ }
+            for (let i = 0; i < 10; i++) {
+                const blk = bot.blockAt(new Vec3(CHEST1.x, CHEST1.y, CHEST1.z));
+                if (blk && blk.name === 'chest') break;
+                await sleep(400);
+            }
             const c = await readChest(bot, CHEST1);
             const viaRcon = await rconChestCount(CHEST1, 'oak_log');
             check('重启后：箱子里仍有 8 个 oak_log（bot 读）', c.ok && (c.total['oak_log'] ?? 0) === 8,
@@ -236,19 +248,19 @@ bot.once('spawn', async () => {
                 };
             };
             const atStoreEnd = snap();
-            console.log(`  [插桩] store 结束: 窗口开着=${atStoreEnd.windowOpen} 光标=${JSON.stringify(atStoreEnd.cursor)} 箱子oak=${atStoreEnd.chestOak} 背包oak=${atStoreEnd.invOak}`);
+            dbg(`  [插桩] store 结束: 窗口开着=${atStoreEnd.windowOpen} 光标=${JSON.stringify(atStoreEnd.cursor)} 箱子oak=${atStoreEnd.chestOak} 背包oak=${atStoreEnd.invOak}`);
             if (atStoreEnd.cursor && atStoreEnd.cursor.count > 0) {
-                console.log('  [插桩] ⚠ store 留下了光标件 —— 这正是"残留 + 本次搬运叠加"的候选来源');
+                dbg('  [插桩] ⚠ store 留下了光标件 —— 这正是"残留 + 本次搬运叠加"的候选来源');
             }
             void w;
 
             // 主动关掉任何残留窗口（记录它当时的状态），让 fetch 从干净状态开始
             if (atStoreEnd.windowOpen) {
-                console.log('  [插桩] ⚠ store 结束时窗口仍开着（预期应已关闭）—— 记录后关闭');
+                dbg('  [插桩] ⚠ store 结束时窗口仍开着（预期应已关闭）—— 记录后关闭');
                 try { closeContainer(bot); } catch { /* ignore */ }
                 await sleep(400);
             }
-            console.log(`  [插桩] fetch 开窗前: 窗口开着=${!!bot.currentWindow} 光标=${JSON.stringify(bot.currentWindow?.selectedItem ?? null)}`);
+            dbg(`  [插桩] fetch 开窗前: 窗口开着=${!!bot.currentWindow} 光标=${JSON.stringify(bot.currentWindow?.selectedItem ?? null)}`);
         }
 
         // ── 3) 取回 8 个（真实技能 flow_store.fetch）──
@@ -258,7 +270,11 @@ bot.once('spawn', async () => {
             const o = await openContainer(bot, { kind: 'block', pos: CHEST1 }, { timeout: 6000 });
             const d = o.ok ? slotDetail() : { open: false, err: o.code };
             try { closeContainer(bot); } catch { /* ignore */ }
-            await sleep(300);
+            // ★ T37：诊断用的开/关窗会留下服务端窗口号在途；下一句 fetch 会立刻重开，
+            //   如果不等它落定，客户端槽位映射可能是旧的 ⇒ 点击落到错槽（实测会「要 8 搬 16」）。
+            //   这里给足静默期（与 settleWindow 同量级），断言本身不变。
+            await settleWindow(bot);
+            await sleep(1200);
             return d;
         })();
         CLICKS.length = 0; CLICKS.t0 = Date.now(); RECORDING = true;
@@ -283,7 +299,7 @@ bot.once('spawn', async () => {
         {
             const physical = (chest1.total['oak_log'] ?? 0) - (chest2r.total['oak_log'] ?? 0);
             const accounted = Number(r2?.data?.taken ?? 0);
-            if (!r2?.ok || physical !== 8 || accounted !== physical) {
+            if (DEBUG_CLICK && (!r2?.ok || physical !== 8 || accounted !== physical)) {
                 const L = [];
                 L.push('# fetch(8) 现场：点击序列 + 三方快照');
                 L.push('');
@@ -355,6 +371,9 @@ bot.once('spawn', async () => {
         await sleep(900);
         await RC(`tp ${NAME} ${HOME.x - 20}.5 ${HOME.y} ${HOME.z + 0.5}`);
         await sleep(1500);
+        // ★ T38：tp 会触发 chunk 重载，客户端背包可能短暂读到 0（实测 store 因此报 NO_ITEM）。
+        //   等到背包稳定显示 4 件再继续（**只是等同步，不改断言**）。
+        for (let i = 0; i < 10 && invCount(bot, 'oak_log') < 4; i++) await sleep(300);
         const far0 = invCount(bot, 'oak_log');
         await settleWindow(bot);
         const r5 = await store(bot, 'oak_log', 4);

@@ -16,7 +16,7 @@ import Vec3 from 'vec3';
 import { ok, fail, normalizeTarget } from './contract.js';
 import { blockAt, reachDistanceTo } from './query_perceive.js';
 import { windowSlots } from './atom_read.js';
-import { closeWindow } from './atom_input_inventory.js';
+import { closeWindow, clickSlot } from './atom_input_inventory.js';   // 窗口点击的唯一合规入口（preflight mouse-input-owner）
 import { GOAL_LOOK_AT_DEFAULT_REACH } from '../rules/rules.runtime.js';
 
 /**
@@ -774,6 +774,97 @@ function measureTaken(bot, item, invBefore, winBefore, take, after) {
     };
 }
 
+/**
+ * ★★★ T38：**自己实现"精确搬 n 件"的点击序列**，绕开 mineflayer transfer() 的收尾。
+ *
+ * 背景（真机 e2e 抓到的现场，docs/audit-r5/fixes/09-chest-e2e.md §12/§13）：
+ *   `win.withdraw()` 是「拿整摞 → 分出 n → 把余数放回容器」，其中"放回余数"
+ *   （`putSelectedItemRange`）依赖客户端光标快照，确认晚到就提前退出 ⇒ 余数滞留光标，
+ *   关窗时服务端把光标件退回**背包** ⇒ 玩家要 8 个、实际搬走 16 个（箱子被搬空）。
+ *
+ * 做法：只搬需要的量，**绝不产生需要放回的余数**：
+ *   · 右键源槽 = 拿一半（`ceil(摞/2)`）
+ *   · 右键目标背包槽 ×k = 一件一件放下
+ *   · 若手上还有剩 ⇒ 左键**同一源槽**放回（绝不碰背包、绝不碰别的槽）
+ * 注意：**绝不对源槽 left-click 去拿整摞** —— win.slots 可能滞后，读到的摞比实际小，
+ *   一 left-click 就会把真实整摞搬走（t37 实测正是「要 8 搬 16」的成因之一）。
+ *
+ * @returns {{delivered:number}}
+ */
+async function clickWithdrawExact(bot, win, name, want) {
+    const invStart = Number(win.inventoryStart);
+    const invEnd = Number.isFinite(win.inventoryEnd) ? Number(win.inventoryEnd) : (win.slots?.length ?? 0);
+    const slotOf = (i) => win.slots?.[i] ?? null;
+    let delivered = 0;
+
+    for (let guard = 0; guard < 60 && delivered < want; guard++) {
+        if (bot?.interrupt_code) break;
+        let srcSlot = -1, srcCount = 0;
+        for (let i = 0; i < invStart; i++) {
+            const s = slotOf(i);
+            if (s && s.name === name && s.count > srcCount) { srcSlot = i; srcCount = s.count; }
+        }
+        if (srcSlot < 0) break;
+        let dstSlot = -1;
+        for (let i = invStart; i < invEnd; i++) {
+            const s = slotOf(i);
+            if (s && s.name === name && s.count < (s.stackSize ?? 64)) { dstSlot = i; break; }
+        }
+        if (dstSlot < 0) {
+            for (let i = invStart; i < invEnd; i++) { if (!slotOf(i)) { dstSlot = i; break; } }
+        }
+        if (dstSlot < 0) break;   // 背包满
+
+        const need = want - delivered;
+        await clickSlot(bot, srcSlot, { button: 1, mode: 0 });   // 右键：拿一半
+        const half = Math.max(1, Math.ceil(srcCount / 2));
+        const place = Math.min(need, half);
+        for (let k = 0; k < place; k++) {
+            await clickSlot(bot, dstSlot, { button: 1, mode: 0 });   // 右键：一次放 1 件
+        }
+        delivered += place;
+        const leftOver = half - place;
+        if (leftOver > 0) {
+            // 放回**同一源槽**。★ 必须先确认光标上真的有件：光标为空时 left-click 是"拿起整摞"（方向反转）。
+            await new Promise((r) => setTimeout(r, 60));
+            if (cursorCount(bot, name) > 0) {
+                await clickSlot(bot, srcSlot, { button: 0, mode: 0 });
+            }
+        }
+    }
+    return { delivered };
+}
+
+/**
+ * ★★★ T38：把光标上的在途件放进**背包（目的地）**。
+ *
+ * 为什么不用 `returnCursorToOrigin(..., 'container')`：那条路是 left-click 容器槽，
+ * 而 left-click 在**光标为空**时语义是"拿起整摞"——方向反转，会把余数整摞搬到背包
+ * （真机实测「要 8 搬 16」的第 9 次点击就是它，见 §13.3）。
+ * 这里只做**目的地**方向：找背包里的同类未满槽或空格，左键放下。
+ *
+ * @returns {Promise<boolean>} 是否真的做了搬运
+ */
+async function drainCursorToInventory(bot, name) {
+    const win = bot?.currentWindow;
+    if (!win) return false;
+    await new Promise((r) => setTimeout(r, 60));         // 客户端读数会滞后，先等一拍
+    if (cursorCount(bot, name) <= 0) return false;        // 光标为空 ⇒ 什么都不做（关键）
+    const invStart = Number(win.inventoryStart);
+    const invEnd = Number.isFinite(win.inventoryEnd) ? Number(win.inventoryEnd) : (win.slots?.length ?? 0);
+    let dst = -1;
+    for (let i = invStart; i < invEnd; i++) {
+        const s = win.slots?.[i];
+        if (s && s.name === name && s.count < (s.stackSize ?? 64)) { dst = i; break; }
+    }
+    if (dst < 0) {
+        for (let i = invStart; i < invEnd; i++) { if (!win.slots?.[i]) { dst = i; break; } }
+    }
+    if (dst < 0) return false;
+    await clickSlot(bot, dst, { button: 0, mode: 0 });       // 左键**背包槽**（目的地）
+    return true;
+}
+
 export async function withdraw(bot, item, n = 1) {
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
     if (!item) return fail('NO_TARGET', '没说要取什么');
@@ -798,13 +889,20 @@ export async function withdraw(bot, item, n = 1) {
     const take = Math.min(want, winBefore);
     const invBefore = invCount(bot, item);
     try {
-        await win.withdraw(itemType, null, take);
+        // ★★★ T38：真 bot 走"精确点击"（右键拆半，绝不整摞左键），绕开 transfer() 不可靠的收尾。
+        //   ★ 兼容：假 bot（单测里的 fake window）没有 bot.clickWindow ⇒ 退回 win.withdraw()，
+        //     否则 act_p0_unit / bot009_partial_move_unit / flow_p0_unit 会直接炸。
+        if (typeof bot?.clickWindow === 'function') {
+            await clickWithdrawExact(bot, win, item, take);
+        } else {
+            await win.withdraw(itemType, null, take);
+        }
     } catch (e) {
         const msg = String(e?.message ?? e);
         if (/interrupt/i.test(msg)) {
             // ★★ 2026-11-07 复审（第1条·附）：中断时把光标上的在途件送回**容器**（取物的来路）。
             const cursorNow = cursorCount(bot, item);
-            const cursorReturned = await returnCursorToOrigin(bot, item, cursorNow, 'container', itemType);
+            const cursorReturned = await drainCursorToInventory(bot, item);
             return fail('INTERRUPTED', '被取消了', { item, cursorAfter: cursorNow, cursorReturned });
         }
         // ★ BOT-009（与 deposit 同一个坑的另一半）：取物抛错时按真实差值报部分进度 ——
@@ -816,8 +914,8 @@ export async function withdraw(bot, item, n = 1) {
         //   以**背包增量（目的地）**为准，容器口径只在背包计数没刷新时兜底并扣掉在途件。
         const after = await settleTransferCounts(bot, item, { baseline: { inv: invBefore, win: winBefore } });
         const m = measureTaken(bot, item, invBefore, winBefore, take, after);
-        // ★ 在途件送回原侧（withdraw 的来路是容器），避免关窗时掉地上（见 returnCursorToOrigin）
-        const cursorReturned = await returnCursorToOrigin(bot, item, m.cursorAfter, 'container', itemType);
+        // ★★★ T38：同上，只往背包放（不碰容器槽）。
+        const cursorReturned = await drainCursorToInventory(bot, item);
         // ★★ 2026-11-07 复审（第1条）：从未看到变化 ⇒ 快照未确认，显式标记（不静默）。
         const unconfirmed = !after.settled && !after.sawChange;
         if (unconfirmed) {
@@ -844,8 +942,9 @@ export async function withdraw(bot, item, n = 1) {
     //   "容器已减、背包未增（1 件在光标上）"时多报；改用 measureTaken 的目的地口径。
     const after = await settleTransferCounts(bot, item, { baseline: { inv: invBefore, win: winBefore } });
     const m = measureTaken(bot, item, invBefore, winBefore, take, after);
-    // ★ 在途件送回原侧（withdraw 的来路是容器），避免关窗时掉地上（见 returnCursorToOrigin）
-    const cursorReturned = await returnCursorToOrigin(bot, item, m.cursorAfter, 'container', itemType);
+    // ★★★ T38：光标有件只往**背包（目的地）**放，**绝不** left-click 容器槽
+    //   （left-click 在光标为空时是"拿起整摞"，方向反转 —— t37 实测 +16 的元凶）。
+    const cursorReturned = await drainCursorToInventory(bot, item);
     const taken = m.taken;
 
     // ★★ 2026-11-07 复审（第1条）：从未看到变化 ⇒ 快照未确认，显式标记（不静默）。

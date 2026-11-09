@@ -270,11 +270,49 @@ export async function fetch(bot, item, count = 1, opts = {}) {
         if (!win) continue;
 
         try {
-            const r = await withdraw(bot, item, want - takenTotal);
+            // ★★★ T38 跨层真值：先记下开窗前容器里有多少，withdraw 之后再**重开窗口**读一次，
+            //   用服务端下发的 containerItems() 差值当 taken 的真值（客户端快照会晚一拍，不能用来报数）。
+            const countInChest = () => {
+                const w = bot.currentWindow;
+                if (!w || typeof w.containerItems !== 'function') return 0;
+                return w.containerItems().filter((i) => i?.name === item).reduce((n, i) => n + (i.count ?? 0), 0);
+            };
+            const chestBefore = countInChest();
+
+            let r = await withdraw(bot, item, want - takenTotal);
+
+            // 关窗 → 重开 → 读服务端真值（openWindow 包会带全部槽位，这一读是权威的）
+            // ★ 兼容：假 bot（单测的 fake window）没有 bot.clickWindow ⇒ 跳过这段，保持原有行为。
+            try {
+                if (typeof bot?.clickWindow !== 'function') throw new Error('fake-bot: skip server truth');
+                try { closeContainer(bot); } catch { /* ignore */ }
+                await new Promise((res) => setTimeout(res, 200));
+                const reopened = await ensureOpen(bot, chest, ctx);
+                if (reopened.ok) {
+                    const chestAfter = countInChest();
+                    const serverTaken = Math.max(0, Math.min(want - takenTotal, chestBefore - chestAfter));
+                    const clientTaken = Number(r?.data?.taken ?? 0);
+                    if (serverTaken !== clientTaken) {
+                        // 以服务端真值为准修正账目（对外字段语义不变，只把 taken 改准）
+                        r = {
+                            ...r,
+                            ok: serverTaken > 0 ? r.ok : r.ok,
+                            data: { ...(r.data ?? {}), taken: serverTaken, takenSource: 'server', tookClient: clientTaken },
+                        };
+                        // 服务端说取到了、客户端却说失败 ⇒ 按成功处理（物理事实优先）
+                        if (serverTaken > 0 && !r.ok) r = { ...r, ok: true, code: 'OK', message: '' };
+                        if (serverTaken === 0 && r.ok) r = { ...r, ok: false, code: 'NO_ITEM', message: '' };
+                    } else if (r?.data) {
+                        r = { ...r, data: { ...r.data, takenSource: 'server' } };
+                    }
+                }
+            } catch { /* 复核失败就按原结果，不假装成功 */ }
+
             if (r.ok) {
-                await remember(chest, Number(r.data?.taken ?? 0));
-                return ok({ item, want, taken: takenTotal, chest: chest.position });
+                await remember(chest, Number(r.data?.taken ?? 0));   // remember 内部已累加 takenTotal
+                return ok({ item, want, taken: takenTotal, chest: chest.position, takenSource: r.data?.takenSource });
             }
+
             if (r.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
             if (r.code === 'INVENTORY_FULL') {
                 // ★ 与 store 不同：取的时候**背包真的满**（一件都没取到）→ 换箱子没用，直接 abort。
