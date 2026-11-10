@@ -7,9 +7,10 @@ import * as mindcraft from './mindcraft.js';
 import * as procCtrl from './proc_control.js';
 import { allowLocalOnly } from './local_only.js';
 // 第一轮审查 第1条 ①②：握手 token 门 + set-agent-settings 字段白名单（见 auth_gate.js 顶部说明）
+// R6 #2：再加「凭据 → 角色」（面板 / agent）。角色由**出示的是哪一份凭据**决定。
 import {
     makeToken, makeHandshakeGate, authCookieHeader, hasAuthCookie,
-    sanitizeAgentSettings,
+    sanitizeAgentSettings, registerCredential, ROLE_AGENT, ROLE_PANEL,
 } from './auth_gate.js';
 // 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
 import { validateNameFormat } from '../agent/connection_handler.js';
@@ -111,6 +112,11 @@ let io;
 let server;
 // 第一轮审查 第1条 ①：本次启动的握手 token（io.use 校验；agent 子进程从 env 拿到同一份）
 let handshakeToken = null;
+// ★ R6 #2：**第二份凭据**。`handshakeToken` 是**面板**凭据（写 .mindserver-token、走 ?token=/cookie）；
+//   `agentToken` 只通过 process.env.MINDSERVER_TOKEN 继承给 agent 子进程。
+//   两者是不同的随机串 ⇒ 握手门知道「这条连接出示的是哪一份」⇒ 角色是**鉴权结论**，
+//   不再是「客户端有没有发 auth 字段」这种自述。见 auth_gate.js 顶部。
+let agentToken = null;
 const agent_connections = {};
 const agent_listeners = [];
 
@@ -254,8 +260,27 @@ export function validateSettingsShape(settings) {
  * 所以抽成一处，避免三份实现悄悄漂移。
  */
 export function isAgentIdentity(socket, token = handshakeToken) {
+    // ★★★ R6 #2：**先看握手时定下的角色**（凭据种类），这是鉴权结论。
+    //   原来这里唯一的判据是「客户端在 auth 里发了 token 吗」——
+    //   而面板也可以发、agent 也可以不发，所以它只能算「语义标签」。
+    const role = socketRole(socket);
+    if (role === ROLE_AGENT) return true;
+    if (role === ROLE_PANEL) return false;
+    // 兜底：没有角色戳的 socket（离线单测的桩、或极早期代码）才退回旧判据。
+    // 生产路径上每个 socket 都过握手门（io.use(makeHandshakeGate)），一定有角色。
     const t = socket?.handshake?.auth?.token;
     return typeof t === 'string' && t !== '' && typeof token === 'string' && t === token;
+}
+
+/**
+ * ★ R6 #2：这条连接在握手时被认定的**角色**（'panel' | 'agent' | null=未知）。
+ * `null` 一律按「不是面板」处理 —— 管理面事件的判据是「明确证明自己是面板」。
+ * @param {object} socket
+ * @returns {'panel'|'agent'|null}
+ */
+export function socketRole(socket) {
+    const role = socket?.data?.role;
+    return role === ROLE_PANEL || role === ROLE_AGENT ? role : null;
 }
 
 /**
@@ -383,6 +408,38 @@ export function logoutAgent(agentName) {
     }
 }
 
+/**
+ * ★★★ R6 #2：`shutdown` 的任务模式判据（纯函数，服务端状态）。
+ *
+ * 报告 #2 要求「破坏性事件必须有真正的角色判据」。`shutdown` 有一个**既有正常路径**
+ * 需要保留：任务模式（`npm start -- --task_path=<file> --task_id=<id>`）下，
+ * agent 跑完任务会 `killAll()` → `emit('shutdown')` → 整套退出。
+ *
+ * 所以这里把「关服」拆成两件事：
+ *   · **权限**：agent 永远没有关服权限（面板模式下一律拒绝）；
+ *   · **配置**：服务端启动时若被配置成任务模式，那么「任务结束收整套」是**服务端自己的决定**，
+ *     agent 的信号只是触发条件。判据全部取自服务端状态：
+ *       - `rootSettings.task.task_id`（启动配置）
+ *       - `agent_connections[name].settings.task.task_id`（这条连接登记的 agent 的配置）
+ *     agent 在 payload 里自述的 `task_id` 只能**收窄**（不相等即拒绝），不能扩大。
+ */
+function taskIdOf(task) {
+    if (!task || typeof task !== 'object') return null;
+    const id = task.task_id;
+    return typeof id === 'string' && id.trim() ? id.trim() : null;
+}
+
+/** 这条 socket 现在是哪个 agent 的通道（没有则 null）。 */
+function agentNameOfSocket(socket) {
+    for (const name of Object.keys(agent_connections)) {
+        if (agent_connections[name]?.socket === socket) return name;
+    }
+    return null;
+}
+
+/** 任务模式下是否已经收过一次尾（幂等：同一个 task 只允许触发一次）。 */
+let taskModeShutdownFired = false;
+
 // Initialize the server
 // F-WEB-203：按远端地址共享的令牌桶（跨连接，重连不清零）
 const RATE_BUCKETS = new Map();
@@ -403,7 +460,13 @@ const STALE_MS = 60000;
 function takeToken(socket, label, capacity, windowMs) {
     const now = Date.now();
     const addr = String(socket?.handshake?.address || socket?.conn?.remoteAddress || 'unknown');
-    const key = `${label}@${addr}`;
+    // ★ R6 #2：桶的 key 里带上**握手时定下的角色**。
+    //   原来只按远端地址分桶，而本仓默认"全本机部署"（面板与所有 agent 同地址）
+    //   ⇒ 面板和所有 agent 挤在同一个桶里：一只话多的 agent 就能把面板自己的配额吃光。
+    //   角色是服务端判的（凭据种类），客户端改不了；这样"谁在刷"至少按主体分开计。
+    //   （按 agent 名再细分需要额外状态，属报告 #33，本轮不做 —— 见 control.md 残留。）
+    const role = socketRole(socket) ?? 'unknown';
+    const key = `${label}@${role}@${addr}`;
     // ★ R3-2（终审实测）：这里原来是 `if (size > 512) { 删 >60s }` —— 那是**清理触发条件**，
     // 不是上限：513 个新鲜 key 时一个都删不掉，之后每条消息全表扫一遍。名不副实。
     // 现在给它**真上限**：新 key 且已满 ⇒ 先清陈旧项；仍满 ⇒ 淘汰**最旧**的那一条（LRU-ish）。
@@ -791,8 +854,19 @@ export function createMindServer(host_public = false, port = 8080) {
     // 所有特权事件都在 io.on('connection') 里，所以全部落在这道门后。
     // 同用户进程仍能读到它（启动日志/env）—— 那不是这道门能解决的，见 auth_gate.js 顶部说明。
     handshakeToken = process.env.MINDSERVER_TOKEN || makeToken();
-    // agent 子进程（AgentProcess 默认继承 process.env）靠这个连回来
-    process.env.MINDSERVER_TOKEN = handshakeToken;
+    // ★★★ R6 #2：**两份凭据**。
+    //   `handshakeToken` = 面板凭据：写进 .mindserver-token、经 ?token= → HttpOnly cookie 交给浏览器、
+    //   `scripts/start-panel.ps1` / tools 也读它。拿到它就等于「面板」。
+    //   `agentToken` = agent 凭据：**只**通过 process.env.MINDSERVER_TOKEN 继承给子进程
+    //   （AgentProcess 默认继承 process.env），从不进 cookie/HTTP 链路、不落盘。
+    //   为什么必须分开：报告 #2 指出「同一个 bearer token 区分不了两类主体」——
+    //   原来 `isPanelConnection()` 靠「有没有发 auth.token」判定，agent 不发就是面板、
+    //   面板发了就是 agent，任何一类连接都能拿到另一类的权力。
+    //   现在 agent 子进程默认**根本没有**面板凭据，破坏性事件只认握手时定下的角色。
+    agentToken = makeToken();
+    registerCredential(agentToken, ROLE_AGENT);
+    // agent 子进程（AgentProcess 默认继承 process.env）拿的是 **agent 凭据**
+    process.env.MINDSERVER_TOKEN = agentToken;
 
     // F-SEC-205（2026-11-06）：token 不再无条件打到 stdout。
     // 为什么：scripts/start-panel.ps1:189 把 mindcraft 的 stdout 重定向进
@@ -1231,17 +1305,48 @@ export function createMindServer(host_public = false, port = 8080) {
         // （后者见 OPS-003 / F-RT-001；token 门与它同级，也不是权限边界）。
 
         /**
-         * ★★ R4 t24：这三个身份事件**只给"已认证的面板连接"**。
+         * ★★★ R6 #2：是不是**面板**连接。
          *
-         * 为什么需要这一层（不只是握手 token 门）：
-         *   · token 门对**所有**连接一视同仁 —— agent 子进程也带 token（它要发 bot-output）；
-         *   · 但"签发绑定码"是**主人的权力**：agent 进程自己（或任何被拿去当 agent 通道的
-         *     连接）不该能凭空造一个能把自己升成 owner 的码。
-         *   判据与 bot-output 相反：**带 auth.token 的 agent 身份 = 拒绝**；面板走 cookie，不带 auth。
+         * 旧判据（已废）：`!isAgentIdentity(socket) && handshake.auth?.token == null`
+         *   —— 也就是「**没发** auth.token 就算面板」。可 agent 也可以不发、面板也可以发，
+         *   所以只要换一种携带方式（query/header/cookie）就能换一个身份；
+         *   这根本不是鉴权，是一条语义标签。报告的结论是：
+         *   「同一个 bearer token 区分不了两类主体」。
          *
-         * @returns {boolean} 这条连接能不能签发/查看/解绑身份
+         * 新判据：**握手时出示的凭据种类**（见 auth_gate.js 的 credentialRole）。
+         *   面板凭据（?token=/cookie）⇒ socket.data.role = 'panel'；
+         *   agent 凭据（子进程 env 继承）⇒ 'agent'。
+         *   `null`（未知）一律当「不是面板」：管理面事件要求**明确证明**自己是面板。
+         *
+         * @returns {boolean} 这条连接能不能签发/查看/解绑身份、能不能执行管理面动作
          */
-        const isPanelConnection = () => !isAgentIdentity(socket) && socket.handshake?.auth?.token == null;
+        const isPanelConnection = () => socketRole(socket) === ROLE_PANEL;
+
+        /**
+         * ★★★ R6 #2：管理面事件的统一闸门。
+         *
+         * 「管理面」= 会 spawn/杀进程、关服、改别的 agent 的东西：
+         *   server-status/start/stop/log、create-agent、destroy-agent、restart-agent、
+         *   start-agent、stop-agent、stop-all-agents、set-agent-settings、listen-to-agents、shutdown。
+         * 这些以前**全部只落在握手门后**，而握手门对面板与 agent 是同一道 ——
+         * 于是一个被提示注入的 bot 就能关掉整台机器上的控制面、批量杀 bot、起新进程。
+         *
+         * 现在：只有 `role==='panel'` 的连接能进来；agent 连接一律拒绝并留日志，
+         * 同时回一个 `control-denied`（面板页面据此能说清"这次为什么没生效"）。
+         *
+         * @param {string} event 事件名（只用于日志/回执）
+         * @param {Function} [ack] 可选 ack（有 ack 的事件既回 control-denied 也回 ack）
+         * @returns {boolean} 放行 = true
+         */
+        const requirePanel = (event, ack) => {
+            if (isPanelConnection()) return true;
+            const role = socketRole(socket) ?? 'unknown';
+            console.warn(`[mindserver] 拒绝 ${event}：这是管理面事件，只允许面板连接（当前角色=${role}）`);
+            const payload = { event, reason: 'panel_only', role };
+            try { if (typeof ack === 'function') ack({ ok: false, ...payload }); } catch { /* 客户端已断开 */ }
+            try { socket.emit('control-denied', payload); } catch { /* 断开中 */ }
+            return false;
+        };
 
         /**
          * 只接受已注册的 agent 名；返回规范化名字或 null。
@@ -1353,25 +1458,40 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         // ---- 配置向导：paper 服务进程管理 ----
+        // ★ R6 #2：这四条是**管理面**（起/停 Minecraft 服务、读服务端日志）。
+        //   agent 子进程不需要它们；原来它们在握手门后对谁都开放 ——
+        //   一个被提示注入的 bot 可以 `server-stop` 把整个服关掉。现在只给面板。
         socket.on('server-status', async (callback) => {
-            try { callback(await procCtrl.getStatus()); }
-            catch (e) { callback({ ok: false, reason: String(e && e.message || e) }); }
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!takeToken(socket, 'server-status', 60, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            if (!requirePanel('server-status', cb)) return;
+            try { cb(await procCtrl.getStatus()); }
+            catch (e) { cb({ ok: false, reason: String(e && e.message || e) }); }
         });
 
         socket.on('server-start', async (callback) => {
-            try { callback(await procCtrl.startServer()); }
-            catch (e) { callback({ ok: false, reason: String(e && e.message || e) }); }
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!takeToken(socket, 'server-start', 6, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            if (!requirePanel('server-start', cb)) return;
+            try { cb(await procCtrl.startServer()); }
+            catch (e) { cb({ ok: false, reason: String(e && e.message || e) }); }
         });
 
         socket.on('server-stop', async (callback) => {
-            try { callback(await procCtrl.stopServer()); }
-            catch (e) { callback({ ok: false, reason: String(e && e.message || e) }); }
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!takeToken(socket, 'server-stop', 6, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            if (!requirePanel('server-stop', cb)) return;
+            try { cb(await procCtrl.stopServer()); }
+            catch (e) { cb({ ok: false, reason: String(e && e.message || e) }); }
         });
 
         socket.on('server-log', (n, callback) => {
             if (typeof n === 'function') { callback = n; n = 80; }
-            try { callback({ ok: true, lines: procCtrl.tailLog(n) }); }
-            catch (e) { callback({ ok: false, reason: String(e && e.message || e) }); }
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!takeToken(socket, 'server-log', 30, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            if (!requirePanel('server-log', cb)) return;
+            try { cb({ ok: true, lines: procCtrl.tailLog(n) }); }
+            catch (e) { cb({ ok: false, reason: String(e && e.message || e) }); }
         });
 
         socket.on('create-agent', async (settings, callback) => {            console.log('API create agent...');
@@ -1392,6 +1512,8 @@ export function createMindServer(host_public = false, port = 8080) {
                 ack({ success: false, error: '太频繁：create-agent 限 5 次/分钟' });
                 return;
             }
+            // ★ R6 #2：spawn 新进程 = 管理面动作，只给面板。
+            if (!requirePanel('create-agent', () => ack({ success: false, error: 'panel_only' }))) return;
             // ★★★ R4 S1#5：**先校验形状**（null / 字符串 / 数组 / profile 不是对象 ⇒ 当场拒绝）。
             //   不做这一步的话，下面 `key in settings` 会抛 TypeError ⇒ 打挂整个控制面。
             {
@@ -1515,6 +1637,16 @@ export function createMindServer(host_public = false, port = 8080) {
                 try { claim.previous.disconnect?.(true); } catch { /* 已经断了 */ }
             }
             conn.socket = socket;
+            // ★ R6 #2：把「这条连接是哪个 agent」写成**服务端判定**的戳。
+            //   任务板（board_server.js）需要知道"你是谁"才能拒绝冒充：原来它只能取
+            //   `payload.bot`（客户端自述 ⇒ 任何连接都能声称自己是任意 bot）。
+            //   这里的值来自 agent 自己声明的名字 **+ 服务端唯一占用裁决**（claimAgentChannel），
+            //   下游（board:hello 等）据此比对，就不再是"自报"了。
+            //   诚实边界：仍是"持有 agent 凭据的进程"粒度，不是每 agent 一份凭据（见 control.md 残留）。
+            try {
+                if (!socket.data) socket.data = {};
+                socket.data.agentName = agentName;
+            } catch { /* 桩 socket 不可写：下游按"无绑定"处理 */ }
             return true;
         }
 
@@ -1576,6 +1708,10 @@ export function createMindServer(host_public = false, port = 8080) {
         // blocked_actions（清空即可放出 !newAction 等被封命令）、profile（里面是 owner 名单）
         // 一律丢弃并告警，不再「照存 + 重启生效」。
         socket.on('set-agent-settings', (agentName, settings) => {
+            // ★ R6 #2：运行期改别人的设置 = 管理面动作（面板「设置」页用）。
+            //   agent 子进程不需要它（它自己的配置走 get-settings 读回），所以只给面板 + 限流。
+            if (!takeToken(socket, 'set-agent-settings', 30, 60000)) return;
+            if (!requirePanel('set-agent-settings')) return;
             const agent = agent_connections[agentName];
             if (!agent) return;
             const { settings: safe, dropped } = sanitizeAgentSettings(settings);
@@ -1594,6 +1730,8 @@ export function createMindServer(host_public = false, port = 8080) {
             // ★ F-WEB-203：`restart-agent` 循环比"刷消息"更伤可用性 —— 每点一次就杀一个 bot 进程
             // 再拉起，反复点能把机器拖垮。按来源限 3 次/60 秒（正常使用远低于此）。
             if (!takeToken(socket, 'restart-agent', 3, 60000)) return;
+            // ★ R6 #2：重启 agent = 管理面动作，只给面板（agent 不能重启别人/自己）。
+            if (!requirePanel('restart-agent')) return;
             // D25：停掉的 agent socket 为 null（面板上重启按钮仍可点），原来这里直接崩掉整个 mindserver
             const conn = agent_connections[agentName];
             if (!conn?.socket) {
@@ -1604,6 +1742,9 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('stop-agent', (agentName) => {
+            // ★ R6 #2：停一只是管理面动作（原来完全无限流、也不区分主体）。
+            if (!takeToken(socket, 'stop-agent', 10, 60000)) return;
+            if (!requirePanel('stop-agent')) return;
             mindcraft.stopAgent(agentName);
             agentsStatusUpdate();
         });
@@ -1617,6 +1758,8 @@ export function createMindServer(host_public = false, port = 8080) {
                 console.warn(`[mindserver] 拒绝 start-agent：触发限流（6 次/60s）`);
                 return;
             }
+            // ★ R6 #2：起进程 = 管理面动作，只给面板。
+            if (!requirePanel('start-agent')) return;
             const r = await mindcraft.startAgent(agentName);
             if (r && r.started === false) {
                 console.warn(`[mindserver] start-agent 未生效（${r.reason}）：${agentName}` +
@@ -1635,6 +1778,8 @@ export function createMindServer(host_public = false, port = 8080) {
                 console.warn(`[mindserver] 拒绝 destroy-agent：触发限流（3 次/60s）`);
                 return;
             }
+            // ★ R6 #2：删 agent（连注册表一起）是管理面动作，只给面板。
+            if (!requirePanel('destroy-agent')) return;
             if (!agent_connections[agentName]) return;
             const r = await mindcraft.destroyAgent(agentName);
             if (!r?.ok) {
@@ -1648,17 +1793,81 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
         socket.on('stop-all-agents', () => {
+            // ★★★ R6 #2：这是「一键杀光全部 bot」—— 原来**既不判角色也不限流**，
+            //   于是任何持 token 的连接（含每个 agent 子进程）都能把整套控制面清空。
+            //   现在：管理面动作 ⇒ 只给面板 + 按来源限流。
+            if (!takeToken(socket, 'stop-all-agents', 3, 60000)) return;
+            if (!requirePanel('stop-all-agents')) return;
             console.log('Killing all agents');
             for (let agentName in agent_connections) {
                 mindcraft.stopAgent(agentName);
             }
         });
 
-        socket.on('shutdown', () => {
-            // ★ F-EXEC-102（2026-11-06）：不再"发信号 + 2 秒后硬退"。
-            // 原来那 2 秒是**赌**子进程会自己退；赌输就留下孤儿 agent（继续领单 + 续租，
-            // 面板看着正常但停不掉）。现在走 shutdownAndWait：逐个等确认，必要时 SIGKILL。
-            shutdownOnce('socket');
+        /**
+         * ★★★ R6 #2：`shutdown` —— 关掉**整套**控制面（含任务板、所有 bot）。
+         *
+         * 缺陷原貌：任何持 token 的连接发一条 `shutdown` 就够了（`shutdownOnce('socket')` →
+         * `process.exit(0)`），而 panel / agent 从来没有被区分过。
+         *
+         * 现在的口径（**判据全在服务端，agent 发来的东西只算"请求"，不算"授权依据"**）：
+         *   ① 面板连接 ⇒ 直接允许（面板该能关服）。
+         *   ② agent 连接 ⇒ 只有一种情形允许：**服务端启动时自己被配置成任务模式**
+         *      （`settings.task` 有 task_id），且这条连接登记的 agent 的配置里就是**那一个** task。
+         *      这是既有正常路径：「跑完任务 → 整套退出」（`agent.js` 的 `checkTaskDone → killAll`）。
+         *      判据取自 `rootSettings.task` 与 `agent_connections[name].settings.task`（服务端状态），
+         *      不取 agent 自述；agent 若额外带了 `task_id`，必须与启动配置**相等**，否则拒绝。
+         *   ③ 同一个 task 只允许触发一次（幂等）：第二次回 `already-finished`，不再重复收尾。
+         *   ④ 其它一切（agent 在面板模式、未知角色）⇒ 拒绝 + `control-denied`。
+         */
+        socket.on('shutdown', (payload) => {
+            const ack = typeof payload === 'function' ? payload : null;
+            const claim = (payload && typeof payload === 'object' && !ack) ? payload : {};
+
+            if (isPanelConnection()) {
+                // F-EXEC-102（2026-11-06）：不再"发信号 + 2 秒后硬退"，走 shutdownAndWait。
+                shutdownOnce('socket');
+                if (ack) { try { ack({ ok: true, accepted: true, by: 'panel' }); } catch { /* 断开中 */ } }
+                return;
+            }
+
+            const deny = (reason) => {
+                console.warn(`[mindserver] 拒绝 shutdown（${reason}）：当前角色=${socketRole(socket) ?? 'unknown'}` +
+                    '。关服是管理面能力，只给面板；agent 只有在任务模式下、且完成的是启动时配置的那个 task 才允许收尾。');
+                try { socket.emit('control-denied', { event: 'shutdown', reason, role: socketRole(socket) ?? null }); } catch { /* 断开中 */ }
+                if (ack) { try { ack({ ok: false, reason, accepted: false }); } catch { /* 断开中 */ } }
+            };
+
+            if (socketRole(socket) !== ROLE_AGENT) { deny('panel_only'); return; }
+
+            const bootTaskId = taskIdOf(rootSettings?.task);
+            if (!bootTaskId) { deny('not-task-mode'); return; }
+
+            const name = agentNameOfSocket(socket);
+            if (!name) { deny('agent-not-bound'); return; }
+
+            const agentTaskId = taskIdOf(agent_connections[name]?.settings?.task);
+            if (agentTaskId && agentTaskId !== bootTaskId) {
+                deny(`task-mismatch（本连接登记的是 ${agentTaskId}，启动配置的是 ${bootTaskId}）`);
+                return;
+            }
+            if (claim && claim.task_id != null && String(claim.task_id) !== bootTaskId) {
+                // agent 自述的 task 只能**收窄**许可，不能扩大。
+                deny(`claimed-task-mismatch（${String(claim.task_id)} ≠ ${bootTaskId}）`);
+                return;
+            }
+            if (taskModeShutdownFired) {
+                console.warn(`[mindserver] 忽略重复的 shutdown（task ${bootTaskId} 已经收尾过）`);
+                try { socket.emit('control-denied', { event: 'shutdown', reason: 'already-finished', task_id: bootTaskId }); } catch { /* 断开中 */ }
+                if (ack) { try { ack({ ok: false, reason: 'already-finished', accepted: false }); } catch { /* 断开中 */ } }
+                return;
+            }
+
+            taskModeShutdownFired = true;
+            console.log(`[mindserver] 任务模式收尾：agent ${name} 报告 task ${bootTaskId} 结束 ⇒ 由**服务端**收整套` +
+                '（这是启动配置决定的行为，不是 agent 的权限）');
+            if (ack) { try { ack({ ok: true, accepted: true, by: 'server-task-mode', task_id: bootTaskId }); } catch { /* 断开中 */ } }
+            shutdownOnce('agent-task-done');
         });
 
 		socket.on('send-message', (agentName, data) => {
@@ -1723,6 +1932,9 @@ export function createMindServer(host_public = false, port = 8080) {
             //   `state-update`，而且 removeListener 只摘掉一个，剩下的永远留在集合里 ⇒
             //   `agent_listeners.length` 归不了零 ⇒ 1 Hz 轮询**永不停止**）。
             if (agent_listeners.includes(socket)) return;
+            // ★ R6 #2：订阅状态广播是**面板**的能力（1 Hz 轮询 + relay 注册都会推高服务端负载）。
+            //   agent 不订阅这个（它发 bot-output/agent-event，方向相反），所以只给面板。
+            if (!requirePanel('listen-to-agents')) return;
             // ★ F-WEB-203：`listen-to-agents` 会让这个 socket 进入广播订阅集合（服务端按 socket 计数
             // 起计时器），原来无限流 ⇒ 单连接反复订阅可推高服务端负载。按来源限 10 次/60 秒。
             if (!takeToken(socket, 'listen-to-agents', 10, 60000)) return;

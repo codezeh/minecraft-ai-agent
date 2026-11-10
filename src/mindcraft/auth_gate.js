@@ -110,6 +110,81 @@ export function isAuthorizedHandshake(handshake, expectedToken) {
     return tokenEquals(tokenFromHandshake(handshake), expectedToken);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// R6 #2：**角色**（面板 / agent）—— 凭据决定身份，不再靠「发没发 auth.token」
+// ════════════════════════════════════════════════════════════════════════════
+//
+// 缺陷原貌（报告 #2）：`isPanelConnection()` 的判据是「**没有**发 auth.token」，
+//   而 agent 也完全可以不发、面板也可以发 ⇒ 只要换一种携带方式就换一个身份。
+//   于是「agent / 面板」不是鉴权结论，只是一个**语义标签**：任何持握手 token 的连接
+//   （包括每个 agent 子进程）都能发 stop-all-agents → shutdown 把整套控制面关掉。
+//
+// 现在的口径：**两份不同的随机凭据**（启动时各生成一次）：
+//   · 面板凭据 = `?token=` → HttpOnly cookie 那条路，也是 `.mindserver-token` 文件里的值；
+//   · agent 凭据 = 只通过 `process.env.MINDSERVER_TOKEN` 继承给子进程，**不进 cookie 链路**。
+// 握手门按「出示的是哪一份」定角色，把结论写到 `socket.data.role`；此后所有事件的判据
+// 只认这个角色。要冒充得**拿到另一份凭据**，而不是「换个字段携带」。
+//
+// **诚实的边界**：这仍是「同用户权限模型」之内 —— 同机同用户进程能读 `.mindserver-token`
+//   文件（= 面板凭据）。本层解决的是「agent 子进程默认拿不到面板凭据」以及
+//   「判据不再取决于客户端自述的字段」，不是进程隔离。
+
+export const ROLE_PANEL = 'panel';
+export const ROLE_AGENT = 'agent';
+
+/**
+ * 额外凭据（token → 角色）。
+ *
+ * 为什么用登记表而不是给 `makeHandshakeGate` 加参数：控制面那行接线
+ * `io.use(makeHandshakeGate(handshakeToken))` 是既有单测（tools/mindserver_gate_unit.mjs D1）
+ * 的锚点，也是「门只有一处」的可 grep 证据。登记表让「面板凭据」仍是唯一的主参数，
+ * 额外凭据（agent）由 `registerCredential` 显式登记进来。
+ */
+const EXTRA_CREDENTIALS = new Map();
+
+/**
+ * 登记一份额外凭据及其角色。返回值只表示「登记成功」，不表示「现在有连接通过」。
+ * @param {string} token
+ * @param {'panel'|'agent'} role
+ * @returns {boolean}
+ */
+export function registerCredential(token, role) {
+    if (typeof token !== 'string' || token.length === 0) return false;
+    if (role !== ROLE_PANEL && role !== ROLE_AGENT) return false;
+    EXTRA_CREDENTIALS.set(token, role);
+    return true;
+}
+
+/** 清空额外凭据（进程内多次 createMindServer 时用；单测也用它隔离）。 */
+export function clearCredentials() {
+    EXTRA_CREDENTIALS.clear();
+}
+
+/**
+ * 这次握手出示的是**哪一份**凭据 → 角色；不认识/没带 → null。
+ *
+ * 逐条 `tokenEquals`（定长比较）而不是 Map 直查：比较要在常量时间内完成，
+ * 不让「前缀匹配程度」从时间差里漏出去。登记表很小（≤ 几条），代价可忽略。
+ *
+ * @param {object} handshake socket.handshake
+ * @param {string} panelToken 面板凭据（= makeHandshakeGate 的主参数）
+ * @returns {'panel'|'agent'|null}
+ */
+export function credentialRole(handshake, panelToken) {
+    let presented = null;
+    try {
+        presented = tokenFromHandshake(handshake);
+    } catch {
+        return null;
+    }
+    if (typeof presented !== 'string' || presented.length === 0) return null;
+    if (tokenEquals(presented, panelToken)) return ROLE_PANEL;
+    for (const [token, role] of EXTRA_CREDENTIALS) {
+        if (tokenEquals(presented, token)) return role;
+    }
+    return null;
+}
+
 /**
  * 给 socket.io 的 `io.use(...)` 用的中间件：token 不对就断开，**不注册任何事件处理器**。
  * 注意 `next(err)` 的 err 会被 socket.io 送到客户端 `connect_error`；
@@ -133,15 +208,22 @@ export function makeHandshakeGate(expectedToken) {
     return function handshakeGate(socket, next) {
         // SEC-001：判定本身也必须兜住。任何来自 handshake 的畸形数据（Cookie / query / header）
         // 都只能变成一次「拒绝」，不能变成一次未捕获异常 —— 未捕获异常会带走整个进程。
-        let authorized = false;
+        let role = null;
         try {
-            authorized = isAuthorizedHandshake(socket?.handshake, expectedToken);
+            role = credentialRole(socket?.handshake, expectedToken);
         } catch (err) {
             console.warn('[mindserver] 握手判定异常（按未授权处理）:', err?.message ?? err);
             return next(reject(socket, '握手数据畸形'));
         }
-        if (authorized) return next();
-        return next(reject(socket, '缺 token 或 token 不对'));
+        if (!role) return next(reject(socket, '缺 token 或 token 不对'));
+        // ★ R6 #2：角色在**这里**定，之后所有事件只认它。
+        //   agent 凭据 ⇒ 'agent'；面板凭据 ⇒ 'panel'。两者是不同的随机串，
+        //   「换个字段携带同一份 token」不再能换身份。
+        try {
+            if (!socket.data) socket.data = {};
+            socket.data.role = role;
+        } catch { /* 桩 socket 不可写：下游按「角色未知」处理（= 管理面事件一律拒绝） */ }
+        return next();
     };
 }
 
