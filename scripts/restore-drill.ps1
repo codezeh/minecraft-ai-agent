@@ -83,6 +83,8 @@ $serverDir = Join-Path $drillRoot 'server'
 $rconPass = 'drill-' + [guid]::NewGuid().ToString('n').Substring(0, 12)
 
 $script:results = New-Object System.Collections.Generic.List[object]
+# R6 #10：断言条数用于 verdict 判定（原来写死 12；新增 13/14 后必须同步，否则永远 FAIL）
+$script:expectedAssertions = 14
 $script:ignored = New-Object System.Collections.Generic.List[object]
 $script:javaProc = $null
 $script:javaKilled = $false
@@ -223,7 +225,7 @@ function Write-Report {
         drillDir    = $drillRoot
         ports       = [ordered]@{ server = $Port; rcon = $RconPort }
         summary     = [ordered]@{ pass = $passed; fail = $failed; total = $script:results.Count }
-        verdict     = $(if ($failed -eq 0 -and $script:results.Count -eq 12) { 'PASS' } else { 'FAIL' })
+        verdict     = $(if ($failed -eq 0 -and $script:results.Count -eq $script:expectedAssertions) { 'PASS' } else { 'FAIL' })
         assertions  = $script:results.ToArray()
         ignoredNetworkErrors = $script:ignored.ToArray()
         evidence    = [ordered]@{
@@ -378,8 +380,52 @@ try {
         switch ($e.kind) {
             'world' { [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $serverDir) }
             'bots' { [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $drillRoot) }
+            # ★ R6 #10（2026-11-10）：原来这两类**根本不解压**（走 default 丢弃），
+            #   于是"12 条断言全过"只证明了世界和 bots 能还原，
+            #   证明不了"原服务器能恢复"——插件配置、服务端配置从未被验证过。
+            #   server-config 解到 drillRoot：包内路径是 server/... 与 config/...，
+            #   解到根下正好落到 drill/server 与 drill/config（与仓库布局一致）。
+            'config' { [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $drillRoot) }
+            'plugins' { [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $serverDir) }
             default { }
         }
+    }
+
+    # ── 用备份里的 server.properties 作基底，只覆盖"隔离必需"的键 ──
+    #   为什么要有这一步：上面 348 行合成的是一份**最小可启动**配置，不是"原服务器的配置"。
+    #   备份还原后真正的 server.properties 会覆盖它 —— 但端口/RCON/在线模式必须改回演练口，
+    #   否则要么撞生产端口，要么连不回本机。其余键（white-list / view-distance / 各类策略）
+    #   一律保留原值，这样断言才能证明"配置真的还原了"。
+    $propsPath = Join-Path $serverDir 'server.properties'
+    $drillOverride = [ordered]@{
+        'server-port'            = "$Port"
+        'server-ip'              = '127.0.0.1'
+        'enable-rcon'            = 'true'
+        'rcon.port'              = "$RconPort"
+        'rcon.password'          = $rconPass
+        'broadcast-rcon-to-ops'  = 'false'
+        'online-mode'            = 'false'
+        'enforce-secure-profile' = 'false'
+        'level-name'             = 'world'
+        'max-players'            = '1'
+        'enable-query'           = 'false'
+        'motd'                   = 'restore-drill'
+    }
+    $propsFromBackup = $false
+    if (Test-Path -LiteralPath $propsPath) {
+        $outProps = New-Object System.Collections.Generic.List[string]
+        $applied = @{}
+        foreach ($line in @(Get-Content -LiteralPath $propsPath -ErrorAction Stop)) {
+            if ($line -match '^\s*([A-Za-z0-9._-]+)\s*=') {
+                $k = $Matches[1]
+                if ($drillOverride.Contains($k)) { $outProps.Add("$k=$($drillOverride[$k])"); $applied[$k] = $true; continue }
+            }
+            $outProps.Add($line)
+        }
+        foreach ($k in $drillOverride.Keys) { if (-not $applied.ContainsKey($k)) { $outProps.Add("$k=$($drillOverride[$k])") } }
+        Set-Content -LiteralPath $propsPath -Value $outProps -Encoding ASCII
+        $propsFromBackup = $true
+        Write-Info "server.properties：以备份内容为基底，覆盖 $($drillOverride.Count) 个隔离必需键"
     }
 
     # ── 断言 3/4/5/6：世界内容 ─────────────────────────────────────
@@ -566,6 +612,43 @@ try {
         if (-not $savedOk) { $rconDetail += ' 日志里没有 All chunks are saved' }
     }
     Add-Result 12 'RCON stop 后日志出现 All chunks are saved' ($rconOk -and $savedOk) $rconDetail
+
+    # ── 断言 13：服务端配置真的还原了（不是"合成一份能启动的"）──────────
+    $cfgEntry = @($entries | Where-Object { $_.kind -eq 'config' })[0]
+    $wantCfgFiles = 0
+    if ($cfgEntry -and $null -ne $cfgEntry.counts.fileCount) { $wantCfgFiles = [int64]$cfgEntry.counts.fileCount }
+    $cfgOk = (Test-Path -LiteralPath $propsPath)
+    $cfgDetail = "properties=$cfgOk 来源=$(if ($propsFromBackup) { '备份' } else { '合成/缺失' })"
+    if ($cfgOk) {
+        $propsText = Get-Content -LiteralPath $propsPath -Raw
+        # 这几个键演练的合成基线里没有：它们在，就说明用的确实是备份那份配置
+        $markers = @('white-list', 'enforce-whitelist', 'difficulty', 'spawn-monsters')
+        $foundMarkers = @($markers | Where-Object { $propsText -match "(?m)^\s*$_\s*=" })
+        $cfgOk = $propsFromBackup -and ($foundMarkers.Count -ge 2)
+        $cfgDetail += "；备份特征键=$($foundMarkers -join '/')"
+        # 口令必须是演练自己注入的，不能是备份里那份（可能为空、也可能是生产口令）
+        $pwOk = [bool]($propsText -match "(?m)^\s*rcon\.password\s*=\s*$([regex]::Escape($rconPass))\s*$")
+        $cfgOk = $cfgOk -and $pwOk
+        $cfgDetail += "；演练口令已注入=$pwOk"
+        if ($wantCfgFiles -gt 0) {
+            $cfgDetail += "；清单登记 $wantCfgFiles 个配置文件"
+        }
+    }
+    Add-Result 13 'server.properties 与配置文件来自备份（非合成）' $cfgOk $cfgDetail
+
+    # ── 断言 14：插件配置与数据库真的还原了 ──────────────────────────
+    $plugEntry = @($entries | Where-Object { $_.kind -eq 'plugins' })[0]
+    $wantPlugFiles = 0
+    if ($plugEntry -and $null -ne $plugEntry.counts.fileCount) { $wantPlugFiles = [int64]$plugEntry.counts.fileCount }
+    $plugDir = Join-Path $serverDir 'plugins'
+    $havePlugFiles = 0
+    if (Test-Path -LiteralPath $plugDir) {
+        $havePlugFiles = @(Get-ChildItem -LiteralPath $plugDir -Recurse -File -Force -ErrorAction SilentlyContinue).Count
+    }
+    # 允许少量差异（.paper-remapped 等运行期缓存），但主体必须在
+    $plugOk = ($wantPlugFiles -gt 0 -and $havePlugFiles -ge [math]::Floor($wantPlugFiles * 0.9))
+    $coreProtect = Test-Path -LiteralPath (Join-Path $plugDir 'CoreProtect/database.db')
+    Add-Result 14 '插件目录与配置从备份还原（≥90% 条目）' $plugOk ("期望 $wantPlugFiles 个，实际 $havePlugFiles 个；CoreProtect 库=$coreProtect")
 
     $rep = Write-Report
     $exitCode = 0

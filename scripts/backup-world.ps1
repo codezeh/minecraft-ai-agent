@@ -640,14 +640,27 @@ try {
     # ── server-config：恢复出一台"能跑的服务器"必需的文件 ──────────
     $cfgFiles = New-Object System.Collections.Generic.List[object]
     $cfgExcluded = New-Object System.Collections.Generic.List[object]
+    $cfgRedacted = New-Object System.Collections.Generic.List[object]
     $serverCfgNames = @('server.properties', 'eula.txt', 'ops.json', 'whitelist.json',
         'banned-ips.json', 'banned-players.json', 'usercache.json',
         'bukkit.yml', 'spigot.yml', 'commands.yml', 'help.yml', 'permissions.yml', 'version_history.json')
     foreach ($n in $serverCfgNames) {
         $p = Join-Path $root "server/$n"
         if (-not (Test-Path -LiteralPath $p)) { continue }
+        # ★ R6 #9（2026-11-10）：`-ExcludeSecrets` 原来是**整份丢掉** server.properties。
+        #   后果：备份恢复出来的是另一台服（enable-rcon/online-mode/white-list/view-distance
+        #   全丢），而且 stop-panel 的优雅关服链依赖 RCON ⇒ 恢复后只能硬关。
+        #   现在改为**脱敏入包**：保留全部非敏感行，只把 rcon.password 抹成空。
+        #   演练侧本来就会自己注入端口与口令（restore-drill:353-354），所以抹空不影响演练。
         if ($ExcludeSecrets -and $n -eq 'server.properties') {
-            $cfgExcluded.Add([ordered]@{ path = "server/$n"; reason = '-ExcludeSecrets：含 rcon.password 等口令，按要求不备份' })
+            $redacted = Join-Path $snapDir 'server.properties.redacted'
+            $outLines = foreach ($l in @(Get-Content -LiteralPath $p -ErrorAction Stop)) {
+                if ($l -match '^\s*rcon\.password\s*=') { 'rcon.password=' } else { $l }
+            }
+            Set-Content -LiteralPath $redacted -Value $outLines -Encoding ASCII
+            $cfgFiles.Add((Get-FileEntry $redacted "server/$n"))
+            $cfgRedacted.Add([ordered]@{ path = "server/$n"; field = 'rcon.password'; reason = '-ExcludeSecrets：口令抹空后入包（其余设置全保留，保证可复现）' })
+            Write-Info 'server.properties：已脱敏入包（rcon.password 置空）'
             continue
         }
         $cfgFiles.Add((Get-FileEntry $p "server/$n"))
@@ -829,8 +842,14 @@ try {
             why       = 'mindserver 以 -WorkingDirectory <repo>\mindcraft 启动（scripts/start-panel.ps1:245），bot_paths.js 的 botsRootOf() 默认 ./bots 因此解析到 mindcraft/bots'
             legacy    = $legacyInfo
         }
+        # ★ R6 #46：插件 jar 按约定不进备份（53MB 可重下），但**清单必须留**，
+        #   否则恢复者不知道原来装了哪几个插件、什么版本 —— "恢复可重现"就不成立。
+        pluginJars      = @(Get-ChildItem (Join-Path $root 'server/plugins') -Filter '*.jar' -File -ErrorAction SilentlyContinue |
+            Sort-Object Name |
+            ForEach-Object { [ordered]@{ name = $_.Name; bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash } })
         containsSecrets = (-not $ExcludeSecrets)
-        secretNote      = $(if ($ExcludeSecrets) { '已用 -ExcludeSecrets 跳过 server/server.properties；恢复后需手工补 RCON 口令/端口' } else { 'server-config.zip 内含 server/server.properties（rcon.password 等口令）：备份目录等同敏感数据，请勿外传/入库' })
+        redacted        = $cfgRedacted.ToArray()
+        secretNote      = $(if ($ExcludeSecrets) { 'server-config.zip 内含 server/server.properties，但 rcon.password 已抹空（其余设置完整保留）；恢复后按 manifest.redacted 填回口令即可' } else { 'server-config.zip 内含 server/server.properties（含 rcon.password）：备份目录等同敏感数据，请勿外传/入库' })
         skipped         = $skipped.ToArray()
         excluded        = $excludedList.ToArray()
         entries         = $entries.ToArray()
