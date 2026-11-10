@@ -5,6 +5,7 @@
  *
  * ★ 判据：预算是防爆炸的，不是防干活的。该共享的范围是"一次任务执行内"，不是"跨任务"。
  */
+import { openTempBoard } from './temp_board.mjs';
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
@@ -37,7 +38,7 @@ await sleep(1200);
 const reg = await import('../src/agent/library/composite_registry.js');
 const board = new BoardClient({ socket: sock, name: NAME, skills: reg.SKILL_NAMES, timeoutMs: 5000 });
 await board.hello();
-const { db } = openBoard();
+const { db } = openTempBoard('a2');
 
 const p = bot.entity.position;
 const bx = Math.floor(p.x), by = Math.floor(p.y), bz = Math.floor(p.z);

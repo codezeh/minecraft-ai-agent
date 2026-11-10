@@ -10,6 +10,7 @@
  *
  * 用法：node tools/board_b3_live.mjs
  */
+import { openTempBoard } from './temp_board.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -125,7 +126,7 @@ const push = (name, pass, detail) => { results.push({ name, pass, detail }); log
 
 // 拆 4 张子单，每张**预约自己的一块区域**（互不相邻 → 两个 bot 不会撞）
 const store = await import('../src/agent/library/board_store.js');
-const { db } = store.openBoard();
+const { db } = openTempBoard('b3');
 
 // 清掉上一轮的残留单，免得干扰
 try { db.exec("DELETE FROM jobs"); db.exec("DELETE FROM claims"); } catch { }

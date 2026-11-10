@@ -4,6 +4,7 @@
  *   ② 调度器真的领走/跑了/回报 —— 验"真的跑起来"（两件事，用户明确要求都看）
  *   ③ 夜间注入那轮的 shelter 子单
  */
+import { openTempBoard } from './temp_board.mjs';
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
@@ -36,7 +37,7 @@ await sleep(1200);
 const reg = await import('../src/agent/library/composite_registry.js');
 const board = new BoardClient({ socket: sock, name: NAME, skills: reg.SKILL_NAMES, timeoutMs: 5000 });
 await board.hello();
-const { db } = openBoard();
+const { db } = openTempBoard('firstnight');
 try { db.exec('DELETE FROM jobs'); } catch { }
 
 const p = bot.entity.position;

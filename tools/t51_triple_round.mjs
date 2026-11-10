@@ -1,5 +1,6 @@
 // 3 轮测量驱动（第 37 跑版）
 // 每轮：检查窗口 → 验树(≥3 沿用，不重建) → 清板到0 → 数真实 oak_log → 跑 harness → 采集指标
+import { openTempBoard } from './temp_board.mjs';
 import { rcon } from './rcon.mjs';
 import { openBoard } from '../src/agent/library/board_store.js';
 import { spawn } from 'node:child_process';
@@ -46,7 +47,7 @@ for (let r = 1; r <= ROUNDS; r++) {
         continue;
     }
 
-    const db = openBoard().db;
+    const db = openTempBoard('t51').db;
     db.exec('DELETE FROM jobs');
     try { db.exec('DELETE FROM claims'); } catch { }
     const n0 = db.prepare('SELECT COUNT(*) c FROM jobs').get().c;
@@ -84,7 +85,7 @@ for (let r = 1; r <= ROUNDS; r++) {
     met.candMax = cands.length ? Math.max(...cands) : null;
     met.logsAfter = await countRealLogs();
 
-    const db2 = openBoard().db;
+    const db2 = openTempBoard('t51').db;
     const fnRow = db2.prepare("SELECT id,state FROM jobs WHERE skill='first_night' ORDER BY createdAt LIMIT 1").get();
     const pid = fnRow?.id ?? null;
     met.parentState = fnRow?.state ?? 'none';
@@ -153,7 +154,7 @@ for (let r = 1; r <= ROUNDS; r++) {
     }
     // ★ 第 53 跑（t88 要求）：**所有 craft 单（含成功）按时间排开**，带 produced / invAfter，建消耗链
     try {
-        const chainDb = openBoard().db;
+        const chainDb = openTempBoard('t51').db;
         const rows = chainDb.prepare("SELECT id,skill,args,state,attempts,createdAt,result FROM jobs WHERE skill='craft' ORDER BY createdAt").all();
         const chain = rows.map((c) => {
             let r = null; try { r = JSON.parse(c.result ?? 'null'); } catch { }

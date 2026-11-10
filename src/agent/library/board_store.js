@@ -272,13 +272,13 @@ export function openBoard(dir, opts = {}) {
     //   生产库当时 jobs=0/claims=0 且目录内无 `.corrupt-*` 备份（正常 DELETE 不留备份，删了就是删了）。
     //
     //   现在：谁要生产库，谁就显式写出来（唯一合法调用方是 mindserver.js:965 的 `openBoard(boardDirOf())`）。
-    //   工具/临时脚本一律用 `tools/_tmp_board.mjs` 的 `openTempBoard()`，每次跑一个新临时目录。
+    //   工具/临时脚本一律用 `tools/temp_board.mjs` 的 `openTempBoard()`，每次跑一个新临时目录。
     //   宁可让忘记传参的脚本**当场报错**，也不让它静默清库。
     if (!dir) {
         throw new Error(
             'openBoard(dir) 必须显式传板库目录：默认值 bots/_board 是生产库，' +
             '无参调用会直接清空线上任务与预占（R6 #1）。' +
-            '生产侧请传 boardDirOf()；临时脚本请用 tools/_tmp_board.mjs 的 openTempBoard()。'
+            '生产侧请传 boardDirOf()；临时脚本请用 tools/temp_board.mjs 的 openTempBoard()。'
         );
     }
     if (!readOnly) mkdirSync(dir, { recursive: true });

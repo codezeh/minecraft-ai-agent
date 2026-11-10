@@ -11,6 +11,7 @@
  *
  * 用法：node tools/board_b2_brief_live.mjs
  */
+import { openTempBoard } from './temp_board.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -112,7 +113,7 @@ const push = (name, pass, detail) => { results.push({ name, pass, detail }); log
 //   于是"退回 ready"的断言从一开始就没意义。
 //   现在直接走**真 store**（同一个库文件）造，并**断言造出来的确实是 running + 旧 interrupted**。
 const store = await import("../src/agent/library/board_store.js");
-const { db } = store.openBoard();
+const { db } = openTempBoard('b2brief');
 const seeded = store.addJob(db, {
     title: "B2 验收：brief 悬单", skill: "mine", args: { ore: "iron", count: 4 },
     priority: 5, assignee: BOT,

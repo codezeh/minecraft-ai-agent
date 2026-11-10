@@ -13,6 +13,7 @@
  *
  * 用法：node tools/board_b4_live.mjs
  */
+import { openTempBoard } from './temp_board.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -129,7 +130,7 @@ await probe.hello();
 
 // 清掉上一轮
 const store = await import('../src/agent/library/board_store.js');
-const { db } = store.openBoard();
+const { db } = openTempBoard('b4');
 try { db.exec('DELETE FROM shared'); } catch { }
 
 const results = [];

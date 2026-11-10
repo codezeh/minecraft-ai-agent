@@ -1,6 +1,7 @@
 /**
  * t31 真机：`!do obtain` 拆单原文 + `!do shelter` 方块证据 + idle-plan 观察。
  */
+import { openTempBoard } from './temp_board.mjs';
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
@@ -38,7 +39,7 @@ await sleep(1200);
 const reg = await import('../src/agent/library/composite_registry.js');
 const board = new BoardClient({ socket: sock, name: NAME, skills: reg.SKILL_NAMES, timeoutMs: 5000 });
 await board.hello();
-const { db } = openBoard();
+const { db } = openTempBoard('m10');
 try { db.exec('DELETE FROM jobs'); } catch { }
 
 const p = bot.entity.position;

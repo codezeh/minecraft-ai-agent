@@ -11,6 +11,7 @@
  * 做法：真 bot + 真 board server + **照搬 agent.js 的调度节奏**（每 3000ms 一次 tick()），
  *       跑 120 秒，收集 onEvent 里的 idle-plan。
  */
+import { openTempBoard } from './temp_board.mjs';
 import mineflayer from 'mineflayer';
 import pf from 'mineflayer-pathfinder';
 import { rcon } from './rcon.mjs';
@@ -94,7 +95,7 @@ const sched = new BoardScheduler({
 //   （2026-11-03 第一版没清，结果 126 秒只有 1 条 think、0 条 idle-mode，差点误判节流失效）
 {
     const { openBoard } = await import('../src/agent/library/board_store.js');
-    const db = openBoard().db;
+    const db = openTempBoard('t37idle').db;
     const before = (db.prepare('SELECT COUNT(*) c FROM jobs').get()?.c) ?? 0;
     db.exec('DELETE FROM jobs');
     try { db.exec('DELETE FROM claims'); } catch { }
