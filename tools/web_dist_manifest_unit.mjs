@@ -88,6 +88,46 @@ check('产物里至少有 1 个 assets/*.js（不是空壳）', jsFiles.length >
 const hasIndexEntry = (manifest.files ? Object.keys(manifest.files) : []).some((f) => f === 'index.html');
 check('index.html 已纳入清单', hasIndexEntry, '');
 
+// ── 5. ★ R6 F1（2026-11-10）：源码漂移校验 —— 本文件头自述要防"产物与源码漂移"，
+//   但原来只核 MANIFEST↔产物，**从不核 web/src**。于是"改了前端源码、没重新构建"
+//   这条最常见的漂移完全没被拦住（实测：#18 改了 diag.ts，web-dist 仍是 11-08 的旧包，
+//   而这套门禁报 ALL PASS）。这里按 scripts/release.ps1 的同一算法复算当前 web/src 指纹。
+const WEB_SRC = path.join(REPO, '..', 'web');
+const SOURCE_ENTRIES = ['src', 'index.html', 'vite.config.ts', 'tsconfig.json', 'package.json', 'package-lock.json'];
+
+if (!existsSync(WEB_SRC)) {
+    check('web/ 源码目录存在（源码漂移校验的前提）', false, `找不到 ${WEB_SRC}`);
+} else {
+    const sha256File = (abs) => createHash('sha256').update(readFileSync(abs)).digest('hex');
+    const files = [];
+    const collectSrc = (abs, rel) => {
+        const st = statSync(abs);
+        if (st.isDirectory()) {
+            for (const n of readdirSync(abs).sort()) collectSrc(path.join(abs, n), `${rel}/${n}`);
+        } else {
+            files.push({ rel, hash: sha256File(abs) });
+        }
+    };
+    let missing = null;
+    for (const entry of SOURCE_ENTRIES) {
+        const abs = path.join(WEB_SRC, entry);
+        if (!existsSync(abs)) { missing = entry; break; }
+        collectSrc(abs, entry);
+    }
+    if (missing) {
+        check('web/ 源码输入完整', false, `缺 web/${missing}`);
+    } else {
+        files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+        // 与 release.ps1 逐字同构：`${rel}\0${hash}\n` 拼接后取 sha256
+        const curHash = 'sha256:' + createHash('sha256').update(files.map((f) => `${f.rel}\0${f.hash}\n`).join('')).digest('hex');
+        const recHash = manifest.source && manifest.source.hash;
+        check('产物绑定的源码指纹与当前 web/src 一致（防"改了源码没重建"）',
+            Boolean(recHash) && recHash === curHash,
+            recHash ? `清单=${recHash.slice(0, 19)}… 当前=${curHash.slice(0, 19)}…（${files.length} 个输入）`
+                    : 'MANIFEST 缺 source.hash：请跑 scripts/release.ps1 重建');
+    }
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURES'}: ${pass} passed, ${fail} failed`);
 if (fail !== 0) {
     console.log('\n提示：改过 web/ 之后必须重新生成产物：');
