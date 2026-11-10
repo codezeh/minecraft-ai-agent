@@ -12,6 +12,30 @@ import { isNoCodeReply } from '../models/_shared.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * ★ R6 #12：把「当前操作」折算成模型调用要的取消三件套 `{signal, deadline, operationId}`。
+ *
+ * 唯一取消源是 `ActionManager._executeAction` 建好并挂到 `agent.currentOperation`
+ * 的那个 operation（`{ id, deadline, ac }`）。代码生成跑在 `!newAction` 的动作里，
+ * 所以它天然有在飞的操作 —— 但调用点以前只传了消息，`prompter._callOptions({})`
+ * 得到 `signal=null`，`!stop` / 动作总超时于是拦不住一次代码生成：模型回来后
+ * **代码照样被执行**（审计 R6 #12 的"跳过后果"）。
+ *
+ * 没有在飞的操作时返回 `{}`：与接线前的缺省逐字一致。
+ *
+ * @param {{currentOperation?: {id:string, deadline:number|null, ac?:{signal:AbortSignal}|null}|null}} agent
+ * @returns {{signal?:AbortSignal|null, deadline?:number|null, operationId?:string}}
+ */
+function operationCallOpts(agent) {
+    const op = agent?.currentOperation ?? null;
+    if (!op) return {};
+    return {
+        signal: op.ac?.signal ?? null,
+        deadline: op.deadline ?? null,
+        operationId: op.id,
+    };
+}
+
+/**
  * H2 双保险之二：代码块里**是否真的含有语句**。
  *
  * 为什么需要（这是 H2 的原始复现路径）：旧兜底串 `'```//no response (truncated)```'`
@@ -70,7 +94,10 @@ export class Coder {
             // 架构收敛项(1) 步 1：改读**结果类型**，不再在字符串里找暗号。
             //   失败 -> status=error（原来靠「没有反引号」碰巧走对分支）；
             //   截断 -> status=truncated 且 content 已是 NO_CODE 信号（H2 契约，不回退）。
-            const typed = await this.agent.prompter.promptCodingResult(messages_copy);
+            // ★ R6 #12：第 2 参 opts 把取消信号与动作期限交给 prompter（缺省 `{}`＝旧行为）。
+            //   取消回来的是 status=cancelled（failed），下面按"没写代码"处理 —— 返回值的
+            //   用法一字未改，只是这一次终于能被停下来了。
+            const typed = await this.agent.prompter.promptCodingResult(messages_copy, operationCallOpts(this.agent));
             if (this.agent.bot.interrupt_code)
                 return null;
             if (typed.failed) {

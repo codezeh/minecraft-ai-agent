@@ -12,6 +12,29 @@ import {
 // ★ t21（缺口 C 根治点）：视觉结果现在带类型 —— 必须**读 status**，不能只当字符串用
 import { STATUS } from "../../models/result.js";
 
+/**
+ * ★ R6 #12：把「当前操作」折算成模型调用要的取消三件套 `{signal, deadline, operationId}`。
+ *
+ * 唯一取消源是 `ActionManager._executeAction` 建好并挂到 `agent.currentOperation`
+ * 的那个 operation（`{ id, deadline, ac }`）。看图最贵也最慢（一次视觉调用最长 120s），
+ * 而调用点以前只传 `(messages, imageBuffer)` ⇒ `prompter._callOptions({})` 得到
+ * `signal=null` ⇒ `!stop` 之后这张图照样要"看完"。
+ *
+ * 没有在飞的操作时返回 `{}`：与接线前的缺省逐字一致。
+ *
+ * @param {{currentOperation?: {id:string, deadline:number|null, ac?:{signal:AbortSignal}|null}|null}} agent
+ * @returns {{signal?:AbortSignal|null, deadline?:number|null, operationId?:string}}
+ */
+function operationCallOpts(agent) {
+    const op = agent?.currentOperation ?? null;
+    if (!op) return {};
+    return {
+        signal: op.ac?.signal ?? null,
+        deadline: op.deadline ?? null,
+        operationId: op.id,
+    };
+}
+
 export class VisionInterpreter {
     constructor(agent, allow_vision) {
         this.agent = agent;
@@ -113,7 +136,9 @@ export class VisionInterpreter {
         const tag = this.agent?.name ?? '?';
 
         if (typeof prompter?.promptVisionResult === 'function') {
-            const r = await prompter.promptVisionResult(messages, imageBuffer);
+            // ★ R6 #12：第 3 参 opts 接上取消链；取消时 status=cancelled ⇒ 下面按
+            //   `status !== ok` 丢弃，不写上下文（用法不变，只是"停得下来"了）。
+            const r = await prompter.promptVisionResult(messages, imageBuffer, operationCallOpts(this.agent));
             if (r && typeof r === 'object' && typeof r.status === 'string') {
                 if (r.status !== STATUS.OK) {
                     console.warn(`[vision] ${tag} 视觉结果 status=${r.status}（${r.errorCode ?? '-'}），`
@@ -125,7 +150,7 @@ export class VisionInterpreter {
             // 拿到了但不是带类型的结果 ⇒ 落到旧字符串路径（仍要过标记判断）
         }
 
-        const raw = await prompter.promptVision(messages, imageBuffer);
+        const raw = await prompter.promptVision(messages, imageBuffer, operationCallOpts(this.agent));
         return this._cleanAnalysis(raw);
     }
 

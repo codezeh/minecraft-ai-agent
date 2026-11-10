@@ -2,6 +2,24 @@ import settings from './settings.js';
 import { containsCommand } from './commands/index.js';
 import { sendBotChatToServer } from './mindserver_proxy.js';
 
+/**
+ * ★ R6 #12：把「当前在飞操作」折算成模型层可用的取消信号。
+ *
+ * 与 history.js / coder.js / vision_interpreter.js 里的同名函数**逐字一致**——
+ * 刻意重复而不是抽公共模块：这三处都在 agent 热路径上，抽出去会新增一层
+ * import 关系，而仓里的「前缀 import 规矩」与本文件的依赖方向都不希望如此。
+ * 若将来要合并成一份，请三处一起改，别只改一处。
+ */
+function operationCallOpts(agent) {
+    const op = agent?.currentOperation ?? null;
+    if (!op) return {};
+    return {
+        signal: op.ac?.signal ?? null,
+        deadline: op.deadline ?? null,
+        operationId: op.id,
+    };
+}
+
 let agent;
 let agent_names = [];
 let agents_in_game = [];
@@ -305,7 +323,10 @@ async function _scheduleProcessInMessage(sender, received, convo) {
             scheduleResponse(fastDelay);
         }
         else {
-            let shouldRespond = await agent.prompter.promptShouldRespondToBot(received.message);
+            // ★ R6 #12（2026-11-10）：补上最后一个未接点。
+            //   t3 修了记忆摘要/代码生成/看图五个出口，但这里（"忙的时候要不要插话"）
+            //   同样是一次模型调用，同样拿不到取消信号 ⇒ !stop 之后仍会跑满。
+            let shouldRespond = await agent.prompter.promptShouldRespondToBot(received.message, operationCallOpts(agent));
             console.log(`${agent.name} decided to ${shouldRespond?'respond':'not respond'} to ${sender}`);
             if (shouldRespond)
                 scheduleResponse(fastDelay);
