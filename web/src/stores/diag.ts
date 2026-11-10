@@ -105,7 +105,30 @@ export function initDiag() {
   })
 }
 
-function ack<T>(event: string, ...args: any[]): Promise<T> {
+/**
+ * ★★★ WEB-001 同源残留（R6 #18）：**断线时不许 emit**。
+ *
+ * 缺陷原貌：这里无条件 `(socket as any).emit(...)`。socket.io-client 在未连接时
+ *   会把事件推进 `sendBuffer`；16 秒后这里 resolve 成 `{ok:false, reason:'超时'}`，
+ *   而 `clearEvents()` 不看结果照样清本地视图 + 把游标归零；
+ *   重连瞬间 `emitBuffered` 把排队的那条 `clear-events` **真发出去**
+ *   ⇒ agent 的事件环形缓冲被清空 —— 恰好发生在"出问题了、想留证据"的时刻。
+ *
+ * 现在的口径（与 `api/socket.ts` 的 `request()` 对齐）：
+ *   · 没连接 ⇒ 立刻 resolve `{ok:false, reason:'OFFLINE'}`，**根本不 emit**（进不了缓冲区）；
+ *   · 调用方必须检查 `ok` 再改本地状态（见 clearEvents）。
+ *
+ * 为什么不直接用 `request()`：这里的事件是**诊断用**、失败要就地显示成
+ * `diag.lastError`，不需要 `request()` 那套"结果未知"的语义；而且想保持
+ * 16s 这个宽松超时（`get-task-state` 要读库）。
+ */
+type DiagAck<T> = T & { ok?: boolean; reason?: string }
+
+function ack<T>(event: string, ...args: any[]): Promise<DiagAck<T>> {
+  if (!socket.connected) {
+    // ★ 关键：**先判连接再 emit**。emit 一次就等于把事件排进 sendBuffer。
+    return Promise.resolve({ ok: false, reason: 'OFFLINE' } as DiagAck<T>)
+  }
   return new Promise((resolve) => {
     let done = false
     const timer = setTimeout(() => {
@@ -124,6 +147,11 @@ function ack<T>(event: string, ...args: any[]): Promise<T> {
 export async function pullEvents() {
   const a = currentAgent.value
   if (!a) return
+  if (!socket.connected) {
+    // 断线时补拉只会把 "get-events" 排进 sendBuffer，重连后迟到执行；这里直接跳过。
+    diag.lastError = '未连接 mindserver：事件补拉已跳过'
+    return
+  }
   const owner = a.name
   const since = cursors.get(owner) ?? 0
   const res = await ack<{ ok: boolean; events: AgentEvent[]; reason?: string }>('get-events', owner, since)
@@ -150,9 +178,21 @@ export async function pullEvents() {
 export async function clearEvents() {
   const a = currentAgent.value
   if (!a) return
-  await ack('clear-events', a.name)
+  const owner = a.name
+  const r = await ack<{ ok: boolean; reason?: string }>('clear-events', owner)
+  // ★ R6 #18：**只有服务端确认清掉了，才清本地视图与游标**。
+  //   原来这里不看回执：断线时事件其实没发出去（或超时），本地却已经清空并
+  //   把游标归零 —— 用户以为"没清掉"，而重连后那条排队的 clear-events 真的执行了。
+  if (!r?.ok) {
+    diag.lastError = r?.reason === 'OFFLINE'
+      ? '未连接 mindserver：清空未执行（本地视图保留）'
+      : `清空失败：${r?.reason || '未知原因'}（本地视图保留）`
+    return
+  }
+  if (currentAgent.value?.name !== owner) return
   diag.events = []
-  cursors.set(a.name, 0)
+  cursors.set(owner, 0)
+  diag.lastError = ''
 }
 
 export async function fetchTaskState() {
