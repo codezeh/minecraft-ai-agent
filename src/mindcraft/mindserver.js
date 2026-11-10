@@ -902,7 +902,7 @@ export function createMindServer(host_public = false, port = 8080) {
                 '<body style="font:14px/1.7 system-ui;max-width:640px;margin:60px auto;padding:0 20px">' +
                 '<h2>面板需要握手 token</h2>' +
                 '<p>这不是故障。MindServer 每次启动生成一个新 token，必须带上它才能打开面板。</p>' +
-                '<ol><li>打开文件 <code>mindcraft\.mindserver-token</code>，复制里面的值</li>' +
+                '<ol><li>打开文件 <code>mindcraft/.mindserver-token</code>，复制里面的值</li>' +
                 '<li>访问 <code>http://localhost:' + safePort + '/?token=&lt;那个值&gt;</code></li>' +
                 '<li>之后浏览器会把它换成 cookie，整站不再需要带 token</li></ol>' +
                 '<p style="color:#666">也可以直接双击 <code>启动面板.bat</code>，它会自动读该文件。</p>' +
