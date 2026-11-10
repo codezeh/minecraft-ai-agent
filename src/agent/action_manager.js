@@ -399,6 +399,10 @@ export class ActionManager {
             // return action status report
             return { success: true, message: output, interrupted, timedout };
         } catch (err) {
+            // ★ R6 #34（2026-11-10）：**先取标签再清空**。
+            //   原来顺序是：清 currentActionLabel → 下面记 lastFailure 时读它 ⇒ 恒为 '(unknown)'，
+            //   于是面板上"最近一次失败是哪个动作"这条信息永久丢失，排障只能翻日志。
+            const failedLabel = this.currentActionLabel;
             this._retireOperation(this.currentOperation);
             this.executing = false;
             this.currentActionLabel = '';
@@ -410,7 +414,7 @@ export class ActionManager {
             try {
                 this.agent.bot.lastFailure = {
                     at: Date.now(),
-                    action: this.currentActionLabel || '(unknown)',
+                    action: failedLabel || '(unknown)',
                     message: String(err && err.message ? err.message : err).slice(0, 300),
                 };
             } catch (e) { /* 记录失败本身不该再抛 */ }
