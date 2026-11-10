@@ -381,25 +381,46 @@ else {
 Write-Step '下一步（照抄即可）'
 
 $ps = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
+$hasServerJar = Test-Path -LiteralPath (Join-Path $DestFull 'server/server.jar')
+$hasProps     = Test-Path -LiteralPath (Join-Path $DestFull 'server/server.properties')
 Write-Host ''
 Write-Host '  # 1) 进目录' -ForegroundColor Gray
 Write-Host ('  cd "' + $DestFull + '"')
 Write-Host ''
-Write-Host '  # 2) 只校验：产物 ↔ 清单 ↔ 源码指纹 是否一致（秒级，不需要 docker）' -ForegroundColor Gray
-Write-Host ('  ' + $ps + ' -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -VerifyOnly')
+Write-Host '  # 2) 供给服务端（JDK 21 + Paper jar + server.properties）—— R6 #7 缺的就是这一步' -ForegroundColor Gray
+Write-Host ('  ' + $ps + ' -NoProfile -ExecutionPolicy Bypass -File scripts/provision.ps1 -DryRun   # 先体检，零副作用')
+Write-Host ('  ' + $ps + ' -NoProfile -ExecutionPolicy Bypass -File scripts/provision.ps1')
+Write-Host '     # 离线机器：-JdkZip <JDK21.zip> -JarFile <paper.jar>；已有 JDK 21：-JavaHome <dir>' -ForegroundColor DarkGray
+Write-Host '     # 它读 server/.paper-url 下 jar（sha256 校验），并从 server.properties.example 生成配置' -ForegroundColor DarkGray
 Write-Host ''
-Write-Host '  # 3) 装运行时依赖（548 个包，首次约 10 分钟）' -ForegroundColor Gray
+Write-Host '  # 3) 装运行时依赖（mindcraft 548 个包，首次约 10 分钟；web 是面板与关服脚本要用的）' -ForegroundColor Gray
 Write-Host ('  cd mindcraft; npm ci')
+Write-Host ('  cd ../web; npm ci')
 Write-Host ''
-Write-Host '  # 4) 改了 web/ 源码后：重建产物并校验（不建镜像）' -ForegroundColor Gray
-Write-Host ('  cd "' + $DestFull + '"; ' + $ps + ' -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -SkipDocker')
+Write-Host '  # 4) 只校验：产物 ↔ 清单 ↔ 源码指纹 是否一致（秒级，不需要 docker）' -ForegroundColor Gray
+Write-Host ('  cd "' + $DestFull + '"; ' + $ps + ' -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -VerifyOnly')
 Write-Host ''
-Write-Host '  # 5) 有 docker 时全链路（构建镜像 + 运行时 200 断言）' -ForegroundColor Gray
+Write-Host '  # 5) 改了 web/ 源码后：重建产物并校验（不建镜像）' -ForegroundColor Gray
+Write-Host ('  ' + $ps + ' -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -SkipDocker')
+Write-Host ''
+Write-Host '  # 6) 有 docker 时全链路（构建镜像 + 运行时 200 断言）' -ForegroundColor Gray
 Write-Host ('  ' + $ps + ' -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1')
 Write-Host ''
 
+# ★ R6 #7：干净 clone 里 JDK / server.jar / server.properties 一定是缺的
+#   （.gitignore 排除二进制与口令文件），不说明这一步，「启动面板.bat」必然停在
+#   "找不到 JDK" 或 "找不到 server\server.jar"。这里按实际检出状态给出针对性提示。
+if (-not $hasServerJar -or -not $hasProps) {
+    $missing = @()
+    if (-not $hasServerJar) { $missing += 'server\server.jar（Paper 服务端核心）' }
+    if (-not $hasProps) { $missing += 'server\server.properties（含 RCON 口令，仓库只跟踪 .example）' }
+    if (-not (Test-Path -LiteralPath (Join-Path $DestFull '.tools'))) { $missing += '.tools\（JDK 21）' }
+    Write-Warn2 ('注意：这份检出里没有 ' + ($missing -join '、') + ' —— 这就是第 2 步要补齐的')
+    Write-Warn2 '不跑第 2 步，「启动面板.bat」会停在 [错误] 找不到 JDK / 找不到 server\server.jar。'
+}
+
 if (-not $hasWebDist) {
-    Write-Warn2 '注意：上面第 2 步很可能失败，因为这次克隆出来的子仓缺 web-dist。原因与修法见 docs/audit-r5/fixes/07-clone-all.md。'
+    Write-Warn2 '注意：上面第 4 步很可能失败，因为这次克隆出来的子仓缺 web-dist。原因与修法见 docs/audit-r5/fixes/07-clone-all.md。'
 }
 
 Write-Host ('  两个仓都就位：' + $DestFull) -ForegroundColor Green

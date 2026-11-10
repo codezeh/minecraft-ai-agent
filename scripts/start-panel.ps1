@@ -178,9 +178,22 @@ Write-Host ''
 
 # ---------- 环境检查 ----------
 $java = Find-Java
-if (-not $java)                { Write-Bad "[错误] 找不到 JDK（.tools\jdk-*\bin\java.exe）"; exit 1 }
-if (-not (Test-Path $node))    { Write-Bad "[错误] 找不到 Node: $node"; exit 1 }
-if (-not (Test-Path (Join-Path $root 'server\server.jar'))) { Write-Bad '[错误] 找不到 server\server.jar'; exit 1 }
+# ★ R6 #7（2026-11-10）：这三条报错以前只报"缺什么"，不说"怎么补" —— 干净 clone 里
+#   这三样必然都缺（.gitignore 排除 .tools/ 与 *.jar；server.properties 只跟踪 .example），
+#   用户只能自己猜。现在每条都指向唯一供给入口 scripts\provision.ps1。
+if (-not $java)               {
+    Write-Bad '[错误] 找不到 JDK（.tools\jdk-*\bin\java.exe）'
+    Write-Bad '        修法（一次性供给）：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\provision.ps1 -DryRun'
+    Write-Bad '        照它的输出做完再重跑本脚本（说明见 README「从零供给（provision.ps1）」）。'
+    exit 1
+}
+if (-not (Test-Path $node))   { Write-Bad "[错误] 找不到 Node: $node"; exit 1 }
+if (-not (Test-Path (Join-Path $root 'server\server.jar'))) {
+    Write-Bad '[错误] 找不到 server\server.jar'
+    Write-Bad '        修法（一次性供给）：powershell -NoProfile -ExecutionPolicy Bypass -File scripts\provision.ps1'
+    Write-Bad '        它会按 server\.paper-url 下载并按 sha256 校验（离线可用 -JarFile <本地 jar>）。'
+    exit 1
+}
 
 # ---------- 0) 构建面板 ----------
 Write-Step '0/4' '构建面板（约 1~2 秒）...'
