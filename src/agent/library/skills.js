@@ -1458,6 +1458,9 @@ export async function discard(bot, itemName, num=-1) {
  * @returns {Promise<{container:Object, pos:Object}|null>}
  */
 async function openKnownChest(bot, range = 32) {
+    // ★ R6 #19：箱子账本在**任务板库**（全 bot 共享）。读之前先同步一次，
+    //   否则 A 刚存进箱子的东西，B 这边还按自己那份旧缓存找箱子。
+    await landmarks.refreshChests(bot);
     const known = landmarks.knownChestsNearest(bot, bot.entity.position);
     for (const c of known) {
         const b = bot.blockAt(new Vec3(c.x, c.y, c.z));
@@ -1525,7 +1528,13 @@ export async function putInChest(bot, itemName, num=-1) {
         log(bot, moved === to_put
             ? `Successfully put ${moved} ${itemName} in the chest at (${opened.pos.x},${opened.pos.y},${opened.pos.z}).`
             : `Partially put ${moved}/${to_put} ${itemName} in the chest at (${opened.pos.x},${opened.pos.y},${opened.pos.z}).`);
+        // ★ R6 #19：把"箱子里现在真有什么"记进**共享账本**（全 bot 一份）。
+        //   以前这里只 `touchChest`（碰一下时间戳），内容一个字都没记 ——
+        //   于是 A 用 !putInChest 存进去的 64 个原木，B 用共享账本查不到。
+        //   现在按刚打开的容器真实内容记账，再等落库完成才对外报成功。
+        landmarks.updateChestContents(bot, opened.pos, storage.summarizeContainer(opened.container));
         landmarks.touchChest(bot, opened.pos);
+        await landmarks.flushChestWrites(bot);
         return true;
     } catch (err) {
         log(bot, `Failed to put ${itemName} in the chest: ${err}`);
@@ -1576,7 +1585,10 @@ export async function takeFromChest(bot, itemName, num=-1) {
         remaining -= toTakeFromSlot;
     }
     
+    // ★ R6 #19：取完也把箱子里的真实余量记进共享账本（同一份真相，B 也看得到）
+    landmarks.updateChestContents(bot, opened.pos, storage.summarizeContainer(chestContainer));
     await chestContainer.close();
+    await landmarks.flushChestWrites(bot);
     log(bot, `Successfully took ${totalTaken} ${itemName} from the chest.`);
     return totalTaken > 0;
 }
@@ -1606,7 +1618,11 @@ export async function viewChest(bot) {
             log(bot, `${item.count} ${item.name}`);
         }
     }
+    // ★ R6 #19：看过就把真实内容记进共享账本 —— "看一眼"本身就是一次观测，
+    //   记下来别的 bot 才能不开箱就知道。可见输出（下面那几行 log）一个字没改。
+    landmarks.updateChestContents(bot, opened.pos, storage.summarizeContainer(chestContainer));
     await chestContainer.close();
+    await landmarks.flushChestWrites(bot);
     return true;
 }
 
@@ -3205,6 +3221,8 @@ function findChestSpot(bot) {
  */
 async function ensureChest(bot, near = null) {
     // ---- 1) 已知箱子：先验证方块还在，避免白走一趟 ----
+    // ★ R6 #19：从共享账本读（别的 bot 记的箱子我也能用），读前先同步一次。
+    await landmarks.refreshChests(bot);
     const known = landmarks.knownChestsNearest(bot, near || bot.entity.position);
     for (const c of known) {
         if (!chestStillValid(bot, c)) {
@@ -3221,6 +3239,7 @@ async function ensureChest(bot, near = null) {
     if (scanned) {
         const pos = { x: scanned.position.x, y: scanned.position.y, z: scanned.position.z };
         landmarks.rememberChest(bot, pos, 'scanned');
+        await landmarks.flushChestWrites(bot);
         log(bot, `Found existing chest nearby at (${pos.x},${pos.y},${pos.z}).`);
         return { ok: true, chest: pos, via: 'scanned' };
     }
@@ -3280,6 +3299,7 @@ async function ensureChest(bot, near = null) {
     }
 
     landmarks.rememberChest(bot, placed, 'placed_by_bot');
+    await landmarks.flushChestWrites(bot);
     log(bot, `Placed and remembered a new chest at (${placed.x},${placed.y},${placed.z}).`);
     return { ok: true, chest: placed, via: 'placed' };
 }
@@ -3316,10 +3336,13 @@ async function stashUnneeded(bot, chestPos, keep, minFreeSlots) {
                 if (moved > 0) stashed.push(`${moved} ${item.name}`);
             } catch (err) { /* 单件失败不影响整体 */ }
         }
+        // ★ R6 #19：存完把箱子真实内容记进共享账本（以前只 touch 时间戳，内容没记）
+        landmarks.updateChestContents(bot, chestPos, storage.summarizeContainer(container));
     } finally {
         try { await container.close(); } catch (err) { /* ignore */ }
     }
     landmarks.touchChest(bot, chestPos);
+    await landmarks.flushChestWrites(bot);
     // ★ S40：`ok` 也要按实际结果。什么都没挪走（箱子满/开不了格）就不是成功。
     return { ok: stashed.length > 0, stashed };
 }
@@ -3975,6 +3998,8 @@ export async function reportStatus(bot) {
      **/
     const pos = world.getPosition(bot);
     const threats = world.getNearestEntityWhere(bot, e => mc.isHostile(e), 16);
+    // ★ R6 #19：先同步共享箱子账本，再回答"已知箱子"（以前只看自己那份文件）
+    await landmarks.refreshChests(bot);
     const knownChest = landmarks.knownChestsNearest(bot, pos)[0] || null;
     const status = {
         position: { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) },
@@ -3995,20 +4020,24 @@ export async function reportStatus(bot) {
  * 读出所有记住的工地（含死亡点），最近用过的在前。
  * @returns {Promise<Array>} [{x,y,z,note,lastUsed}]
  */
-export function listKnownSites(bot) {
+export async function listKnownSites(bot) {
     /**
      * List every place the bot remembers: building sites, death position, chests, and places
      * saved with !rememberHere. Use this when the player asks "where was the house / where did
      * you die / where is that place I told you to remember" instead of guessing.
+     *
+     * ★ R6 #19：箱子部分改成读**共享账本**（板库），所以本函数变成 async ——
+     *   调用方要 `await`（列表内容与以前一致，只是"谁记的箱子"从"我自己"变成"大家"）。
      * @param {MinecraftBot} bot, reference to the minecraft bot.
-     * @returns {Array<Object>} list of {x, y, z, note, source}
+     * @returns {Promise<Array<Object>>} list of {x, y, z, note, source}
      * @example
-     * const sites = skills.listKnownSites(bot);
+     * const sites = await skills.listKnownSites(bot);
      * log(bot, sites.map(s => `${s.note} at ${s.x},${s.y},${s.z}`).join('; '));
      **/
     const results = [];
 
-    // 1) landmarks（工地、死亡点、箱子）—— 存磁盘
+    // 1) landmarks（工地、死亡点）+ 共享箱子账本 —— 工业/房子仍存磁盘，箱子在板库
+    await landmarks.refreshChests(bot);
     const data = landmarks.loadLandmarks(bot);
     const sites = [...data.sites].sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0));
     for (const s of sites) {
@@ -4444,6 +4473,8 @@ export async function storeItem(bot, itemName, num = -1) {
     const wantNum = num === -1 ? item.count : Math.min(num, item.count);
 
     // 按分类找箱子（可能多个）
+    // ★ R6 #19：分类箱子从**共享账本**读（别的 bot 建的分类箱子我也认），读前同步一次。
+    await landmarks.refreshChests(bot);
     let candidates = landmarks.chestsByCategory(bot, cat);
     if (!candidates.length) {
         log(bot, `No ${storage.categoryLabel(cat)} chest yet. Set one up with skills.createStorageChests().`);
@@ -4499,10 +4530,11 @@ export async function storeItem(bot, itemName, num = -1) {
         }
     }
 
-    // 更新箱子里装了什么，方便以后查询
+    // 更新箱子里装了什么，方便以后查询（★ R6 #19：写的是共享账本，落库后再返回）
     for (const t of touched) {
         landmarks.updateChestContents(bot, t.pos, t.contents, t.category);
     }
+    await landmarks.flushChestWrites(bot);
 
     if (storedTotal === 0) {
         // ★ S40：失败分支也要带 `stored: 0`。/ 一样，调用方拿到的数字必须**总是可读**——
@@ -4532,6 +4564,8 @@ export async function findItemInStorage(bot, itemName, opts = {}) {
      * @example
      * const r = await skills.findItemInStorage(bot, "iron_ingot", { verify: true });
      **/
+    // ★ R6 #19：读**共享账本** —— A 存的，B 也查得到（这就是本条缺陷的验收点）
+    await landmarks.refreshChests(bot);
     const hits = landmarks.findItemInChests(bot, itemName);
     if (!hits.length) {
         log(bot, `记忆里没有哪个箱子记着 ${itemName}。` +
@@ -4619,6 +4653,7 @@ export async function listStorage(bot) {
      * @example
      * const s = await skills.listStorage(bot);
      **/
+    await landmarks.refreshChests(bot);          // ★ R6 #19：共享箱子账本
     const data = landmarks.loadLandmarks(bot);
     const area = data.storage;
     if (area) log(bot, `Storage area: (${area.x},${area.y},${area.z})`);
@@ -4757,6 +4792,9 @@ export async function planMaterials(bot, required = {}) {
     const lines = [];
     const mustGather = [];
     let shortfall = 0;
+
+    // ★ R6 #19：仓库里有什么要读**共享账本**（A 存的原木，B 做计划时也算得上）
+    await landmarks.refreshChests(bot);
 
     for (const [itemName, need] of entries) {
         const name = itemName.replace('minecraft:', '');
@@ -5238,6 +5276,9 @@ export async function fillRoomWithChests(bot, options = {}) {
     const CHEST_Y = area.y;
     const x0 = center.x - Math.floor(S / 2), z0 = center.z - Math.floor(S / 2);
 
+    // ★ R6 #19：分类箱子清单来自**共享账本**，先同步一次再决定"哪些还没有"
+    await landmarks.refreshChests(bot);
+
     // 验证房间真的在：检查地板和四角墙
     const probe = (x, y, z) => {
         const b = bot.blockAt(new Vec3(x, y, z));
@@ -5282,6 +5323,7 @@ export async function fillRoomWithChests(bot, options = {}) {
         const cat = cats[ci];
 
         // 该分类是否已有有效箱子（记录可能过期，逐个验证）
+        // ★ R6 #19：读共享账本（别的 bot 在同一个仓库里建的分类箱子，我不该重复建）
         const old = landmarks.chestsByCategory(bot, cat)
             .filter(c => Math.abs(c.x - center.x) <= OUT + 2 && Math.abs(c.z - center.z) <= OUT + 2);
         let exist = null;
@@ -5314,6 +5356,7 @@ export async function fillRoomWithChests(bot, options = {}) {
     }
 
     const ok = placed.length > 0;
+    await landmarks.flushChestWrites(bot);      // ★ R6 #19：摆完的箱子先落共享账本
     log(bot, `Chests ${ok ? 'placed' : 'NOT placed'}: ${placed.length} ok, ${skipped.length} skipped.`);
     return { ok, placed, skipped, roomFound: true, reason: ok ? 'placed' : 'none_placed', center };
 }
@@ -5375,6 +5418,8 @@ export async function verifyChest(bot, chestPos = null) {
      * log(bot, `chest really holds: ${JSON.stringify(v.contents)}`);
      **/
     let target = chestPos;
+    // ★ R6 #19：核对的对象从**共享账本**里取（谁记的都算，是全队的一份库存）
+    await landmarks.refreshChests(bot);
     if (!target) {
         const known = landmarks.loadLandmarks(bot).chests;
         if (!known.length) {
@@ -5418,13 +5463,14 @@ export async function verifyChest(bot, chestPos = null) {
         try { await container.close(); } catch (e) { /* ignore */ }
     }
 
-    // 对比旧记录，标出差异
+    // 对比旧记录，标出差异（★ R6 #19：旧记录来自**共享账本**）
     const old = landmarks.loadLandmarks(bot).chests
         .find(c => c.x === target.x && c.y === target.y && c.z === target.z);
     const oldContents = old?.contents || {};
     const changed = JSON.stringify(oldContents) !== JSON.stringify(contents);
 
     landmarks.updateChestContents(bot, target, contents, old?.category || null);
+    await landmarks.flushChestWrites(bot);      // 核对结果落库后再回报
 
     const items = Object.entries(contents);
     log(bot, `Verified chest (${target.x},${target.y},${target.z}): ` +

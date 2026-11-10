@@ -25,6 +25,18 @@
  *     而 `landmarks.js` 也管同一个文件、但用的是**另一种数据形状**（数组 vs 这里用的 map）——
  *     两个写者会互相覆盖。B4 把这一路彻底删掉，不再有第二个真相。
  *   ★ 没有任务板时（mindserver 都没连上）**不写**：宁可少一条记忆，也不要再长出第二份文件。
+ *
+ * ★★★ R6 #19（2026-11-10）：**B4 当时只改了一半。**
+ *   本文件的注释写着"不再有第二个真相"，但 `landmarks.js` 的 rememberChest /
+ *   updateChestContents / findItemInChests 仍在读写 `memory/chests.json`，
+ *   而 `!putInChest` / `!viewChest` / `verifyChest` / `storeItem` / `findItemInStorage` /
+ *   `tidyInventory` 全走那一路 —— 于是 A 用 !putInChest 存的 64 个原木，
+ *   B 用 `findItemInSharedChests` **看不到**（两个账本各记各的）。
+ *   现在 `landmarks.js` 的箱子域也改成板库 `shared(kind='chest')` 的适配器
+ *   （旧文件不读不写，只留作升级时的一次性迁移源），两边共用同一张表：
+ *     · 本文件写**增量**（`sharedMerge`：存 +N / 取 -N）—— 多次合并不会互相覆盖；
+ *     · `landmarks.js` 写**观测值**（打开箱子看到的真实内容）与档案字段（note/category）。
+ *   谁都不是"第二个账本"：**板库的 chest 命名空间是唯一真相**，两边只是两个写入口径。
  */
 // B4：不再直接读写 chests.json（那是第二个真相），走任务板。
 import { ok, fail } from './contract.js';
