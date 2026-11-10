@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { rcon } from './rcon.mjs';
 import { openBoard, listClaims, reserve, release, CLAIM_TTL_MS } from '../src/agent/library/board_store.js';
+import { boardDirOf } from '../src/agent/library/bot_paths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SELF = join(__dirname, 't37_claims_contention_live.mjs');
@@ -120,7 +121,7 @@ console.log('═══════════════════');
     for (const c of [A, B]) { try { await c.hello(); } catch { } }
     await sleep(800);
 
-    const db = openBoard().db;
+    const db = openBoard(boardDirOf(), { readOnly: true }).db;
 
     // 直连查库：某 key 的行
     const rowsOf = (key) => listClaims(db).filter((c) => c.key === key);

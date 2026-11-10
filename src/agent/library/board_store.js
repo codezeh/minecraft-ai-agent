@@ -256,7 +256,14 @@ export function isCorruptError(e) {
  * @param {string} dir 板库目录。**必填，无默认值** —— 见下方 R6 #1 说明。
  * @returns {{db:DatabaseSync, dir:string, path:string, rebuilt:boolean}}
  */
-export function openBoard(dir) {
+export function openBoard(dir, opts = {}) {
+    // ★ R6 #1b（2026-11-10）：**只读模式**。
+    //   有些 live 工具是合法的"观察者"（看正在跑的真实系统），它们不该被逼去用临时库，
+    //   但也不该拿到写能力。`{ readOnly: true }` 给一条"能读生产、绝写不了"的通道：
+    //     · 不建目录、不建表、不迁移、不建索引（这些全是写操作）
+    //     · 库文件不存在 ⇒ 直接抛错（不会凭空造一个空库骗人）
+    //     · 库损坏 ⇒ 直接抛错（**不重建**，重建会 rename/rm 掉正在用的库）
+    const readOnly = opts.readOnly === true;
     // ★★★ R6 #1（2026-11-10）：**取消默认目录**。
     //
     //   原来的签名是 `openBoard(dir = boardDirOf())`，默认指向 `bots/_board` —— 那是**生产库**。
@@ -274,15 +281,24 @@ export function openBoard(dir) {
             '生产侧请传 boardDirOf()；临时脚本请用 tools/_tmp_board.mjs 的 openTempBoard()。'
         );
     }
-    mkdirSync(dir, { recursive: true });
+    if (!readOnly) mkdirSync(dir, { recursive: true });
     const path = join(dir, 'board.sqlite');
 
     /** 最近一次构造的 db 句柄（用于失败时 close 掉，否则文件被锁住没法改名/删）。 */
     let lastDb = null;
 
     const tryOpen = () => {
-        const db = new DatabaseSync(path);
+        const db = new DatabaseSync(path, readOnly ? { readOnly: true } : {});
         lastDb = db;
+        if (readOnly) {
+            // 只读：只设连接级的 busy_timeout（改 journal_mode 属于写操作，跳过）。
+            try { db.exec('PRAGMA busy_timeout = 5000'); } catch { /* ignore */ }
+            // ★ 只读打开是**惰性**的：SQLite 不在这里校验文件头，坏文件要等第一次查询才报错
+            //   ⇒ 工具会先拿到一个"看起来正常"的句柄，跑到一半才炸（实测探针就是这样）。
+            //   这里做一次纯只读校验，把失败提前到打开点。
+            db.prepare('SELECT count(*) FROM sqlite_master').get();
+            return { db, migration: null };
+        }
         // WAL + busy 超时：mindserver 是唯一写者，但读可能并发（面板/别的查询）
         try { db.exec('PRAGMA journal_mode = WAL'); } catch { /* 有的构建不支持，忽略 */ }
         try { db.exec('PRAGMA busy_timeout = 5000'); } catch { /* ignore */ }
@@ -298,8 +314,14 @@ export function openBoard(dir) {
 
     try {
         const opened = tryOpen();
-        return { db: opened.db, dir, path, rebuilt: false, migration: opened.migration };
+        return { db: opened.db, dir, path, rebuilt: false, migration: opened.migration, readOnly };
     } catch (e) {
+        // 只读模式**绝不重建**：重建 = rename/rm + 建空库，是写操作，会毁掉正在被用的库。
+        if (readOnly) {
+            try { lastDb?.close?.(); } catch { /* ignore */ }
+            lastDb = null;
+            throw e;
+        }
         // ★★★ 第3条：**只有"文件真的坏了"才重建**。
         //   锁忙（另一个进程 BEGIN EXCLUSIVE）/ 权限 / 磁盘满 → 一律原样抛出去。
         //   以前这里无条件往下走，等于"读不到就把库删了"—— 比不启动严重得多。
