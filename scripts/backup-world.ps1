@@ -40,16 +40,21 @@
     安全边界：
       · 默认冷备：world 侧被占用（java/session.lock）就拒绝；任务板库被 mindserver 开着不拒绝，
         改为"复制前后比对 (大小,mtime) 零变更"来证明快照是同一时刻的（manifest.sourceQuiescent）。
-      · `server.properties` 含 RCON 口令：默认**备份**（否则恢复出来的服务器没有 RCON/权限），
-        并在 manifest 标记 `containsSecrets=true`、结束时明确警告备份目录属于敏感数据；
-        不想带口令就加 `-ExcludeSecrets`（manifest 会记录该项被排除）。
+      · `server.properties` 含 RCON 口令，默认按 `config/backup.json` 的 `excludeSecrets` 处理 ——
+        ★ R6 #7-②（2026-11-10）：配置**永远读**，手动裸跑也算（以前只有 `-FromConfig` 才读，
+          于是 README 教的那种裸跑会产出含明文口令的备份）。
+          `excludeSecrets=true`（默认）⇒ 文件仍入包，但 `rcon.password` 抹空，
+          manifest 记 `containsSecrets=false` 并在 `redacted` 里说明动了哪个字段；
+          要带明文口令必须**显式** `-IncludeSecrets`，此时 manifest 记 `containsSecrets=true`
+          并警告备份目录属敏感数据。两个参数同时给 ⇒ 直接 exit 1（不猜用户想要哪个）。
       · 不删除任何非本脚本产出的目录（旧备份目录必须含 manifest.json 才参与保留策略）。
 
 .PARAMETER OutDir
     备份根目录，默认 <repo>/backups。
 
 .PARAMETER Keep
-    保留最近多少个 world-* 备份（默认 7）。0 表示不清理。只清理**含 manifest.json** 的目录。
+    保留最近多少个 world-* 备份。不传则取 `config/backup.json` 的 `keep`（缺省 7）。
+    0 表示不清理。只清理**含 manifest.json** 的目录。
 
 .PARAMETER Mode
     Cold（默认，推荐）：服务端在跑就拒绝。Hot：需要 -Force，预期失败但保证 save-on。
@@ -67,10 +72,24 @@
     `server/logs` 只备份最近多少天（默认 7；0 = 不备份日志）。
 
 .PARAMETER ExcludeSecrets
-    不备份 `server/server.properties`（含 RCON 口令）。默认备份并在 manifest 标记。
+    `server/server.properties` 里的 `rcon.password` 抹空后入包（其余设置全保留，保证可恢复）。
+    不传则按 `config/backup.json` 的 `excludeSecrets`（默认 true ⇒ 抹空）。
+
+.PARAMETER IncludeSecrets
+    显式要求**带明文 RCON 口令**备份（覆盖 `config/backup.json`）。与 `-ExcludeSecrets` 互斥。
+    默认不会给你明文口令 —— 想要就得明说。
+
+.PARAMETER FromConfig
+    自动备份模式（停止面板 / 每日计划任务用）：`enabled=false` 时跳过并记日志（exit 0）。
+    手动备份**不需要**它 —— 配置永远会被读取，只是手动跑不会因为 `enabled=false` 被拦下。
 
 .EXAMPLE
+    # 手动冷备（先关服）。会读 config/backup.json：keep / excludeSecrets 都生效
     powershell -ExecutionPolicy Bypass -File scripts\backup-world.ps1
+
+.EXAMPLE
+    # 手动冷备，但这次要把明文 RCON 口令一起备（默认不会，必须显式说）
+    powershell -ExecutionPolicy Bypass -File scripts\backup-world.ps1 -IncludeSecrets
 
 .NOTES
     退出码：0 成功；1 失败；2 拒绝（服务端在跑，需先关服）；3 拒绝（Hot 未加 -Force）。
@@ -85,7 +104,9 @@ param(
     [int]$WaitLockSec = 0,
     [int]$LogDays = 7,
     [switch]$ExcludeSecrets,
-    # 从 config/backup.json 取默认值（keep / excludeSecrets / 总开关）；命令行显式参数仍然优先
+    # 显式要求"带明文 RCON 口令"备份（覆盖 config/backup.json 的 excludeSecrets=true）
+    [switch]$IncludeSecrets,
+    # 自动备份模式（停服后备份 / 每日计划任务）：enabled=false ⇒ 跳过并记日志
     [switch]$FromConfig
 )
 
@@ -98,24 +119,54 @@ $rconLib = Join-Path $PSScriptRoot 'lib/rcon.ps1'
 if (-not (Test-Path -LiteralPath $rconLib)) { throw "缺少 RCON 库：$rconLib" }
 . $rconLib
 
-# ── 自动备份配置（用户拍板⑥）────────────────────────────────────────
-# -FromConfig：给"停服后自动备份"和"每日计划任务"用；读 config/backup.json，
-# 但命令行显式给的参数仍然优先（$PSBoundParameters 判断，不靠默认值猜）。
-$backupCfg = $null
-if ($FromConfig) {
-    . (Join-Path $PSScriptRoot 'lib/backup_config.ps1')
-    $backupCfg = Get-BackupConfig -Root $root
-    foreach ($w in $backupCfg.warnings) { Write-Host "WARN $w" -ForegroundColor Yellow }
+# ── 备份配置（config/backup.json）────────────────────────────────────
+# ★ R6 #7-②（2026-11-10）：以前配置**只有 -FromConfig 才读**，而 README 教的是裸跑
+#   （`powershell -File scripts\backup-world.ps1`）⇒ 人工备份永远不读 excludeSecrets，
+#   会产出**含明文 RCON 口令**的备份。现在配置**永远**读：
+#     · 手动裸跑：keep / excludeSecrets 照样生效，但**不**受 enabled=false 拦截
+#                 （总开关只关"自动备份"；手动备份是用户明确要求）；
+#     · -FromConfig：停服后自动备份 / 每日计划任务用，enabled=false ⇒ 跳过（exit 0）并记日志；
+#     · 命令行永远优先：-Keep / -ExcludeSecrets / -IncludeSecrets，用 $PSBoundParameters 判断，
+#       不靠默认值猜。想要明文口令必须显式 -IncludeSecrets。
+if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib/backup_config.ps1'))) {
+    throw "缺少备份配置库：$(Join-Path $PSScriptRoot 'lib/backup_config.ps1')"
+}
+. (Join-Path $PSScriptRoot 'lib/backup_config.ps1')
+$backupCfg = Get-BackupConfig -Root $root
+foreach ($w in $backupCfg.warnings) { Write-Host "WARN $w" -ForegroundColor Yellow }
 
-    if (-not $backupCfg.enabled) {
-        Write-Host 'SKIP 自动备份已关闭（config/backup.json enabled=false）—— 本次不备份' -ForegroundColor Yellow
-        Write-BackupAutoLog -Root $root -Level 'SKIP' -Message '计划任务/自动备份跳过：总开关 enabled=false'
-        exit 0
-    }
-    if (-not $PSBoundParameters.ContainsKey('Keep')) { $Keep = $backupCfg.keep }
-    if (-not $PSBoundParameters.ContainsKey('ExcludeSecrets') -and $backupCfg.excludeSecrets) { $ExcludeSecrets = $true }
-    Write-Host ("自动备份配置：enabled={0} keep={1} excludeSecrets={2} dailyAt={3}（{4}）" -f `
-            $backupCfg.enabled, $Keep, [bool]$ExcludeSecrets, $backupCfg.dailyAt, $backupCfg.configPath) -ForegroundColor DarkGray
+if ($FromConfig -and -not $backupCfg.enabled) {
+    Write-Host 'SKIP 自动备份已关闭（config/backup.json enabled=false）—— 本次不备份' -ForegroundColor Yellow
+    Write-BackupAutoLog -Root $root -Level 'SKIP' -Message '计划任务/自动备份跳过：总开关 enabled=false'
+    exit 0
+}
+if (-not $FromConfig -and -not $backupCfg.enabled) {
+    Write-Host '注意：config/backup.json 的 enabled=false 只关"自动备份"；本次是手动备份，继续执行。' -ForegroundColor DarkGray
+}
+
+if (-not $PSBoundParameters.ContainsKey('Keep')) { $Keep = $backupCfg.keep }
+
+if ($ExcludeSecrets -and $IncludeSecrets) {
+    Write-Host 'FAIL -ExcludeSecrets 与 -IncludeSecrets 互斥，请只留一个（不带任何就是按 config/backup.json）。' -ForegroundColor Red
+    exit 1
+}
+$secretsSource = 'config/backup.json'
+if ($IncludeSecrets) {
+    $ExcludeSecrets = $false
+    $secretsSource = '命令行 -IncludeSecrets（显式要求带明文口令）'
+}
+elseif ($PSBoundParameters.ContainsKey('ExcludeSecrets')) {
+    $secretsSource = $(if ($ExcludeSecrets) { '命令行 -ExcludeSecrets' } else { '命令行 -ExcludeSecrets:$false' })
+}
+else {
+    $ExcludeSecrets = [bool]$backupCfg.excludeSecrets
+}
+
+Write-Host ("配置：{0}（{1}）keep={2}" -f $backupCfg.configPath,
+        $(if ($backupCfg.fromFile) { '已读取' } else { '文件缺失/损坏 ⇒ 用默认值' }), $Keep) -ForegroundColor DarkGray
+Write-Host ("口令：excludeSecrets={0}（来源：{1}）" -f [bool]$ExcludeSecrets, $secretsSource) -ForegroundColor DarkGray
+if ($FromConfig) {
+    Write-Host ("自动备份配置：enabled={0} dailyAt={1}" -f $backupCfg.enabled, $backupCfg.dailyAt) -ForegroundColor DarkGray
 }
 if (-not $OutDir) { $OutDir = Join-Path $root 'backups' }
 
@@ -848,6 +899,13 @@ try {
             Sort-Object Name |
             ForEach-Object { [ordered]@{ name = $_.Name; bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash } })
         containsSecrets = (-not $ExcludeSecrets)
+        # ★ R6 #7-②：manifest 要能回答"这份备份为什么带/不带口令"
+        secretsPolicy   = [ordered]@{
+            excludeSecrets = [bool]$ExcludeSecrets
+            source         = $secretsSource
+            configPath     = $backupCfg.configPath
+            configFromFile = [bool]$backupCfg.fromFile
+        }
         redacted        = $cfgRedacted.ToArray()
         secretNote      = $(if ($ExcludeSecrets) { 'server-config.zip 内含 server/server.properties，但 rcon.password 已抹空（其余设置完整保留）；恢复后按 manifest.redacted 填回口令即可' } else { 'server-config.zip 内含 server/server.properties（含 rcon.password）：备份目录等同敏感数据，请勿外传/入库' })
         skipped         = $skipped.ToArray()
@@ -864,7 +922,10 @@ try {
     Write-Step "完成：$final"
     Write-Info "组件：$(($targets | ForEach-Object { $_.Leaf }) -join ', ')"
     Write-Info "一致性：$(if ($consistent) { '已保证（' + $Mode + '）' } else { '无保证（见 WARN）' })"
-    if (-not $ExcludeSecrets) { Write-Warn2 '备份内含 server\server.properties（RCON 口令）—— 备份目录属敏感数据，别外传、别提交进 git。' }
+    if (-not $ExcludeSecrets) {
+        Write-Warn2 '备份内含 server\server.properties（RCON 口令）—— 备份目录属敏感数据，别外传、别提交进 git。'
+        Write-Info '        下次想脱敏：去掉 -IncludeSecrets（默认按 config/backup.json 的 excludeSecrets=true 抹空口令）。'
+    }
     Write-Info "核验：powershell -File scripts\verify-world-backup.ps1 -BackupDir `"$final`""
     if ($FromConfig) {
         Write-BackupAutoLog -Root $root -Level 'OK' -Message ("自动备份成功：{0}（{1:N0} MB，keep={2}）" -f `
