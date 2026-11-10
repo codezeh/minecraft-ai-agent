@@ -188,6 +188,33 @@ function Stop-DrillJava {
 }
 
 function Write-Report {
+    # ★ R6 #47（2026-11-10）：**先把 Java 侧证据收进 logs/，再写报告**。
+    #
+    #   原状：`$bootOut/$bootErr` 建在 $serverDir（= drill-*/server/boot.out），
+    #   而收尾只把 `server/logs/*` 拷到 `drill/logs/`、随后删掉整个骨架。
+    #   于是**最需要证据的"起服失败"场景**里，Java 的堆栈正好被删掉；
+    #   而 report.json 的 evidence.javaOut 写的是 'logs/boot.out' —— 这个路径从来不存在。
+    #   用户拿到的是"断言 10 FAIL + 超时"，没有任何 Java 侧报错。
+    #
+    #   现在：写报告前无条件把 boot.out/boot.err 复制进 drill/logs/（存在才拷）。
+    #   报告里的路径因此是真的；-KeepArtefacts 与否都不影响。
+    $logDir = Join-Path $drillRoot 'logs'
+    if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
+    foreach ($n in @('boot.out', 'boot.err')) {
+        $srcBoot = Join-Path $serverDir $n
+        $dstBoot = Join-Path $logDir $n
+        if ((Test-Path -LiteralPath $srcBoot) -and -not (Test-Path -LiteralPath $dstBoot)) {
+            try { Copy-Item -LiteralPath $srcBoot -Destination $dstBoot -Force -ErrorAction Stop } catch { }
+        }
+    }
+    # ★ 同一类问题的第二处（本次实测发现）：latest.log 此时也还在 server/logs/，
+    #   而报告用 Test-Path drill/logs/latest.log 判断 ⇒ 明明起服成功，evidence.serverLog
+    #   仍写「（未起服）」。证据字段撒谎比缺字段更糟，所以一并在写报告前收进来。
+    $srvLogs = Join-Path $serverDir 'logs'
+    if (Test-Path -LiteralPath $srvLogs) {
+        try { Copy-Item (Join-Path $srvLogs '*') -Destination $logDir -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+    }
+
     $passed = @($script:results | Where-Object { $_.status -eq 'PASS' }).Count
     $failed = @($script:results | Where-Object { $_.status -eq 'FAIL' }).Count
     $report = [ordered]@{
