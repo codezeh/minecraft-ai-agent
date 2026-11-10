@@ -193,19 +193,19 @@ onUnmounted(() => { if (tick) clearInterval(tick) })
 <style scoped>
 .identity { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
 .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.label { font-size: 12px; color: var(--text-dim); letter-spacing: .04em; }
+.label { font-size: 12px; color: var(--fg-dim); letter-spacing: .04em; }
 
 .codebox { border: 1px solid var(--border-soft); border-radius: 6px; padding: 8px 10px; background: var(--bg-hover); }
 .codebox.dead { opacity: .6; }
 .code { font: 600 18px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
-.meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 11px; color: var(--text-dim); }
+.meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; font-size: 11px; color: var(--fg-dim); }
 
-.hints { margin: 0; padding-left: 18px; font-size: 11px; line-height: 1.7; color: var(--text-dim); }
+.hints { margin: 0; padding-left: 18px; font-size: 11px; line-height: 1.7; color: var(--fg-dim); }
 .hints code { background: var(--bg-hover); padding: 1px 4px; border-radius: 3px; }
 .hints .warn { color: var(--warn, #c9a227); }
 
 .bindings { display: flex; flex-direction: column; gap: 4px; }
-.sub { font-size: 11px; color: var(--text-dim); }
+.sub { font-size: 11px; color: var(--fg-dim); }
 .bindings ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .bindings li { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .who { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -219,8 +219,8 @@ onUnmounted(() => { if (tick) clearInterval(tick) })
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border-soft); white-space: nowrap; }
 .mode.premium .badge { color: var(--ok, #4ade80); }
 .mode.offline .badge { color: var(--warn, #c9a227); }
-.mode-text { color: var(--text-dim); line-height: 1.5; }
-.switch-hint { font-size: 10px; line-height: 1.6; color: var(--text-dim); opacity: .85; }
+.mode-text { color: var(--fg-dim); line-height: 1.5; }
+.switch-hint { font-size: 10px; line-height: 1.6; color: var(--fg-dim); opacity: .85; }
 .switch-hint code { background: var(--bg-hover); padding: 0 3px; border-radius: 2px; }
 
 button.tiny { font-size: 11px; padding: 2px 8px; }
