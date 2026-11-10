@@ -11,7 +11,20 @@
 //   而旧代码把一切连接失败都说成"mindserver 没在跑" ⇒ 用户以为没开服、去关窗口 ⇒ 非优雅关停
 //   （stop-panel.ps1 注释写明"走 RCON stop 会自己刷盘，不是强杀"）⇒ **存档未刷盘风险**。
 //   token 来源顺序：环境变量 MINDSERVER_TOKEN → 当前目录 ./.mindserver-token（mindserver 写在它的 cwd）。
-import { io } from 'socket.io-client';
+// ★ R6 #8（2026-11-10）：`socket.io-client` 从 **web/scripts** 解析，必须有 `web/node_modules`。
+//   静态 import 缺依赖时抛的是 ERR_MODULE_NOT_FOUND 堆栈，用户看到的是"找不到模块"，
+//   而 README 只教了 `cd mindcraft; npm ci` —— 于是「停止面板.bat」直接不可用，
+//   用户只能强关窗口（存档未刷盘）。现在改成动态 import：缺依赖给一条能照做的提示。
+let io;
+try {
+    ({ io } = await import('socket.io-client'));
+} catch (e) {
+    console.log('[ERROR] 缺少前端依赖：web/node_modules 里没有 socket.io-client。');
+    console.log('        本脚本从 web/scripts 解析依赖，所以光装 mindcraft 的依赖不够。');
+    console.log('        修法：cd web && npm install   （然后重跑本脚本）');
+    console.log('        注意：此时服务器**仍在运行**；不要用关窗口/杀进程的方式停它（会丢未刷盘的存档）。');
+    process.exit(STOP_EXIT.MISSING_DEPS);
+}
 import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -65,7 +78,30 @@ s.on('connect', () => { connected = true; });
 // 否则用户会被"mindserver 可能没开"这句误导，转而去强关窗口（= 存档未刷盘）。
 s.on('connect_error', (e) => { connectErr = e; });
 
-await sleep(1500);
+// ★ R6 #11（2026-11-10）：原来是 `await sleep(1500)` 后看 `connected` —— 只要握手慢于 1.5s
+//   （机器忙 / mindserver 正在起 / WAL 争用）就走到下面的"没在跑"分支并 **exit 0**，
+//   面板于是显示"已停止"，其实全都还在跑；用户接着关窗口 ⇒ 存档未刷盘。
+//   现在：等到"连上"或"明确失败"任一定局（最多 10s）。两者都没发生 = **无法确认**，
+//   按非零退出，绝不冒充"已经没在跑了"。
+async function waitConnectOutcome(timeoutMs = 10000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+        if (connected) return { state: 'connected' };
+        if (connectErr) return { state: 'error' };
+        await sleep(200);
+    }
+    return { state: 'unknown' };
+}
+
+const outcome = await waitConnectOutcome();
+
+if (outcome.state === 'unknown') {
+    console.log('[ERROR] 无法确认 mindserver 是否在运行：8080 的连接在 10 秒内既没有成功、也没有失败。');
+    console.log('        可能原因：进程卡死 / 防火墙丢包 / 正在启动。');
+    console.log('        **没有**执行任何停止动作；请稍后重跑本脚本，或检查 8080 是否可达。');
+    try { s.close(); } catch { /* ignore */ }
+    process.exit(STOP_EXIT.UNKNOWN);
+}
 
 if (!connected) {
     const code = connectErr?.data?.code || connectErr?.message || '';
@@ -146,7 +182,27 @@ try {
     s.emit('shutdown');
 } catch { /* ignore */ }
 
-await sleep(4000);
+// ★ R6 #11（2026-11-10）：原来是 `await sleep(4000)` 后直接宣布"完成"——从不确认管理端真的退出。
+//   现在轮询 8080：关了才算完成；没关就是"没确认"，非零退出且说清该看哪里。
+async function waitPortClosed(port, timeoutMs = 15000) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+        if (!(await isPortOpen(port))) return true;
+        await sleep(500);
+    }
+    return !(await isPortOpen(port));
+}
+
+const mgmtGone = await waitPortClosed(8080, 15000);
+if (!mgmtGone) {
+    console.log('');
+    console.log('[ERROR] 已发出 shutdown，但管理端（8080）在 15 秒内仍未关闭 —— **无法确认**它退出了。');
+    console.log('        此时 Minecraft 通常已停止；请在面板/任务管理器确认 mindserver 进程，');
+    console.log('        或查看 mindcraft-console.log 的退出信息。不要直接关窗口（可能丢未刷盘数据）。');
+    try { s.close(); } catch { /* ignore */ }
+    process.exit(STOP_EXIT.UNKNOWN);
+}
+
 console.log('完成。');
 s.close();
 process.exit(0);

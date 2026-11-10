@@ -17,6 +17,8 @@ export const STOP_EXIT = Object.freeze({
     NO_TOKEN: 2,    // 拿不到握手 token
     AUTH_REJECTED: 3, // 握手被拒（token 过期）
     STOP_FAILED: 4, // **关服没成功**：管理端保持运行
+    UNKNOWN: 5,     // **无法确认**：连接既没成功也没失败 / 管理端没有确认退出
+    MISSING_DEPS: 6, // 缺 web/node_modules（脚本连自己都起不来）
 });
 
 /**

@@ -185,8 +185,19 @@ if (-not (Test-Path (Join-Path $root 'server\server.jar'))) { Write-Bad '[错误
 # ---------- 0) 构建面板 ----------
 Write-Step '0/4' '构建面板（约 1~2 秒）...'
 $vite = Join-Path $root 'web\node_modules\vite\bin\vite.js'
+$distIndex = Join-Path $root 'web\dist\index.html'
+# ★ R6 #8（2026-11-10）：缺依赖时**不许**静默跳过、更不许在跳过之后打印"已启动完成"并打开一个 404 的面板。
+#   这两种情况必须分开处理：
+#     · 已经有 web\dist  → 跳过构建是合理的（沿用上次产物），但要说清"用的是旧产物"
+#     · 没有 web\dist    → 面板必然 404，当场停手并给出可照做的命令（此时一个进程都还没起）
 if (-not (Test-Path $vite)) {
-    Write-Warn2 '跳过：web\node_modules 未安装（先在 web 目录跑一次 npm install）'
+    if (Test-Path $distIndex) {
+        Write-Warn2 '跳过构建：web\node_modules 未安装；沿用已存在的 web\dist'
+    } else {
+        Write-Bad '[错误] 缺少面板构建依赖，且没有可用的 web\dist —— 面板打开必然 404。'
+        Write-Bad '        修法：cd web; npm install   然后重跑本脚本。'
+        if (-not $dryRun) { exit 1 }
+    }
 } else {
     if ($dryRun) {
         Write-DryRun ('& "' + $node + '" "' + $vite + '" build     # cwd=' + (Join-Path $root 'web'))
@@ -196,7 +207,12 @@ if (-not (Test-Path $vite)) {
         $code = $LASTEXITCODE
         Pop-Location
         if ($code -eq 0) { Write-Ok '面板已构建' }
-        else { Write-Warn2 '[警告] 构建失败，将沿用上一次的 dist' }
+        elseif (Test-Path $distIndex) { Write-Warn2 '[警告] 构建失败，沿用上一次的 dist' }
+        else {
+            Write-Bad '[错误] 面板构建失败，且没有可用的 web\dist —— 面板打开必然 404。'
+            Write-Bad '        先单独跑 cd web; npm run build 看详细报错，修好再重跑本脚本。'
+            exit 1
+        }
     }
 }
 
