@@ -137,7 +137,12 @@ CREATE TABLE IF NOT EXISTS claims (
     id TEXT NOT NULL, key TEXT NOT NULL, owner TEXT, until INTEGER,
     PRIMARY KEY (id, key)
 );
-CREATE INDEX IF NOT EXISTS idx_claims_key ON claims(key);
+-- ★★★ R6 #5：(id,key) 主键**挡不住**"同一个 key 属于不同 id"（两个分身各插一行 ⇒ 双占同一资源）。
+--   所以 key 上加**唯一索引**：同一资源同一时刻只允许有一行；有第二个写者时，
+--   数据库层只会让一个赢家落库（另一方拿到 changes=0 → 返回 CLAIM_CONFLICT）。
+--   老库可能**已经**有重复 key（正是这个 bug 的现场）→ 建索引前必须先跑迁移去重，
+--   见 migrateBoardSchema → ensureClaimsUniqueKey（保留到期最晚的一行，删掉其余重复）。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_claims_key ON claims(key);
 -- 共享数据（B4，06 §9.3）：地标 / 危险点 / 箱子内容。三种 kind 共用一张表。
 --   kind = 'landmark' | 'danger' | 'chest'
 --   key  = 名字（地标）/ "x,z"（危险）/ "x,y,z"（箱子）
@@ -172,7 +177,9 @@ CREATE INDEX IF NOT EXISTS idx_claims_until ON claims(until);
  *   所以收尾归属校验直接读 `checkpoint.attemptSeq`（见 `attemptGuardSql`），
  *   不新增列、不做迁移、不回填老库。
  */
-export const BOARD_SCHEMA_VERSION = 2;
+// ★ v3（R6 #5）：`claims.key` 加唯一索引。这一版迁移不只是"补列"，
+//   还要清理老库里已有的重复预约（见 `migrateBoardSchema` → `ensureClaimsUniqueKey`）。
+export const BOARD_SCHEMA_VERSION = 3;
 
 /**
  * 从 `SCHEMA` 里抽出 `jobs` 表的列定义（`[{name, def}]`）。
@@ -194,17 +201,57 @@ export function jobColumnDefs(schema = SCHEMA) {
 }
 
 /**
- * 幂等迁移：把「老库缺的列」补上，再写回 `PRAGMA user_version`。
+ * 老库的 `claims` 表：**先去重、再建 `key` 唯一索引**（R6 #5 的必要迁移）。
  *
- * @returns {{added:string[], from:number, to:number}} 无事可做时 `added` 为空数组
+ * ★ 为什么必须去重：唯一索引"新建库由 SCHEMA 建"，老库如果已经有重复 key，
+ *   `CREATE UNIQUE INDEX` 会直接失败 → `openBoard` 抛错 → 板起不来。
+ *   而老库里的重复 key **不是脏数据，是这个 bug 的证据**（两个分身各插了一行）。
+ *
+ * ★ 保留哪一条：`until` 最晚的（活得最久的预约最可能是"还在用"的那条），
+ *   `until` 为 NULL（无期限预约）排在最后，同 `until` 时取 rowid 最小（最早写入）。
+ *   被删掉的重复行属于**同一资源上的另一个占用人** —— 一个资源本来就只该有一个
+ *   占用人，删掉它正是这次修复要的结果，不是丢数据。
+ *
+ * @returns {{duplicateKeys:number, removed:number, status?:string}}
+ */
+export function ensureClaimsUniqueKey(db) {
+    const dups = db.prepare('SELECT key FROM claims GROUP BY key HAVING COUNT(*) > 1').all();
+    let removed = 0;
+    for (const row of dups) {
+        const key = String(row.key);
+        const rows = db.prepare(
+            'SELECT rowid AS rid FROM claims WHERE key=? ORDER BY (until IS NULL) ASC, until DESC, rowid ASC',
+        ).all(key);
+        for (const drop of rows.slice(1)) {
+            db.prepare('DELETE FROM claims WHERE rowid=?').run(drop.rid);
+            removed++;
+        }
+    }
+    // 旧的**非唯一**索引留着没有用处（唯一索引同样能服务 `WHERE key=?`），
+    // 而且名字会让人误以为"按 key 查"就是它 → 直接换掉，不留两个真相。
+    db.exec('DROP INDEX IF EXISTS idx_claims_key');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_claims_key ON claims(key)');
+    return { duplicateKeys: dups.length, removed };
+}
+
+/**
+ * 幂等迁移：把「老库缺的列」补上、把 `claims.key` 唯一约束落到老库上，再写回 `PRAGMA user_version`。
+ *
+ * @returns {{added:string[], from:number, to:number, claims:object}} 无事可做时 `added` 为空数组
  */
 export function migrateBoardSchema(db) {
+    // ★ R6 #5：唯一索引必须在 `db.exec(SCHEMA)` **之前**建好 ——
+    //   否则 SCHEMA 里的 `CREATE UNIQUE INDEX` 会因为老库的重复 key 直接失败。
+    const claimsTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'claims'").get();
+    const claims = claimsTable
+        ? ensureClaimsUniqueKey(db)
+        : { duplicateKeys: 0, removed: 0, status: 'no-table' };
     // ★ 表还不存在（全新库）→ 无事可做：`SCHEMA` 会一次建全，不需要"补列"。
     //   （而且 `ALTER TABLE jobs` 对不存在的表必然报错。）
     const exists = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").get();
     if (!exists) {
         const from0 = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
-        return { added: [], from: from0, to: BOARD_SCHEMA_VERSION, skipped: 'no-table' };
+        return { added: [], from: from0, to: BOARD_SCHEMA_VERSION, claims, skipped: 'no-table' };
     }
     const have = new Set(db.prepare('PRAGMA table_info(jobs)').all().map((r) => String(r.name)));
     const added = [];
@@ -219,7 +266,7 @@ export function migrateBoardSchema(db) {
     }
     const from = Number(db.prepare('PRAGMA user_version').get()?.user_version ?? 0);
     if (from !== BOARD_SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${BOARD_SCHEMA_VERSION}`);
-    return { added, from, to: BOARD_SCHEMA_VERSION };
+    return { added, from, to: BOARD_SCHEMA_VERSION, claims };
 }
 
 /** 只有这两个 SQLite 错误码算"文件真的坏了"：11 = SQLITE_CORRUPT、26 = SQLITE_NOTADB。 */
@@ -244,6 +291,84 @@ export function isCorruptError(e) {
     if (CORRUPT_ERRCODES.has(code)) return true;
     const msg = String(e?.message ?? e ?? '');
     return /file is not a database|malformed|not a database/i.test(msg);
+}
+
+/**
+ * 设置连接级 PRAGMA，并把**"设置没生效"变成可观测告警**（R6 #6）。
+ *
+ * 病根：以前是 `try { db.exec('PRAGMA journal_mode = WAL'); } catch { /* 忽略 *\/ }` ——
+ *   万一文件系统/构建不支持 WAL，没人知道当前其实是 rollback journal 模式，
+ *   而 `busy_timeout` 的等待语义在两种模式下并不相同（跨进程并发时表现会变）。
+ *   **不可观测的状态差异**本身就是缺陷。
+ *
+ * 现在：执行 + **读回来核对**，不一致就进 `warnings`，由 `openBoard` 打到日志里。
+ *
+ * @returns {{warnings:string[]}}
+ */
+function applyTuningPragmas(db, { wal = true } = {}) {
+    const warnings = [];
+    if (wal) {
+        let mode = null;
+        try {
+            const row = db.prepare('PRAGMA journal_mode = WAL').get();
+            mode = String(row?.journal_mode ?? '').trim().toLowerCase() || null;
+        } catch (e) {
+            warnings.push(`PRAGMA journal_mode = WAL 执行失败：${String(e?.message ?? e)}`);
+        }
+        if (mode && mode !== 'wal') {
+            warnings.push(
+                `journal_mode 实际为 "${mode}"（不是 wal）：该文件系统/构建不支持 WAL；`
+                + 'busy_timeout 的等待语义与 WAL 下不同，多写者时更容易 SQLITE_BUSY',
+            );
+        }
+    }
+    try {
+        const row = db.prepare('PRAGMA busy_timeout = 5000').get();
+        const ms = Number(row?.timeout ?? row?.busy_timeout ?? NaN);
+        if (!Number.isFinite(ms) || ms <= 0) {
+            warnings.push(`PRAGMA busy_timeout 未生效（读回 ${JSON.stringify(row)}）`);
+        }
+    } catch (e) {
+        warnings.push(`PRAGMA busy_timeout = 5000 执行失败：${String(e?.message ?? e)}`);
+    }
+    return { warnings };
+}
+
+/**
+ * 「重建」之前的**第二道证据**：另开一个只读连接跑 `PRAGMA quick_check(1)`（R6 #6）。
+ *
+ * ★ 为什么还要第二道：`isCorruptError` 只看错误码/文案。万一某天判据又写宽了一格，
+ *   就会把**一个其实能用的库**改名/删掉 —— 那正是 #6 说的数据毁灭路径。
+ *   所以重建前再独立问一次 SQLite："这个文件现在到底能不能读、内容正不正常？"
+ *
+ * @returns {{ok:boolean, opened:boolean, detail:string}}
+ *   ok=true  → **文件是好的**（"坏库"判断站不住，必须拒建）
+ *   ok=false → 打不开（NOTADB/垃圾字节）或 quick_check 不通过 → 坏库证据成立
+ */
+function proveBoardCorruption(path) {
+    let probe = null;
+    try {
+        probe = new DatabaseSync(path, { readOnly: true });
+        const rows = probe.prepare('PRAGMA quick_check(1)').all();
+        const text = rows.map((r) => String(Object.values(r ?? {})[0] ?? '')).join('; ').trim();
+        return { ok: /^ok$/i.test(text), opened: true, detail: text.slice(0, 300) || '(空)' };
+    } catch (e) {
+        return { ok: false, opened: false, detail: String(e?.message ?? e).slice(0, 300) };
+    } finally {
+        try { probe?.close?.(); } catch { /* 关不掉不影响结论 */ }
+    }
+}
+
+/**
+ * 把打开期的"隐性降级"打到日志里（R6 #6）。
+ *
+ * ★ 为什么用 `console.warn`：这些不是致命错误（板仍能用），但**必须留痕** ——
+ *   "现在是 rollback journal 模式"这种状态差异如果没人知道，排障时就会把手伸向
+ *   完全错误的方向。`opts.quiet` 供离线工具/单测关掉噪音。
+ */
+function emitBoardWarnings(warnings, opts = {}) {
+    if (opts.quiet === true || !warnings?.length) return;
+    for (const w of warnings) console.warn(`[board] ${w}`);
 }
 
 /**
@@ -290,18 +415,21 @@ export function openBoard(dir, opts = {}) {
     const tryOpen = () => {
         const db = new DatabaseSync(path, readOnly ? { readOnly: true } : {});
         lastDb = db;
+        /** ★ R6 #6：PRAGMA 没生效之类的"隐性降级"必须能传出去，不再静默。 */
+        const warnings = [];
         if (readOnly) {
             // 只读：只设连接级的 busy_timeout（改 journal_mode 属于写操作，跳过）。
-            try { db.exec('PRAGMA busy_timeout = 5000'); } catch { /* ignore */ }
+            warnings.push(...applyTuningPragmas(db, { wal: false }).warnings);
             // ★ 只读打开是**惰性**的：SQLite 不在这里校验文件头，坏文件要等第一次查询才报错
             //   ⇒ 工具会先拿到一个"看起来正常"的句柄，跑到一半才炸（实测探针就是这样）。
             //   这里做一次纯只读校验，把失败提前到打开点。
             db.prepare('SELECT count(*) FROM sqlite_master').get();
-            return { db, migration: null };
+            return { db, migration: null, warnings };
         }
         // WAL + busy 超时：mindserver 是唯一写者，但读可能并发（面板/别的查询）
-        try { db.exec('PRAGMA journal_mode = WAL'); } catch { /* 有的构建不支持，忽略 */ }
-        try { db.exec('PRAGMA busy_timeout = 5000'); } catch { /* ignore */ }
+        // ★★★ R6 #6：以前是 `try { ... } catch {}` —— 设置没生效**没有任何痕迹**。
+        //   现在执行 + 读回核对，没生效就进 warnings（openBoard 会打日志，见 emitBoardWarnings）。
+        warnings.push(...applyTuningPragmas(db, { wal: true }).warnings);
         // ★★ 第24条：**必须先迁移、再跑 SCHEMA**。
         //   因为 `SCHEMA` 里除了建表还有 `CREATE INDEX ... ON jobs(state, priority, createdAt)` ——
         //   老库缺 `priority` 时，索引语句会先炸（`no such column: priority`），
@@ -309,12 +437,16 @@ export function openBoard(dir, opts = {}) {
         //   顺序：① 老库补列 → ② 建表（IF NOT EXISTS，存在即 no-op）→ ③ 建索引。
         const migration = migrateBoardSchema(db);
         db.exec(SCHEMA);
-        return { db, migration };
+        return { db, migration, warnings };
     };
 
     try {
         const opened = tryOpen();
-        return { db: opened.db, dir, path, rebuilt: false, migration: opened.migration, readOnly };
+        emitBoardWarnings(opened.warnings, opts);
+        return {
+            db: opened.db, dir, path, rebuilt: false, migration: opened.migration, readOnly,
+            warnings: opened.warnings,
+        };
     } catch (e) {
         // 只读模式**绝不重建**：重建 = rename/rm + 建空库，是写操作，会毁掉正在被用的库。
         if (readOnly) {
@@ -330,6 +462,22 @@ export function openBoard(dir, opts = {}) {
             lastDb = null;
             throw e;
         }
+        // ★★★ R6 #6（证据化）：**重建之前必须证明"确实是坏库"**，不能只凭一个错误码。
+        //   做法：先关掉自己那个句柄（否则 Windows 上文件还被占着），再另开一个**只读**连接
+        //   跑 `PRAGMA quick_check(1)`：
+        //     · 打不开（NOTADB / 垃圾字节）→ 第二份证据成立，按坏库重建；
+        //     · 打得开但 quick_check 不是 ok → 真坏，重建；
+        //     · **打得开且 quick_check = ok → 判断站不住，拒建、原样抛错**。
+        //   宁可让 agent 起不来并报明确的错，也不把"其实能用"的库改名 —— 那就是数据毁灭路径。
+        try { lastDb?.close?.(); } catch { /* 关不掉也继续试 */ }
+        lastDb = null;
+        const proof = proveBoardCorruption(path);
+        if (proof.ok) {
+            throw new Error(
+                '打开任务板库失败，但完整性复核通过（quick_check=ok）：拒绝按"坏库"重建，库文件原样保留。'
+                + `原始错误=${String(e?.message ?? e)}；复核=${proof.detail}`,
+            );
+        }
         // 坏了：**先把坏文件移走留证，再建空库**（用户决策②）。
         //
         // 坑（2026-11-02 实测）：第一次 `new DatabaseSync(path)` 抛错时，句柄可能还占着文件，
@@ -340,6 +488,7 @@ export function openBoard(dir, opts = {}) {
         //
         //   ★ 另一个实测坑：`new DatabaseSync()` **即使 exec 抛错也会占着文件句柄**，
         //     直接 rename/rm 会 EBUSY。所以必须先 `close()` 掉那个句柄再动文件。
+        //     （上面的只读复核已经 close 过一次；这里再兜一次，幂等。）
         try { lastDb?.close?.(); } catch { /* 关不掉也继续试 */ }
         lastDb = null;
         const backupBase = `${path}.corrupt-${Date.now()}`;
@@ -358,13 +507,23 @@ export function openBoard(dir, opts = {}) {
             }
         }
         let db;
+        let rebuiltWarnings = [];
         try {
-            db = tryOpen().db;
+            const again = tryOpen();
+            db = again.db;
+            rebuiltWarnings = again.warnings;
         } catch (e2) {
             // 连重建都失败：把两个错都带上，别让上层只看到第二个
             throw new Error(`任务板库损坏且重建失败：原始错误=${String(e?.message ?? e)}；重建错误=${String(e2?.message ?? e2)}`);
         }
-        return { db, dir, path, rebuilt: true, backup, error: String(e?.message ?? e) };
+        emitBoardWarnings(rebuiltWarnings, opts);
+        return {
+            db, dir, path, rebuilt: true, backup,
+            error: String(e?.message ?? e),
+            // 证明确实是坏库才走到这里的第二份证据（R6 #6），留给日志/排障
+            corruptionEvidence: String(proof.detail ?? ''),
+            warnings: rebuiltWarnings,
+        };
     }
 }
 
@@ -554,8 +713,40 @@ export function listJobs(db, filter = {}) {
     const sql = `SELECT * FROM jobs ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                  ORDER BY priority DESC, createdAt ASC
                  LIMIT ?`;
-    params.push(Number.isFinite(filter.limit) ? filter.limit : 200);
+    params.push(normalizeListLimit(filter.limit));
     return db.prepare(sql).all(...params).map(rowToJob);
+}
+
+/** `board:list` 的默认/最大窗口（R6 #16）。 */
+export const LIST_LIMIT_DEFAULT = 200;
+export const LIST_LIMIT_MAX = 500;
+
+/**
+ * 把调用方给的 `limit` 归一化成一个**有界整数**（R6 #16）。
+ *
+ * 病根：原来是 `Number.isFinite(filter.limit) ? filter.limit : 200` ——
+ *   `Number.isFinite(-1) === true` ⇒ `LIMIT -1`，而 SQLite 里 **`LIMIT -1` 等于"无上限"**。
+ *   于是"只想看几条"的调用可以（有意或无意地）把**整张表**读出来；
+ *   面板一次翻页就能把几万张历史单连同 args/result 全灌进内存和 socket。
+ *
+ * 归一化规则（**宁可回默认值也不许放大**）：
+ *   · 非有限数 / 非整数 / < 1（含 -1、0）→ 回 `LIST_LIMIT_DEFAULT`
+ *   · > `LIST_LIMIT_MAX` → **夹到上限**（显式要"很多"是合理诉求，但必须有天花板）
+ *
+ * @returns {number} 1..LIST_LIMIT_MAX 的整数
+ */
+export function normalizeListLimit(raw) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return LIST_LIMIT_DEFAULT;
+    const int = Math.trunc(n);
+    if (int < 1) return LIST_LIMIT_DEFAULT;
+    return Math.min(int, LIST_LIMIT_MAX);
+}
+
+/** 未终结单数（R6 #16：`board:add` 的"未终结单上限"判据）。 */
+export function countOpenJobs(db) {
+    const r = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE state NOT IN ('done','failed','cancelled')").get();
+    return Number(r?.n ?? 0);
 }
 
 /**
@@ -1300,6 +1491,77 @@ export function countJobs(db, state = null) {
 /** 预约的默认 TTL（与租约同步：30 秒，跟着 heartbeat 续期）。 */
 export const CLAIM_TTL_MS = LEASE_MS;
 
+// ───────────────────────────────────────────────────────────────────────────
+// 写事务（R6 #4 / #5）——"抢不到锁"必须能被如实汇报，不许降级
+// ───────────────────────────────────────────────────────────────────────────
+
+/** SQLITE_BUSY(5) / SQLITE_LOCKED(6) → "另一个写者/读者正占着库"。 */
+function isBusyError(e) {
+    const code = Number(e?.errcode ?? NaN);
+    if (code === 5 || code === 6) return true;
+    return /database is locked|database table is locked|database schema is locked|busy/i
+        .test(String(e?.message ?? ''));
+}
+
+/**
+ * 开一个 `BEGIN IMMEDIATE` 写事务。
+ *
+ * ★ 为什么是 `IMMEDIATE` 而不是裸 `BEGIN`：`BEGIN`（DEFERRED）不申请写锁，
+ *   "读"和"第一次写"之间别人可以插进来 —— 那正是 check-then-write 的病根。
+ *   `IMMEDIATE` 在**开启时**就拿写锁，抢不到当场失败。
+ *
+ * ★ 抢不到锁**必须返回失败**（R6 #4 的核心）：绝不能再像以前那样 catch 掉、
+ *   退化成无锁读-改-写还返回成功。
+ *
+ * ★ 已经在事务里（`db.isTransaction === true`）→ 复用外层事务：原子性本来就有，
+ *   再 BEGIN 一次只会得到 "cannot start a transaction within a transaction"。
+ */
+function beginImmediate(db) {
+    if (db?.isTransaction === true) return { ok: true, nested: true };
+    try {
+        db.exec('BEGIN IMMEDIATE');
+        return { ok: true, nested: false };
+    } catch (e) {
+        return {
+            ok: false,
+            nested: false,
+            code: isBusyError(e) ? 'BOARD_BUSY' : 'INTERNAL',
+            message: `拿不到任务板写锁，事务未开启（不会降级成无锁读改写）：${String(e?.message ?? e)}`,
+        };
+    }
+}
+
+/**
+ * 在 `BEGIN IMMEDIATE` 事务里跑 `body()`，并**如实汇报**每一种失败：
+ * 抢锁失败 / body 抛错 / `body` 返回 `ok:false`（业务失败 → 整体回滚）/ COMMIT 失败。
+ *
+ * `body()` 的返回值原样透传（必须带 `ok`），这样调用方既能拿到 `CLAIM_CONFLICT`
+ * 这种"预期的失败"，也会在锁忙时拿到 `BOARD_BUSY`。
+ */
+function runInImmediateTx(db, body) {
+    const tx = beginImmediate(db);
+    if (!tx.ok) return { ok: false, code: tx.code, message: tx.message };
+    let out;
+    try {
+        out = body();
+    } catch (e) {
+        if (!tx.nested) { try { db.exec('ROLLBACK'); } catch { /* 回滚失败也别吞原始错误 */ } }
+        return {
+            ok: false,
+            code: isBusyError(e) ? 'BOARD_BUSY' : 'INTERNAL',
+            message: String(e?.message ?? e),
+        };
+    }
+    if (tx.nested) return out;
+    try {
+        db.exec(out?.ok === false ? 'ROLLBACK' : 'COMMIT');
+        return out;
+    } catch (e) {
+        try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+        return { ok: false, code: 'INTERNAL', message: `事务收尾失败（已尝试回滚）：${String(e?.message ?? e)}` };
+    }
+}
+
 /**
  * 抢占一批预约（原子：要么全拿到，要么一个都不占）。
  *
@@ -1327,41 +1589,65 @@ export function reserve(db, jobId, owner, keys, opts = {}) {
     if (!norm.ok) return { ok: false, code: 'INTERNAL', conflicts: [], message: norm.error };
     if (!norm.keys.length) return { ok: true, reserved: [], until: now + ttlMs };
 
-    // 先清掉过期预约（否则死掉的 bot 会永久占着 —— 06 §9.2 "bot 掉线自动释放"）
-    expireClaims(db, now);
+    // ★★★ R6 #5：**读-判断-写必须在同一个 `BEGIN IMMEDIATE` 事务里**。
+    //   以前这四步之间没有事务：单进程靠 Node 单线程"中间不让出"侥幸正确，
+    //   一旦有第二个写者（第二个进程 / 运维开着 sqlite 客户端 / 别的工具）就是
+    //   "都查不到冲突 → 都插入 → 双占"，而且两边都拿到 `ok:true`。
+    //   再加 `claims.key` 唯一索引（见 SCHEMA / ensureClaimsUniqueKey）做最后一道闸：
+    //   跨进程时**数据库层**只会让一个赢家落库。
+    const out = runInImmediateTx(db, () => {
+        // 先清掉过期预约（否则死掉的 bot 会永久占着 —— 06 §9.2 "bot 掉线自动释放"）
+        expireClaims(db, now);
 
-    // 查"别人持有的未过期预约"，逐个跟我要的 key 比（**跨类型**也比）
-    const live = db.prepare(
-        'SELECT id, key, owner, until FROM claims WHERE until > ? AND (owner IS NULL OR owner <> ?)',
-    ).all(now, owner);
+        // 查"别人持有的未过期预约"，逐个跟我要的 key 比（**跨类型**也比）
+        const live = db.prepare(
+            'SELECT id, key, owner, until FROM claims WHERE until > ? AND (owner IS NULL OR owner <> ?)',
+        ).all(now, owner);
 
-    const conflicts = [];
-    for (const want of norm.keys) {
-        const mine = parseClaimKey(want);
-        if (!mine.ok) { conflicts.push(want); continue; }
-        for (const held of live) {
-            if (held.id === jobId) continue;                 // 同一张单自己的旧预约
-            const theirs = parseClaimKey(held.key);
-            if (theirs.ok && claimsConflict(mine, theirs)) {
-                conflicts.push(want);
-                break;
+        const conflicts = [];
+        for (const want of norm.keys) {
+            const mine = parseClaimKey(want);
+            if (!mine.ok) { conflicts.push(want); continue; }
+            for (const held of live) {
+                if (held.id === jobId) continue;                 // 同一张单自己的旧预约
+                const theirs = parseClaimKey(held.key);
+                if (theirs.ok && claimsConflict(mine, theirs)) {
+                    conflicts.push(want);
+                    break;
+                }
             }
         }
-    }
 
-    if (conflicts.length) {
-        // **全有或全无**：一个都不占（否则半占着会把别人堵死）
-        return {
-            ok: false, code: 'CLAIM_CONFLICT', conflicts,
-            message: `预约冲突：${conflicts.join(', ')} 已被别人占着`,
-        };
-    }
+        if (conflicts.length) {
+            // **全有或全无**：一个都不占（否则半占着会把别人堵死）
+            return {
+                ok: false, code: 'CLAIM_CONFLICT', conflicts,
+                message: `预约冲突：${conflicts.join(', ')} 已被别人占着`,
+            };
+        }
 
-    const until = now + ttlMs;
-    const stmt = db.prepare('INSERT INTO claims (id, key, owner, until) VALUES (?,?,?,?) '
-        + 'ON CONFLICT(id, key) DO UPDATE SET owner=excluded.owner, until=excluded.until');
-    for (const k of norm.keys) stmt.run(jobId, k, owner, until);
-    return { ok: true, reserved: norm.keys, until };
+        const until = now + ttlMs;
+        // ★ 兜底（跨进程/判据漏网的最后一格）：`ON CONFLICT(key)` 只有在**自己**的行上才更新。
+        //   别人的行 → `WHERE` 不成立 → `changes = 0` → 回来报 `CLAIM_CONFLICT`（不抛异常，
+        //   上层按"换目标"处理）。同一 owner 换单持有同一 key 时，行迁移到新单（幂等）。
+        const stmt = db.prepare('INSERT INTO claims (id, key, owner, until) VALUES (?,?,?,?) '
+            + 'ON CONFLICT(key) DO UPDATE SET id=excluded.id, owner=excluded.owner, until=excluded.until '
+            + 'WHERE claims.owner IS NULL OR claims.owner = excluded.owner');
+        const taken = [];
+        for (const k of norm.keys) {
+            const r = stmt.run(jobId, k, owner, until);
+            if (Number(r?.changes ?? 0) === 0) taken.push(k);
+        }
+        if (taken.length) {
+            return {
+                ok: false, code: 'CLAIM_CONFLICT', conflicts: taken,
+                message: `预约冲突：${taken.join(', ')} 已被别人占着（唯一约束判定）`,
+            };
+        }
+        return { ok: true, reserved: norm.keys, until };
+    });
+    if (out.ok === false && !Array.isArray(out.conflicts)) out.conflicts = [];
+    return out;
 }
 
 /**
@@ -2101,6 +2387,11 @@ export const SHARED_CHEST_KIND = 'chest';
  * 修法：把"读-改-写"**收进一个事务、放到唯一写库的进程里**（mindserver 是唯一写者，
  *   06 §3）。`BEGIN IMMEDIATE` 先拿写锁再读，保证中间不会被插进来。
  *
+ * ★★★ R6 #4（2026-11-10）：**抢锁失败必须失败，不许降级**。
+ *   以前 `BEGIN IMMEDIATE` 的异常被 `catch { inTx = false }` 吞掉，然后无锁读-改-写
+ *   仍然 `return ok:true` —— 注释和实现相反。现在 `BOARD_BUSY` 会一路传回调用方。
+ *   返回：`{ok:true}` 或 `{ok:false, code:'BOARD_BUSY'|'NO_TARGET'|'INTERNAL', message}`。
+ *
  * ★ 合并语义（与原来一致，只是搬了个地方）：
  *   `delta` 是**增量**（存 +N / 取 -N）；合计 ≤ 0 的条目直接删掉（别留 0 条垃圾）。
  *
@@ -2119,9 +2410,17 @@ export function mergeSharedChest(db, key, delta, owner = null, opts = {}) {
     const k = String(key);
     const d = (delta && typeof delta === 'object') ? delta : {};
 
-    let inTx = false;
-    try { db.exec('BEGIN IMMEDIATE'); inTx = true; } catch { inTx = false; }
-    try {
+    // ★★★ R6 #4：**抢不到写锁就失败，绝不降级**。
+    //   以前这里是 `let inTx = false; try { BEGIN IMMEDIATE } catch { inTx = false; }` ——
+    //   抢锁失败**恰好就是最需要原子性的时刻**，却静默退化成无锁读-改-写，
+    //   最后还 `return { ok: true }`。调用方（board_server → agent）据此认为"已入账"，
+    //   实际上那次写入随时会被另一个写者整份覆盖。修法有两条，缺一不可：
+    //     ① 抢锁失败 → 返回 `{ok:false, code:'BOARD_BUSY'}`，由调用方重试/降级报告；
+    //     ② 读-改-写**整个**包在事务里（中间任何异常都回滚，不留半份数据）。
+    //   `busy_timeout = 5000` 已经在连接级设好，所以这里的失败是"等了 5 秒仍抢不到"，
+    //   不是"没等" —— 同步函数里不退避重试（`Atomics.wait` 会阻塞事件循环），
+    //   宁可让调用方（异步层）重试。
+    return runInImmediateTx(db, () => {
         const prev = getShared(db, SHARED_CHEST_KIND, k);
         const prevValue = prev?.value ?? null;
         const items = { ...(prevValue?.items ?? {}) };
@@ -2138,13 +2437,13 @@ export function mergeSharedChest(db, key, delta, owner = null, opts = {}) {
             owner: owner ?? prevValue?.owner ?? null,
             at: now,
         };
-        putShared(db, SHARED_CHEST_KIND, k, value, { now, owner: owner ?? null });
-        if (inTx) db.exec('COMMIT');
+        const written = putShared(db, SHARED_CHEST_KIND, k, value, { now, owner: owner ?? null });
+        if (!written.ok) {
+            // 写失败 → 整个事务回滚（`runInImmediateTx` 看到 ok:false 会 ROLLBACK）
+            return { ok: false, code: written.code ?? 'INTERNAL', message: written.message ?? '共享数据写入失败' };
+        }
         return { ok: true, key: k, value };
-    } catch (e) {
-        if (inTx) { try { db.exec('ROLLBACK'); } catch { /* 回滚失败也别吞原始错误 */ } }
-        return { ok: false, code: 'INTERNAL', message: String(e?.message ?? e) };
-    }
+    });
 }
 
 /** 删一条。 */

@@ -33,6 +33,8 @@ import {
     putShared, getShared, listShared, delShared, findItemInSharedChests,
     // ★ T31 第16条：箱子内容的**原子合并**（读-改-写在服务端一次做完）
     mergeSharedChest, SHARED_CHEST_KIND,
+    // ★ R6 #16：`list` 的 limit 上限 + 未终结单计数（限流/上限判据）
+    LIST_LIMIT_MAX, countOpenJobs,
 } from './board_store.js';
 // ★ BOARD-002：归一化 agent 随 claim 上报的"我身上有什么"（跨 client/server 共用的纯函数）
 import { normalizeReportedItems } from './board_claims.js';
@@ -113,17 +115,246 @@ export function attachBoardServer(deps = {}) {
         if (job) broadcast('board:changed', { id: job.id, state: job.state, priority: job.priority, reason });
     };
 
+    // ══════════════════════════════════════════════════════════════════════
+    // R6 #3：**服务端可验证的身份**（不是"检查有没有发 token"）
+    //
+    // 病根：原来每个事件都直接信 `payload.bot` / `payload.owner` ——
+    //   任何连上来的 socket 都能自称是任意 bot，A 可以替 B 领单、结单、放预约、删共享数据。
+    //   而 board_store 里那些归属校验（lease.owner / attemptSeq）**挡不住冒充**：
+    //   它们校验的是"你报的名字是不是持有者"，不是"你真的是不是你报的名字"。
+    //
+    // 现在分两层，**哪一层能做多少就写多少**：
+    //   ① **绑定（真实、但这层依赖握手）**：连接在 `board:hello` 里声明自己代表哪只 bot，
+    //      之后所有事件只能以**声明过的** bot 身份行动。agent 连接（`socket.data.role ===
+    //      'agent'`，由握手门写入，见 mindserver/auth_gate）**只允许绑定一只 bot 且绑定后
+    //      不可更改** —— 这是"一个 agent 子进程 = 一只 bot"的拓扑。
+    //   ② **归属（不依赖传输层，任何人可验）**：改一张正被租用的单，必须就是那个租约持有者。
+    //      这层即使身份被冒充也仍然有效（冒充者还是得先拿租约）。
+    //
+    // ★ 残留缺口（**必须诚实写在这里**，别让下一个人以为已经鉴权了）：
+    //   `board:hello` 本身没有密码学凭据来证明"我真的是 alpha"。在 mindserver 给
+    //   **每只 agent 发独立凭据**并把结果写进 `socket.data`（t1 范畴）之前，
+    //   一个能连上 mindserver 的客户端仍然可以 hello 成别人的名字。
+    //   职责分工：**传输层认证 = t1；本文件的归属校验 + 身份绑定 = t3（本条）**。
+    // ══════════════════════════════════════════════════════════════════════
+
+    const ROLE_AGENT = 'agent';
+
+    // ── 错误码口径（为什么只有 NO_PERMISSION / TOO_MUCH 两个）─────────────
+    //   `contract.js` 的 `CODES` 是**全仓唯一**的错误码表，未注册的码会让
+    //   `fail()` 抛异常、也会被启动自检判红。本文件只允许产出**已注册**的码，
+    //   所以这三类拒绝都折到两个已注册码上，**具体原因靠 `reason` 说清**：
+    //     · 身份不符 / 没 hello / 不是自己的共享数据 → `NO_PERMISSION`（处置：停手，别重试）
+    //     · 下单过快 / 未终结单满 / limit 越界           → `TOO_MUCH`（处置：退避或改参数）
+    //   想要更细的码（RATE_LIMITED / IDENTITY_MISMATCH / BAD_LIMIT…）必须
+    //   **同时**做三件事：注册进 contract.js 的 CODES、在 board_client 的
+    //   `contractCodeOf` 里映射、更新错误码审计 —— 那是另一条任务（t1/t4 的接口范畴），
+    //   不在本条的写作用域里。**不要**为了"码好看"在这里造未注册码。
+
+    /** 拿（必要时创建）socket 上的身份状态。 */
+    const identityOf = (socket) => {
+        if (!socket) return { role: '', bots: new Set() };
+        if (!socket.data || typeof socket.data !== 'object') socket.data = {};
+        if (!(socket.data.boardBots instanceof Set)) socket.data.boardBots = new Set();
+        return { role: String(socket.data.role ?? '').toLowerCase(), bots: socket.data.boardBots };
+    };
+
+    /**
+     * `board:hello` 的绑定步骤（见上面 ① ）。
+     * @returns {{ok:true, role:string} | {ok:false, code:string, reason:string}}
+     */
+    const bindBot = (socket, bot) => {
+        const { role, bots } = identityOf(socket);
+        if (role === ROLE_AGENT) {
+            // ★★ R6 #3（2026-11-10，t1 的握手门落地后）：**名字的来源换成服务端裁决的戳**。
+            //   `socket.data.agentName` 由 `bindAgentChannel()` 在 `login-agent` /
+            //   `connect-agent-process` 成功后写入 —— 它已经过 `claimAgentChannel` 的
+            //   **唯一占用裁决 + 接管限速**，是**服务端判定**的结果，不是 payload 自述。
+            //   所以这里不再"信 payload 里的 bot"，而是拿它跟戳**对账**：
+            //     · 不一致 → 拒（这正是"一个 agent 进程冒充另一只 bot"的那一步）
+            //     · 戳为空 → 拒（还没 login-agent，就没有可信名字；宁可报错让人先握手）
+            //   ⚠️ 诚实边界：这仍是"持有 agent 凭据的进程"粒度，不是 per-agent 凭据。
+            //      一个持 agent 凭据的进程仍可以 login-agent 去抢别人的名字 ——
+            //      但那会被 claimAgentChannel 的唯一占用 + 接管限速 + 日志记下，且会顶掉
+            //      对方通道（肉眼可见），属"可观测的越权"，不是静默冒充。
+            //      真正封闭要做 per-agent 凭据（(name × 进程) 一对一），后续任务。
+            const stamped = String(socket.data?.agentName ?? '').trim();
+            if (!stamped) {
+                return {
+                    ok: false, code: 'NO_PERMISSION',
+                    reason: '这条 agent 连接还没完成 agent 握手（socket.data.agentName 为空）：先 login-agent 再来 board:hello',
+                };
+            }
+            if (stamped !== bot) {
+                return {
+                    ok: false, code: 'NO_PERMISSION',
+                    reason: `服务端裁决的 agent 名是「${stamped}」，不能声明成「${bot}」`,
+                };
+            }
+            // 一个 agent 连接只能代表一只 bot：绑定后不可换人（防"先 hello 成 alpha，再改成 beta"）
+            const bound = [...bots][0] ?? null;
+            if (bound && bound !== bot) {
+                return {
+                    ok: false, code: 'NO_PERMISSION',
+                    reason: `这条 agent 连接已绑定「${bound}」，不能再次声明成「${bot}」`,
+                };
+            }
+            bots.clear();
+            bots.add(bot);
+            return { ok: true, role };
+        }
+        // 面板/控制层（以及夹具）：一条连接可以替多只 bot 声明，但只能用它声明过的名字行动
+        bots.add(bot);
+        return { ok: true, role };
+    };
+
+    /**
+     * 解析"这条连接此刻以哪只 bot 的身份说话"，并校验它**声明过**这个名字。
+     *
+     * 顺序：`payload.bot` → `payload.owner`（不同事件用不同字段名）。
+     * agent 连接没发过 hello、或声明里没有这个名字 → 直接拒。
+     *
+     * @returns {{ok:true, bot:string, role:string} | {ok:false, code:string, reason:string}}
+     */
+    const actingBot = (socket, payload, field = null) => {
+        const { role, bots } = identityOf(socket);
+        const raw = field ? payload?.[field] : (payload?.bot ?? payload?.owner);
+        const claimed = String(raw ?? '').trim();
+        if (role === ROLE_AGENT) {
+            if (!claimed) {
+                // agent 连接只有一只 bot 时可以不写（省得每个事件都带名字），但必须已 hello 过
+                if (bots.size === 1) return { ok: true, bot: [...bots][0], role };
+                return { ok: false, code: 'NO_PERMISSION', reason: '这条 agent 连接还没发 board:hello，无法确定身份' };
+            }
+            if (!bots.size) {
+                return { ok: false, code: 'NO_PERMISSION', reason: '这条 agent 连接还没发 board:hello，无法确定身份' };
+            }
+            if (!bots.has(claimed)) {
+                return {
+                    ok: false, code: 'NO_PERMISSION',
+                    reason: `这条连接代表「${[...bots].join('/')}」，不能以「${claimed}」的身份行动`,
+                };
+            }
+            return { ok: true, bot: claimed, role };
+        }
+        // ★ 面板 / 控制层 / 离线夹具（角色未知）：
+        //   · 报了名字 → 必须是它 hello 过的（防一条连接在中途换名字）
+        //   · 没报名字 → **放行**（`!cancelJob` 这种控制层命令本来就不带 bot；
+        //     这类连接的鉴权在 t1 的握手门里，不在本文件。见上方"残留缺口"）
+        if (claimed && bots.size && !bots.has(claimed)) {
+            return {
+                ok: false, code: 'NO_PERMISSION',
+                reason: `这条连接还没为「${claimed}」发过 board:hello`,
+            };
+        }
+        return { ok: true, bot: claimed || null, role };
+    };
+
+    /**
+     * 第二层：**归属校验**（不依赖传输层身份）。
+     *
+     * 判据：这张单**正被一条未过期的租约持有**，且持有者不是 `bot` → 拒绝。
+     * 反过来三种情形放行：无租约（ready/paused/终态）、就是自己、租约已过期（残局清理必须能做）。
+     *
+     * ★ 只对 agent 连接生效：面板/控制层要能取消、暂停、改任意单（那是功能，不是漏洞；
+     *   面板侧的鉴权在 t1 的握手门里）。未知角色（离线夹具/老接线）保持旧行为，
+     *   这样"没接上握手门"的部署不会突然全红 —— 但也意味着**这层不是万能的**。
+     */
+    const assertJobOwner = (socket, bot, jobId) => {
+        const { role } = identityOf(socket);
+        if (role !== ROLE_AGENT) return { ok: true };
+        const id = String(jobId ?? '');
+        if (!id) return { ok: true };                       // 让下游按原逻辑报"缺 id"
+        let job = null;
+        try { job = getJob(db, id); } catch { return { ok: true }; }
+        if (!job) return { ok: true };                      // 没这张单 → 下游按原逻辑报错
+        const owner = job.lease?.owner ?? null;
+        if (!owner || String(owner) === String(bot)) return { ok: true };
+        const until = Number(job.lease?.until ?? 0);
+        if (until && until <= now()) return { ok: true };    // 过期租约 = 残局，允许清理
+        return {
+            ok: false, code: 'LEASE_LOST',
+            reason: `「${id}」现在由「${owner}」持有（租约未过期），不能由「${bot}」修改`,
+        };
+    };
+
+    // ── R6 #16：`board:add` 的限流（令牌桶，**按真实来源分桶**）────────────
+    //
+    // 病根：`board:add` 零限流 —— 一条连接可以在一秒内灌进上千张单，
+    //   把调度器视野（LIMIT 200）和历史表一起淹掉，且没有任何人能看出是谁干的。
+    // 分桶键：agent 连接 → `bot:<名字>`（同一台机上两只 agent 各算各的）；
+    //   其余（面板/控制层）→ 握手地址；都没有 → socket.id。**不再全机共用一个桶**
+    //   （共用一个桶 = 一个人刷爆就把所有人打死，限流本身变成攻击面）。
+    const ADD_RATE = Object.freeze({ max: 30, windowMs: 60_000 });
+    const addBuckets = new Map();          // key -> { tokens, at }
+    const ADD_BUCKETS_MAX = 512;           // 防止桶表本身成为内存增长点
+
+    const bucketKeyOf = (socket, bot) => {
+        const { role } = identityOf(socket);
+        if (role === ROLE_AGENT && bot) return `bot:${bot}`;
+        const addr = socket?.handshake?.address;
+        if (addr) return `addr:${addr}`;
+        return `sock:${socket?.id ?? 'unknown'}`;
+    };
+
+    /** 取一个令牌；拿不到就返回还要等多久（毫秒）。 */
+    const takeAddToken = (key) => {
+        const t = now();
+        let b = addBuckets.get(key);
+        if (!b) {
+            if (addBuckets.size >= ADD_BUCKETS_MAX) {
+                // 简单清理：丢掉已经回满的桶（它们等价于"没出现过"）
+                for (const [k, v] of addBuckets) {
+                    if (t - v.at >= ADD_RATE.windowMs) addBuckets.delete(k);
+                }
+                if (addBuckets.size >= ADD_BUCKETS_MAX) addBuckets.delete(addBuckets.keys().next().value);
+            }
+            b = { tokens: ADD_RATE.max, at: t };
+            addBuckets.set(key, b);
+        }
+        const elapsed = Math.max(0, t - b.at);
+        b.tokens = Math.min(ADD_RATE.max, b.tokens + (elapsed * ADD_RATE.max) / ADD_RATE.windowMs);
+        b.at = t;
+        if (b.tokens < 1) {
+            const need = (1 - b.tokens) * (ADD_RATE.windowMs / ADD_RATE.max);
+            return { ok: false, retryAfterMs: Math.max(1, Math.ceil(need)) };
+        }
+        b.tokens -= 1;
+        return { ok: true, tokens: Math.floor(b.tokens) };
+    };
+
+    /** 未终结单上限（R6 #16）：防止"只加不结"把板和调度器一起淹掉。 */
+    const MAX_OPEN_JOBS = 500;
+
+    /**
+     * `board:list` 的 limit 校验（R6 #16）：负数/超大/非数字一律拒，不静默夹。
+     * 错误码用已注册的 `TOO_MUCH`，具体原因在 `reason`（见上方"错误码口径"）。
+     */
+    const BAD_LIMIT = (raw) => ({
+        ok: false, code: 'TOO_MUCH',
+        reason: `limit 必须是 1..${LIST_LIMIT_MAX} 的整数（收到 ${JSON.stringify(raw)}）`,
+    });
+    const checkListLimit = (raw) => {
+        if (raw === undefined || raw === null) return { ok: true, limit: undefined };
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n < 1 || n > LIST_LIMIT_MAX) return BAD_LIMIT(raw);
+        return { ok: true, limit: n };
+    };
+
     io.on('connection', (socket) => {
-        // ── hello：记下这只 bot 能干什么 ────────────────────────────────
+        // ── hello：记下这只 bot 能干什么（同时**绑定身份**，R6 #3）────────
         socket.on('board:hello', (payload, cb) => {
             const bot = String(payload?.bot ?? '').trim();
             const skills = Array.isArray(payload?.skills) ? payload.skills : [];
             if (!bot) return ack(cb, { ok: false, reason: '缺少 bot' });
+            // ★ R6 #3：绑定失败（agent 连接想换人）→ 直接拒，不登记能力
+            const bound = bindBot(socket, bot);
+            if (!bound.ok) return ack(cb, { ok: false, code: bound.code, reason: bound.reason });
             botRegistry.set(bot, { skills: new Set(skills), roles: payload?.roles ?? [], at: now() });
-            ack(cb, { ok: true, jobs: listJobs(db, { assignee: bot }).length });
+            ack(cb, { ok: true, jobs: listJobs(db, { assignee: bot }).length, role: bound.role || null });
         });
 
-        // ── add：校验 → 入库 → 推 changed ───────────────────────────────
+        // ── add：校验 → 入库 → 推 changed（R6 #16：限流 + 未终结单上限）────
         socket.on('board:add', (job, cb) => {
             try {
                 // ① 先问"这个技能在注册表里存在吗"（全局第一道）
@@ -140,6 +371,38 @@ export function attachBoardServer(deps = {}) {
                     if (!reg.skills.has(String(v.job.skill))) {
                         return ack(cb, { ok: false, reason: `「${assignee}」没上报过技能「${v.job.skill}」` });
                     }
+                }
+
+                // ② R6 #3：agent 连接只能替**自己**下单（面板块 = 控制层，可以替任意 bot 建单）
+                const who = actingBot(socket, job, 'bot');
+                const role = identityOf(socket).role;
+                if (role === ROLE_AGENT) {
+                    if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                    if (assignee && String(assignee) !== who.bot) {
+                        return ack(cb, {
+                            ok: false, code: 'NO_PERMISSION',
+                            reason: `这条连接代表「${who.bot}」，不能把单指派给「${assignee}」`,
+                        });
+                    }
+                }
+
+                // ③ R6 #16：限流（按真实来源分桶）
+                const bucket = bucketKeyOf(socket, assignee ?? (who.ok ? who.bot : null));
+                const limit = takeAddToken(bucket);
+                if (!limit.ok) {
+                    return ack(cb, {
+                        ok: false, code: 'TOO_MUCH',
+                        reason: `下单太频繁（${ADD_RATE.max} 张/${ADD_RATE.windowMs / 1000} 秒），请 ${Math.ceil(limit.retryAfterMs / 1000)} 秒后再试`,
+                    });
+                }
+
+                // ④ R6 #16：未终结单上限（只加不结会把调度器视野和历史表一起淹掉）
+                const open = countOpenJobs(db);
+                if (open >= MAX_OPEN_JOBS) {
+                    return ack(cb, {
+                        ok: false, code: 'TOO_MUCH',
+                        reason: `未终结单已达上限 ${MAX_OPEN_JOBS}（现在 ${open} 张）：先结单/取消再下单`,
+                    });
                 }
 
                 const created = addJob(db, v.job, { now: now() });
@@ -184,12 +447,17 @@ export function attachBoardServer(deps = {}) {
                 //   `scope='claimable'` 的用途是"抢占判定 / 残局回收"，它绝不能
                 //   被 200 张已完成的历史单挤出窗口（`jobs` 表从不删除，
                 //   `LIMIT 200` + "同级取最老" ⇒ 新单永远进不了视野，且不报错）。
+                // ★ R6 #16：`limit` 先**校验**（负数/超大/非数字一律拒，不静默夹成无上限）。
+                //   以前 `limit: f.limit` 直通 store，而 store 里 `Number.isFinite(-1) === true`
+                //   ⇒ `LIMIT -1` = **无上限**：一次 list 就能把整张历史表灌进 socket。
+                const lim = checkListLimit(f.limit);
+                if (!lim.ok) return ack(cb, { ok: false, code: lim.code, reason: lim.reason });
                 const jobs = listJobs(db, {
                     states,
                     ...listFilter,
                     skill: f.skill ?? null,
                     openOnly: f.openOnly === true || scope === 'claimable',
-                    limit: f.limit,
+                    limit: lim.limit,
                 });
                 ack(cb, { ok: true, jobs, scope });
             } catch (e) {
@@ -215,8 +483,12 @@ export function attachBoardServer(deps = {}) {
         // ── claim：原子领单 ─────────────────────────────────────────────
         socket.on('board:claim', (payload, cb) => {
             try {
-                const bot = String(payload?.bot ?? '').trim();
-                if (!bot) return ack(cb, { ok: false, reason: '缺少 bot' });
+                // ★ R6 #3：bot 只认**这条连接声明过的**身份（不再直接信 payload.bot）
+                const who = actingBot(socket, payload, 'bot');
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                const bot = who.bot;
+                // 面板/控制层没绑定身份时，「领单」没有对象可领 —— 明确报错，别拿空名字去查
+                if (!bot) return ack(cb, { ok: false, code: 'NO_PERMISSION', reason: '缺少 bot' });
                 // ★ B3（06 §9.4）：用**服务端记下的** roles 做资格判断，
                 //   不信任 agent 传来的 roles（socket 外部可达，可以自己说自己是 miner）。
                 const reg = botRegistry.get(bot);
@@ -238,7 +510,10 @@ export function attachBoardServer(deps = {}) {
         // ── heartbeat：续租 + 进度 ──────────────────────────────────────
         socket.on('board:heartbeat', (payload, cb) => {
             try {
-                const r = heartbeat(db, String(payload?.id ?? ''), String(payload?.bot ?? ''), {
+                // ★ R6 #3：身份来自绑定，不信 payload（原来直接 String(payload?.bot ?? '')）
+                const who = actingBot(socket, payload, 'bot');
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                const r = heartbeat(db, String(payload?.id ?? ''), who.bot ?? '', {
                     now: now(), progress: payload?.progress ?? null,
                     // ★ BOARD-003：带着尝试标识续租，同名重领后旧尝试的心跳必须失效
                     attemptSeq: payload?.attemptSeq ?? null,
@@ -248,7 +523,7 @@ export function attachBoardServer(deps = {}) {
                 // ★ T6：必须带上 **owner** —— 不带就等于"谁都能替别人续预约"
                 //   （单 id 共享可见）。给了 owner 后 store 会校验租约归属与状态。
                 try {
-                    renewClaims(db, String(payload?.id ?? ''), { now: now(), owner: String(payload?.bot ?? '') });
+                    renewClaims(db, String(payload?.id ?? ''), { now: now(), owner: who.bot ?? '' });
                 } catch { /* 续不上不影响心跳 */ }
                 ack(cb, { ok: true, job: r.job });
             } catch (e) {
@@ -259,6 +534,11 @@ export function attachBoardServer(deps = {}) {
         // ── checkpoint：存断点（不动状态）─────────────────────────────
         socket.on('board:checkpoint', (payload, cb) => {
             try {
+                // ★ R6 #3：写别人的单前先过归属校验（租约持有者才行）
+                const who = actingBot(socket, payload);
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                const own = assertJobOwner(socket, who.bot, payload?.id);
+                if (!own.ok) return ack(cb, { ok: false, code: own.code, reason: own.reason });
                 const r = updateJob(db, String(payload?.id ?? ''), { checkpoint: payload?.checkpoint ?? null }, {
                     now: now(),
                     // ★ BOARD-003：迟到的 checkpoint 不得写进新尝试
@@ -276,8 +556,11 @@ export function attachBoardServer(deps = {}) {
                 // ★★★ T30 第4条：**必须把 bot 传下去** —— `finish()` 要用它做租约归属校验。
                 //   不传就等于"谁都能改任何单的状态"：租约过期的旧持有者能把别人
                 //   正在跑的单写回 ready（两个 bot 抢同一张单）。
+                // ★ R6 #3：bot 取自**连接声明过的身份**，不取 payload（原来任何人填别人的名字即可）。
+                const who = actingBot(socket, payload, 'bot');
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
                 const r = finish(db, String(payload?.id ?? ''), payload?.result ?? {}, {
-                    now: now(), bot: payload?.bot ?? null,
+                    now: now(), bot: who.bot,
                     // ★ BOARD-003：带上尝试标识 —— 租约只看名字时，"同名重领"之后
                     //   旧尝试的迟到 finish 会被当成当前尝试的结果接受（报告实测的 staleAccepted）。
                     attemptSeq: payload?.attemptSeq ?? null,
@@ -292,7 +575,7 @@ export function attachBoardServer(deps = {}) {
                 }
                 changed(r.job, `finish:${r.next}`);
                 // ★ B3：单结束了就放掉它的预约（失败/完成都不该再占着资源）
-                try { release(db, r.job.id, r.job.lease?.owner ?? String(payload?.bot ?? ''), null); } catch { /* ignore */ }
+                try { release(db, r.job.id, r.job.lease?.owner ?? who.bot, null); } catch { /* ignore */ }
                 // ★ B3：父子收敛（06 §9.1）—— 有 parentId 就顺手推进父单
                 if (r.job.parentId) {
                     // ★ t83：**先**把"材料已到、之前被 NO_ITEM 卡住的兄弟"放回 ready，
@@ -316,6 +599,11 @@ export function attachBoardServer(deps = {}) {
         // ── set-state：cancel / pause / resume / 被抢占退回 ─────────────
         socket.on('board:set-state', (payload, cb) => {
             try {
+                // ★ R6 #3：身份 + 归属（agent 不能取消/暂停别人正在跑的单；面板可以）
+                const who = actingBot(socket, payload);
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                const own = assertJobOwner(socket, who.bot, payload?.id);
+                if (!own.ok) return ack(cb, { ok: false, code: own.code, reason: own.reason });
                 const r = setState(db, String(payload?.id ?? ''), String(payload?.state ?? ''), {
                     now: now(),
                     // ★ BOARD-003 补洞：带尝试标识，旧尝试不能把新尝试的单置 ready/paused（会清掉新租约）
@@ -336,8 +624,14 @@ export function attachBoardServer(deps = {}) {
         socket.on('board:reserve', (payload, cb) => {
             try {
                 const id = String(payload?.id ?? '');
-                const owner = String(payload?.owner ?? '').trim();
+                // ★ R6 #3：owner 只取**连接声明过的身份**（原来直接信 payload.owner ⇒ 可以替别人占资源）
+                const who = actingBot(socket, payload, 'owner');
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                const owner = who.bot;
                 if (!id || !owner) return ack(cb, { ok: false, reason: '缺少 id/owner' });
+                // ★ R6 #3：别人的单正被租着时，不许拿它的 id 去占资源
+                const own = assertJobOwner(socket, owner, id);
+                if (!own.ok) return ack(cb, { ok: false, code: own.code, reason: own.reason });
                 const r = reserve(db, id, owner, payload?.keys ?? [], { now: now() });
                 ack(cb, r.ok
                     ? { ok: true, reserved: r.reserved, until: r.until }
@@ -348,7 +642,10 @@ export function attachBoardServer(deps = {}) {
         socket.on('board:release', (payload, cb) => {
             try {
                 const id = String(payload?.id ?? '');
-                const owner = String(payload?.owner ?? '').trim();
+                // ★ R6 #3：同理，owner 只取绑定值（store 里还会校验租约归属）
+                const who = actingBot(socket, payload, 'owner');
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                const owner = who.bot;
                 if (!id || !owner) return ack(cb, { ok: false, reason: '缺少 id/owner' });
                 const r = release(db, id, owner, payload?.keys ?? null);
                 ack(cb, { ok: true, released: r.released });
@@ -369,6 +666,11 @@ export function attachBoardServer(deps = {}) {
         socket.on('board:save-checkpoint', (payload, cb) => {
             try {
                 const id = String(payload?.id ?? '');
+                // ★ R6 #3：断点也是"改别人的单" —— 必须有身份 + 归属
+                const who = actingBot(socket, payload);
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                const own = assertJobOwner(socket, who.bot, id);
+                if (!own.ok) return ack(cb, { ok: false, code: own.code, reason: own.reason });
                 const job = getJob(db, id);
                 if (!job) return ack(cb, { ok: false, reason: '没有这张单' });
                 const key = String(payload?.key ?? 'default');
@@ -390,8 +692,17 @@ export function attachBoardServer(deps = {}) {
         // **不许绕过板库直接读 bots/<name>/memory/*.json**（否则又是两条路径）。
         socket.on('board:shared-put', (payload, cb) => {
             try {
+                // ★ R6 #3：owner 只取绑定身份 —— 以前 `payload.owner` 直通，谁都能把一条
+                //   共享数据记成别人的名字（事后追责全指向错的人）。
+                const { role } = identityOf(socket);
+                let owner = payload?.owner ?? null;
+                if (role === ROLE_AGENT) {
+                    const who = actingBot(socket, payload, 'owner');
+                    if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                    owner = who.bot;
+                }
                 const r = putShared(db, String(payload?.kind ?? ''), payload?.key, payload?.value, {
-                    now: now(), owner: payload?.owner ?? null,
+                    now: now(), owner,
                 });
                 ack(cb, r.ok ? { ok: true } : { ok: false, reason: r.message ?? r.code });
             } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
@@ -404,14 +715,23 @@ export function attachBoardServer(deps = {}) {
         // 现在把"读-改-写"收进 store 的一个事务里，客户端只发**增量**。
         socket.on('board:shared-merge', (payload, cb) => {
             try {
+                // ★ R6 #3：同 shared-put —— agent 连接只能以自己的名字合并
+                const { role } = identityOf(socket);
+                let owner = payload?.owner ?? null;
+                if (role === ROLE_AGENT) {
+                    const who = actingBot(socket, payload, 'owner');
+                    if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                    owner = who.bot;
+                }
                 const r = mergeSharedChest(
                     db, payload?.key, payload?.delta,
-                    payload?.owner ?? null,
+                    owner,
                     { now: now(), pos: payload?.pos ?? null },
                 );
                 ack(cb, r.ok
                     ? { ok: true, item: { kind: SHARED_CHEST_KIND, key: r.key, value: r.value } }
-                    : { ok: false, reason: r.message ?? r.code });
+                    // ★ R6 #4：`BOARD_BUSY`（抢不到写锁）必须**如实回给调用方**，不能吞成成功
+                    : { ok: false, code: r.code, reason: r.message ?? r.code });
             } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
         });
 
@@ -426,8 +746,27 @@ export function attachBoardServer(deps = {}) {
         });
 
         socket.on('board:shared-del', (payload, cb) => {
-            try { ack(cb, { ok: true, deleted: delShared(db, String(payload?.kind ?? ''), payload?.key).deleted }); }
-            catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
+            try {
+                const kind = String(payload?.kind ?? '');
+                const key = payload?.key;
+                // ★ R6 #3：删除是**破坏性**动作。面板/控制层可以删任意条；
+                //   agent 连接只能删**自己名下**的那条（`shared.owner` 是库里的真实字段，
+                //   可查、可验 —— 不是"payload 里自称是谁"）。
+                const { role } = identityOf(socket);
+                if (role === ROLE_AGENT) {
+                    const who = actingBot(socket, payload, 'owner');
+                    if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                    const row = getShared(db, kind, key);
+                    const rowOwner = row?.owner ?? null;
+                    if (rowOwner && String(rowOwner) !== who.bot) {
+                        return ack(cb, {
+                            ok: false, code: 'NO_PERMISSION',
+                            reason: `「${kind}/${key}」是「${rowOwner}」记的，不能由「${who.bot}」删除`,
+                        });
+                    }
+                }
+                ack(cb, { ok: true, deleted: delShared(db, kind, key).deleted });
+            } catch (e) { ack(cb, { ok: false, reason: String(e?.message ?? e) }); }
         });
 
         // ★ B4 验收用的那条查询：**不开箱**就知道哪个箱子有这个物品
@@ -439,6 +778,11 @@ export function attachBoardServer(deps = {}) {
         // ── update：控制层契约里的 update(id, patch) ────────────────────
         socket.on('board:update', (payload, cb) => {
             try {
+                // ★ R6 #3：update 能改 assignee/priority/lease 等字段 —— 必须过身份 + 归属
+                const who = actingBot(socket, payload);
+                if (!who.ok) return ack(cb, { ok: false, code: who.code, reason: who.reason });
+                const own = assertJobOwner(socket, who.bot, payload?.id);
+                if (!own.ok) return ack(cb, { ok: false, code: own.code, reason: own.reason });
                 const r = updateJob(db, String(payload?.id ?? ''), payload?.patch ?? {}, { now: now() });
                 if (!r.ok) return ack(cb, { ok: false, reason: r.message ?? r.code });
                 changed(r.job, 'updated');
