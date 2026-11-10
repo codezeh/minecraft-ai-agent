@@ -382,13 +382,18 @@ export class Agent {
               
                 if (!load_mem) {
                     if (settings.task) {
-                        this.task.initBotTask();
-                        this.task.setAgentGoal();
+                        // ★ R6 #13/#15 相邻加固：这两个都是 **async 但历史上 fire-and-forget**。
+                        //   一旦 reject 就是 unhandled rejection ⇒ Node 24 直接带走进程
+                        //   （与 #13 同一条杀伤链，只是触发点从「落盘」换成「任务初始化」）。
+                        //   现在接住并**干净退出（非 0）**：父进程能看见「起不来」并退避重试，
+                        //   日志里也有明确的哪一步失败 —— 比"进程凭空消失"强一个数量级。
+                        this.guardTaskStartup('initBotTask', this.task.initBotTask());
+                        this.guardTaskStartup('setAgentGoal', this.task.setAgentGoal());
                     }
                 } else {
                     // set the goal without initializing the rest of the task
                     if (settings.task) {
-                        this.task.setAgentGoal();
+                        this.guardTaskStartup('setAgentGoal', this.task.setAgentGoal());
                     }
                 }
 
@@ -397,7 +402,25 @@ export class Agent {
 
             } catch (error) {
                 console.error('Error in spawn event:', error);
-                process.exit(0);
+                // ★ R6 #15（2026-11-10）：**这里原来是 `process.exit(0)`。**
+                //
+                //   退出码 0 的语义是「正常结束」：`planExit()`（src/process/agent_process.js:58）
+                //   见到 code === 0 直接返回 `action:'none'` ⇒ **不重启、也不走 unregister 的告警分支**
+                //   ⇒ bot 掉线后再也不回来，日志里只剩一行 `Error in spawn event`。
+                //   而同一份代码里「起不来」的其它路径（`init_agent` 的启动失败）用的是 exit(1)（会重启），
+                //   两条路径语义相反。
+                //
+                //   现在改成 `cleanKill(msg, 1)`：与 init_agent 的失败路径对齐 —— 退出码 1
+                //   让父进程按「起不足 10 秒就退出」进指数退避重启，真的起不来才由
+                //   MAX_QUICK_EXITS 收口。**setup 崩了必须能被认出来，不能伪装成正常退出。**
+                //   外层再兜一层：cleanKill 内部要碰 bot.chat / history（setup 中途可能半坏），
+                //   它自己再抛就退化成 exit(1) —— 退出码仍然是「异常」，不许回到 0。
+                try {
+                    this.cleanKill(`Error in spawn event: ${error?.message ?? error}`, 1);
+                } catch (e) {
+                    console.error('Error while killing agent after spawn failure:', e);
+                    process.exit(1);
+                }
             }
         });
     }
@@ -744,7 +767,7 @@ export class Agent {
 
         // Handle other user messages
         await this.history.add(source, message);
-        this.history.save();
+        this.saveMemoryQuietly();
 
         if (!self_prompt && this.self_prompter.isActive()) // message is from user during self-prompting
             max_responses = 1; // force only respond to this message, then let self-prompting take over
@@ -883,7 +906,7 @@ export class Agent {
                 break;
             }
             
-            this.history.save();
+            this.saveMemoryQuietly();
         }
 
         return used_command;
@@ -1097,6 +1120,62 @@ export class Agent {
     }
     
 
+    /**
+     * ★ R6 #13/#15 相邻加固：接住「任务初始化」这类 fire-and-forget 的 async 调用。
+     *
+     * 为什么必须接：`initBotTask()` / `setAgentGoal()` 是 async，而历史上是**裸调用**。
+     * 它们内部要 `executeCommand`、`bot.chat`、等同伴 bot —— 任何一步 reject 都是
+     * unhandled rejection，Node 24 默认 `--unhandled-rejections=throw` ⇒ **整个进程被带走**
+     * （与 #13 同一条杀伤链，只是触发点不同）。而且这种死法在日志里通常只剩一行 warning。
+     *
+     * 现在：记清楚是哪一步失败 → 走 `cleanKill(msg, 1)`（**非 0 退出码**，
+     * 与 #15 同口径：父进程据此按「起不足 10 秒」退避重启，而不是当成"正常结束"）。
+     *
+     * @param {string} label 哪一步（进日志，便于排障）
+     * @param {Promise<any>} promise 被保护的异步调用
+     */
+    guardTaskStartup(label, promise) {
+        const onFail = (e) => {
+            console.error(`[agent] 任务初始化阶段 ${label} 失败:`, e);
+            const msg = `Task startup failed (${label}): ${e?.message ?? e}`;
+            try {
+                this.cleanKill(msg, 1);
+            } catch (e2) {
+                // cleanKill 内部要碰 bot.chat / history（初始化阶段可能半坏）——
+                // 它自己再抛也只能退化成 exit(1)，**不许**回到 0。
+                console.error('[agent] cleanKill 期间再抛（已兜住，直接以退出码 1 结束）:', e2);
+                process.exit(1);
+            }
+        };
+        try {
+            if (promise && typeof promise.catch === 'function') void promise.catch(onFail);
+        } catch (e) {
+            // 极端情况：调用本身同步抛（不是 async 函数时会这样）
+            onFail(e);
+        }
+    }
+
+    /**
+     * ★ R6 #13（2026-11-10）：记忆落盘的 **fire-and-forget 唯一入口**。
+     *
+     * 为什么要有这个包装：`history.save()` 的 3 个调用点（handleMessage / 命令循环 /
+     * `cleanKill()`）都是「不 await 的顺手一存」。原来 `save()` 内部 catch 后**重新 throw**
+     * ⇒ unhandled rejection ⇒ Node 24 默认把它当异常抛出 ⇒ **整个 agent 进程崩**。
+     * （`save()` 现在内部已不再抛；这里再兜一层，防的是以后有人把那处 catch 改回去。）
+     *
+     * 另外同步写盘也在 try 里：`save()` 是 async 函数，但它的写盘是同步的 ——
+     * 理论上不会同步抛，可一旦抛了（比如 capSize 里访问了坏字段），这条路径同样不能带走进程。
+     */
+    saveMemoryQuietly() {
+        try {
+            void this.history.save().catch((e) => {
+                console.error(`[agent] 记忆落盘失败（已兜住，进程继续运行）: ${e?.message ?? e}`);
+            });
+        } catch (e) {
+            console.error(`[agent] 记忆落盘同步异常（已兜住，进程继续运行）: ${e?.message ?? e}`);
+        }
+    }
+
     cleanKill(msg='Killing agent process...', code=1) {
         this.history.add('system', msg);
         // ★ 2026-11-01（M2）：文案原来写反了 —— `code > 1 ? 'Restarting.' : 'Exiting.'`。
@@ -1105,7 +1184,9 @@ export class Agent {
         // 日志说她"Exiting."，人就去查为什么退出，其实她只是重启了一轮。
         // 现在按实际语义正向播：>1 说结束任务，其余（1）说重启。判定逻辑一字未动。
         this.bot.chat(code > 1 ? 'Ending task.' : 'Restarting.');
-        this.history.save();
+        // ★ R6 #13：这里原来是裸 `this.history.save()` —— 一次落盘失败会把「正常重启」
+        //   变成「异常崩溃」，退出码也偏离 planExit 的 0/1/>1 三分支。
+        this.saveMemoryQuietly();
         process.exit(code);
     }
     async checkTaskDone() {
