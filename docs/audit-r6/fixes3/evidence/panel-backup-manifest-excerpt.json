@@ -1,0 +1,52 @@
+{
+  "createdAt": "2026-11-11T23:51:42.3924735+08:00",
+  "mode": "Cold",
+  "consistent": true,
+  "containsSecrets": false,
+  "secretsPolicy": {
+    "excludeSecrets": true,
+    "source": "config/backup.json",
+    "configPath": "E:\\我的世界ai\\tmp\\panel-accept\\root\\config\\backup.json",
+    "configFromFile": true
+  },
+  "pluginJars": [
+    {
+      "name": "bluemap-5.16-paper.jar",
+      "bytes": 5710626,
+      "sha256": "79DBAEB260532DBD56624F8BCE8AB22FBCA158AE4A2860B04FCCEFFB9E4676CA"
+    },
+    {
+      "name": "ChunkyBorder-Bukkit-1.2.23.jar",
+      "bytes": 101396,
+      "sha256": "7FA76E7AD85E4142BE7203C30BC843896518985398BA8961FD573FAA2964432F"
+    },
+    {
+      "name": "Chunky-Bukkit-1.4.40.jar",
+      "bytes": 296244,
+      "sha256": "2A5477FC80F71012E15ADE1CE34DBEB836E17623B28DB112492C0F1443C09721"
+    },
+    {
+      "name": "CoreProtect-CE-24.1.jar",
+      "bytes": 1113283,
+      "sha256": "A2ACEF7C06EF201355CEF07D591A6055DFED358AD768FAAAAAF4E276865ECC97"
+    },
+    {
+      "name": "OnePlayerSleep-4.0.1.jar",
+      "bytes": 9231,
+      "sha256": "12B5A105580AF75215D17C78A8E689AB8256FFC2AEA3A569A8312633C7B364D1"
+    },
+    {
+      "name": "SkinsRestorer.jar",
+      "bytes": 8016648,
+      "sha256": "A85B4A370F988741C9A38F4D0498262EDACBF3220314790AC1C127461996359C"
+    }
+  ],
+  "redacted": [
+    {
+      "path": "server/server.properties",
+      "field": "rcon.password",
+      "reason": "-ExcludeSecrets：口令抹空后入包（其余设置全保留，保证可复现）"
+    }
+  ],
+  "secretNote": "server-config.zip 内含 server/server.properties，但 rcon.password 已抹空（其余设置完整保留）；恢复后按 manifest.redacted 填回口令即可"
+}

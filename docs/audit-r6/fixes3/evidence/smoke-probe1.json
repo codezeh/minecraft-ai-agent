@@ -1,0 +1,465 @@
+{
+  "at": "2026-11-11T15:44:54.741Z",
+  "results": [
+    {
+      "id": "#66-a",
+      "item": "HTTP 无 token → 401",
+      "request": "GET /api/config（无 token）",
+      "response": {
+        "status": 401
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#66-b",
+      "item": "HTTP 带正确 token → 200",
+      "request": "GET /api/config?token=<panel>",
+      "response": {
+        "status": 200
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#66-c",
+      "item": "错 token 握手 → AUTH_REQUIRED",
+      "request": "socket.io connect auth:{token:\"wrong-token-0000\"}",
+      "response": {
+        "connected": false,
+        "message": "unauthorized: mindserver 需要握手 token",
+        "code": "AUTH_REQUIRED"
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#66-d",
+      "item": "不带 token 握手 → AUTH_REQUIRED",
+      "request": "socket.io connect（无 auth）",
+      "response": {
+        "connected": false,
+        "message": "unauthorized: mindserver 需要握手 token",
+        "code": "AUTH_REQUIRED"
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#66-e",
+      "item": "错 token + 自动重连客户端 4s 内重试次数（服务端每次都拒）",
+      "request": "socket.io-client reconnection:true, reconnectionDelay:200ms, 观察 4s",
+      "response": {
+        "connectErrorCount": 1,
+        "lastCode": "AUTH_REQUIRED"
+      },
+      "pass": true,
+      "note": "服务端是无状态拒绝（不排队、不主动重连）；重试次数完全由客户端策略决定。出厂前端在 AUTH_REQUIRED 时调 pauseReconnect()（web/src/stores/agents.ts:280-284，产物 web-dist 内含该码）。"
+    },
+    {
+      "id": "#57-1",
+      "item": "send-message 是否回 ack",
+      "request": "emit('send-message', 'smokeA', {from:'panel',message:'smoke-test'}, cb) 等 1.2s",
+      "response": {
+        "acked": false,
+        "ms": 1213
+      },
+      "pass": false,
+      "note": "服务端处理器签名 (agentName, data) —— 第 3 个参数（ack）被忽略，回调永不触发。"
+    },
+    {
+      "id": "#57-2",
+      "item": "start-agent 是否回 ack + 失败帧",
+      "request": "emit('start-agent','smokeA', cb) 等 1.2s",
+      "response": {
+        "ack": {
+          "acked": false,
+          "ms": 1206
+        },
+        "start-agent-failed": [
+          {
+            "agent": "smokeA",
+            "reason": "not-found"
+          }
+        ]
+      },
+      "pass": false,
+      "note": "无 ack（handler 签名 (agentName)）；但失败帧 start-agent-failed 确实发出来了（见 RES）。"
+    },
+    {
+      "id": "#57-3",
+      "item": "stop-agent 是否回 ack",
+      "request": "emit('stop-agent','smokeA', cb) 等 1.2s",
+      "response": {
+        "acked": false,
+        "ms": 1211
+      },
+      "pass": false,
+      "note": "无 ack；且\"未找到 agent\"只打 console.warn，不回任何东西。"
+    },
+    {
+      "id": "#57-4",
+      "item": "restart-agent 是否回 ack",
+      "request": "emit('restart-agent','smokeA', cb) 等 1.2s",
+      "response": {
+        "acked": false,
+        "ms": 1209
+      },
+      "pass": false,
+      "note": "无 ack；agent 不在线只打 warn。"
+    },
+    {
+      "id": "#57-5",
+      "item": "destroy-agent 是否回 ack + 失败帧",
+      "request": "emit('destroy-agent','smokeB', cb) 等 1.2s（smokeB 的假进程拒绝退出）",
+      "response": {
+        "ack": {
+          "acked": false,
+          "ms": 1213
+        },
+        "destroy-agent-failed": [
+          {
+            "agent": "smokeB",
+            "reason": "smoke-fake-refuses-to-die"
+          }
+        ]
+      },
+      "pass": false,
+      "note": "无 ack（handler 签名 (agentName)）；destroy-agent-failed 帧已发出。"
+    },
+    {
+      "id": "#57-6",
+      "item": "失败帧 agent-channel-rejected 是否真会发",
+      "request": "面板连接 emit('login-agent','smokeA')",
+      "response": {
+        "frames": [
+          {
+            "agent": "smokeA",
+            "reason": "identity-required"
+          }
+        ]
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#57-7",
+      "item": "失败帧 agent-channel-taken-over 是否真会发",
+      "request": "两条不同 socket 都用 smokeA 的 agent 凭据 login-agent('smokeA')",
+      "response": {
+        "frames": [
+          {
+            "agent": "smokeA"
+          }
+        ],
+        "c1Connected": true,
+        "c2Connected": true
+      },
+      "pass": true,
+      "note": "接管后服务端主动断开旧连接（claim.previous.disconnect(true)）。"
+    },
+    {
+      "id": "#57-8",
+      "item": "失败帧 control-denied 是否真会发（agent 发管理面事件）",
+      "request": "agent 凭据连接 emit('stop-agent','smokeB')",
+      "response": {
+        "frames": [
+          {
+            "event": "stop-agent",
+            "reason": "panel_only",
+            "role": "agent"
+          }
+        ]
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#33",
+      "item": "限流按 agent 分桶：smokeA 打满不影响 smokeB",
+      "request": "agent smokeA 连打 get-settings 21 次（配额 20/60s）；随后 smokeB 打 1 次",
+      "response": {
+        "smokeA": {
+          "okCount": 20,
+          "rateLimited": true,
+          "last": {
+            "error": "rate_limited"
+          }
+        },
+        "smokeB": {
+          "settings": {
+            "profile": {
+              "name": "smokeB",
+              "model": "smoke",
+              "api": "smoke"
+            }
+          }
+        }
+      },
+      "pass": true,
+      "note": "桶键 = label@主体@地址，主体=agent:<name>（mindserver.js:539-556）。同一台机、同一地址，只有主体不同 ⇒ 证明分桶不是按地址。"
+    },
+    {
+      "id": "#68-a",
+      "item": "board:add 非法 skill → 明确拒绝并列出可用技能",
+      "request": "emit('board:add',{skill:'__no_such_skill__',args:'{}'},cb)",
+      "response": {
+        "acked": true,
+        "payload": {
+          "ok": false,
+          "reason": "skill「__no_such_skill__」不在注册表里（可用：collect follow pickup platform escape craft smelt store fetch eat mine farm fight build shelter obtain tool_tier first_night）"
+        },
+        "ms": 0
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#68-b",
+      "item": "board:add 建单",
+      "request": "emit('board:add',{skill:'collect',args:'{}'},cb)",
+      "response": {
+        "acked": true,
+        "payload": {
+          "ok": false,
+          "reason": "参数不合格：参数要写成 key=value：{}"
+        },
+        "ms": 1
+      },
+      "pass": false,
+      "note": ""
+    },
+    {
+      "id": "#68-c",
+      "item": "board:list 能看到新单",
+      "request": "emit('board:list',{scope:'all',limit:50},cb)",
+      "response": {
+        "ok": true,
+        "count": 0,
+        "hasJob": false,
+        "jobs": []
+      },
+      "pass": false,
+      "note": ""
+    },
+    {
+      "id": "#68-d",
+      "item": "board:set-state 取消单（cancel）",
+      "request": "emit('board:set-state',{id:'null',state:'cancelled',bot:'smokeA'},cb)",
+      "response": {
+        "acked": false
+      },
+      "pass": false,
+      "note": ""
+    },
+    {
+      "id": "#68-e",
+      "item": "取消后 list 里该单状态为 cancelled",
+      "request": "emit('board:list',{scope:'all',limit:50},cb)",
+      "response": {
+        "job": null
+      },
+      "pass": false,
+      "note": ""
+    },
+    {
+      "id": "#30-0",
+      "item": "隔离保管库初始化（只为能测 /unlock 401/429 分支）",
+      "request": "POST /api/vault/init {passphrase:'smoke-pass-1234'}（MC_VAULT_DB 指向 tmp）",
+      "response": {
+        "status": 201,
+        "body": {
+          "ok": true,
+          "unlocked": true,
+          "injected": 0
+        },
+        "ms": 949
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#30-a",
+      "item": "/unlock 连打 6 次错口令 → 第 6 次 429（不排队、可重试）",
+      "request": "POST /api/vault/unlock {passphrase:'wrong-pass-000N'} ×6（顺序）",
+      "response": [
+        {
+          "n": 1,
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 69
+        },
+        {
+          "n": 2,
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 58
+        },
+        {
+          "n": 3,
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 60
+        },
+        {
+          "n": 4,
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 70
+        },
+        {
+          "n": 5,
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 59
+        },
+        {
+          "n": 6,
+          "status": 429,
+          "error": "VAULT_TOO_MANY_ATTEMPTS",
+          "ms": 74
+        }
+      ],
+      "pass": true,
+      "note": "口径：先校验口令、后判限流 ⇒ 前 5 次失败 401，第 6 次失败才 429。"
+    },
+    {
+      "id": "#30-b",
+      "item": "被限流后正确口令仍可解锁（限流不锁死管理员）",
+      "request": "POST /api/vault/unlock {passphrase:'smoke-pass-1234'}",
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "injected": 0
+        },
+        "ms": 59
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#30-c",
+      "item": "并发 /unlock 超上限 → 立刻 429 VAULT_BUSY（不排队）",
+      "request": "POST /api/vault/unlock ×4 并发（错口令）",
+      "response": [
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 66
+        },
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 128
+        },
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 189
+        },
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 254
+        }
+      ],
+      "pass": false,
+      "note": "并发闸 (max=2) 在 scrypt 之前；超出直接拒，不排队 —— 所以 BUSY 响应是毫秒级。"
+    },
+    {
+      "id": "#30-d",
+      "item": "并发风暴后正确口令仍可解锁",
+      "request": "POST /api/vault/unlock {passphrase:'smoke-pass-1234'}",
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "injected": 0
+        },
+        "ms": 58
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#59-a",
+      "item": "false→true 不带 confirm → 409 CONFIG_CONFIRM_REQUIRED 且**不写盘**",
+      "request": "PUT /api/config/runtime {\"allow_insecure_coding\":true}",
+      "response": {
+        "status": 409,
+        "body": {
+          "error": "CONFIG_CONFIRM_REQUIRED",
+          "message": "allow_insecure_coding 是\"允许模型在本机写并执行代码（= 本机 root）\"。开启它需要二次确认：请在同一个请求体里加 \"confirm\": true 再提交一次。"
+        },
+        "settingsShaUnchanged": true
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#59-b",
+      "item": "带 confirm:true → 成功且写盘",
+      "request": "PUT /api/config/runtime {\"allow_insecure_coding\":true,\"confirm\":true}",
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "group": "runtime",
+          "applied": {
+            "allow_insecure_coding": true
+          },
+          "backup": "E:\\我的世界ai\\mindcraft\\settings.js.bak-20261111234454719-001",
+          "values": {
+            "allow_insecure_coding": true,
+            "allow_vision": false,
+            "code_timeout_mins": 20,
+            "max_messages": 30,
+            "num_examples": 2,
+            "spawn_timeout": 60,
+            "log_all_prompts": false,
+            "speak": false,
+            "chat_ingame": true,
+            "narrate_behavior": false,
+            "chat_bot_messages": true
+          }
+        },
+        "settingsShaChanged": true
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#59-c",
+      "item": "改回 false（复原，不需要 confirm）",
+      "request": "PUT /api/config/runtime {\"allow_insecure_coding\":false}",
+      "response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "group": "runtime",
+          "applied": {
+            "allow_insecure_coding": false
+          },
+          "backup": "E:\\我的世界ai\\mindcraft\\settings.js.bak-20261111234454732-002",
+          "values": {
+            "allow_insecure_coding": false,
+            "allow_vision": false,
+            "code_timeout_mins": 20,
+            "max_messages": 30,
+            "num_examples": 2,
+            "spawn_timeout": 60,
+            "log_all_prompts": false,
+            "speak": false,
+            "chat_ingame": true,
+            "narrate_behavior": false,
+            "chat_bot_messages": true
+          }
+        },
+        "settingsRestored": true
+      },
+      "pass": true,
+      "note": "字节级复原：settings.js 的 sha256 与测试前一致。"
+    }
+  ]
+}

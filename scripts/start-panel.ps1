@@ -299,13 +299,19 @@ if ($mcState -eq 'ours') {
     Write-SpawnContext '将启动 Minecraft 服务端' $srvDir
     if ($dryRun) {
         Write-Ok '[DRYRUN] 本应启动（已短路，不会 spawn）'
-        Write-DryRun ('Start-Process -FilePath "' + $java + '" -ArgumentList "-Xms1G","-Xmx2G","-XX:+UseG1GC","-jar","server.jar","nogui" -WorkingDirectory "' + $srvDir + '" -RedirectStandardOutput "' + $srvOut + '" -WindowStyle Hidden')
+        Write-DryRun ('Start-Process -FilePath "' + $java + '" -ArgumentList "-Xms1G","-Xmx2G","-XX:+UseG1GC","-jar","' + (Join-Path $srvDir 'server.jar') + '","nogui" -WorkingDirectory "' + $srvDir + '" -RedirectStandardOutput "' + $srvOut + '" -WindowStyle Hidden')
         Write-DryRun ('端口：25565（RCON 25575）')
     } else {
     Write-Ok '正在启动（冷启动约 15~40 秒）'
     $launchAt = Get-Date
+    # ★ F1（真机验收发现）：`Get-ServerJava` 的判据要求命令行里出现**绝对**路径
+    #   `<root>\server\server.jar`（OPS-009 为防误匹配别人目录的 jar），
+    #   而这里原来传的是相对名 `server.jar` ⇒ 判据永假：冷启动被误判成"进程已退出"、
+    #   热重跑被误判成"25565 被别的程序占用"。
+    #   修法：先算成变量再传（不能把 (Join-Path ...) 直接塞进续行参数表，会打断续行）。
+    $jarAbs = Join-Path $srvDir 'server.jar'
     Start-Process -FilePath $java `
-        -ArgumentList '-Xms1G', '-Xmx2G', '-XX:+UseG1GC', '-jar', 'server.jar', 'nogui' `
+        -ArgumentList '-Xms1G', '-Xmx2G', '-XX:+UseG1GC', '-jar', $jarAbs, 'nogui' `
         -WorkingDirectory $srvDir `
         -RedirectStandardOutput $srvOut `
         -RedirectStandardError (Join-Path $logDir 'server-console.err.log') `

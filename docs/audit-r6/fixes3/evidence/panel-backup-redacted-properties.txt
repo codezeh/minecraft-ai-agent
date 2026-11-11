@@ -1,0 +1,8 @@
+--- packed server.properties (selected lines) ---
+enable-rcon=true
+level-name=world
+rcon.password=
+rcon.port=25575
+server-port=25565
+white-list=true
+--- occurrences of the test password: 0

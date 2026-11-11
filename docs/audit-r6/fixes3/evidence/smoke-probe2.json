@@ -1,0 +1,252 @@
+{
+  "at": "2026-11-11T15:52:32.444Z",
+  "results": [
+    {
+      "id": "#66-f",
+      "item": "错 token + 默认 transports + 自动重连，4s 内 connect_error 次数",
+      "request": "socket.io-client（默认 polling→ws）reconnection:true 4s",
+      "response": {
+        "count": 1,
+        "code": "AUTH_REQUIRED"
+      },
+      "pass": true,
+      "note": "实测客户端在 AUTH_REQUIRED 后**自己就停了**（1 次），没有 0.5~3s 的无限重连风暴；出厂前端另外显式 pauseReconnect()。"
+    },
+    {
+      "id": "#68-a",
+      "item": "board:add 建单（skill=collect, args=\"block=oak_log count=1\"）",
+      "request": "emit('board:add',{skill:'collect',args:'block=oak_log count=1'},cb)",
+      "response": {
+        "acked": true,
+        "payload": {
+          "ok": true,
+          "id": "j_20261111_0001_rq5",
+          "job": {
+            "id": "j_20261111_0001_rq5",
+            "kind": "personal",
+            "parentId": null,
+            "title": null,
+            "skill": "collect",
+            "args": {
+              "count": 1,
+              "radius": 48,
+              "block": "oak_log"
+            },
+            "why": null,
+            "priority": 5,
+            "source": null,
+            "assignee": null,
+            "requires": null,
+            "claims": null,
+            "state": "ready",
+            "attempts": 0,
+            "maxAttempts": 3,
+            "lease": {
+              "owner": null,
+              "until": null
+            },
+            "progress": null,
+            "checkpoint": null,
+            "result": null,
+            "interrupted": null,
+            "notBefore": null,
+            "repeat": null,
+            "dependsOn": null,
+            "createdAt": 1794412352001,
+            "updatedAt": 1794412352001
+          }
+        },
+        "ms": 7
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#68-b",
+      "item": "board:list 能看到新单",
+      "request": "emit('board:list',{scope:'all',limit:50},cb)",
+      "response": {
+        "ok": true,
+        "count": 1,
+        "hasJob": true,
+        "job": {
+          "id": "j_20261111_0001_rq5",
+          "kind": "personal",
+          "parentId": null,
+          "title": null,
+          "skill": "collect",
+          "args": {
+            "count": 1,
+            "radius": 48,
+            "block": "oak_log"
+          },
+          "why": null,
+          "priority": 5,
+          "source": null,
+          "assignee": null,
+          "requires": null,
+          "claims": null,
+          "state": "ready",
+          "attempts": 0,
+          "maxAttempts": 3,
+          "lease": {
+            "owner": null,
+            "until": null
+          },
+          "progress": null,
+          "checkpoint": null,
+          "result": null,
+          "interrupted": null,
+          "notBefore": null,
+          "repeat": null,
+          "dependsOn": null,
+          "createdAt": 1794412352001,
+          "updatedAt": 1794412352001
+        }
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#68-c",
+      "item": "board:list openOnly 过滤（新单未终结 ⇒ 应在列表里）",
+      "request": "emit('board:list',{scope:'all',openOnly:true,limit:50},cb)",
+      "response": {
+        "ok": true,
+        "count": 1,
+        "hasJob": true
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#68-d",
+      "item": "board:set-state 取消单（cancel）",
+      "request": "emit('board:set-state',{id:'j_20261111_0001_rq5',state:'cancelled',bot:'smokeA'},cb)",
+      "response": {
+        "acked": true,
+        "payload": {
+          "ok": true,
+          "job": {
+            "id": "j_20261111_0001_rq5",
+            "kind": "personal",
+            "parentId": null,
+            "title": null,
+            "skill": "collect",
+            "args": {
+              "count": 1,
+              "radius": 48,
+              "block": "oak_log"
+            },
+            "why": null,
+            "priority": 5,
+            "source": null,
+            "assignee": null,
+            "requires": null,
+            "claims": null,
+            "state": "cancelled",
+            "attempts": 0,
+            "maxAttempts": 3,
+            "lease": {
+              "owner": null,
+              "until": null
+            },
+            "progress": null,
+            "checkpoint": null,
+            "result": null,
+            "interrupted": null,
+            "notBefore": null,
+            "repeat": null,
+            "dependsOn": null,
+            "createdAt": 1794412352001,
+            "updatedAt": 1794412352009
+          }
+        },
+        "ms": 6
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#68-e",
+      "item": "取消后 list 里该单状态为 cancelled",
+      "request": "emit('board:list',{scope:'all',limit:50},cb)",
+      "response": {
+        "state": "cancelled",
+        "job": {
+          "id": "j_20261111_0001_rq5",
+          "state": "cancelled",
+          "skill": "collect"
+        }
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#68-f",
+      "item": "取消后 openOnly 里不再有该单",
+      "request": "emit('board:list',{scope:'all',openOnly:true,limit:50},cb)",
+      "response": {
+        "count": 0,
+        "stillThere": false
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#68-g",
+      "item": "board:list limit 越界 → 明确拒绝（TOO_MUCH）",
+      "request": "emit('board:list',{scope:'all',limit:9999},cb)",
+      "response": {
+        "acked": true,
+        "payload": {
+          "ok": false,
+          "code": "TOO_MUCH",
+          "reason": "limit 必须是 1..500 的整数（收到 9999）"
+        },
+        "ms": 0
+      },
+      "pass": true,
+      "note": ""
+    },
+    {
+      "id": "#30-c",
+      "item": "观察：并发 /unlock ×6 时 HTTP 层能否打到 429 VAULT_BUSY",
+      "request": "POST /api/vault/unlock ×6 并发（错口令）",
+      "response": [
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 80
+        },
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 122
+        },
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 176
+        },
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 277
+        },
+        {
+          "status": 401,
+          "error": "VAULT_BAD_PASSPHRASE",
+          "ms": 349
+        },
+        {
+          "status": 429,
+          "error": "VAULT_TOO_MANY_ATTEMPTS",
+          "ms": 417
+        }
+      ],
+      "pass": true,
+      "note": "**闸没被触发**：口令派生用的是 scryptSync（secrets_vault.js:234）⇒ 同步阻塞事件循环 ⇒ 同一进程里同时「在算」的解锁永远 ≤1，闸的 max=2 在 HTTP 层不可达。并发请求被**串行化**（耗时单调递增 66/128/189/254ms），所以 CPU 仍不会被并发打满；但\"超额立刻 429\"这条只在离线单测里成立（tools/control_plane_r6_unit.mjs A1/A1b/A1c）。"
+    }
+  ]
+}
