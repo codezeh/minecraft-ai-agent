@@ -130,3 +130,37 @@ export function createUnlockLimiter({
         },
     };
 }
+
+/**
+ * ★ R6 #30：**并发闸**（信号量），给"昂贵的同步算力"用（这里是 scrypt）。
+ * `tryEnter()` 不排队（拿不到返回 null ⇒ 调用方回 429），release 幂等；只管"同时在算几个"。
+ * 为什么需要：/unlock 刻意"先校验口令再看限流"，代价就是没有并发上限（CPU 可被打满）。
+ * @param {{max?:number}} [opts]
+ */
+export function createConcurrencyGate({ max = 2 } = {}) {
+    const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : 2;
+    let active = 0;
+    let peak = 0;
+    return {
+        max: limit,
+        /** 当前在跑的数量（诊断/测试用）。 */
+        get active() { return active; },
+        /** 历史峰值（诊断用：真被压过没有）。 */
+        get peak() { return peak; },
+        /**
+         * 尝试进入。成功返回 release()，失败返回 null（**不阻塞、不排队**）。
+         * @returns {null|(()=>void)}
+         */
+        tryEnter() {
+            if (active >= limit) return null;
+            active += 1;
+            if (active > peak) peak = active;
+            let released = false;
+            return () => {
+                if (released) return;      // 幂等：调用方在 finally 里重复调用也只减一次
+                released = true;
+                active -= 1;
+            };
+        },
+    };
+}

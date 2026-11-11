@@ -32,6 +32,7 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 import { readFileSync, writeFileSync, existsSync, copyFileSync, renameSync, mkdirSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveIdentityPolicy, readServerOnlineMode } from './offline_identity_risk.js';
@@ -55,6 +56,10 @@ export const CONFIG_ERROR = Object.freeze({
     WRITE_FAILED: 'CONFIG_WRITE_FAILED',
     SETTINGS_INVALID: 'CONFIG_SETTINGS_INVALID',
     UNKNOWN_KEY: 'CONFIG_UNKNOWN_KEY',
+    // ★ R6 #28：并发写冲突（HTTP 层映射 409）。**不是**失败——是"你读的那份已经旧了，重读再改"。
+    CONFLICT: 'CONFIG_CONFLICT',
+    // ★ R6 #29：危险开关需要二次确认（HTTP 层映射 409，与"值非法"的 400 区分开）。
+    CONFIRM_REQUIRED: 'CONFIG_CONFIRM_REQUIRED',
 });
 
 export class ConfigError extends Error {
@@ -136,6 +141,10 @@ const SCHEMA = {
         keep: { kind: 'int', min: 1, max: 30 },
     },
     runtime: {
+        /**
+         * ★ R6 #29：危险开关，从 false 改成 true 需要 `confirm: true`（见 updateConfigGroup）。
+         * 原来 socket 那扇门封死、HTTP 这扇门只 warn 一行就写盘 ⇒ 同一个开关两个答案。
+         */
         allow_insecure_coding: { kind: 'bool' },
         allow_vision: { kind: 'bool' },
         code_timeout_mins: { kind: 'int', min: 1, max: 120 },
@@ -296,10 +305,33 @@ function tailBackupLog(n = 5) {
 
 /* ───────────────────────── 写 ───────────────────────── */
 
+/**
+ * ★ R6 #28：备份名到**毫秒 + 序号**。原来只到秒 ⇒ 同秒两次写会覆盖同一份备份。
+ */
+let backupSeq = 0;
 function stamp() {
     const d = new Date();
     const p = (n, w = 2) => String(n).padStart(w, '0');
-    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+    backupSeq = (backupSeq + 1) % 1000;
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
+        + `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${p(d.getMilliseconds(), 3)}`
+        + `-${p(backupSeq, 3)}`;
+}
+
+/** 内容哈希（CAS 用）。文件不存在 → null（"应当不存在"也是一种可比的快照）。 */
+function hashOfText(text) {
+    if (text === null || text === undefined) return null;
+    return createHash('sha256').update(String(text), 'utf8').digest('hex');
+}
+
+/** 读一份文件的**原文**（不存在返回 null；读不动就抛，别把"读不到"当"内容为空"）。 */
+function readTextOrNull(file) {
+    try {
+        return readFileSync(file, 'utf8');
+    } catch (e) {
+        if (e?.code === 'ENOENT') return null;
+        throw e;
+    }
 }
 
 /**
@@ -310,18 +342,38 @@ function stamp() {
  * 但从"逐字节对比"的角度等于**整文件被重写**（实测发现：改一个值，sha256 全变）。
  * 对备份/审计/`git diff --stat` 都是噪音，也会让"定向改写"这句话变成空话。
  */
-function writeJsonFile(file, obj) {
+function writeJsonFile(file, obj, expectedHash = undefined) {
     let eol = '\n';
     try {
         const before = readFileSync(file, 'utf8');
         if (before.includes('\r\n')) eol = '\r\n';
     } catch { /* 文件不存在就用 LF */ }
     const body = JSON.stringify(obj, null, 2).replace(/\n/g, eol) + eol;
-    return backupThenWrite(file, body);
+    return backupThenWrite(file, body, expectedHash);
 }
 
-/** 先备份再写（备份失败就**不写**：宁可保存失败，也不让现场没有退路）。 */
-function backupThenWrite(file, content) {
+/**
+ * 先备份再写（备份失败就**不写**）。★ R6 #28：`expectedHash` = 读到的快照哈希，
+ * 写前比对，不一致就抛 CONFLICT（HTTP 409）让前端重读重试（原来会静默丢别人的改动）。
+ *
+ * @param {string} file
+ * @param {string} content
+ * @param {string|null|undefined} expectedHash `null` = 期待文件不存在；`undefined` = 不做 CAS
+ */
+function backupThenWrite(file, content, expectedHash = undefined) {
+    if (expectedHash !== undefined) {
+        let current;
+        try {
+            current = readTextOrNull(file);
+        } catch (e) {
+            throw new ConfigError(CONFIG_ERROR.WRITE_FAILED, `写前无法读取 ${file}：${e.message}`);
+        }
+        const currentHash = hashOfText(current);
+        if (currentHash !== expectedHash) {
+            throw new ConfigError(CONFIG_ERROR.CONFLICT,
+                `${file} 在你读取之后已被另一处修改（写前一致性校验失败），已放弃本次写入。请重新读取配置后再改一次。`);
+        }
+    }
     const bak = `${file}.bak-${stamp()}`;
     try {
         if (existsSync(file)) copyFileSync(file, bak);
@@ -442,12 +494,15 @@ async function verifySettingsLoadable() {
  *
  * @param {'network'|'identity'|'backup'|'runtime'} group
  * @param {object} patch 只包含要改的键（部分更新）
- * @param {{log?: {info:Function, warn:Function}}} [io]
+ * @param {{log?: {info:Function, warn:Function}, confirm?: boolean}} [io]
+ *   `confirm: true` 是**危险开关的二次确认**（目前只有 runtime.allow_insecure_coding
+ *   从 false 改成 true 需要它）。它**不能**放进 patch —— patch 的每个键都要过 SCHEMA 校验。
  * @returns {Promise<{ok:true, group:string, applied:object, backup:string|null, values:object}>}
  */
 export async function updateConfigGroup(group, patch, io = {}) {
     const log = io.log ?? console.log;
     const warn = io.warn ?? console.warn;
+    const confirmed = io.confirm === true;
 
     if (!GROUP_META[group]) {
         throw new ConfigError(CONFIG_ERROR.BAD_GROUP, `未知配置组：${group}（只有 ${Object.keys(GROUP_META).join(' / ')}）`);
@@ -474,6 +529,8 @@ export async function updateConfigGroup(group, patch, io = {}) {
 
     if (group === 'network' || group === 'backup') {
         const file = group === 'network' ? NETWORK_PATH : BACKUP_PATH;
+        // ★ R6 #28：先把"我读到的那份原文"抓成快照（哈希），写前用它做 CAS。
+        const beforeRaw = readTextOrNull(file);
         const obj = readJson(file, group === 'network' ? { servers: { main: {} } } : {});
         if (group === 'network') {
             if (!obj.servers) obj.servers = {};
@@ -482,7 +539,7 @@ export async function updateConfigGroup(group, patch, io = {}) {
         } else {
             Object.assign(obj, applied);
         }
-        const backup = writeJsonFile(file, obj);
+        const backup = writeJsonFile(file, obj, hashOfText(beforeRaw));
         log(`[config] 已写入 ${file}（备份 ${backup}）`);
         return { ok: true, group, applied, backup, values: groupValues(group) };
     }
@@ -491,16 +548,30 @@ export async function updateConfigGroup(group, patch, io = {}) {
     const before = readSettingsText();
     const after = patchSettingsText(before, group, applied);
     const oldInsecure = readScalar(before, 'allow_insecure_coding');
-    const backup = backupThenWrite(SETTINGS_PATH, after);
+    // ★ R6 #29：危险开关的**二次确认**（见上面对 SCHEMA.runtime.allow_insecure_coding 的说明）。
+    if (group === 'runtime' && applied.allow_insecure_coding === true && oldInsecure !== true && !confirmed) {
+        throw new ConfigError(CONFIG_ERROR.CONFIRM_REQUIRED,
+            'allow_insecure_coding 是"允许模型在本机写并执行代码（= 本机 root）"。开启它需要二次确认：'
+            + '请在同一个请求体里加 "confirm": true 再提交一次。');
+    }
+    const backup = backupThenWrite(SETTINGS_PATH, after, hashOfText(before));
     try {
         await verifySettingsLoadable();
     } catch (e) {
-        // 回滚：把备份原样写回，绝不把坏文件留在现场
-        try {
-            writeFileSync(SETTINGS_PATH, before, 'utf8');
-            warn(`[config] settings.js 写后校验失败，已回滚到改动前内容（备份 ${backup}）：${e?.message ?? e}`);
-        } catch (re) {
-            warn(`[config] 回滚失败！请用 ${backup} 手工恢复：${re?.message ?? re}`);
+        // ★ R6 #28：回滚**只在"当前内容仍是我们写的那份"时**执行；否则会把别人并发写入的
+        //   改动一起抹掉（原实现无条件写回 before）。
+        let currentRaw = null;
+        try { currentRaw = readTextOrNull(SETTINGS_PATH); } catch { currentRaw = null; }
+        if (hashOfText(currentRaw) === hashOfText(after)) {
+            try {
+                writeFileSync(SETTINGS_PATH, before, 'utf8');
+                warn(`[config] settings.js 写后校验失败，已回滚到改动前内容（备份 ${backup}）：${e?.message ?? e}`);
+            } catch (re) {
+                warn(`[config] 回滚失败！请用 ${backup} 手工恢复：${re?.message ?? re}`);
+            }
+        } else {
+            warn(`[config] settings.js 写后校验失败，但**没有回滚**：当前内容已不是本次写入的结果`
+                + `（另一处刚刚改过它）。请用备份 ${backup} 核对。原因：${e?.message ?? e}`);
         }
         throw new ConfigError(CONFIG_ERROR.SETTINGS_INVALID, `settings.js 改写后无法加载：${e?.message ?? e}`);
     }

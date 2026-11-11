@@ -15,6 +15,24 @@
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
+/**
+ * ★ R6 #23：`MIND_SERVER_ALLOWED_HOSTS`（逗号分隔）显式加开 Host 白名单。
+ * 原来没有这个开关 ⇒ MIND_SERVER_HOST=0.0.0.0 时 HTTP 能开、socket.io 握手永远 forbidden。
+ * 安全默认不变：不设就只有本机名；它只加"Host 头允许出现哪些名字"，token/Origin 判据照旧。
+ * 详见 docs/audit-r6/fixes2/control.md §#23。
+ * @param {object} [env] 便于单测注入（默认 process.env）
+ * @returns {Set<string>}
+ */
+export function configuredHosts(env = process.env) {
+    const set = new Set(LOCAL_HOSTS);
+    const raw = String(env?.MIND_SERVER_ALLOWED_HOSTS || '');
+    for (const part of raw.split(',')) {
+        const h = part.trim().toLowerCase();
+        if (h) set.add(h);
+    }
+    return set;
+}
+
 /** "localhost:8080" / "[::1]:8080" → 小写主机名（IPv6 保留方括号）。 */
 function hostOfHeader(host) {
     const m = /^(\[[^\]]*\]|[^:]*)/.exec(String(host || '').trim().toLowerCase());
@@ -31,12 +49,12 @@ function hostOfOrigin(origin) {
 }
 
 /** 这个握手请求是不是来自本机（Host 和 Origin 都看）。 */
-export function isLocalRequest(req) {
+export function isLocalRequest(req, hosts = configuredHosts()) {
     const headers = req?.headers || {};
-    if (!LOCAL_HOSTS.has(hostOfHeader(headers.host))) return false;
+    if (!hosts.has(hostOfHeader(headers.host))) return false;
     const origin = headers.origin;
     if (origin === undefined) return true;
-    return LOCAL_HOSTS.has(hostOfOrigin(origin));
+    return hosts.has(hostOfOrigin(origin));
 }
 
 /** 给 socket.io 的 `allowRequest` 用。 */

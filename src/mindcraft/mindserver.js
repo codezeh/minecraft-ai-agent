@@ -27,6 +27,8 @@ import {
     readServerOnlineMode, resolveIdentityPolicy,
 } from './offline_identity_risk.js';
 import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync, unlinkSync } from 'fs';
+// ★ R6 #21：身份存储的写前 CAS 要算内容哈希（见 mutateStoreFile）
+import { createHash } from 'crypto';
 // t20-C（R5-收口）：token 文件落盘后要收口 NTFS DACL。只用 execFile(argv)，**不用 shell**。
 import { execFile } from 'child_process';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
@@ -50,7 +52,7 @@ import {
     ConfigError, CONFIG_ERROR, GROUP_META, readConfig, updateConfigGroup,
 } from './config_center.js';
 // T31 / W-2：/unlock 的**按来源分桶**失败限流（抽成模块才能离线证明"正确口令不被锁死"）
-import { createUnlockLimiter, addressKeyOf } from './unlock_limiter.js';
+import { createUnlockLimiter, addressKeyOf, createConcurrencyGate } from './unlock_limiter.js';
 // R4 t20：启动告警要读 identity_binding 的真实配置（离线模式那条限制必须说出来）
 import rootSettings from '../../settings.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -443,7 +445,8 @@ export function registerAgent(settings, viewer_port) {
 }
 
 export function logoutAgent(agentName) {
-    if (agent_connections[agentName]) {
+    // ★ R6 #25：原型链键（`constructor`）也是真值 —— 只认自有键。
+    if (Object.prototype.hasOwnProperty.call(agent_connections, agentName)) {
         agent_connections[agentName].in_game = false;
         agentsStatusUpdate();
     }
@@ -478,6 +481,95 @@ function agentNameOfSocket(socket) {
     return null;
 }
 
+/**
+ * ★ R6 #72：注册项是不是"已经没有进程、也没有通道"的残留（子进程自杀只删 agent_processes）。
+ * 判据全取服务端状态（通道 + 进程表），不信客户端。
+ */
+function isStaleAgentConn(name) {
+    const conn = agent_connections[name];
+    if (!conn) return false;
+    if (conn.socket) return false;                              // 还有通道 ⇒ 活的
+    try {
+        if (mindcraft.getAgentProcess?.(name)) return false;    // 进程表里还有 ⇒ 只是没连上
+    } catch { /* 取不到就当"没有进程" */ }
+    return true;
+}
+
+/**
+ * ★ R6 #21：身份码/身份表是**两个进程都会写**的文件（面板签发 vs agent 核销），
+ * 裸"读-算-写"会静默抹掉别人的改动。这里做**写前 CAS**（比对内容哈希）+ 写后复核。
+ * 不是跨进程锁；根治（单一写者）见 docs/audit-r6/fixes2/control.md 残留。
+ */
+function fileHashOf(file) {
+    try {
+        return createHash('sha256').update(readFileSync(file, 'utf8'), 'utf8').digest('hex');
+    } catch (e) {
+        if (e?.code === 'ENOENT') return null;
+        return `unreadable:${e?.code ?? e?.message ?? e}`;
+    }
+}
+
+/**
+ * 带写前 CAS 的"读-改-写"。
+ *
+ * @param {string} file
+ * @param {(store:object)=>({store:object, result:any}|null)} mutate 返回 null = 无事可做（幂等）
+ * @param {{attempts?:number, what?:string, verify?:Function}} [opts]
+ * @returns {{ok:boolean, result:any, reason?:string, skipped?:boolean, attempts?:number}}
+ */
+function mutateStoreFile(file, mutate, { attempts = 4, what = '身份存储', verify = null } = {}) {
+    if (typeof mutate !== 'function') return { ok: false, reason: 'no-mutator', result: null };
+    for (let i = 0; i < attempts; i += 1) {
+        const before = fileHashOf(file);
+        let out;
+        try {
+            out = mutate(readStore(file).store);      // 坏文件按空表（与 identity_store 同一口径）
+        } catch (e) {
+            return { ok: false, reason: String(e?.message ?? e), result: null };
+        }
+        if (!out) return { ok: true, skipped: true, result: null };
+        if (fileHashOf(file) !== before) {
+            console.warn(`[mindserver] ${what} 在本次读-改-写期间被另一个进程改过（第 ${i + 1}/${attempts} 次），重读重算`);
+            continue;
+        }
+        const wrote = writeStore(file, out.store);
+        if (!wrote.ok) return { ok: false, reason: wrote.reason, result: null };
+        if (typeof verify === 'function') {
+            let landed = false;
+            try { landed = verify(readStore(file).store, out.result) === true; } catch { landed = false; }
+            if (!landed) {
+                console.warn(`[mindserver] ${what} 写后复核未通过（第 ${i + 1}/${attempts} 次），重读重算`);
+                continue;
+            }
+        }
+        return { ok: true, result: out.result, attempts: i + 1 };
+    }
+    return { ok: false, reason: 'conflict', result: null };
+}
+
+/**
+ * ★ R6 #33 / ADR §10.2-5：限流桶的**主体键**。原来按远端地址（全本机 ⇒ 单一全局桶），
+ * 上一轮只到 role；现在 agent 连接按服务端判定的 agent 名，未绑定时用凭据指纹。
+ */
+function rateSubjectOf(socket) {
+    const role = socketRole(socket) ?? 'unknown';
+    if (role === ROLE_AGENT) {
+        const name = socket?.data?.agentName;
+        if (typeof name === 'string' && name) return `agent:${name}`;
+        const cred = tokenFromSocket(socket);
+        return cred ? `agent#${cred.slice(0, 8)}` : 'agent:unbound';
+    }
+    return role;
+}
+
+/**
+ * 桶键 `label@主体@来源地址`。导出只为让离线单测能直接断言"按 agent 分桶"（§10.2-5）。
+ */
+export function rateBucketKeyOf(socket, label) {
+    const addr = String(socket?.handshake?.address || socket?.conn?.remoteAddress || 'unknown');
+    return `${label}@${rateSubjectOf(socket)}@${addr}`;
+}
+
 /** 任务模式下是否已经收过一次尾（幂等：同一个 task 只允许触发一次）。 */
 let taskModeShutdownFired = false;
 
@@ -501,14 +593,10 @@ const STALE_MS = 60000;
 function takeToken(socket, label, capacity, windowMs) {
     const now = Date.now();
     const addr = String(socket?.handshake?.address || socket?.conn?.remoteAddress || 'unknown');
-    // ★ R6 #2：桶的 key 里带上**握手时定下的角色**。
-    //   原来只按远端地址分桶，而本仓默认"全本机部署"（面板与所有 agent 同地址）
-    //   ⇒ 面板和所有 agent 挤在同一个桶里：一只话多的 agent 就能把面板自己的配额吃光。
-    //   角色是服务端判的（凭据种类），客户端改不了；这样"谁在刷"至少按主体分开计。
-    //   （按 agent 名再细分需要额外状态，属报告 #33，本轮不做 —— 见 control.md 残留。）
-    const role = socketRole(socket) ?? 'unknown';
-    const key = `${label}@${role}@${addr}`;
-    // ★ R3-2（终审实测）：这里原来是 `if (size > 512) { 删 >60s }` —— 那是**清理触发条件**，
+    // ★ R6 #33 / ADR §10.2-5：桶键 = label@**主体**@来源地址（主体见 rateSubjectOf）。
+    //   上一轮只到 role（所有 agent 共用一个桶）；现在细到"哪一个 agent"。
+    const subject = rateSubjectOf(socket);
+    const key = rateBucketKeyOf(socket, label);    // ★ R3-2（终审实测）：这里原来是 `if (size > 512) { 删 >60s }` —— 那是**清理触发条件**，
     // 不是上限：513 个新鲜 key 时一个都删不掉，之后每条消息全表扫一遍。名不副实。
     // 现在给它**真上限**：新 key 且已满 ⇒ 先清陈旧项；仍满 ⇒ 淘汰**最旧**的那一条（LRU-ish）。
     // 只在"要插入新 key"时才做，已有 key 的路径不受影响（不引入每条消息的开销）。
@@ -526,7 +614,7 @@ function takeToken(socket, label, capacity, windowMs) {
     rl.tokens = Math.min(capacity, rl.tokens + ((now - rl.ts) / windowMs) * capacity);
     rl.ts = now;
     if (rl.tokens < 1) {
-        console.warn(`[mindserver] 拒绝 ${label}：触发限流（${capacity} 次/${windowMs}ms，来源 ${addr}）`);
+        console.warn(`[mindserver] 拒绝 ${label}：触发限流（${capacity} 次/${windowMs}ms，主体 ${subject}，来源 ${addr}）`);
         return false;
     }
     rl.tokens -= 1;
@@ -575,6 +663,12 @@ function attachVaultApi(app) {
      */
     const unlockLimiter = createUnlockLimiter({ windowMs: 60_000, maxFails: 5 });
     const UNLOCK_WINDOW_MS = 60_000;   // 只用于文案
+    /**
+     * ★ R6 #30：scrypt 并发闸（同时最多 2 个）。限流刻意"先校验口令再看限流"，
+     * 代价是没有并发上限 ⇒ 并发 /unlock 能把 CPU 打满（症状伪装成"任务板坏了"）。
+     * 超出的立刻 429（可重试、不排队）；只管"同时在算几个"。
+     */
+    const unlockScryptGate = createConcurrencyGate({ max: 2 });
 
     /** 错误码 → HTTP 状态码（**唯一**一张表，别在路由里散着写 if）。 */
     const STATUS_OF = {
@@ -631,7 +725,8 @@ function attachVaultApi(app) {
     });
 
     // ── 解锁 / 上锁 ─────────────────────────────────────────────────────
-    router.post('/unlock', (req, res) => {
+    /** 真正的解锁逻辑（并发闸在外层：见下面的 `/unlock` 路由）。 */
+    function handleUnlock(req, res) {
         // ★ T31 / W-2：**先校验口令，再看限流**。
         //   顺序颠倒就是原来那个 WEAK：攻击者用错口令把额度耗尽后，管理员的**正确口令**
         //   也会被 429 挡在门外（长期 DoS）。限流只该决定"失败怎么回"，不该否决成功。
@@ -671,6 +766,24 @@ function attachVaultApi(app) {
             }
         }
         fail(res, error);
+    }
+
+    router.post('/unlock', (req, res) => {
+        // ★ R6 #30：并发闸在**最前面** —— 连一次 scrypt 都不许排进队列。
+        const releaseScrypt = unlockScryptGate.tryEnter();
+        if (!releaseScrypt) {
+            console.warn('[vault] 拒绝解锁：同时在算的解锁请求已达上限（2）');
+            res.status(429).json({
+                error: 'VAULT_BUSY',
+                message: '同时解锁的请求过多（最多 2 个在算），请稍后重试（正确口令任何时候都能解锁）',
+            });
+            return;
+        }
+        try {
+            handleUnlock(req, res);
+        } finally {
+            releaseScrypt();
+        }
     });
 
     router.post('/lock', (req, res) => {
@@ -782,6 +895,10 @@ function attachConfigApi(app) {
         [CONFIG_ERROR.BAD_JSON]: 500,
         [CONFIG_ERROR.WRITE_FAILED]: 500,
         [CONFIG_ERROR.SETTINGS_INVALID]: 500,
+        // ★ R6 #28 / #29：两者都是"请求本身没错，但状态不允许现在这么做"，用 409 让前端区分
+        //   "重读后重试" 与 "必须显式确认"（400 是值非法，别混）。
+        [CONFIG_ERROR.CONFLICT]: 409,
+        [CONFIG_ERROR.CONFIRM_REQUIRED]: 409,
     };
 
     function fail(res, e) {
@@ -867,7 +984,17 @@ function attachConfigApi(app) {
         }
         // updateConfigGroup 是 async（写完要 import 验一次）；浮空 Promise 会被
         // lint_hard 的 no-floating-promise 抓到，所以这里显式 await + catch。
-        updateConfigGroup(group, req.body, { log: console.log, warn: console.warn })
+        // ★ R6 #29：`confirm` 与 patch **分开传** —— patch 的每个键都要过 SCHEMA 校验，
+        //   而 `confirm` 是个协议层的确认标记，不是配置项。
+        const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body))
+            ? { ...req.body }
+            : req.body;
+        let confirm = false;
+        if (body && typeof body === 'object' && !Array.isArray(body)) {
+            confirm = body.confirm === true;
+            delete body.confirm;
+        }
+        updateConfigGroup(group, body, { log: console.log, warn: console.warn, confirm })
             .then((r) => {
                 res.json({ ok: true, group: r.group, applied: r.applied, backup: r.backup, values: r.values });
             })
@@ -1415,6 +1542,7 @@ export function createMindServer(host_public = false, port = 8080) {
                 // ★ t27：面板要能显示"当前是离线还是正版 + owner 策略"，
                 //   否则用户不知道自己处在哪种状态（也就无从判断要不要去开正版验证）。
                 let modeInfo = null;
+                let modeError = null;
                 try {
                     const online = readServerOnlineMode();
                     const cfg = (rootSettings?.identity_binding && typeof rootSettings.identity_binding === 'object')
@@ -1432,11 +1560,21 @@ export function createMindServer(host_public = false, port = 8080) {
                         sessionMinutes: pol.sessionMinutes,
                         reason: pol.reason,
                     };
-                } catch { /* 面板信息拿不到不影响绑定本身 */ }
+                } catch (e) {
+                    // ★ R6 #74：原来裸 catch {} ⇒ 面板只看到 mode:null，分不清"读不到"与"正常"。
+                    //   现在把原因带回（新增字段 modeError，既有字段语义不变）。
+                    modeError = String(e?.message ?? e).slice(0, 160);
+                    console.warn(`[mindserver] identity-status：读身份策略失败（面板会显示 unknown）：${modeError}`);
+                }
                 cb({
                     ok: true,
                     agent: name,
                     mode: modeInfo,
+                    modeError,
+                    // t2 移交（R6 #69）：身份表损坏时 t2 会改名留证（readStore 带回 corrupt/backup）。
+                    // 透出去，面板才能说"身份表损坏、已留证 <路径>"，而不是只看到"一个绑定都没有"。
+                    corrupt: idRead.corrupt === true,
+                    backup: idRead.backup ?? null,
                     // 码本身不在这里回（它只出现在"刚生成"那一次的回执里）——
                     // 免得任何持 token 的客户端随手一拉就能捡走别人还没用的码。
                     pendingCodes: st.codes.map((c) => ({ expiresAt: c.expiresAt, sessionId: c.sessionId })),
@@ -1459,14 +1597,20 @@ export function createMindServer(host_public = false, port = 8080) {
             try {
                 const code = makeCode();
                 const file = codesFileOf(name);
-                const read = readStore(file);
-                const added = addCode(read.store, {
-                    code, agent: name, sessionId: socket.id ?? null, ttlMs: DEFAULT_CODE_TTL_MS,
+                // ★ R6 #21：写前 CAS（见 mutateStoreFile 的说明）—— 面板签发与游戏内核销
+                //   是两个进程，裸的"读-算-写"会让刚签发的码被抹掉、或让已核销的码复活。
+                const added = mutateStoreFile(file, (store) => {
+                    const r = addCode(store, {
+                        code, agent: name, sessionId: socket.id ?? null, ttlMs: DEFAULT_CODE_TTL_MS,
+                    });
+                    return { store: r.store, result: r.record };
+                }, {
+                    what: `${name} 的绑定码表`,
+                    verify: (store) => store.codes.some((c) => c.code === code),
                 });
-                const wrote = writeStore(file, added.store);
-                if (!wrote.ok) { cb({ ok: false, reason: `写码失败：${wrote.reason}` }); return; }
+                if (!added.ok) { cb({ ok: false, reason: `写码失败：${added.reason}` }); return; }
                 console.log(`[mindserver] 为 ${name} 生成身份绑定码（5 分钟有效，单次使用，会话 ${socket.id ?? '-'}）`);
-                cb({ ok: true, agent: name, code, expiresAt: added.record.expiresAt, ttlMs: DEFAULT_CODE_TTL_MS });
+                cb({ ok: true, agent: name, code, expiresAt: added.result.expiresAt, ttlMs: DEFAULT_CODE_TTL_MS });
             } catch (e) {
                 cb({ ok: false, reason: String(e?.message ?? e) });
             }
@@ -1484,15 +1628,17 @@ export function createMindServer(host_public = false, port = 8080) {
             if (!takeToken(socket, 'identity-unbind', 10, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
             try {
                 const file = identityFileOf(name);
-                const read = readStore(file);
                 const uuid = typeof who?.uuid === 'string' ? who.uuid : null;
                 const person = typeof who?.name === 'string' ? who.name : null;
                 if (!uuid && !person) { cb({ ok: false, reason: 'need_uuid_or_name' }); return; }
-                const out = revokeBinding(read.store, { uuid, name: person });
-                const wrote = writeStore(file, out.store);
-                if (!wrote.ok) { cb({ ok: false, reason: `写绑定表失败：${wrote.reason}` }); return; }
-                console.log(`[mindserver] 已解绑 ${name} 的玩家 ${person ?? uuid}（移除 ${out.removed} 条）`);
-                cb({ ok: true, agent: name, removed: out.removed });
+                // ★ R6 #21：写前 CAS —— 绑定表同样与 agent 侧的读写并发。
+                const out = mutateStoreFile(file, (store) => {
+                    const r = revokeBinding(store, { uuid, name: person });
+                    return { store: r.store, result: r.removed };
+                }, { what: `${name} 的身份表` });
+                if (!out.ok) { cb({ ok: false, reason: `写绑定表失败：${out.reason}` }); return; }
+                console.log(`[mindserver] 已解绑 ${name} 的玩家 ${person ?? uuid}（移除 ${out.result} 条）`);
+                cb({ ok: true, agent: name, removed: out.result });
             } catch (e) {
                 cb({ ok: false, reason: String(e?.message ?? e) });
             }
@@ -1611,8 +1757,18 @@ export function createMindServer(host_public = false, port = 8080) {
                     return;
                 }
                 if (settings.profile.name in agent_connections) {
-                    ack({ success: false, error: 'Agent already exists' });
-                    return;
+                    // ★ R6 #72：**残留条目**（进程已自己退出、通道也断了）不该挡住重建。
+                    //   原来只在 destroy-agent 成功时删表，而子进程自杀走的是 unregister → destroyAgent
+                    //   （mindcraft 只管 agent_processes）⇒ agent_connections 里留下**永久**条目：
+                    //   面板显示"还在"、同名 create-agent 被永久拒（Agent already exists）。
+                    if (isStaleAgentConn(settings.profile.name)) {
+                        console.warn(`[mindserver] create-agent：${settings.profile.name} 的注册项是残留`
+                            + '（无进程、无通道），先摘掉再重建');
+                        delete agent_connections[settings.profile.name];
+                    } else {
+                        ack({ success: false, error: 'Agent already exists' });
+                        return;
+                    }
                 }
                 let returned;
                 try {
@@ -1638,12 +1794,31 @@ export function createMindServer(host_public = false, port = 8080) {
             }
         });
 
+        /**
+         * ★ R6 #27 + #25：读设置收口 —— 限流 20/min；agent 连接只能读自己那一条
+         * （身份取服务端判定，未绑定时退回凭据归属）；名字过 knownAgent（原型链键不再是 agent 名）；
+         * ack 永远安全。面板仍可读任意已注册项（设置页的正常路径）。
+         */
         socket.on('get-settings', (agentName, callback) => {
-            if (agent_connections[agentName]) {
-                callback({ settings: agent_connections[agentName].settings });
-            } else {
-                callback({ error: `Agent '${agentName}' not found.` });
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!takeToken(socket, 'get-settings', 20, 60000)) { cb({ error: 'rate_limited' }); return; }
+            const wanted = knownAgent(agentName);
+            if (!wanted) { cb({ error: `Agent '${agentName}' not found.` }); return; }
+            if (socketRole(socket) === ROLE_AGENT) {
+                const owner = socket?.data?.agentName ?? credentialAgent(tokenFromSocket(socket));
+                // ★ T7-1：owner 取不到时要 fail-closed，不能短路成"放行读任意 agent"。
+                if (!owner) {
+                    console.warn('[mindserver] 拒绝 get-settings：agent 连接没有可归属的身份（未绑定也未映射凭据）');
+                    cb({ error: 'identity-unbound' });
+                    return;
+                }
+                if (owner !== wanted) {
+                    console.warn(`[mindserver] 拒绝 get-settings(${wanted})：agent 连接只能读自己的设置（本连接 = ${owner}）`);
+                    cb({ error: 'identity-only' });
+                    return;
+                }
             }
+            cb({ settings: agent_connections[wanted].settings });
         });
 
         /**
@@ -1727,12 +1902,19 @@ export function createMindServer(host_public = false, port = 8080) {
                 if (sid) {
                     for (const name of Object.keys(agent_connections)) {
                         const file = codesFileOf(name);
-                        const read = readStore(file);
-                        if (!read.store.codes.some((c) => c.sessionId === sid)) continue;
-                        const out = revokeSessionCodes(read.store, sid);
-                        if (out.removed > 0) {
-                            writeStore(file, out.store);
-                            console.log(`[mindserver] 面板会话 ${sid} 断开：作废 ${out.removed} 个未核销绑定码（${name}）`);
+                        // ★ R6 #21：写前 CAS + "没有我的码就什么都不写"（幂等）。
+                        //   原来这里是裸的"读 → 判 → 写"，与游戏内核销并发时能把**已核销**的码
+                        //   写回去（复活一次性码）。
+                        const out = mutateStoreFile(file, (store) => {
+                            if (!store.codes.some((c) => c.sessionId === sid)) return null;
+                            const r = revokeSessionCodes(store, sid);
+                            return r.removed > 0 ? { store: r.store, result: r.removed } : null;
+                        }, {
+                            what: `${name} 的绑定码表`,
+                            verify: (store) => !store.codes.some((c) => c.sessionId === sid),
+                        });
+                        if (out.ok && out.result > 0) {
+                            console.log(`[mindserver] 面板会话 ${sid} 断开：作废 ${out.result} 个未核销绑定码（${name}）`);
                         }
                     }
                 }
@@ -1741,14 +1923,37 @@ export function createMindServer(host_public = false, port = 8080) {
             }
         });
 
+        /**
+         * ★ R6 #26：chat-message 补身份校验 —— 只有 agent 身份能发（面板走 send-message）；
+         * 目标过 knownAgent；载荷要形状（message 非空、≤2000）；限流 30/10s。
+         * 原来任何持 token 连接都能向任意 bot 注入"聊天消息"（进 LLM 上下文 = 提示注入）。
+         */
         socket.on('chat-message', (agentName, json) => {
-            // 停掉的 agent socket 为 null，原来直接 .socket.emit 会让 mindserver 崩（同 D25）
-            if (!agent_connections[agentName]?.socket) {
-                console.warn(`Agent ${agentName} tried to send a message but is not logged in`);
+            if (!isAgentIdentity(socket)) {
+                console.warn(`[mindserver] 丢弃伪造的 chat-message：连接不是 agent 身份，声称目标=${JSON.stringify(agentName)}`
+                    + '（面板发玩家消息请用 send-message）');
                 return;
             }
-            console.log(`${curAgentName} sending message to ${agentName}: ${json.message}`);
-            agent_connections[agentName].socket.emit('chat-message', curAgentName, json);
+            if (!takeToken(socket, 'chat-message', 30, 10000)) return;
+            const targetName = knownAgent(agentName);
+            if (!targetName) {
+                console.warn(`[mindserver] 丢弃 chat-message：未知目标 ${JSON.stringify(agentName)}`);
+                return;
+            }
+            const target = agent_connections[targetName];
+            // 停掉的 agent socket 为 null，原来直接 .socket.emit 会让 mindserver 崩（同 D25）
+            if (!target?.socket) {
+                console.warn(`Agent ${targetName} tried to send a message but is not logged in`);
+                return;
+            }
+            const message = json?.message;
+            if (typeof message !== 'string' || !message || message.length > 2000) {
+                console.warn(`[mindserver] 丢弃 chat-message：message 形状非法（${typeof message}`
+                    + `${typeof message === 'string' ? `，长度 ${message.length}` : ''}）`);
+                return;
+            }
+            console.log(`${curAgentName} sending message to ${targetName}: ${message}`);
+            target.socket.emit('chat-message', curAgentName, json);
         });
 
         // 第1条 ②：运行期设置只走白名单。allow_insecure_coding（= 远程开代码执行 = 本机 root）、
@@ -1759,7 +1964,14 @@ export function createMindServer(host_public = false, port = 8080) {
             //   agent 子进程不需要它（它自己的配置走 get-settings 读回），所以只给面板 + 限流。
             if (!takeToken(socket, 'set-agent-settings', 30, 60000)) return;
             if (!requirePanel('set-agent-settings')) return;
-            const agent = agent_connections[agentName];
+            // ★ R6 #25：原来是 `agent_connections[agentName]` —— `'constructor'` 拿到 `Object`
+            //   构造函数（真值）⇒ `agent.setSettings` 不是函数 ⇒ 抛进 socket.io 派发。一律过 knownAgent()。
+            const wanted = knownAgent(agentName);
+            if (!wanted) {
+                console.warn(`[mindserver] 忽略 set-agent-settings：未知 agent ${JSON.stringify(agentName)}`);
+                return;
+            }
+            const agent = agent_connections[wanted];
             if (!agent) return;
             const { settings: safe, dropped } = sanitizeAgentSettings(settings);
             if (dropped.length) {
@@ -1780,7 +1992,13 @@ export function createMindServer(host_public = false, port = 8080) {
             // ★ R6 #2：重启 agent = 管理面动作，只给面板（agent 不能重启别人/自己）。
             if (!requirePanel('restart-agent')) return;
             // D25：停掉的 agent socket 为 null（面板上重启按钮仍可点），原来这里直接崩掉整个 mindserver
-            const conn = agent_connections[agentName];
+            // ★ R6 #25：名字一律过 knownAgent（原型链键不再是"任意字符串 = agent 名"）。
+            const restartName = knownAgent(agentName);
+            if (!restartName) {
+                console.warn(`[mindserver] 忽略 restart-agent：未知 agent ${JSON.stringify(agentName)}`);
+                return;
+            }
+            const conn = agent_connections[restartName];
             if (!conn?.socket) {
                 console.warn(`Agent ${agentName} is not running, cannot restart`);
                 return;
@@ -1792,7 +2010,13 @@ export function createMindServer(host_public = false, port = 8080) {
             // ★ R6 #2：停一只是管理面动作（原来完全无限流、也不区分主体）。
             if (!takeToken(socket, 'stop-agent', 10, 60000)) return;
             if (!requirePanel('stop-agent')) return;
-            mindcraft.stopAgent(agentName);
+            // ★ R6 #25：stopAgent('constructor') 原来会直接打到进程表上（原型链键）。
+            const stopName = knownAgent(agentName);
+            if (!stopName) {
+                console.warn(`[mindserver] 忽略 stop-agent：未知 agent ${JSON.stringify(agentName)}`);
+                return;
+            }
+            mindcraft.stopAgent(stopName);
             agentsStatusUpdate();
         });
 
@@ -1827,8 +2051,13 @@ export function createMindServer(host_public = false, port = 8080) {
             }
             // ★ R6 #2：删 agent（连注册表一起）是管理面动作，只给面板。
             if (!requirePanel('destroy-agent')) return;
-            if (!agent_connections[agentName]) return;
-            const r = await mindcraft.destroyAgent(agentName);
+            // ★ R6 #25：`agent_connections['constructor']` 是真值 ⇒ 原来会一路打到 destroyAgent。
+            const destroyName = knownAgent(agentName);
+            if (!destroyName) {
+                console.warn(`[mindserver] 忽略 destroy-agent：未知 agent ${JSON.stringify(agentName)}`);
+                return;
+            }
+            const r = await mindcraft.destroyAgent(destroyName);
             if (!r?.ok) {
                 console.error(`[mindserver] destroy-agent ${agentName} 未确认退出（${r?.reason}）—— **保留注册表**（孤儿仍在领单/续租，需要人工查进程表）`);
                 try { socket.emit('destroy-agent-failed', { agent: agentName, reason: r?.reason ?? 'unknown' }); } catch { /* 断开中 */ }
@@ -1846,8 +2075,10 @@ export function createMindServer(host_public = false, port = 8080) {
             if (!takeToken(socket, 'stop-all-agents', 3, 60000)) return;
             if (!requirePanel('stop-all-agents')) return;
             console.log('Killing all agents');
-            for (let agentName in agent_connections) {
-                mindcraft.stopAgent(agentName);
+            // ★ R6 #25 / #75：`for...in` 会把原型链上的键一起枚举（`constructor`/`toString`…）。
+            //   "枚举注册表"这件事必须只走**自有键**。
+            for (const name of Object.keys(agent_connections)) {
+                mindcraft.stopAgent(name);
             }
         });
 
@@ -1918,7 +2149,10 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
 		socket.on('send-message', (agentName, data) => {
-			if (!agent_connections[agentName]) {
+			// ★ R6 #25：`agent_connections['constructor']` 是真值（`Object` 构造函数）⇒ 下面 `.socket`
+			//   会抛错。名字一律先过 knownAgent()。
+			const sendTo = knownAgent(agentName);
+			if (!sendTo) {
 				console.warn(`Agent ${agentName} not in game, cannot send message via MindServer.`);
                 return;
 			}
@@ -1944,7 +2178,7 @@ export function createMindServer(host_public = false, port = 8080) {
 				return;
 			}
 			try {
-                agent_connections[agentName].socket.emit('send-message', data);
+                agent_connections[sendTo].socket.emit('send-message', data);
 			} catch (error) {
 				console.error('Error: ', error);
 			}
@@ -2003,8 +2237,20 @@ export function createMindServer(host_public = false, port = 8080) {
     //   而宿主侧仍需显式把端口映射到 127.0.0.1:8080（见 docker-compose.yml 的注释与 README）。
     const host = (process.env.MIND_SERVER_HOST || 'localhost').trim() || 'localhost';
     if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
+        // ★ R6 #23：HTTP 门只看 token，而 socket.io 的 Host 白名单仍是本机名 ⇒ 容器里
+        // "页面能打开、永远连不上"。这里读 MIND_SERVER_ALLOWED_HOSTS 加开，并说清后果。
+        const extraHosts = String(process.env.MIND_SERVER_ALLOWED_HOSTS || '')
+            .split(',').map((s) => s.trim()).filter(Boolean);
         console.log(`[mindserver] ⚠ 监听 ${host}：控制台将对本机以外的来源可达。`
             + '请确认已启用 token，并且只在可信网络里这样做。');
+        if (extraHosts.length === 0) {
+            console.warn('[mindserver] ⚠ 但 socket.io 的 Host 白名单仍只有本机名 ⇒ 用 `http://<非本机名>` 打开面板时'
+                + '握手会被拒（页面能加载、连不上）。需要走这条路时显式设 '
+                + 'MIND_SERVER_ALLOWED_HOSTS=<宿主IP 或域名>[,...]（逗号分隔）。');
+        } else {
+            console.log(`[mindserver] socket.io Host 白名单已加开：${extraHosts.join(', ')}`
+                + '（来源仍由 token + Host/Origin 双判据把关，不是"对外网无鉴权"）');
+        }
     }
     // ★ F-EXEC-102（2026-11-06）：**唯一的关停入口**（socket 的 shutdown 事件 + SIGINT/SIGTERM 共用）。
     // 幂等：重复触发（例如连点两次"停止面板"，或 Ctrl-C 与 socket 同时来）只跑一次。
@@ -2149,7 +2395,9 @@ function agentsStatusUpdate(socket) {
         socket = io;
     }
     let agents = [];
-    for (let agentName in agent_connections) {
+    // ★ R6 #75（Nice）：`for...in` 会把原型链上的键一起枚举（与 #25 同一根因）；
+    //   这里每秒广播，偶发的继承键会变成"一条假 agent"。只走自有键。
+    for (const agentName of Object.keys(agent_connections)) {
         const conn = agent_connections[agentName];
         agents.push({
             name: agentName, 
@@ -2203,24 +2451,47 @@ function startStatePolling() {
         polling = true;
         try {
             const states = {};
-            for (let agentName in agent_connections) {
-                let agent = agent_connections[agentName];
-                if (agent.in_game) {
-                    try {
-                        const state = await new Promise((resolve, reject) => {
-                            const timer = setTimeout(() => reject(new Error('state timeout')), 5000);
-                            agent.socket.emit('get-full-state', (s) => { clearTimeout(timer); resolve(s); });
-                        });
-                        agent.last_state = state;
-                        states[agentName] = state;
-                    } catch (e) {
-                        states[agentName] = (String(e?.message) === 'state timeout' && agent.last_state)
-                            ? agent.last_state
-                            : { error: String(e) };
-                    }
+            // ★ R6 #31：并发拉取（Promise.all + 每只独立 5s 超时 + 整轮 6s 兜底），
+            //   不再逐只串行 await（原来 10 只卡住 = 面板状态停更 50s）。
+            const targets = Object.keys(agent_connections)
+                .map((name) => [name, agent_connections[name]])
+                .filter(([, agent]) => agent && agent.in_game && agent.socket);
+
+            const fetchOne = (name, agent) => new Promise((resolve) => {
+                const timer = setTimeout(() => resolve({ name, ok: false, reason: 'state timeout' }), 5000);
+                try {
+                    agent.socket.emit('get-full-state', (s) => {
+                        clearTimeout(timer);
+                        resolve({ name, ok: true, state: s });
+                    });
+                } catch (e) {
+                    clearTimeout(timer);
+                    resolve({ name, ok: false, reason: String(e?.message ?? e) });
+                }
+            });
+
+            const round = Promise.all(targets.map(([name, agent]) => fetchOne(name, agent)));
+            const settled = await Promise.race([
+                round,
+                new Promise((resolve) => {
+                    const t = setTimeout(() => resolve(null), 6000);
+                    // 不因为这个兜底计时器让进程退不掉
+                    try { t.unref?.(); } catch { /* ignore */ }
+                }),
+            ]);
+
+            for (const [name, agent] of targets) {
+                const hit = Array.isArray(settled) ? settled.find((r) => r.name === name) : null;
+                if (hit?.ok) {
+                    agent.last_state = hit.state;
+                    states[name] = hit.state;
+                } else if (agent.last_state) {
+                    states[name] = agent.last_state;
+                } else {
+                    states[name] = { error: String(hit?.reason ?? 'state timeout') };
                 }
             }
-            for (let listener of agent_listeners) {
+            for (const listener of agent_listeners) {
                 listener.emit('state-update', states);
             }
         } finally {
