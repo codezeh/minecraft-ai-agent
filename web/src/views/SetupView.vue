@@ -9,17 +9,31 @@ const settingsJson = ref('')
 const selected = ref('')
 const err = ref('')
 
-function loadSettings(name: string) {
+async function loadSettings(name: string) {
   selected.value = name
   settingsJson.value = ''
   err.value = ''
-  socket.emit('get-settings', name, (res: any) => {
+  // #60：原来裸 emit 无超时/无离线判据 —— 回调不来就永远停占位文案，看起来像没点中。
+  try {
+    const res = await request<{ error?: string; settings?: any }>('get-settings', name)
     if (res?.error) { err.value = res.error; return }
     settingsJson.value = JSON.stringify(res?.settings ?? {}, null, 2)
-  })
+  } catch (e: any) {
+    err.value = '读取配置失败：' + (e?.message || String(e))
+  }
 }
 
+// #65：高危操作两次点击确认（与 /vault 的删除一致），4 秒后自动复位
+const confirmDestroy = ref('')
+const confirmStop = ref(false)
+
 function act(evt: string, name: string) {
+  if (evt === 'destroy-agent' && confirmDestroy.value !== name) {
+    confirmDestroy.value = name
+    setTimeout(() => { if (confirmDestroy.value === name) confirmDestroy.value = '' }, 4000)
+    return
+  }
+  if (evt === 'destroy-agent') confirmDestroy.value = ''
   // WEB-001：启停/重启/销毁是**有副作用**的控制命令，断线时绝不能 emit
   // （socket.io 会把事件存进 sendBuffer，重连后突然执行 —— 实测过 server-stop 迟到执行）。
   const r = emitControl(evt, name)
@@ -60,10 +74,15 @@ const form = ref({
 
 async function loadProfiles() {
   profilesErr.value = ''
-  const r = await request<{ ok: boolean; profiles?: ProfileRow[]; dir?: string; reason?: string }>('get-profiles')
-  if (!r?.ok) { profilesErr.value = r?.reason || '读取失败'; return }
-  profiles.value = r.profiles || []
-  profilesDir.value = r.dir || ''
+  // #60：request() 在断线时立即以 OFFLINE 拒绝；原来没有 catch ⇒ 未处理拒绝 + 页面永远空白
+  try {
+    const r = await request<{ ok: boolean; profiles?: ProfileRow[]; dir?: string; reason?: string }>('get-profiles')
+    if (!r?.ok) { profilesErr.value = r?.reason || '读取失败'; return }
+    profiles.value = r.profiles || []
+    profilesDir.value = r.dir || ''
+  } catch (e: any) {
+    profilesErr.value = '读取 profile 列表失败：' + (e?.message || String(e))
+  }
 }
 
 async function pick(p: ProfileRow) {
@@ -142,13 +161,25 @@ const srvBusy = ref(false)
 const srvMsg = ref('')
 
 async function refreshServer() {
-  const r = await request<ServerStatus>('server-status')
-  srv.value = r
-  const l = await request<{ ok: boolean; lines?: string[] }>('server-log', 60)
-  if (l?.ok) srvLog.value = l.lines || []
+  // #60：断线时 request() 立即拒绝 —— 原来没 catch，徽标永远停在"未知"
+  try {
+    const r = await request<ServerStatus>('server-status')
+    srv.value = r
+    const l = await request<{ ok: boolean; lines?: string[] }>('server-log', 60)
+    if (l?.ok) srvLog.value = l.lines || []
+  } catch (e: any) {
+    srvMsg.value = '读取 Paper 服务状态失败：' + (e?.message || String(e))
+  }
 }
 
 async function srvAction(kind: 'start' | 'stop') {
+  // #65：优雅停服一击即发太危险 —— 第一次点只进入确认态
+  if (kind === 'stop' && !confirmStop.value) {
+    confirmStop.value = true
+    setTimeout(() => { confirmStop.value = false }, 4000)
+    return
+  }
+  if (kind === 'stop') confirmStop.value = false
   srvBusy.value = true
   srvMsg.value = ''
   try {
@@ -157,6 +188,9 @@ async function srvAction(kind: 'start' | 'stop') {
       ? (kind === 'start' ? `已启动 pid=${r.pid}（等 Done 出现才算就绪）` : '已发出优雅停止')
       : `失败：${r?.reason || '?'}${r?.hint ? ' — ' + r.hint : ''}`
     setTimeout(refreshServer, 1200)
+  } catch (e: any) {
+    // #60：原来只有 try/finally（没有 catch）⇒ 断线点"启动服务"完全没反应
+    srvMsg.value = `操作失败：${e?.message || String(e)}`
   } finally {
     srvBusy.value = false
   }
@@ -309,7 +343,9 @@ onMounted(() => {
 
         <div class="row">
           <button class="primary" :disabled="srvBusy" @click="srvAction('start')">启动服务</button>
-          <button class="danger" :disabled="srvBusy" @click="srvAction('stop')">优雅停止（RCON）</button>
+          <button class="danger" :disabled="srvBusy" @click="srvAction('stop')">
+            {{ confirmStop ? '确认停止？（再点一次）' : '优雅停止（RCON）' }}
+          </button>
           <button :disabled="srvBusy" @click="refreshServer">刷新</button>
         </div>
         <div v-if="srvMsg" class="small" :class="srvMsg.startsWith('已') ? 'ok-text' : 'bad'">{{ srvMsg }}</div>

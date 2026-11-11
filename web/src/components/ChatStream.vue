@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted } from 'vue'
+import { ref, watch, nextTick, onMounted, computed } from 'vue'
 import { store, say, currentAgent } from '../stores/agents'
 
 const input = ref('')
@@ -9,7 +9,8 @@ const showOutput = ref(true)
 function send() {
   const text = input.value.trim()
   if (!text) return
-  say(text)
+  // #58：只有真的发出去了才清空输入框（原来无条件清空 ⇒ 断线时用户输入被静默吞掉）
+  if (!say(text)) return
   input.value = ''
 }
 
@@ -37,6 +38,18 @@ function onKey(e: KeyboardEvent) {
 }
 
 const kindClass: Record<string, string> = { me: 'me', her: 'her', system: 'sys' }
+
+/** #58：断线/列表失效时不再假装能说 —— 判定统一走 connected + 未失效 + in_game。 */
+const canSend = computed(() =>
+  store.connected && !store.agentsStale && !!currentAgent.value?.in_game,
+)
+/** #57：服务端不回 ack ⇒ 消息只能标"已发出/失败"，不能假装"已送达"。 */
+function stateMark(m: { state?: string; reason?: string }) {
+  if (m.state === 'pending') return '发送中…'
+  if (m.state === 'failed') return '未发出' + (m.reason ? `（${m.reason}）` : '')
+  if (m.state === 'sent') return '已发出'
+  return ''
+}
 
 /** 用户是不是"本来就贴着底部"（贴底才自动跟随，否则会抢走正在读的历史）。 */
 function isNearBottom(el: HTMLElement, slackPx = 80) {
@@ -108,6 +121,10 @@ function isNoise(text: string) {
         <span class="t faint num">{{ time(m.t) }}</span>
         <span class="who">{{ m.kind === 'me' ? '我' : m.kind === 'her' ? m.agent : '·' }}</span>
         <span class="text">{{ m.text }}</span>
+        <span v-if="stateMark(m)" class="st" :class="m.state">{{ stateMark(m) }}</span>
+      </div>
+      <div v-if="store.chatGap" class="gap">
+        — 期间可能断线过，断线窗口内的输出服务端不补发 —
       </div>
       <div v-if="!store.chat.length" class="faint empty">
         还没有对话。先说点什么，她在地图里会出现。
@@ -123,12 +140,12 @@ function isNoise(text: string) {
       <input
         v-model="input"
         type="text"
-        :placeholder="currentAgent?.in_game ? '和她说话，或直接发 !命令…' : 'agent 离线，无法发送'"
-        :disabled="!currentAgent?.in_game"
+        :placeholder="canSend ? '和她说话，或直接发 !命令…' : (store.connected ? 'agent 离线，无法发送' : '未连接到 mindserver，无法发送')"
+        :disabled="!canSend"
         spellcheck="false"
         @keydown="onKey"
       />
-      <button class="primary" :disabled="!currentAgent?.in_game || !input.trim()" @click="send">发送</button>
+      <button class="primary" :disabled="!canSend || !input.trim()" @click="send">发送</button>
     </div>
   </div>
 </template>
@@ -163,6 +180,13 @@ function isNoise(text: string) {
 .line.her .text { color: var(--fg); }
 .line.sys .who, .line.sys .text { color: var(--fg-faint); font-size: 11px; }
 .line.noise { display: none; }
+
+/* #57：一条消息的投递状态（服务端无 ack，只能到"已发出"） */
+.line .st { flex: none; font-size: 10px; color: var(--fg-faint); }
+.line .st.failed { color: #ffb4ae; }
+.line .st.pending { color: var(--warn); }
+/* #64：断线窗口的提示（不伪造"什么都没丢"） */
+.gap { text-align: center; font-size: 10px; color: var(--fg-faint); padding: 3px 0; }
 
 .empty { font-size: 12px; padding: 8px 0; }
 

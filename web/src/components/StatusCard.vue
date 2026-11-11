@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { currentAgent, currentState, agentAction, store } from '../stores/agents'
+import { currentAgent, currentState, agentAction, store, isActionPending, stateAgeMs, STALE_AFTER_MS } from '../stores/agents'
 
 const s = currentState
 const a = currentAgent
 
-const inGame = computed(() => !!a.value?.in_game)
+// #58/#63：在线 = 连上了 && 列表没失效 && in_game；断线时不许再显示"在线"。
+const inGame = computed(() => !!a.value?.in_game && store.connected && !store.agentsStale)
+/** #63：状态帧超过 5 秒即视为过期（服务端 5 秒不回会沿用旧帧，面板必须能看出来）。 */
+const expired = computed(() => Number.isFinite(stateAgeMs.value) && stateAgeMs.value > STALE_AFTER_MS)
+const ageSec = computed(() => Number.isFinite(stateAgeMs.value) ? Math.round(stateAgeMs.value / 1000) : null)
 // ★ WEB-002：`gameplay` 本身可能整个缺失（服务端首次 full_state 超时后只发了错误对象）。
 //   原来写 `s.value?.gameplay.health` —— 可选链只保护了 `s`，`gameplay` 是 undefined 时仍然抛。
 //   现在逐层可选，拿不到就按 0 显示，让卡片降级而不是崩掉整个面板。
@@ -73,14 +77,31 @@ function fmt(v: any) { return v === undefined || v === null || v === '' ? '-' : 
       </dd>
     </dl>
 
+    <!-- #63：状态停更必须可见（否则卡死的 bot 会长期显示"健康、坐标正常"） -->
+    <div v-if="expired" class="stale">
+      ⚠ 状态已过期 {{ ageSec }} 秒（服务端超时会沿用上一帧）—— 下面的坐标/血量可能不是现在
+    </div>
+
+    <div v-if="store.actionError[a?.name || '']" class="fail" :title="store.actionError[a?.name || '']">
+      <span class="k">操作失败</span>{{ store.actionError[a?.name || ''] }}
+    </div>
+
     <div v-if="lastFailure" class="fail" :title="lastFailure">
       <span class="k">上次失败</span>{{ lastFailure }}
     </div>
 
     <div class="actions">
-      <button :disabled="!a || inGame" @click="agentAction('start-agent')">启动</button>
-      <button :disabled="!a || !inGame" @click="agentAction('stop-agent')">停止</button>
-      <button :disabled="!a" class="danger" @click="agentAction('restart-agent')">重启</button>
+      <!-- #65：在飞期间上锁；#57：服务端无 ack，按钮文案如实说"已发起" -->
+      <button :disabled="!a || inGame || isActionPending(a.name, 'start-agent')" @click="agentAction('start-agent')">
+        {{ isActionPending(a?.name || '', 'start-agent') ? '启动中…' : '启动' }}
+      </button>
+      <button :disabled="!a || !inGame || isActionPending(a.name, 'stop-agent')" @click="agentAction('stop-agent')">
+        {{ isActionPending(a?.name || '', 'stop-agent') ? '停止中…' : '停止' }}
+      </button>
+      <button :disabled="!a || isActionPending(a.name, 'restart-agent')" class="danger"
+              @click="agentAction('restart-agent')">
+        {{ isActionPending(a?.name || '', 'restart-agent') ? '重启中…' : '重启' }}
+      </button>
     </div>
   </div>
 </template>
@@ -123,6 +144,12 @@ function fmt(v: any) { return v === undefined || v === null || v === '' ? '-' : 
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .fail .k { color: var(--fg-faint); margin-right: 6px; }
+
+/* #63：数据过期横幅（比错误更常见，要能一眼看到） */
+.stale {
+  font-size: 11px; color: #ffd18a; background: #2a2110;
+  border: 1px solid #4a3f1f; border-radius: 6px; padding: 5px 7px;
+}
 
 .actions { display: flex; gap: 6px; margin-top: auto; }
 .actions button { flex: 1; }

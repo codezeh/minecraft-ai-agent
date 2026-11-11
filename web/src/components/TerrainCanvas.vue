@@ -266,10 +266,17 @@ function resetView() {
   fitCamera(true)
 }
 
+// W13：窗口在后台/最小化时停 rAF，避免常驻 60fps 白烧 GPU。
+let visible = true
 function loop() {
+  if (!visible) { raf = 0; return }
   raf = requestAnimationFrame(loop)
   controls?.update()
   if (renderer && scene && camera) renderer.render(scene, camera)
+}
+function onVisibility() {
+  visible = document.visibilityState !== 'hidden'
+  if (visible && !raf) raf = requestAnimationFrame(loop)
 }
 
 function sizeToHost() {
@@ -343,6 +350,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibility)
   cancelAnimationFrame(raf)
   resizeObs?.disconnect()
   controls?.dispose()

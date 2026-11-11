@@ -22,8 +22,12 @@ const yRange = computed(() => {
 
 async function load() {
   error.value = ''
-  const res = await loadTerrain()
-  if (!res) error.value = store.lastError || '没有拿到地形数据'
+  try {
+    const res = await loadTerrain()
+    if (!res) error.value = store.lastError || terrain.stats || '没有拿到地形数据'
+  } catch (e: any) {
+    error.value = '加载地形失败：' + (e?.message || String(e))
+  }
 }
 
 function toggleType(i: number) {

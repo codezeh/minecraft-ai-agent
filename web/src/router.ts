@@ -31,6 +31,13 @@ export const router = createRouter({
       component: () => import('./views/SettingsView.vue'),
       meta: { label: '设置' },
     },
+    // #68：任务板（最小入口：看板 + 取消/重试）
+    {
+      path: '/board',
+      name: 'board',
+      component: () => import('./views/BoardView.vue'),
+      meta: { label: '任务板' },
+    },
     // R5 t15：凭据保管库（加密存 API Key）。懒加载，和其它二级页一致。
     {
       path: '/vault',

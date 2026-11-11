@@ -6,17 +6,28 @@ import InventoryGrid from '../components/InventoryGrid.vue'
 import ChatStream from '../components/ChatStream.vue'
 import QuickCommands from '../components/QuickCommands.vue'
 import { store } from '../stores/agents'
+import { reconnectNow } from '../api/socket'
 </script>
 
 <template>
   <div v-if="!store.agents.length" class="empty">
     <div class="panel box">
-      <h2>还没有 agent</h2>
-      <p class="dim">
-        mindserver 没报告任何 agent。检查 <code>settings.js</code> 里的 <code>profiles</code>，
-        或去「配置」页创建一个。
-      </p>
-      <RouterLink to="/setup"><button class="primary">去配置</button></RouterLink>
+      <template v-if="!store.connected">
+        <h2>未连接到 mindserver</h2>
+        <p class="dim">
+          面板没有连上控制端（正在重连）。断线期间不显示 agent 列表 ——
+          空列表不代表"没有 agent"。
+        </p>
+        <button class="primary" @click="reconnectNow()">重试连接</button>
+      </template>
+      <template v-else>
+        <h2>还没有 agent</h2>
+        <p class="dim">
+          mindserver 没报告任何 agent。检查 <code>settings.js</code> 里的 <code>profiles</code>，
+          或去「配置」页创建一个。
+        </p>
+        <RouterLink to="/setup"><button class="primary">去配置</button></RouterLink>
+      </template>
     </div>
   </div>
 

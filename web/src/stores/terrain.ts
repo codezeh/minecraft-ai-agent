@@ -94,7 +94,20 @@ export function decodeTerrain(
     return null
   }
   const [ox, oy, oz] = res.origin
+  // W15：契约漂移时给出可见错误，而不是让 new Int32Array 抛 RangeError（旧图留在屏幕上）
+  const dtype = (res as any).dtype === 'int32' ? 4 : 2
   const posBytes = b64ToBytes(res.pos)
+  const typesBytes = b64ToBytes(res.types)
+  if (posBytes.byteLength % (dtype * 3) !== 0) {
+    terrain.decoded = null
+    terrain.stats = `地形数据损坏：pos 长度 ${posBytes.byteLength} 不是 ${dtype * 3} 的整数倍`
+    return null
+  }
+  if (typesBytes.length < Math.floor(posBytes.byteLength / dtype / 3)) {
+    terrain.decoded = null
+    terrain.stats = `地形数据损坏：types 只有 ${typesBytes.length} 个，少于面数`
+    return null
+  }
   // 后端按坐标跨度选宽度：跨度 < 32760 用 int16，否则 int32
   const i16 =
     (res as any).dtype === 'int32'
@@ -111,7 +124,7 @@ export function decodeTerrain(
     x[i] = i16[i * 3] + ox
     y[i] = i16[i * 3 + 1] + oy
     z[i] = i16[i * 3 + 2] + oz
-    t[i] = types[i]
+    t[i] = types[i] ?? 0   // W15：缺失类型码按"实心"兜底，且上面已校验数量
   }
 
   const bbox = res.bbox || {
@@ -143,7 +156,14 @@ export async function loadTerrain() {
     radius: terrain.radius,
     lod: terrain.lod,
   })
-  return decodeTerrain(res, expected)
+  // W15：解码异常必须变成可见错误（原来会以未处理拒绝逃出去，画面停在旧图）
+  try {
+    return decodeTerrain(res, expected)
+  } catch (e: any) {
+    terrain.decoded = null
+    terrain.stats = '地形解码失败：' + (e?.message || String(e))
+    return null
+  }
 }
 
 /** 切 agent / 换维度时，旧地形立即失效（别让上一个 bot 或上一个世界的图留在屏幕上）。 */

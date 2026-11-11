@@ -170,21 +170,37 @@ export async function loadConfig(): Promise<void> {
  *
  * 后端返回的新值会覆盖本地，避免"界面显示 90、磁盘上其实是 60"这种漂移。
  */
-export async function saveGroup(group: ConfigGroup, patch: Record<string, unknown>): Promise<void> {
+export async function saveGroup(
+  group: ConfigGroup,
+  patch: Record<string, unknown>,
+  opts: { confirm?: boolean } = {},
+): Promise<void> {
   config.saving = true
   config.error = ''
   config.notice = ''
+  // #59 + fix-control 的接口增量：把 false→true 的高危开关必须带 confirm:true，
+  // 否则服务端 409 CONFIG_CONFIRM_REQUIRED 且不写盘。confirm 只代表"本次提交已确认"。
+  const body = opts.confirm ? { ...patch, confirm: true } : patch
   try {
     const r = await call<{ ok: boolean; applied: Record<string, unknown>; backup: string | null }>(
       `/${group}`,
-      { method: 'PUT', body: JSON.stringify(patch) },
+      { method: 'PUT', body: JSON.stringify(body) },
     )
     const appliedKeys = Object.keys(r.applied || {}).join(', ')
     const bak = r.backup ? `（已备份 ${r.backup.split(/[\\/]/).pop()}）` : ''
     config.notice = `已保存 ${group}：${appliedKeys}${bak}`
     await loadConfig()
   } catch (e) {
-    config.error = (e as ConfigError).message
+    const err = e as ConfigError
+    if (err.code === 'CONFIG_CONFIRM_REQUIRED') {
+      config.error = '开启高危项需要二次确认：在确认框里选「我明白风险，开启」后会自动重试保存。'
+    } else if (err.code === 'CONFIG_CONFLICT') {
+      config.error = '保存被拒绝：配置已被别人（另一个标签页/进程）改过。请先点「刷新」重读，再重新修改并保存。'
+    } else if (err.status === 400) {
+      config.error = '值不合法（服务端拒绝写入）：' + err.message
+    } else {
+      config.error = err.message
+    }
     throw e
   } finally {
     config.saving = false

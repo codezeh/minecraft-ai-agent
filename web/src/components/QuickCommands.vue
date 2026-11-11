@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { say, currentState } from '../stores/agents'
+import { say, currentState, currentAgent, store } from '../stores/agents'
 
 // 快捷指令条：后端已有 60+ 个 !命令，这里只放最常用的几个。
 //
@@ -15,6 +15,9 @@ const nearbyPlayer = computed(() => {
 })
 
 const targetPlayer = computed(() => player.value.trim() || nearbyPlayer.value)
+
+// #58：断线/列表失效时快捷指令一律不可点（点了也发不出去，只会静默失败）
+const offline = computed(() => !store.connected || store.agentsStale || !currentAgent.value?.in_game)
 
 function fire(cmd: string) {
   say(cmd)
@@ -56,11 +59,14 @@ const quick = computed(() => [
         v-for="q in quick"
         :key="q.label"
         :title="q.hint"
-        :disabled="q.disabled"
+        :disabled="q.disabled || offline"
         @click="fire(q.cmd)"
       >{{ q.label }}</button>
     </div>
-    <div class="tip faint">点一下等于发送对应命令；参数用双引号（解析器只认这种）。</div>
+    <div class="tip faint">
+      <span v-if="offline" class="warn">未连接或 agent 不在游戏里：快捷指令已禁用。</span>
+      <span v-else>点一下等于发送对应命令；参数用双引号（解析器只认这种）。</span>
+    </div>
   </div>
 </template>
 

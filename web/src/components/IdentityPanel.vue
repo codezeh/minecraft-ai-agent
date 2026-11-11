@@ -13,7 +13,7 @@
  *   ② 码的边界：5 分钟、只能用一次、面板断开即作废；
  *   ③ 离线服的限制：它只证明"此刻你能拿到面板"，**不能**证明游戏里那个同名的人是本人。
  */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import {
   currentAgent, issueIdentityCode, identityStatus, unbindIdentity,
   type IdentityBindingRow, type IdentityMode,
@@ -28,6 +28,10 @@ const bindings = ref<IdentityBindingRow[]>([])
 // ★ t27：当前"离线 / 正版验证 + owner 策略"——用户在面板上就能看到自己处在哪种状态
 const mode = ref<IdentityMode | null>(null)
 const pending = ref<{ expiresAt: number; sessionId: string | null }[]>([])
+// R6 #69/#74：身份表损坏（已 fail-closed 按空表处理）与"读不到模式"的原因
+const corrupt = ref(false)
+const backupPath = ref<string | null>(null)
+const modeError = ref<string | null>(null)
 
 let tick: ReturnType<typeof setInterval> | null = null
 
@@ -55,6 +59,10 @@ async function refresh() {
       bindings.value = r.bindings || []
       pending.value = r.pendingCodes || []
       mode.value = r.mode || null
+      // 字段缺失一律当"正常"（旧服务端不发这两个字段，不能被当成损坏/异常）
+      corrupt.value = r.corrupt === true
+      backupPath.value = r.corrupt === true ? (r.backup ?? null) : null
+      modeError.value = r.modeError ?? null
       err.value = ''
     } else {
       err.value = humanize(r?.reason)
@@ -89,10 +97,14 @@ async function generate() {
 
 async function unbind(row: IdentityBindingRow) {
   if (!agentName.value) return
+  // #61：把"这次解绑属于谁"钉住；期间切了人就丢弃结果，别把 A 的结果写进 B 的视图
+  const owner = agentName.value
   err.value = ''
   try {
-    const r = await unbindIdentity({ uuid: row.uuid, name: row.name }, agentName.value)
+    const r = await unbindIdentity({ uuid: row.uuid, name: row.name }, owner)
+    if (currentAgent.value?.name !== owner) return
     if (!r?.ok) err.value = humanize(r?.reason)
+    else if (!r.removed) err.value = '服务端没有删除任何记录（这个玩家可能本来就不在名单里）'
     await refresh()
   } catch (e: any) {
     err.value = String(e?.message || e)
@@ -124,6 +136,22 @@ function copyCode() {
   try { void navigator.clipboard?.writeText(code.value) } catch { /* 剪贴板不可用就算了，码就在眼前 */ }
 }
 
+// #61：切 agent 时必须清空并重拉 —— 否则显示的是上一个 bot 的绑定/模式，
+// 「解绑」还会把 A 的行发给 B（服务端 removed:0，界面却像成功了）。
+watch(agentName, (name, prev) => {
+  if (name === prev) return
+  bindings.value = []
+  pending.value = []
+  mode.value = null
+  corrupt.value = false
+  backupPath.value = null
+  modeError.value = null
+  code.value = ''
+  expiresAt.value = 0
+  err.value = ''
+  if (name) void refresh()
+})
+
 onMounted(() => {
   tick = setInterval(() => { now.value = Date.now() }, 1000)
   void refresh()
@@ -149,6 +177,18 @@ onUnmounted(() => { if (tick) clearInterval(tick) })
       想切成正版验证（owner 持久、不可被同名冒用）：改
       <code>config/network.json</code> 的 <code>servers.main.onlineMode = true</code>
       → 跑 <code>node tools/server-net.mjs apply</code> → 重启 Minecraft 服务器。
+    </div>
+
+    <!-- R6 #69：身份表损坏必须说清"已按空表处理"，否则下面"0 个绑定"会被读成"没人绑过" -->
+    <div v-if="corrupt" class="corrupt small">
+      <b>⚠ 身份表损坏</b>：已按<strong>空表</strong>处理（fail-closed，不会误授权）。
+      <div v-if="backupPath" class="bk">原文件已改名留证：<code>{{ backupPath }}</code></div>
+      <div class="bk">此时"0 个绑定"<b>不代表</b>没人绑定过，别据此判断权限。</div>
+    </div>
+
+    <!-- R6 #74：读不到身份策略时，别只留一个空白 -->
+    <div v-if="modeError && !mode" class="bad small">
+      读不到身份策略（离线/正版无法判断）：{{ modeError }}
     </div>
 
     <div v-if="err" class="bad small">{{ err }}</div>
@@ -185,6 +225,9 @@ onUnmounted(() => { if (tick) clearInterval(tick) })
           <button class="tiny ghost" @click="unbind(b)">解绑</button>
         </li>
       </ul>
+      <div v-else-if="corrupt" class="faint small">
+        绑定表不可读（见上方"身份表损坏"）—— 这不是"没有绑定"，别据此判断权限。
+      </div>
       <div v-else class="faint small">还没有人绑定。玩家拿到码后在游戏里 <code>!claim</code> 即可。</div>
     </div>
   </div>
@@ -222,6 +265,14 @@ onUnmounted(() => { if (tick) clearInterval(tick) })
 .mode-text { color: var(--fg-dim); line-height: 1.5; }
 .switch-hint { font-size: 10px; line-height: 1.6; color: var(--fg-dim); opacity: .85; }
 .switch-hint code { background: var(--bg-hover); padding: 0 3px; border-radius: 2px; }
+
+/* R6 #69：身份表损坏告警（比"错误"更重，要显眼且不误导） */
+.corrupt {
+  color: #ffd18a; background: #2a2110; border: 1px solid #4a3f1f;
+  border-radius: 6px; padding: 6px 8px; line-height: 1.6;
+}
+.corrupt .bk { font-size: 10px; color: var(--fg-dim); margin-top: 3px; }
+.corrupt code, .corrupt strong { color: #ffd18a; }
 
 button.tiny { font-size: 11px; padding: 2px 8px; }
 button.tiny.ghost { background: transparent; border: 1px solid var(--border-soft); }

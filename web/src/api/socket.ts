@@ -23,6 +23,26 @@ export function isOnline(): boolean {
   return socket.connected === true
 }
 
+// ★ #66：token 失效时停止重连风暴，给用户明确出口（详见 docs/audit-r6/fixes2/web.md）。
+export function pauseReconnect() {
+  try { socket.io.opts.reconnection = false } catch { /* 老版本没有该字段 */ }
+  try {
+    if (socket.connected) socket.disconnect()
+    else socket.io.engine?.close()
+  } catch { /* 已断开 */ }
+}
+
+/** 恢复自动重连（用户点了"重试连接"，或带新 token 重新打开页面）。 */
+export function resumeReconnect() {
+  try { socket.io.opts.reconnection = true } catch { /* ignore */ }
+  connect()
+}
+
+/** 界面上"重试连接"按钮的入口。 */
+export function reconnectNow() {
+  resumeReconnect()
+}
+
 /**
  * 请求失败的分类。界面据此决定"能不能重试"，不要一律说"失败了"。
  *
@@ -86,6 +106,9 @@ export type ControlResult = { ok: true } | { ok: false; code: RequestErrorCode; 
  *
  * 与 `request()` 的区别：这类事件服务端不一定回 ack，所以这里只保证一件事 ——
  * **没连接时绝不发**，免得它躺在缓冲区里等重连后突然执行（WEB-001）。
+ *
+ * ★ #57：服务端对这类事件仍**不回 ack**，所以 `ok:true` 只代表"已从浏览器发出"，
+ *   不代表"服务端执行了"。调用方必须显式呈现 pending/unknown 态并监听失败帧。
  *
  * @returns ok:false 时 `code:'OFFLINE'`，调用方应把"没执行"告诉用户，而不是静默吞掉。
  */

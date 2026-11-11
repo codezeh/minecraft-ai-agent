@@ -67,6 +67,8 @@ const saved = ref<ConfigResponse | null>(null)
 const newPlayer = ref('')
 /** allow_insecure_coding 的二次确认弹窗。 */
 const confirmInsecure = ref(false)
+/** #59：确认只对**本次提交**有效（原来确认后复位、再点保存又弹框 ⇒ 开关永远存不下去）。 */
+const confirmedFor = ref<ConfigGroup | ''>('')
 
 function syncFromServer(): void {
   const d = config.data
@@ -88,19 +90,22 @@ async function save(group: ConfigGroup): Promise<void> {
   // 高危项在保存前再确认一次（不是只靠控件上的红字）
   if (group === 'runtime' && form.runtime.allow_insecure_coding) {
     const wasOff = saved.value ? saved.value.runtime.allow_insecure_coding === false : true
-    if (wasOff && !confirmInsecure.value) {
+    if (wasOff && confirmedFor.value !== 'runtime') {
       confirmInsecure.value = true
       return
     }
   }
   const patch = diffOf(group)
-  if (!Object.keys(patch).length) return
+  if (!Object.keys(patch).length) { confirmedFor.value = ''; return }
   try {
-    await saveGroup(group, patch)
+    // confirm 只随"这一次"提交发出，成功后即失效（服务端据此放行 false→true 并写盘）
+    await saveGroup(group, patch, { confirm: confirmedFor.value === 'runtime' })
     syncFromServer()
     confirmInsecure.value = false
+    confirmedFor.value = ''
   } catch {
     /* 错误已在 store 中填充，页面用 config.error 展示 */
+    confirmedFor.value = ''
   }
 }
 
@@ -174,11 +179,15 @@ function toggleInsecure(): void {
 function acceptInsecure(): void {
   form.runtime.allow_insecure_coding = true
   confirmInsecure.value = false
+  confirmedFor.value = 'runtime'
+  // 确认后立刻把这次提交送出去（原来只改本地状态、不触发保存 ⇒ 无限弹框）
+  void save('runtime')
 }
 
 function rejectInsecure(): void {
   form.runtime.allow_insecure_coding = false
   confirmInsecure.value = false
+  confirmedFor.value = ''
 }
 
 /** `all` + 离线模式 = 同网络任何人都能冒名（白名单只校验名字）。 */

@@ -1,5 +1,5 @@
 import { reactive, computed } from 'vue'
-import { socket, request, connect, emitControl, isOnline } from '../api/socket'
+import { socket, request, connect, emitControl, isOnline, pauseReconnect } from '../api/socket'
 import type { AgentInfo, FullState, TerrainResult } from '../api/types'
 
 export interface ChatLine {
@@ -8,6 +8,9 @@ export interface ChatLine {
   kind: 'me' | 'her' | 'system'
   agent: string
   text: string
+  /** ★ #57：服务端无 ack ⇒ 只能区分"已发出"与"已知失败"，不能假装"已送达"。 */
+  state?: 'pending' | 'sent' | 'failed'
+  reason?: string
 }
 
 export interface OutputLine {
@@ -18,22 +21,133 @@ export interface OutputLine {
 }
 
 const MAX_CHAT = 500
-const MAX_OUTPUT = 500
+// #64：输出日志与对话是两份独立缓冲（不再互挤容量），输出留得更久便于排障。
+const MAX_OUTPUT = 1000
 
 export const store = reactive({
   connected: false,
   everConnected: false,
+  /** #58：断开后 agents 只是"上一次看到的"，界面不许再把它当在线。 */
+  agentsStale: false,
   agents: [] as AgentInfo[],
   states: {} as Record<string, FullState>,
+  /** #63：最后一帧状态的到达时刻（0 = 从未收到）。 */
+  statesAt: 0,
+  /** #63：每秒刷新一次，供"数据已过期 Ns"使用。 */
+  now: Date.now(),
   current: '',
   chat: [] as ChatLine[],
   output: [] as OutputLine[],
+  /** #64：断线期间可能有消息丢失（界面据此插一条分隔提示）。 */
+  chatGap: false,
+  /** #62：是否收到过 state-update（= 服务端确实把我们放进了订阅集合）。 */
+  subscribed: false,
+  /** #62：订阅可能失败时的说明（限流/无回执）。 */
+  subscribeError: '',
+  /** #57：已发出但未确认的控制动作，key = `${agent}:${event}`。 */
+  pendingActions: {} as Record<string, { event: string; at: number }>,
+  /** #57：最近一次控制失败帧（按 agent 记，供卡片就地显示）。 */
+  actionError: {} as Record<string, string>,
+  /** #66：握手 token 失效（不再无脑重连）。 */
+  authFailed: false,
   terrainCache: {} as Record<string, TerrainResult>,
   terrainLoading: false,
   lastError: '',
+  /** #63：lastError 是否可关闭（临时错误不该挂一整天）。 */
+  lastErrorAt: 0,
 })
 
 let seq = 0
+
+/** #63：统一写错误（带时间戳），临时错误可被成功响应清掉。 */
+export function setError(msg: string) {
+  store.lastError = msg
+  store.lastErrorAt = Date.now()
+}
+
+export function dismissError() {
+  store.lastError = ''
+  store.lastErrorAt = 0
+}
+
+/** #63：距最后一帧状态多久（毫秒；从没收到过 = Infinity）。 */
+export const stateAgeMs = computed(() =>
+  store.statesAt ? Math.max(0, store.now - store.statesAt) : Infinity,
+)
+
+/** 超过这个年龄的状态一律视为过期，界面不再显示为"健康/在线"。 */
+export const STALE_AFTER_MS = 5000
+
+export const dataStale = computed(() =>
+  !store.connected || store.agentsStale || stateAgeMs.value > STALE_AFTER_MS,
+)
+
+// #64：把最近的消息落到 sessionStorage —— 刷新页面不再清空，断线也有上下文。
+const PERSIST_KEY = 'mindcraft-panel:history-v1'
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+
+function persistHistory() {
+  if (persistTimer) return
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    try {
+      sessionStorage.setItem(PERSIST_KEY, JSON.stringify({
+        chat: store.chat.slice(-200),
+        output: store.output.slice(-200),
+        gap: store.chatGap,
+      }))
+    } catch { /* 隐私模式/配额满：不持久化，不影响主流程 */ }
+  }, 400)
+}
+
+// #62：listen-to-agents 无 ack，且被限流时服务端直接 return。只能"看有没有状态帧"反推：
+// 连上后迟迟没有 state-update ⇒ 视为可能未订阅，退避重试并把状态显式化。
+let subTimer: ReturnType<typeof setTimeout> | null = null
+let subAttempt = 0
+
+function armSubscribeWatch(delayMs = 12000) {
+  if (subTimer) clearTimeout(subTimer)
+  subTimer = setTimeout(() => {
+    subTimer = null
+    if (!store.connected || store.subscribed) return
+    subAttempt += 1
+    if (subAttempt > 3) {
+      store.subscribeError = '仍然收不到状态更新：可能被服务端限流（10 次/60 秒）或 relay 未注册。请稍后点「重试订阅」。'
+      return
+    }
+    socket.emit('listen-to-agents')
+    store.subscribeError = `未收到状态更新，正在重新订阅（第 ${subAttempt} 次）…`
+    armSubscribeWatch(5000 * subAttempt)
+  }, delayMs)
+}
+
+function stopSubscribeWatch() {
+  if (subTimer) { clearTimeout(subTimer); subTimer = null }
+}
+
+/** 手动重试订阅（#62 的出口，DebugView / 横幅用）。 */
+export function retrySubscribe() {
+  if (!store.connected) return
+  stopSubscribeWatch()
+  subAttempt = 0
+  store.subscribed = false
+  store.subscribeError = ''
+  socket.emit('listen-to-agents')
+  armSubscribeWatch()
+}
+
+function restoreHistory() {
+  try {
+    const raw = sessionStorage.getItem(PERSIST_KEY)
+    if (!raw) return
+    const d = JSON.parse(raw)
+    if (Array.isArray(d?.chat)) store.chat = d.chat
+    if (Array.isArray(d?.output)) store.output = d.output
+    store.chatGap = d?.gap === true
+    seq = Math.max(0, ...store.chat.map((c: ChatLine) => Number(c.seq) || 0),
+      ...store.output.map((o: OutputLine) => Number(o.seq) || 0))
+  } catch { /* 坏数据当成没有 */ }
+}
 
 /**
  * ★★★ WEB-002（2026-11-06 深度检查）：**状态入口必须先验协议**。
@@ -53,9 +167,15 @@ function isFullState(v: any): v is FullState {
   return !!v
     && typeof v === 'object'
     && v.gameplay && typeof v.gameplay === 'object'
-    && typeof v.gameplay.health === 'number'      // 状态卡读它
+    && typeof v.gameplay.health === 'number'
+    && v.gameplay.position && typeof v.gameplay.position === 'object'
     && v.inventory && typeof v.inventory === 'object'
-    && v.inventory.counts && typeof v.inventory.counts === 'object'   // 背包读它
+    && v.inventory.counts && typeof v.inventory.counts === 'object'
+    && v.inventory.equipment && typeof v.inventory.equipment === 'object'
+    && typeof v.inventory.stacksUsed === 'number'
+    && v.action && typeof v.action === 'object'
+    && v.nearby && typeof v.nearby === 'object'
+    && Array.isArray(v.nearby.humanPlayers)
 }
 
 function sanitizeStates(raw: any): Record<string, FullState> {
@@ -69,9 +189,9 @@ function sanitizeStates(raw: any): Record<string, FullState> {
   // 服务端"没有旧状态"时会把错误放在顶层（不是某个 agent 的 state 里）
   const topLevelError = (raw as any).error
   if (topLevelError) {
-    store.lastError = '状态尚未就绪：' + String(topLevelError)
+    setError('状态尚未就绪：' + String(topLevelError))
   } else if (bad.length) {
-    store.lastError = `状态数据不完整（${bad.join(', ')}），已忽略；通常出现在首次 full_state 超时之后`
+    setError(`状态数据不完整（${bad.join(', ')}），已忽略；通常出现在首次 full_state 超时之后`)
   }
   return out
 }
@@ -88,14 +208,29 @@ export const currentState = computed<FullState | null>(() => {
   return store.states[a.name] || null
 })
 
-function pushChat(line: Omit<ChatLine, 'seq' | 't'>) {
-  store.chat.push({ ...line, seq: ++seq, t: Date.now() })
+function pushChat(line: Omit<ChatLine, 'seq' | 't'>): number {
+  const row: ChatLine = { ...line, seq: ++seq, t: Date.now() }
+  store.chat.push(row)
   if (store.chat.length > MAX_CHAT) store.chat.splice(0, store.chat.length - MAX_CHAT)
+  persistHistory()
+  return row.seq
 }
 
-function pushOutput(line: Omit<OutputLine, 'seq' | 't'>) {
-  store.output.push({ ...line, seq: ++seq, t: Date.now() })
+function pushOutput(line: Omit<OutputLine, 'seq' | 't'>): number {
+  const row: OutputLine = { ...line, seq: ++seq, t: Date.now() }
+  store.output.push(row)
   if (store.output.length > MAX_OUTPUT) store.output.splice(0, store.output.length - MAX_OUTPUT)
+  persistHistory()
+  return row.seq
+}
+
+/** #57：把某条"我发的"消息从 pending 落成 sent / failed。 */
+function settleChat(chatSeq: number, state: 'sent' | 'failed', reason = '') {
+  const row = store.chat.find(c => c.seq === chatSeq)
+  if (!row) return
+  row.state = state
+  if (reason) row.reason = reason
+  persistHistory()
 }
 
 let inited = false
@@ -103,27 +238,79 @@ export function initStore() {
   if (inited) return
   inited = true
 
+  // #64：刷新页面后把最近的消息接回来（不依赖服务端重放）
+  restoreHistory()
+  // #63：1 Hz 心跳，驱动"数据已过期 Ns"（只是本地时钟，不碰服务端）
+  setInterval(() => { store.now = Date.now() }, 1000)
+
   socket.on('connect', () => {
     store.connected = true
     store.everConnected = true
-    store.lastError = ''
+    store.agentsStale = false
+    store.authFailed = false
+    store.subscribed = false
+    store.subscribeError = ''
+    dismissError()
     // 每次（重）连接都要重新订阅；服务端侧不会重复计数同一条 socket。
     socket.emit('listen-to-agents')
+    armSubscribeWatch()
   })
 
   socket.on('disconnect', () => {
     store.connected = false
+    // #58：列表只是"上次看到的" —— 不清空，但必须失效，否则面板继续显示"在线"。
+    store.agentsStale = true
     store.states = {}
-    store.lastError = '与 mindserver 断开，正在重连…'
+    store.statesAt = 0
+    store.subscribed = false
+    store.chatGap = true
+    store.pendingActions = {}
+    // #57：还在"发送中"的消息不可能再被确认了，落成失败（不要永远转圈）
+    for (const c of store.chat) {
+      if (c.state === 'pending') { c.state = 'failed'; c.reason = '发送后连接断开' }
+    }
+    stopSubscribeWatch()
+    setError('与 mindserver 断开，正在重连…')
   })
 
-  socket.on('connect_error', (e: Error) => {
+  socket.on('connect_error', (e: any) => {
     store.connected = false
-    store.lastError = '连不上 mindserver(8080)：' + (e?.message || 'unknown')
+    store.agentsStale = true
+    const code = e?.data?.code
+    if (code === 'AUTH_REQUIRED' || code === 'AUTH_BAD_TOKEN') {
+      store.authFailed = true
+      setError('握手 token 已失效：mindserver 重启会换 token。请用新值重新打开 '
+        + `http://${location.hostname}:8080/?token=<mindcraft/.mindserver-token 里的值>`)
+      pauseReconnect()   // 不再 0.5s 一次地刷重连
+      return
+    }
+    setError('连不上 mindserver(8080)：' + (e?.message || 'unknown'))
+  })
+
+  // #57：服务端四类失败帧（原来前端一个都没监听 ⇒ 控制命令"点了没反应也不知道"）。
+  const onFail = (evt: string) => (p: any) => {
+    const name = String(p?.agent || store.current || '')
+    const reason = String(p?.reason || '服务端拒绝，未给出原因')
+    store.actionError[name] = `${evt} 失败：${reason}`
+    delete store.pendingActions[`${name}:${evt}`]
+    if (name === store.current || !name) setError(`${name || 'agent'} ${evt} 失败：${reason}`)
+    pushChat({ kind: 'system', agent: name || 'system', text: `${evt} 失败：${reason}` })
+  }
+  socket.on('start-agent-failed', onFail('start-agent'))
+  socket.on('destroy-agent-failed', onFail('destroy-agent'))
+  socket.on('agent-channel-rejected', onFail('agent-channel-rejected'))
+  socket.on('agent-channel-taken-over', (p: any) => {
+    const name = String(p?.agent || store.current || '')
+    store.actionError[name] = '「' + name + '」的 agent 通道已被另一次连接接管'
+    setError('「' + name + '」的 agent 通道已被接管（可能是另一个面板/进程）')
   })
 
   socket.on('agents-status', (agents: AgentInfo[]) => {
     store.agents = Array.isArray(agents) ? agents : []
+    store.agentsStale = false
+    // 列表回来了 = 这条连接是活的；此前"已发起未确认"的控制动作可以收尾。
+    store.pendingActions = {}
+    store.actionError = {}
     if (!store.agents.some(a => a.name === store.current)) {
       store.current = store.agents[0]?.name || ''
     }
@@ -132,12 +319,25 @@ export function initStore() {
   socket.on('state-update', (states: Record<string, FullState>) => {
     // 1 Hz 全量推送；这里按 agent 覆盖，字段级 diff 交给 Vue 的响应式。
     store.states = sanitizeStates(states)
+    store.statesAt = Date.now()
+    store.now = Date.now()
+    // #62：能收到状态帧 ⇒ 订阅确实生效了，清掉"可能未订阅"的告警。
+    if (!store.subscribed) {
+      store.subscribed = true
+      store.subscribeError = ''
+      stopSubscribeWatch()
+    }
+    // #63：状态帧持续到达 = 链路确实活着 ⇒ 15 秒前的临时错误自动消失（不再挂一整天）
+    if (store.lastError && store.lastErrorAt && Date.now() - store.lastErrorAt > 15000) {
+      dismissError()
+    }
   })
 
   // 她的输出（agent.js 的 sendOutputToServer）与系统消息都走这条
   socket.on('bot-output', (agentName: string, message: string) => {
     if (!message) return
     pushOutput({ agent: agentName, text: String(message) })
+    // 系统消息进对话流；bot 的输出也进（日志行由 ChatStream 的开关折叠）
     pushChat({ kind: agentName === 'system' ? 'system' : 'her', agent: agentName, text: String(message) })
   })
 
@@ -159,13 +359,25 @@ export function say(text: string): boolean {
   const a = currentAgent.value
   const msg = text.trim()
   if (!a || !msg) return false
+  if (store.connected && a.in_game && !store.agentsStale) {
+    // 在线且确认在游戏里：往下走
+  } else {
+    setError('未连接或 agent 不在游戏里：这条消息没有发出去')
+    return false
+  }
   // WEB-001：断线时不发（否则事件躺在 sendBuffer 里，重连后突然执行一条"迟到指令"）。
   const r = emitControl('send-message', a.name, { from: 'ADMIN', message: msg })
   if (!r.ok) {
-    store.lastError = r.message
+    setError(r.message)
     return false
   }
-  pushChat({ kind: 'me', agent: a.name, text: msg })
+  // #57：服务端不回 ack ⇒ 先标 pending，"已发出"只能在超时后成立（不是"已送达"）。
+  const chatSeq = pushChat({ kind: 'me', agent: a.name, text: msg, state: 'pending' })
+  setTimeout(() => {
+    const row = store.chat.find(c => c.seq === chatSeq)
+    if (row?.state === 'pending') settleChat(chatSeq, store.connected ? 'sent' : 'failed',
+      store.connected ? '服务端不回执，无法确认送达' : '发送后连接断开')
+  }, 2500)
   return true
 }
 
@@ -176,12 +388,28 @@ export async function agentAction(
   if (!a) return false
   // WEB-001：启停/重启这类控制命令绝不能进了缓冲区等重连 ——
   // 报告实测过"界面报超时失败，重连后 server-stop 真的执行了"。
+  const key = `${a.name}:${evt}`
+  if (store.pendingActions[key]) return false   // #65：连点不再重复下发
   const r = emitControl(evt, a.name)
   if (!r.ok) {
-    store.lastError = r.message
+    setError(r.message)
     return false
   }
+  // #57：服务端不回 ack —— 标"已发起/结果未知"，由 agents-status 或失败帧收尾。
+  store.pendingActions[key] = { event: evt, at: Date.now() }
+  delete store.actionError[a.name]
+  setTimeout(() => {
+    if (!store.pendingActions[key]) return
+    delete store.pendingActions[key]
+    store.actionError[a.name] = `${evt}：已发出但 ${Math.round(15000 / 1000)} 秒内没有状态变化（结果未知）`
+    setError(`${a.name} 的 ${evt} 结果未知：服务端不回执，也没有状态变化`)
+  }, 15000)
   return true
+}
+
+/** #57：查询某 agent 某个动作是否在飞行中（界面用来加锁/显示"已发起…"）。 */
+export function isActionPending(agent: string, evt: string): boolean {
+  return !!store.pendingActions[`${agent}:${evt}`]
 }
 
 /**
@@ -236,6 +464,12 @@ export interface IdentityStatus {
   bindings?: IdentityBindingRow[]
   pendingCodes?: { expiresAt: number; sessionId: string | null }[]
   mode?: IdentityMode | null
+  /** R6 #74：读身份策略失败的原因（mode 为 null 时才可能有值）。 */
+  modeError?: string | null
+  /** R6 #69：身份表损坏（已按空表 fail-closed 处理）；缺失时视为 false。 */
+  corrupt?: boolean
+  /** 损坏时原文件的留证路径（<path>.corrupt-<ts>）。 */
+  backup?: string | null
   reason?: string
 }
 

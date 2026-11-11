@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch, nextTick } from 'vue'
-import { store, currentState, currentAgent } from '../stores/agents'
+import { store, currentState, currentAgent, retrySubscribe } from '../stores/agents'
+import { humanize } from '../api/humanize'
 import {
   diag, pullEvents, clearEvents, fetchTaskState, fetchMemory, eventTone, eventDetail,
 } from '../stores/diag'
@@ -8,8 +9,11 @@ import {
 type Tab = 'events' | 'task' | 'memory' | 'state' | 'output'
 const tab = ref<Tab>('events')
 
+// W13：只在真的停在 full_state 页时才 stringify（原来每秒对整份状态做一次）
 const stateJson = computed(() =>
-  currentState.value ? JSON.stringify(currentState.value, null, 2) : '（无数据）',
+  tab.value !== 'state'
+    ? ''
+    : (currentState.value ? JSON.stringify(currentState.value, null, 2) : '（无数据）'),
 )
 
 const output = computed(() => store.output.slice().reverse())
@@ -62,6 +66,11 @@ onMounted(() => {
       <button :class="{ on: tab === 'output' }" @click="tab = 'output'">输出日志</button>
 
       <div class="spacer" />
+      <!-- #62：订阅状态显式化（listen-to-agents 被限流时，relay 根本没注册，所有面板都只会超时） -->
+      <span class="small" :class="store.subscribed ? 'faint' : 'bad'">
+        {{ store.subscribed ? '已订阅状态' : '未确认订阅' }}
+      </span>
+      <button v-if="!store.subscribed" @click="retrySubscribe()">重试订阅</button>
       <span class="faint small">{{ currentAgent?.name || '-' }}</span>
       <button @click="copy">复制</button>
     </div>
@@ -75,7 +84,7 @@ onMounted(() => {
         </button>
         <button @click="pullEvents">补拉</button>
         <button class="danger" @click="clearEvents">清空</button>
-        <span v-if="diag.lastError" class="bad small">{{ diag.lastError }}</span>
+        <span v-if="diag.lastError" class="bad small">{{ humanize(diag.lastError) }}</span>
       </div>
       <div ref="listEl" class="pane scroll">
         <div v-for="e in filteredEvents" :key="e.seq" class="ev" :class="eventTone(e.type)">
@@ -96,7 +105,7 @@ onMounted(() => {
       <div class="toolbar inline">
         <button :disabled="diag.busy" @click="fetchTaskState">{{ diag.busy ? '读取中…' : '刷新' }}</button>
         <span v-if="diag.taskState && !diag.taskState.ok" class="bad small">
-          {{ diag.taskState.reason || '读取失败' }}
+          {{ humanize(diag.taskState.reason) || '读取失败' }}
         </span>
       </div>
 
