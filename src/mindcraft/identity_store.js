@@ -20,7 +20,7 @@
  *   · 绑定默认有效期 30 天，过期即自动降级为 guest（fail-closed）。
  */
 import { randomBytes, createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { botDirOf } from '../agent/library/bot_paths.js';
 
@@ -181,7 +181,8 @@ export function codesFileOf(agentName) {
 
 /** 空表。 */
 export function emptyStore() {
-    return { version: IDENTITY_VERSION, bindings: [], codes: [] };
+    // rev：单调版本号（R6 #21 的乐观锁判据；readStore 读出来、writeStore 校验后再 +1）
+    return { version: IDENTITY_VERSION, bindings: [], codes: [], rev: 0 };
 }
 
 /**
@@ -210,6 +211,7 @@ export function makeCode(rand = randomBytes) {
 function sanitizeStore(raw) {
     const base = emptyStore();
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return base;
+    base.rev = Number(raw.rev) || 0;
     const bindings = Array.isArray(raw.bindings) ? raw.bindings : [];
     const codes = Array.isArray(raw.codes) ? raw.codes : [];
     base.bindings = bindings.filter((b) => b && typeof b === 'object' && typeof b.level === 'string')
@@ -234,18 +236,38 @@ function sanitizeStore(raw) {
     return base;
 }
 
+/** 把解析失败的身份表改名留证（`.corrupt-<时间戳>`）；改名失败返回 null。 */
+function backupCorruptFile(file) {
+    try {
+        const backup = `${file}.corrupt-${Date.now()}`;
+        renameSync(file, backup);
+        return backup;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * 读表。文件不存在/坏掉 → 空表 + `ok:false`（调用方照常工作，只是"没有绑定"）。
  * @param {string} file
- * @returns {{store:object, ok:boolean, reason:string}}
+ * @returns {{store:object, ok:boolean, reason:string, corrupt?:boolean, backup?:string|null}}
  */
 export function readStore(file) {
     if (!file || !existsSync(file)) return { store: emptyStore(), ok: false, reason: 'missing' };
+    let text;
     try {
-        const raw = JSON.parse(readFileSync(file, 'utf8'));
-        return { store: sanitizeStore(raw), ok: true, reason: 'ok' };
+        text = readFileSync(file, 'utf8');
     } catch (e) {
-        return { store: emptyStore(), ok: false, reason: `corrupt:${e?.message ?? e}` };
+        return { store: emptyStore(), ok: false, reason: `unreadable:${e?.message ?? e}` };
+    }
+    try {
+        return { store: sanitizeStore(JSON.parse(text)), ok: true, reason: 'ok' };
+    } catch (e) {
+        // R6 #69：损坏必须留证 + 告警（原来静默返回空表 → 全员降级 guest 且查不到证据）
+        const backup = backupCorruptFile(file);
+        console.error(`[identity] 身份表损坏，已按空表处理（fail-closed）`
+            + `：${file}${backup ? `（原文件已留证：${backup}）` : '（改名留证失败）'}：${e?.message ?? e}`);
+        return { store: emptyStore(), ok: false, reason: `corrupt:${e?.message ?? e}`, corrupt: true, backup };
     }
 }
 
@@ -258,12 +280,42 @@ export function readStore(file) {
 export function writeStore(file, store) {
     try {
         mkdirSync(path.dirname(file), { recursive: true });
+        const clean = sanitizeStore(store);
+        const cur = readStore(file);
+        const curRev = cur.ok ? Number(cur.store.rev ?? 0) : 0;
+        // R6 #21：带 rev 的写（readStore 读出来的那份）遇到别人先写过 → 拒写，不静默覆盖
+        if (Number(store?.rev) > 0 && Number(store.rev) !== curRev) {
+            return { ok: false, file, reason: 'conflict' };
+        }
+        clean.rev = curRev + 1;
         const tmp = `${file}.tmp-${process.pid}`;
-        writeFileSync(tmp, JSON.stringify(sanitizeStore(store), null, 2), 'utf8');
+        writeFileSync(tmp, JSON.stringify(clean, null, 2), 'utf8');
         renameSync(tmp, file);
         return { ok: true, file, reason: 'ok' };
     } catch (e) {
         return { ok: false, file, reason: String(e?.message ?? e) };
+    }
+}
+
+/** 同步睡 ms（锁重试用）。 */
+function sleepMs(ms) {
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* 没有 SAB 就忙等 */ }
+}
+
+/** 文件级互斥锁（O_EXCL 建锁；崩溃残留超过 staleMs 视为可抢）。 */
+function acquireFileLock(file, { timeoutMs = 3000, staleMs = 10000 } = {}) {
+    const lockPath = `${file}.lock`;
+    const start = Date.now();
+    for (;;) {
+        try {
+            closeSync(openSync(lockPath, 'wx'));
+            return { ok: true, release: () => { try { unlinkSync(lockPath); } catch { /* ignore */ } } };
+        } catch (e) {
+            if (e?.code !== 'EEXIST') return { ok: false, reason: `lock:${e?.code ?? e?.message}` };
+            try { if (Date.now() - statSync(lockPath).mtimeMs > staleMs) unlinkSync(lockPath); } catch { /* ignore */ }
+            if (Date.now() - start >= timeoutMs) return { ok: false, reason: 'lock-timeout' };
+            sleepMs(3);
+        }
     }
 }
 
@@ -317,6 +369,55 @@ export function consumeCode(store, { code, now = Date.now() } = {}) {
     }
     const [record] = next.codes.splice(idx, 1);
     return { ok: true, record, reason: 'ok', store: next };
+}
+
+/**
+ * 事务式读-改-写（R6 #21）：**加锁 → 重读 → 改 → 原子 rename**，期间没有别的写者。
+ * mutator(store, ctx) 返回 `{store, result}` 落库；返回 `null` 表示"不写"。
+ */
+export function mutateStore(file, mutator, { now = Date.now(), attempts = 3 } = {}) {
+    if (!file) return { ok: false, reason: 'no-file' };
+    try { mkdirSync(path.dirname(file), { recursive: true }); } catch { /* 写失败会报出来 */ }
+    const locked = acquireFileLock(file);
+    if (!locked.ok) return { ok: false, reason: locked.reason };
+    try {
+        for (let i = 1; i <= attempts; i += 1) {
+            const read = readStore(file);
+            const out = mutator(read.store, { now, attempt: i, clean: read.ok });
+            if (!out) return { ok: true, skipped: true, result: null };
+            const wrote = writeStore(file, out.store);
+            if (wrote.ok) return { ok: true, result: out.result ?? null, store: out.store, attempts: i };
+            if (wrote.reason !== 'conflict') return { ok: false, reason: wrote.reason };
+        }
+        return { ok: false, reason: 'conflict' };
+    } finally {
+        locked.release();
+    }
+}
+
+/**
+ * 核销一个绑定码（R6 #21）：**跨进程单次生效** —— 加锁读改写，第二个核销者看到码已不在。
+ * 返回值与 `consumeCode` 同形（ok/record/reason），但 store 已落盘。
+ */
+export function consumeCodeAtomic(file, code, { now = Date.now() } = {}) {
+    let why = null;
+    const r = mutateStore(file, (store, ctx) => {
+        const c = consumeCode(store, { code, now: ctx.now });
+        if (!c.ok) { why = c.reason; return null; }
+        return { store: c.store, result: c.record };
+    }, { now });
+    if (!r.ok) return { ok: false, record: null, reason: r.reason };
+    if (r.skipped) return { ok: false, record: null, reason: why ?? 'invalid' };
+    return { ok: true, record: r.result, reason: 'ok' };
+}
+
+/** 签发一个绑定码（面板侧，R6 #21）：与核销同一把锁，避免"读旧写新"抹掉别人刚签的码。 */
+export function issueCodeAtomic(file, p = {}) {
+    const r = mutateStore(file, (store, ctx) => {
+        const out = addCode(store, { ...p, now: p.now ?? ctx.now });
+        return { store: out.store, result: out.record };
+    });
+    return r.ok ? { ...r, record: r.result } : { ...r, record: null };
 }
 
 /**

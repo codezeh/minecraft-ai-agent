@@ -56,7 +56,8 @@ function manifestOf(name, summary, extraCodes) {
             count: 'int 1..64 = 1',
         },
         needs: { items: [], near: [] },
-        claims: ['container:chest'],
+        // R6 #67：这里原来是个死常量 claim（只写了 container 种类、没有 x,y,z → 非法 key），已删。
+        // 容器预约改由 act_container 开窗时按真实坐标补占位，deriveClaims 也会从 args 推。
         codes: ['NO_TARGET', 'NO_ITEM', 'WINDOW_CLOSED', 'INVENTORY_FULL', 'OUT_OF_REACH', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL', ...extraCodes],
         resumable: false,
         timeoutMs: 3 * 60 * 1000,

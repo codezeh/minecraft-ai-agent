@@ -475,14 +475,35 @@ const freshDb = () => {
     mkdirSync(dir, { recursive: true });
     const { db } = openBoard(dir);
 
-    const handlers = new Map();
-    const srvSocket = { on: (e, f) => handlers.set(e, f) };
-    const mkSocket = () => ({ on() { }, emit(e, p, ack) { const h = handlers.get(e); if (!h) return ack?.({ ok: false }); h(p, ack); } });
-    const io = { on: (e, f) => { if (e === 'connection') f(srvSocket); }, emit() { } };
+    // ★ ADR 阶段 1（2026-11-11）：真实的拓扑是**每只 bot 一条独立连接**。
+    //   原来这里让两个 client 共用同一个 srvSocket —— 那在 R6 语义下能过，
+    //   但 board 层现在要求写事件有明确角色、且 agent 连接只能代表已 hello 的那一只 bot，
+    //   共享 socket 会让第二个 client 的 hello 把第一个顶掉（测试自身不真实）。
+    //   改成各连各的：每个 client 一条 server socket，角色=agent，名字互相独立。
+    const conns = new Map();      // serverSocket → handlers
+    const mkPeer = (role, agentName = null) => {
+        const handlers = new Map();
+        // agent 连接还必须有 `data.agentName` —— 那是 R6 起由 bindAgentChannel（服务端裁决）
+        // 写入的戳；board:hello 拿它跟 payload.bot 对账，所以在桩里也要如实提供。
+        const srv = { on: (e, f) => handlers.set(e, f), data: { role, ...(agentName ? { agentName } : {}) } };
+        const cli = { on() { }, emit(e, p, ack) { const h = handlers.get(e); if (!h) return ack?.({ ok: false }); h(p, ack); } };
+        return { srv, cli, handlers };
+    };
+    const peerA = mkPeer('agent', 'alpha');
+    const peerB = mkPeer('agent', 'beta');
+    // ★ 假 io：`attachBoardServer` 只注册**一次** connection 回调，所以不能靠"注册时顺带触发"
+    //   来模拟第二条连接（那样第二条永远是空的 handlers）。先留住回调，再对每条 socket 各调一次。
+    let onConnection = null;
+    const io = {
+        on: (e, f) => { if (e === 'connection') onConnection = f; },
+        emit() { },
+    };
     attachBoardServer({ io, db, registry: new Map([['mine', {}]]), validateArgs: () => ({ ok: true, args: {} }) });
+    onConnection(peerA.srv);
+    onConnection(peerB.srv);
 
-    const A = new BoardClient({ socket: mkSocket(), name: 'alpha', timeoutMs: 800 });
-    const B = new BoardClient({ socket: mkSocket(), name: 'beta', timeoutMs: 800 });
+    const A = new BoardClient({ socket: peerA.cli, name: 'alpha', timeoutMs: 800 });
+    const B = new BoardClient({ socket: peerB.cli, name: 'beta', timeoutMs: 800 });
     await A.hello(); await B.hello();
 
     const r1 = await A.reserve('jobA', ['block:5,64,5']);

@@ -167,14 +167,7 @@ export async function refreshChests(bot) {
         for (const row of (r.data?.items ?? [])) {
             const e = entryFromRow(row);
             if (!e) continue;
-            // ★ 合并（flow_store 的 `sharedMerge` 只写 pos/items/owner/at）会把
-            //   category/note 这类"档案字段"抹掉。板库那份确实没了，但我这边知道过，
-            //   就按"档案字段只增不减"补回来 —— 免得一次增量入库把分类箱子变成 unsorted。
-            const local = st.rows.get(e.key);
-            if (local) {
-                if (!e.category) e.category = local.category ?? null;
-                if (!e.note) e.note = local.note ?? '';
-            }
+            // t9：删掉"档案字段本地补回" —— §10.2-1 后板库现值已是基底，不再抹 category/note。
             incoming.set(e.key, e);
         }
         st.boardRows = incoming;                 // 纯板库快照（写路径的合并基底）

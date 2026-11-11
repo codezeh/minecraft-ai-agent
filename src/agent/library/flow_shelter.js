@@ -32,7 +32,7 @@ export const manifest = {
         floor: 'string?',        // 'auto'（默认）= 脚下不是实心才补地板；'always' / 'never'
     },
     needs: { items: ['建筑材料 ≥20'], near: [] },
-    claims: ['area:<自己周围>'],
+    // t9：不声明 claims —— 区域要真实坐标，运行时才知道（'area:<自己周围>' 不是合法 key）。
     // t36：加 NO_DATA —— 脚下没加载时如实报 NO_DATA（原来错报 NO_TARGET）
     codes: ['NO_ITEM', 'NO_TARGET', 'NO_DATA', 'NO_SUPPORT', 'UNSAFE', 'OUT_OF_REACH', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
     resumable: true,

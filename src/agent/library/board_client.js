@@ -29,7 +29,7 @@
 import { ok, fail, CODES } from './contract.js';
 // ★ BOARD-002 / BOARD-003：与**服务端同一份**纯函数（去重限长的物品名归一化、尝试序号口径）。
 //   从 board_claims 取而不是各写一份：那个文件不碰 node:sqlite，agent 侧引用是安全的。
-import { normalizeReportedItems, attemptSeqOfJob } from './board_claims.js';
+import { normalizeReportedItems, attemptSeqOfJob, normalizeClaimKeys } from './board_claims.js';
 
 /** socket ack 超时（06 §14：5 秒没回算失败）。 */
 export const ACK_TIMEOUT_MS = 5000;
@@ -273,6 +273,14 @@ export class BoardClient {
 
     /** 【不等】加一张单。 */
     add(job) {
+        // R6 #67：client 侧先校验 claim key 形状 —— 非法 key 在这里带日志拒掉，不送进账本
+        if (job?.claims != null) {
+            const norm = normalizeClaimKeys(job.claims);
+            if (!norm.ok) {
+                console.warn(`[board] board:add 本地被拒：claims 非法 —— ${norm.error}`);
+                return Promise.resolve(fail('INTERNAL', `claims 里有非法 key：${norm.error}`));
+            }
+        }
         return this._call('board:add', job).then(async (r) => {
             if (r.ok && r.data?.job) { this._byId.set(r.data.job.id, r.data.job); return r; }
             // ★★ 2026-11-03（t58）：**ack 超时 ≠ 没建成** —— 超时后必须回查一次。

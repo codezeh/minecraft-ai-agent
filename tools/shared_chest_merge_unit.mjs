@@ -174,6 +174,46 @@ const itemsOf = (db) => (getShared(db, 'chest', KEY)?.value?.items ?? null);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// ⑩ ADR §10.2-1 回归（新用例）：merge 只覆盖自己负责的字段，category/note 不许被抹掉
+//    场景取"重启视角"：写档案 → 增量 merge → 关连接重开 → 档案字段仍在
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const dir = join(DIR, 'cat-restart');
+    const r1 = openBoard(dir);
+    putShared(r1.db, 'chest', KEY, {
+        pos: { x: 10, y: 64, z: -3 }, items: { oak_log: 5 }, category: '木料', note: '第一夜仓库', lastUsed: 777,
+    }, { now: 100 });
+    const m = mergeSharedChest(r1.db, KEY, { stone: 2 }, 'B', { now: 200 });
+    r1.db.close();
+    const r2 = openBoard(dir);
+    const v = getShared(r2.db, 'chest', KEY)?.value;
+    r2.db.close();
+    const kept = v?.category === '木料' && v?.note === '第一夜仓库' && v?.lastUsed === 777;
+    const merged = v?.items?.oak_log === 5 && v?.items?.stone === 2;
+    if (m.ok && kept && merged) {
+        okCase('★ ⑩ merge 后档案字段仍在（重启视角）：category/note/lastUsed 保留、items 已合并',
+            `category=${v.category} items=${JSON.stringify(v.items)}`);
+    } else {
+        badCase('⑩ merge 抹掉了档案字段（ADR §10.2-1 复发）', { m, v });
+    }
+}
+
+// ⑩-b 反证：老实现（只写 pos/items/owner/at）在同一场景下 category 必丢 —— 证明这条用例真的在守东西
+{
+    const db = freshDb();
+    putShared(db, 'chest', KEY, {
+        pos: { x: 10, y: 64, z: -3 }, items: { oak_log: 5 }, category: '木料', note: '第一夜仓库',
+    }, { now: 100 });
+    putShared(db, 'chest', KEY, { pos: { x: 10, y: 64, z: -3 }, items: { oak_log: 5, stone: 2 }, owner: 'B', at: 200 }, { now: 200 });
+    const old = getShared(db, 'chest', KEY)?.value;
+    if (old?.category === undefined) {
+        okCase('⑩-b 反证：老实现只写四个字段 → category 丢失（这正是 §10.2-1 的现场）', JSON.stringify(old));
+    } else {
+        badCase('⑩-b 反证不成立（场景没构造对）', old);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // ⑨ 接线守卫：三处必须真的改过（否则"服务端有函数、没人调用"）
 // ══════════════════════════════════════════════════════════════════════════
 {

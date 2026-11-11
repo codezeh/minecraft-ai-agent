@@ -41,7 +41,7 @@ export const manifest = {
         fuel: 'item?',
     },
     needs: { items: ['<input>', '燃料'], near: [] },
-    claims: ['station:furnace'],
+    // t9：不声明 claims —— 合法形状是 station:furnace@x,y,z，熔炉坐标运行时才知道。
     codes: ['NO_ITEM', 'NO_WORKSTATION', 'NOT_READY', 'INVENTORY_FULL', 'OUT_OF_REACH', 'OCCUPIED', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
     resumable: false,
     timeoutMs: 10 * 60 * 1000,

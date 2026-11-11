@@ -42,7 +42,7 @@ export const manifest = {
         retreatHp: 'int 1..20 = 8',
     },
     needs: { items: ['武器'], near: [] },
-    claims: ['entity:target'],
+    // t9：不声明 claims —— 合法 key 要真实实体 id，运行时才知道（'entity:target' 不是合法 key）。
     codes: ['NO_TARGET', 'OUT_OF_REACH', 'NOT_READY', 'BLOCKED', 'TIMEOUT', 'INTERRUPTED', 'INTERNAL'],
     resumable: false,
     timeoutMs: 3 * 60 * 1000,

@@ -20,7 +20,7 @@
  */
 import {
     addJob, getJob, listJobs, claimFor, heartbeat, finish, setState, updateJob,
-    expireLeases, JOB_STATE,
+    expireLeases, JOB_STATE, isTerminal,
     // B3：预约（06 §9.2）+ 父子收敛（06 §9.1）
     reserve, release, renewClaims, expireClaims, listClaims, rollupParent,
     reopenBlockedWithSatisfiedDeps,
@@ -37,13 +37,61 @@ import {
     LIST_LIMIT_MAX, countOpenJobs,
 } from './board_store.js';
 // ★ BOARD-002：归一化 agent 随 claim 上报的"我身上有什么"（跨 client/server 共用的纯函数）
-import { normalizeReportedItems } from './board_claims.js';
+import { normalizeReportedItems, normalizeClaimKeys } from './board_claims.js';
 
 /** 单个 bot 上报的能力（`board:hello` 记下来，用于校验 add 的 skill）。 */
-const botRegistry = new Map();   // bot -> { skills:Set, roles:[], at }
+// bot -> { skills:Set, roles:[], rolesSource, at, socketId }
+// ★ R6 #24：有上限（满则拒绝）；连接断开即摘掉（见 disconnect）。
+//   `roles` 是 **hello 自报的提示**，不是授权依据（board.md #24 写清了残留）。
+const botRegistry = new Map();
+export const MAX_REGISTERED_BOTS = 64;
 
 /** 心跳/租约扫描间隔（06 §6：租约 30 秒，每 10 秒续租；这里 5 秒扫一次过期）。 */
 const SCAN_MS = 5000;
+
+/** `board:add` 允许客户端指定的状态（现有合法调用只用到这三种，R6 #20）。 */
+export const ADD_ALLOWED_STATES = Object.freeze(['pending', 'ready', 'running']);
+export const ADD_MAX_ATTEMPTS_MAX = 10;
+
+/** `board:add` 字段校验（R6 #20）：归一化合法字段，非法即拒。 */
+export function validateAddFields(job) {
+    const out = {};
+    if (job.state != null) {
+        const st = String(job.state);
+        if (!ADD_ALLOWED_STATES.includes(st)) {
+            return { ok: false, reason: `board:add 不接受 state="${st}"（只能是 ${ADD_ALLOWED_STATES.join('/')}）` };
+        }
+        out.state = st;
+    }
+    if (job.maxAttempts != null) {
+        const n = Number(job.maxAttempts);
+        if (!Number.isInteger(n) || n < 1 || n > ADD_MAX_ATTEMPTS_MAX) {
+            return { ok: false, reason: `maxAttempts 必须是 1-${ADD_MAX_ATTEMPTS_MAX} 的整数（现在 ${job.maxAttempts}）` };
+        }
+        out.maxAttempts = n;
+    }
+    if (job.parentId != null) {
+        const p = String(job.parentId).trim();
+        if (!p) return { ok: false, reason: 'parentId 不能是空字符串' };
+        out.parentId = p;
+    }
+    if (job.assignee != null) {
+        const a = String(job.assignee).trim();
+        if (!a || a.length > 64 || /[\s\u0000-\u001f]/.test(a)) {
+            return { ok: false, reason: `assignee 不合法（收到 ${JSON.stringify(job.assignee)}）` };
+        }
+        out.assignee = a;
+    }
+    if (job.claims != null) {
+        const norm = normalizeClaimKeys(job.claims);
+        if (!norm.ok) return { ok: false, reason: `claims 里有非法 key：${norm.error}` };
+        out.claims = norm.keys;
+    }
+    if (out.state === 'running' && out.assignee == null) {
+        return { ok: false, reason: "state='running' 必须同时给 assignee（无主的 running 单没人敢收）" };
+    }
+    return { ok: true, fields: out };
+}
 
 /**
  * 校验一张要入库的单（安全 ①②③）。
@@ -78,7 +126,10 @@ export function validateIncomingJob(job, opts = {}) {
     if (!Number.isFinite(priority) || priority < 0 || priority > 9) {
         return { ok: false, reason: `priority 必须是 0-9（现在 ${job.priority}）` };
     }
-    return { ok: true, job: { ...job, skill, priority, kind: job.kind ?? 'personal' } };
+    // ② R6 #20：state/parentId/assignee/maxAttempts/claims 不再放行
+    const fields = validateAddFields(job);
+    if (!fields.ok) return { ok: false, reason: fields.reason };
+    return { ok: true, job: { ...job, ...fields.fields, skill, priority, kind: job.kind ?? 'personal' } };
 }
 
 /**
@@ -153,6 +204,18 @@ export function attachBoardServer(deps = {}) {
     //   **同时**做三件事：注册进 contract.js 的 CODES、在 board_client 的
     //   `contractCodeOf` 里映射、更新错误码审计 —— 那是另一条任务（t1/t4 的接口范畴），
     //   不在本条的写作用域里。**不要**为了"码好看"在这里造未注册码。
+
+    /** R6 #24：登记表准入 —— 满了就淘汰最久没 hello 的，仍满则拒绝（不无限增长）。 */
+    const registryAdmit = (bot) => {
+        if (botRegistry.has(bot) || botRegistry.size < MAX_REGISTERED_BOTS) return { ok: true };
+        // 先收掉没有连接挂着的残留（正常情况下 disconnect 已经清过）
+        for (const [name, reg] of botRegistry) {
+            if (reg.socketId == null) botRegistry.delete(name);
+        }
+        if (botRegistry.size < MAX_REGISTERED_BOTS) return { ok: true };
+        try { console.warn(`[board] 登记表已满（${MAX_REGISTERED_BOTS}），拒绝新的 hello（R6 #24）`); } catch { /* ignore */ }
+        return { ok: false, reason: 'registry-full' };
+    };
 
     /** 拿（必要时创建）socket 上的身份状态。 */
     const identityOf = (socket) => {
@@ -355,6 +418,13 @@ export function attachBoardServer(deps = {}) {
     };
 
     io.on('connection', (socket) => {
+        // R6 #24：连接断开就摘掉这条连接登记的 bot（原来永不清理，表只增不减）
+        socket.on('disconnect', () => {
+            for (const [bot, reg] of botRegistry) {
+                if (reg.socketId != null && reg.socketId === socket.id) botRegistry.delete(bot);
+            }
+        });
+
         // ── hello：记下这只 bot 能干什么（同时**绑定身份**，R6 #3）────────
         socket.on('board:hello', (payload, cb) => {
             const bot = String(payload?.bot ?? '').trim();
@@ -363,7 +433,18 @@ export function attachBoardServer(deps = {}) {
             // ★ R6 #3：绑定失败（agent 连接想换人）→ 直接拒，不登记能力
             const bound = bindBot(socket, bot);
             if (!bound.ok) return ack(cb, { ok: false, code: bound.code, reason: bound.reason });
-            botRegistry.set(bot, { skills: new Set(skills), roles: payload?.roles ?? [], at: now() });
+            // R6 #24：先过准入（满 → 淘汰/拒绝），并记下这条登记属于哪个连接（断开时摘掉）
+            const admit = registryAdmit(bot);
+            if (!admit.ok) {
+                return ack(cb, { ok: false, code: 'TOO_MUCH', reason: `已登记 ${botRegistry.size} 只 bot（上限 ${MAX_REGISTERED_BOTS}），拒绝新的 hello` });
+            }
+            botRegistry.set(bot, {
+                skills: new Set(skills),
+                roles: payload?.roles ?? [],
+                rolesSource: 'hello-self-reported',   // ★ 提示，不是授权依据（R6 #24）
+                at: now(),
+                socketId: socket.id ?? null,
+            });
             ack(cb, { ok: true, jobs: listJobs(db, { assignee: bot }).length, role: bound.role || null });
         });
 
@@ -397,6 +478,24 @@ export function attachBoardServer(deps = {}) {
                             reason: `这条连接代表「${who.bot}」，不能把单指派给「${assignee}」`,
                         });
                     }
+                }
+
+                // ③ R6 #20：parentId 必须指向存在的、未终结的单；agent 只能挂自己名下的
+                if (v.job.parentId) {
+                    const parent = getJob(db, String(v.job.parentId));
+                    if (!parent) {
+                        return ack(cb, { ok: false, code: 'NO_TARGET', reason: `parentId「${v.job.parentId}」不存在` });
+                    }
+                    if (isTerminal(parent.state)) {
+                        return ack(cb, { ok: false, code: 'NO_TARGET', reason: `父单「${parent.id}」已是终态 ${parent.state}，不能再挂子单` });
+                    }
+                    if (role === ROLE_AGENT && parent.assignee && String(parent.assignee) !== String(who.bot)) {
+                        return ack(cb, { ok: false, code: 'NO_PERMISSION', reason: `父单「${parent.id}」属于「${parent.assignee}」` });
+                    }
+                }
+                // ③b R6 #20：agent 只能把单派给已 hello 的 bot（面板是控制层，允许提前指派）
+                if (role === ROLE_AGENT && assignee && !botRegistry.has(String(assignee))) {
+                    return ack(cb, { ok: false, code: 'NO_PERMISSION', reason: `「${assignee}」没 hello 过，不能把单派给它` });
                 }
 
                 // ③ R6 #16：限流（按真实来源分桶）

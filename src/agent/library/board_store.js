@@ -955,8 +955,10 @@ export function heartbeat(db, id, bot, opts = {}) {
     // ★★★ BOARD-003：心跳也要校验尝试标识 —— 否则"租约过期→同名重领"之后，
     //   旧尝试还能继续给新尝试续租/写进度，把新租约的 until 往前推、把进度覆盖。
     const hbGuard = attemptGuardSql(opts.attemptSeq);
-    const hb = db.prepare(`UPDATE jobs SET lease_until=?, state=?, progress=?, updatedAt=? WHERE id=?${hbGuard.sql}`)
-        .run(now + leaseMs, nextState, j(merged.progress), now, id, ...hbGuard.params);
+    // R6 #22：租约归属与"租约还没过期"都作为 SQL 条件，不靠上面那次读快照
+    const hb = db.prepare(`UPDATE jobs SET lease_until=?, state=?, progress=?, updatedAt=?
+        WHERE id=? AND lease_owner=? AND (lease_until IS NULL OR lease_until >= ?)${hbGuard.sql}`)
+        .run(now + leaseMs, nextState, j(merged.progress), now, id, bot, now, ...hbGuard.params);
     if (hb.changes === 0) return { ok: false, code: 'LEASE_LOST' };
 
     // ★ 2026-11-02（t20，captain 要求）：心跳报到"已达标"就当场收敛成 done，**别等 finish**。
@@ -1075,9 +1077,10 @@ export function finish(db, id, result = {}, opts = {}) {
     //     claimed / running（正常在跑）、paused（按停后收尾）、
     //     ready（无人持有的草稿态，保持既有语义："没人持有 ⇒ 谁都可能是合法收尾者"）。
     //   只拒 `pending` / `blocked` / 终态 —— 不改变任何正常路径。
-    //   ★ 需要老的宽松行为时显式传 `{ anyState: true }`（离线夹具/工具）。
+    //   ★ T7-3：这里原来有个 `{ anyState: true }` 逃生门，全仓**零调用**（含 tools/），已删除；
+    //     要放宽就显式改这个状态表，别留一个没人测、没人用的旁路。
     const FINISHABLE_STATES = [JOB_STATE.READY, JOB_STATE.CLAIMED, JOB_STATE.RUNNING, JOB_STATE.PAUSED];
-    if (opts.anyState !== true && !FINISHABLE_STATES.includes(job.state)) {
+    if (!FINISHABLE_STATES.includes(job.state)) {
         return {
             ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
             message: `单 ${id} 的状态是 ${job.state}，不该被 finish（一个字段都没写）`,
@@ -1258,7 +1261,7 @@ export function finish(db, id, result = {}, opts = {}) {
     const r = db.prepare(`UPDATE jobs
         SET state=?, attempts=?, lease_owner=NULL, lease_until=NULL,
             progress=?, checkpoint=?, result=?, interrupted=?, updatedAt=?
-        WHERE id=?${leaseGuard}${aGuard.sql}`).run(
+        WHERE id=? AND state=? AND attempts=?${leaseGuard}${aGuard.sql}`).run(
         next, attempts,
         j(progressForWrite),
         j(checkpointForWrite),
@@ -1282,7 +1285,9 @@ export function finish(db, id, result = {}, opts = {}) {
         // 回到 ready 时清掉 interrupted（与 control.js 的 requeue 语义一致）；
         // 其它状态保留（paused 时要留着"被打断的原因/时刻"）
         next === JOB_STATE.READY ? null : j(result.interrupted ?? job.interrupted),
-        now, id, ...(bot == null ? [] : [bot]), ...aGuard.params,
+        // R6 #22：state 与 attempts 也作为条件 —— 两个收尾同时到，只有一个的 changes=1
+        //   （另一个返回 LEASE_STALE，不会把 attempts 写成同一个数而"丢一次计数"）
+        now, id, job.state, job.attempts, ...(bot == null ? [] : [bot]), ...aGuard.params,
     );
 
     // ★★★ 第4条：`changes === 0` = **租约已不属于调用者** → 一字不写，直接拒。
@@ -1383,8 +1388,10 @@ export function setState(db, id, state, opts = {}) {
     //   新尝试的租约摘掉 —— 与"旧 finish 结束新尝试"是同一个洞的另一扇门。
     //   兼容：不传 attemptSeq（老客户端/控制层离线工具）时行为完全不变。
     const stGuard = attemptGuardSql(opts.attemptSeq);
-    const st = db.prepare(`UPDATE jobs SET state=?, updatedAt=?${clearLease ? ', lease_owner=NULL, lease_until=NULL' : ''} WHERE id=?${stGuard.sql}`)
-        .run(state, now, id, ...stGuard.params);
+    // R6 #22：合法的起点状态也进 SQL 条件（并发转移时 changes=0，而不是按旧快照硬写）
+    const st = db.prepare(`UPDATE jobs SET state=?, updatedAt=?${clearLease ? ', lease_owner=NULL, lease_until=NULL' : ''}
+        WHERE id=? AND state=?${stGuard.sql}`)
+        .run(state, now, id, job.state, ...stGuard.params);
     if (st.changes === 0) {
         return {
             ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
@@ -1466,7 +1473,10 @@ export function updateJob(db, id, patch = {}, opts = {}) {
     // ★★★ BOARD-003：断点写入同样要落在"同一次尝试"上。
     //   报告回归验收明确要求"迟到 checkpoint 不得修改新尝试字段"。
     const ujGuard = attemptGuardSql(opts.attemptSeq);
-    const uj = db.prepare(`UPDATE jobs SET ${sets.join(', ')} WHERE id=?${ujGuard.sql}`).run(...params, ...ujGuard.params);
+    // R6 #22：改 state 时把"起点状态"也落进 SQL 条件（并发转移 → changes=0，不硬写旧快照）
+    const stateGuard = patch.state == null ? '' : ' AND state=?';
+    const uj = db.prepare(`UPDATE jobs SET ${sets.join(', ')} WHERE id=?${stateGuard}${ujGuard.sql}`)
+        .run(...params, ...(patch.state == null ? [] : [job.state]), ...ujGuard.params);
     if (uj.changes === 0) {
         return {
             ok: false, code: BOARD_RESULT_CODES.LEASE_STALE,
@@ -2422,8 +2432,12 @@ export function mergeSharedChest(db, key, delta, owner = null, opts = {}) {
     //   宁可让调用方（异步层）重试。
     return runInImmediateTx(db, () => {
         const prev = getShared(db, SHARED_CHEST_KIND, k);
-        const prevValue = prev?.value ?? null;
-        const items = { ...(prevValue?.items ?? {}) };
+        const prevValue = (prev?.value && typeof prev.value === 'object') ? prev.value : null;
+        // ADR §10.2-1：以板库现值为基底合并，只覆盖本函数负责的字段（否则会抹掉 category/note）
+        const keep = prevValue ? { ...prevValue } : {};
+        const items = { ...(keep.items ?? keep.contents ?? {}) };
+        delete keep.contents;                              // items 才是权威口径
+        if (keep.removed === true) delete keep.removed;    // 能合并 ⇒ 箱子现在真的在用
         for (const [name, raw] of Object.entries(d)) {
             const n = Number(raw);
             if (!Number.isFinite(n) || n === 0) continue;
@@ -2432,6 +2446,7 @@ export function mergeSharedChest(db, key, delta, owner = null, opts = {}) {
             else delete items[name];
         }
         const value = {
+            ...keep,
             pos: prevValue?.pos ?? opts.pos ?? null,
             items,
             owner: owner ?? prevValue?.owner ?? null,
