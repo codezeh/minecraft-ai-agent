@@ -31,6 +31,8 @@ const pending = ref<{ expiresAt: number; sessionId: string | null }[]>([])
 // R6 #69/#74：身份表损坏（已 fail-closed 按空表处理）与"读不到模式"的原因
 const corrupt = ref(false)
 const backupPath = ref<string | null>(null)
+const codesCorrupt = ref(false)
+const codesBackupPath = ref<string | null>(null)
 const modeError = ref<string | null>(null)
 
 let tick: ReturnType<typeof setInterval> | null = null
@@ -62,6 +64,8 @@ async function refresh() {
       // 字段缺失一律当"正常"（旧服务端不发这两个字段，不能被当成损坏/异常）
       corrupt.value = r.corrupt === true
       backupPath.value = r.corrupt === true ? (r.backup ?? null) : null
+      codesCorrupt.value = r.codesCorrupt === true
+      codesBackupPath.value = r.codesCorrupt === true ? (r.codesBackup ?? null) : null
       modeError.value = r.modeError ?? null
       err.value = ''
     } else {
@@ -145,6 +149,8 @@ watch(agentName, (name, prev) => {
   mode.value = null
   corrupt.value = false
   backupPath.value = null
+  codesCorrupt.value = false
+  codesBackupPath.value = null
   modeError.value = null
   code.value = ''
   expiresAt.value = 0
@@ -180,6 +186,10 @@ onUnmounted(() => { if (tick) clearInterval(tick) })
     </div>
 
     <!-- R6 #69：身份表损坏必须说清"已按空表处理"，否则下面"0 个绑定"会被读成"没人绑过" -->
+    <div v-if="codesCorrupt" class="corrupt small">
+      <b>⚠ 绑定码表损坏</b>：已按<strong>空表</strong>处理，待用的绑定码全部不可用。
+      <div v-if="codesBackupPath" class="bk">原文件已改名留证：<code>{{ codesBackupPath }}</code></div>
+    </div>
     <div v-if="corrupt" class="corrupt small">
       <b>⚠ 身份表损坏</b>：已按<strong>空表</strong>处理（fail-closed，不会误授权）。
       <div v-if="backupPath" class="bk">原文件已改名留证：<code>{{ backupPath }}</code></div>

@@ -470,6 +470,10 @@ export interface IdentityStatus {
   corrupt?: boolean
   /** 损坏时原文件的留证路径（<path>.corrupt-<ts>）。 */
   backup?: string | null
+  /** 码表（identity-codes.json）损坏；口径与 corrupt 一致。 */
+  codesCorrupt?: boolean
+  /** 码表损坏时的留证路径。 */
+  codesBackup?: string | null
   reason?: string
 }
 
