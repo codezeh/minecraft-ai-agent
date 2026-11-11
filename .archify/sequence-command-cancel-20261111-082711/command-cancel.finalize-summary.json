@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "fail",
+  "type": "sequence",
+  "quality": "showcase",
+  "specification": {
+    "path": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\candidate.json",
+    "sha256": "1eabe665e0d3a511a5ac7801044df2bac1c93ab2fd31e03391b0e0c688c868ec",
+    "bytes": 7412
+  },
+  "artifact": {
+    "path": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+    "sha256": "f7d3a823ab5e15d056882b78d2d7d0929ba2925780b48e5f0939a8986564a3a9",
+    "bytes": 827961
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "fail"
+  },
+  "failedStage": "browser-check",
+  "diagnostics": [
+    {
+      "code": "viewer/evidence-path-conflict",
+      "severity": "error",
+      "message": "browser-check will not replace the existing unowned evidence path \"E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json\".",
+      "subject": {
+        "artifact": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+        "evidencePath": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json"
+      },
+      "evidence": {
+        "reason": {
+          "code": "ownership-artifact-mismatch"
+        }
+      },
+      "supportedFixes": [
+        "move the conflicting file aside, or choose a separate --out-dir, then rerun browser-check"
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.finalize.json",
+    "summaryReceipt": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.finalize-summary.json",
+    "browserCheckReceipt": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-10T23:59:07.293Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 1608,
+  "browserCheck": {
+    "requested": true,
+    "ran": false
+  }
+}

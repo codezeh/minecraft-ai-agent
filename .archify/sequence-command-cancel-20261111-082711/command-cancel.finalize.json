@@ -1,0 +1,421 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "fail",
+  "type": "sequence",
+  "quality": "showcase",
+  "startedAt": "2026-11-11T00:33:11.576Z",
+  "specification": {
+    "path": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\candidate.json",
+    "sha256": "1eabe665e0d3a511a5ac7801044df2bac1c93ab2fd31e03391b0e0c688c868ec",
+    "bytes": 7412
+  },
+  "artifact": {
+    "path": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+    "sha256": "f7d3a823ab5e15d056882b78d2d7d0929ba2925780b48e5f0939a8986564a3a9",
+    "bytes": 827961
+  },
+  "stages": {
+    "validate": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": null,
+      "execution": "embedded-in-deliver",
+      "command": [
+        "D:\\Node\\node.exe",
+        "C:\\Users\\zeh\\.agents\\skills\\archify\\bin\\archify.mjs",
+        "deliver",
+        "sequence",
+        "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\candidate.json",
+        "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+        "--quality",
+        "showcase",
+        "--repo-root",
+        "E:\\我的世界ai\\mindcraft",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": true,
+        "command": "validate",
+        "specification": {
+          "sha256": "1eabe665e0d3a511a5ac7801044df2bac1c93ab2fd31e03391b0e0c688c868ec",
+          "bytes": 7412
+        },
+        "validation": {
+          "checksPassed": 9,
+          "checkCount": 9,
+          "compositionProfile": "showcase",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 0
+        }
+      }
+    },
+    "deliver": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 1113,
+      "command": [
+        "D:\\Node\\node.exe",
+        "C:\\Users\\zeh\\.agents\\skills\\archify\\bin\\archify.mjs",
+        "deliver",
+        "sequence",
+        "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\candidate.json",
+        "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+        "--quality",
+        "showcase",
+        "--repo-root",
+        "E:\\我的世界ai\\mindcraft",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "db536e46-3a03-4709-95dc-82cc0493a76e",
+        "ok": true,
+        "command": "deliver",
+        "type": "sequence",
+        "input": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\candidate.json",
+        "output": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+        "specification": {
+          "sha256": "1eabe665e0d3a511a5ac7801044df2bac1c93ab2fd31e03391b0e0c688c868ec",
+          "bytes": 7412
+        },
+        "artifact": {
+          "sha256": "f7d3a823ab5e15d056882b78d2d7d0929ba2925780b48e5f0939a8986564a3a9",
+          "bytes": 827961
+        },
+        "validation": {
+          "checksPassed": 9,
+          "checkCount": 9,
+          "compositionProfile": "showcase",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 0
+        },
+        "evidence": {
+          "verified": true,
+          "repository": "https://github.com/mindcraft-bots/mindcraft",
+          "revision": "6c548b3dc2940dc84d15e7caf3e71efbd89b68f1",
+          "references": 5
+        },
+        "update": {
+          "status": "unavailable",
+          "installedVersion": null,
+          "availableVersion": null,
+          "releaseNotes": null,
+          "checkedAt": null,
+          "source": null,
+          "noticeRequired": false,
+          "noticeText": null,
+          "reason": "disabled"
+        }
+      }
+    },
+    "check": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 158,
+      "command": [
+        "D:\\Node\\node.exe",
+        "C:\\Users\\zeh\\.agents\\skills\\archify\\bin\\archify.mjs",
+        "check",
+        "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+        "--require-provenance"
+      ],
+      "receipt": {
+        "ok": true,
+        "file": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+        "artifact": {
+          "sha256": "f7d3a823ab5e15d056882b78d2d7d0929ba2925780b48e5f0939a8986564a3a9",
+          "bytes": 827961
+        },
+        "checks": [
+          {
+            "name": "single_svg",
+            "ok": true,
+            "details": [
+              "found 1 <svg> block(s)"
+            ]
+          },
+          {
+            "name": "finite_svg",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "orthogonal_arrows",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "label_route_clearance",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "relationship_crossings",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "relationship_corridors",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "container_border_runs",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "route_rhythm",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "legend_clearance",
+            "ok": true,
+            "details": []
+          }
+        ],
+        "composition": {
+          "schemaVersion": 1,
+          "profile": "showcase",
+          "status": "pass",
+          "summary": {
+            "errors": 0,
+            "warnings": 0
+          },
+          "metrics": {
+            "properCrossings": 0,
+            "resolvedCrossovers": 0,
+            "ambiguousCorridors": 0,
+            "arrowheadCollisions": 0,
+            "containerBorderRuns": 0,
+            "labelRouteClearanceIssues": 0,
+            "labelCanvasOverflowIssues": 0,
+            "minLabelRouteClearance": 10,
+            "desktopReadabilityIssues": 0,
+            "viewportHeightIssues": 0,
+            "minProjectedNodeTextPx": 7,
+            "maxBends": 0,
+            "routesOverSuggestedBends": 0,
+            "maxStretch": 1,
+            "routesOverSuggestedStretch": 0,
+            "minSegmentPx": 107.3,
+            "minInteriorSegmentPx": null,
+            "shortSegmentCount": 0,
+            "shortEndpointSegmentCount": 0,
+            "shortInteriorSegmentCount": 0,
+            "microSegmentCount": 0
+          },
+          "suggestedLimits": {
+            "bendsPerRelationship": 2,
+            "stretch": 1.35,
+            "segmentPx": 16,
+            "microSegmentPx": 8
+          },
+          "routeReview": {
+            "crossings": [],
+            "detours": []
+          },
+          "leadingSpace": {
+            "measured": false,
+            "reviewSuggested": false
+          },
+          "sequenceColumnSpace": {
+            "measured": true,
+            "columnFit": "spread",
+            "participantCount": 7,
+            "occupiedRight": 885.2,
+            "viewBoxLeft": 0,
+            "canvasWidth": 920,
+            "emptyRightPx": 34.8,
+            "emptyRightRatio": 0.038,
+            "typicalParticipantWidth": 90,
+            "reviewSuggested": false
+          },
+          "sequenceNoteBorders": [
+            {
+              "code": "sequence/note-segment-border",
+              "reviewSuggested": true,
+              "message": "Note on message \"signal 已 abort ⇒ 六个出口全部取消\" ends at y=731, crossing its segment bottom y=664. Review the note and neighbouring phase boundaries together; keep the full note and message order.",
+              "subject": {
+                "diagramType": "sequence",
+                "path": "/messages/13/note"
+              },
+              "evidence": {
+                "note": {
+                  "x": 611.3333333333333,
+                  "y": 601,
+                  "width": 126.42000000000007,
+                  "height": 129.75
+                },
+                "lines": 12,
+                "messageY": 590,
+                "segment": {
+                  "path": "/segments/4/to",
+                  "from": 488,
+                  "to": 664
+                },
+                "requiredTo": 735
+              },
+              "supportedFixes": []
+            }
+          ],
+          "desktopReadability": {
+            "budgetBasis": "legacy-930",
+            "readerContract": "declared-wide-v1",
+            "availableDiagramWidth": 930,
+            "actualBudgetPx": 930,
+            "limit": "legacy",
+            "requestedTargetPx": null,
+            "requestedTargetMet": null,
+            "hardFloorPx": 6,
+            "hardFloorMet": true,
+            "minimumOwner": {
+              "kind": "edge",
+              "id": "m14",
+              "from": "slot",
+              "to": "llm"
+            },
+            "minimumSourceTextPx": 7,
+            "minimumProjectedTextPx": 7,
+            "semanticTextCount": 31
+          },
+          "issues": []
+        },
+        "provenance": "current",
+        "deliveryReceiptId": "db536e46-3a03-4709-95dc-82cc0493a76e"
+      }
+    },
+    "browser-check": {
+      "status": "fail",
+      "exitCode": 1,
+      "durationMs": 62,
+      "command": [
+        "D:\\Node\\node.exe",
+        "C:\\Users\\zeh\\.agents\\skills\\archify\\bin\\archify.mjs",
+        "browser-check",
+        "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+        "--json",
+        "--require-provenance"
+      ],
+      "execution": "in-process",
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": false,
+        "command": "browser-check",
+        "evidenceKind": "automated-browser",
+        "status": "fail",
+        "visualReview": "not-requested",
+        "provenance": "current",
+        "deliveryReceiptId": "db536e46-3a03-4709-95dc-82cc0493a76e",
+        "artifact": {
+          "path": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+          "sha256": "f7d3a823ab5e15d056882b78d2d7d0929ba2925780b48e5f0939a8986564a3a9",
+          "bytes": 827961
+        },
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "chrome": {
+          "status": "not-checked",
+          "executable": null
+        },
+        "diagnostics": [
+          {
+            "code": "viewer/evidence-path-conflict",
+            "severity": "error",
+            "message": "browser-check will not replace the existing unowned evidence path \"E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json\".",
+            "subject": {
+              "artifact": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+              "evidencePath": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json"
+            },
+            "evidence": {
+              "reason": {
+                "code": "ownership-artifact-mismatch"
+              }
+            },
+            "supportedFixes": [
+              "move the conflicting file aside, or choose a separate --out-dir, then rerun browser-check"
+            ]
+          }
+        ],
+        "containment": {
+          "status": "fail",
+          "policy": "fit-or-reader-declared-readable-vertical-scroll",
+          "viewports": []
+        },
+        "themeStates": {
+          "status": "fail",
+          "viewports": []
+        },
+        "readability": {
+          "status": "fail",
+          "minimumProjectedNodeTextPx": 6,
+          "viewports": []
+        },
+        "viewerChrome": {
+          "status": "fail",
+          "viewports": []
+        },
+        "captures": {
+          "status": "not-requested",
+          "screenshots": [],
+          "contactSheet": null
+        },
+        "sidecars": {
+          "receipt": "command-cancel.browser-check.json",
+          "files": []
+        },
+        "error": "browser-check will not replace the existing unowned evidence path \"E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json\"."
+      }
+    }
+  },
+  "browserCheck": {
+    "requested": true,
+    "ran": false
+  },
+  "diagnostics": [
+    {
+      "code": "viewer/evidence-path-conflict",
+      "severity": "error",
+      "message": "browser-check will not replace the existing unowned evidence path \"E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json\".",
+      "subject": {
+        "artifact": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+        "evidencePath": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json"
+      },
+      "evidence": {
+        "reason": {
+          "code": "ownership-artifact-mismatch"
+        }
+      },
+      "supportedFixes": [
+        "move the conflicting file aside, or choose a separate --out-dir, then rerun browser-check"
+      ]
+    }
+  ],
+  "evidence": {
+    "receipt": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.finalize.json",
+    "summaryReceipt": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.finalize-summary.json",
+    "browserCheckReceipt": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "failedStage": "browser-check",
+  "finishedAt": "2026-11-11T00:33:13.185Z",
+  "durationMs": 1608,
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-10T23:59:07.293Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  }
+}

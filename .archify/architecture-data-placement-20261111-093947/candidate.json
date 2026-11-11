@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "现状 · 数据落在哪七处",
+    "locale": "zh-CN",
+    "subtitle": "全部为代码中既有事实（带提交级来源）；并发形态按当前实现标注",
+    "quality_profile": "showcase",
+    "output": ".archify/architecture-data-placement-20261111-093947/data-placement.html",
+    "repository": {
+      "url": "https://github.com/mindcraft-bots/mindcraft.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "6c548b3dc2940dc84d15e7caf3e71efbd89b68f1"
+    }
+  },
+  "components": [
+    {
+      "id": "mindserver",
+      "type": "backend",
+      "label": "Mindserver",
+      "sublabel": "控制面 :8080",
+      "tag": "唯一板库写者",
+      "pos": [
+        380,
+        380
+      ],
+      "size": [
+        200,
+        74
+      ],
+      "sources": [
+        {
+          "path": "src/mindcraft/mindserver.js",
+          "line": 965,
+          "label": "openBoard(boardDirOf()) 唯一调用"
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "type": "backend",
+      "label": "Bot 子进程 ×N",
+      "sublabel": "每 bot 一进程",
+      "pos": [
+        680,
+        380
+      ],
+      "size": [
+        190,
+        74
+      ],
+      "sources": [
+        {
+          "path": "src/process/agent_process.js",
+          "line": 135,
+          "end_line": 152,
+          "label": "spawn"
+        }
+      ]
+    },
+    {
+      "id": "board",
+      "type": "database",
+      "label": "任务板",
+      "sublabel": "bots/_board/board.sqlite",
+      "tag": "单库 · WAL · 迁移 v3",
+      "pos": [
+        120,
+        120
+      ],
+      "size": [
+        210,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/agent/library/board_store.js",
+          "line": 145,
+          "label": "uq_claims_key"
+        }
+      ]
+    },
+    {
+      "id": "memory",
+      "type": "database",
+      "label": "人物记忆",
+      "sublabel": "bots/<name>/memory.json",
+      "tag": "进程私有 · 三级抢救",
+      "pos": [
+        400,
+        120
+      ],
+      "size": [
+        200,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/agent/history.js",
+          "line": 64,
+          "label": "memory_fp"
+        }
+      ]
+    },
+    {
+      "id": "identity",
+      "type": "database",
+      "label": "身份绑定",
+      "sublabel": "bots/<name>/identity.json",
+      "tag": "按 agent 目录 · 明文码",
+      "pos": [
+        660,
+        120
+      ],
+      "size": [
+        200,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/mindcraft/identity_store.js",
+          "line": 174,
+          "label": "identityFileOf"
+        }
+      ]
+    },
+    {
+      "id": "vault",
+      "type": "database",
+      "label": "凭据保管库",
+      "sublabel": ".secrets.db",
+      "tag": "SQLite · AES-256-GCM",
+      "pos": [
+        900,
+        120
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/agent/library/secrets_vault.js",
+          "line": 50,
+          "end_line": 51,
+          "label": "DEFAULT_DB_PATH"
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "type": "database",
+      "label": "配置与密钥",
+      "sublabel": "keys.json · profiles/ · settings.js",
+      "tag": "运行时挂载 · 只读",
+      "pos": [
+        400,
+        600
+      ],
+      "size": [
+        220,
+        62
+      ],
+      "sources": [
+        {
+          "path": "settings.js",
+          "line": 3,
+          "end_line": 9,
+          "label": "host/端口默认值"
+        }
+      ]
+    },
+    {
+      "id": "world",
+      "type": "database",
+      "label": "世界存档",
+      "sublabel": "server/world* · region/*.mca",
+      "tag": "Paper 独占 · 备份对象",
+      "pos": [
+        120,
+        780
+      ],
+      "size": [
+        210,
+        62
+      ]
+    },
+    {
+      "id": "token",
+      "type": "database",
+      "label": "握手令牌",
+      "sublabel": ".mindserver-token",
+      "tag": "启动重建 · ACL 收口",
+      "pos": [
+        680,
+        600
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "sources": [
+        {
+          "path": "src/mindcraft/mindserver.js",
+          "line": 806,
+          "label": "写 cwd 下的 token 文件"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "mindcraft 子仓（运行时数据）",
+      "wraps": [
+        "board",
+        "memory",
+        "identity",
+        "vault",
+        "config",
+        "token",
+        "mindserver",
+        "agents"
+      ],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    {
+      "id": "ms-board",
+      "from": "mindserver",
+      "to": "board",
+      "label": "唯一写者",
+      "variant": "emphasis"
+    },
+    {
+      "id": "agents-board",
+      "from": "agents",
+      "to": "board",
+      "label": "board:* RPC",
+      "variant": "dashed"
+    },
+    {
+      "id": "agents-memory",
+      "from": "agents",
+      "to": "memory",
+      "label": "读写",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ms-identity",
+      "from": "mindserver",
+      "to": "identity",
+      "label": "核销绑定码"
+    },
+    {
+      "id": "ms-vault",
+      "from": "mindserver",
+      "to": "vault",
+      "label": "unlock 门",
+      "variant": "security"
+    },
+    {
+      "id": "ms-token",
+      "from": "mindserver",
+      "to": "token",
+      "label": "每次启动重建"
+    },
+    {
+      "id": "agents-config",
+      "from": "agents",
+      "to": "config",
+      "label": "读配置"
+    },
+    {
+      "id": "agents-world",
+      "from": "agents",
+      "to": "world",
+      "label": "mineflayer 连服",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "七处存储的并发形态",
+      "items": [
+        "任务板：全系统一份，只有 mindserver 打开；WAL + busy_timeout，claims.key 有 UNIQUE 兜底",
+        "人物记忆：每个 bot 自己的文件，进程私有，无跨进程争用",
+        "身份绑定与令牌：文件，按 agent 目录或 cwd 落盘；令牌每次启动重建并收 ACL"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "备份覆盖到哪、没覆盖到哪",
+      "items": [
+        "已进备份：world* / bots（含 board.sqlite 快照）/ plugins 配置 / server-config（含脱敏 properties）/ logs",
+        "不进备份：*.jar（可重下，但清单记在 manifest.pluginJars）",
+        "不在备份范围：.secrets.db 与 .mindserver-token（密钥材料，刻意不备）"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "这张图暴露的两个结构性欠账",
+      "items": [
+        "身份按 agent 目录存 ⇒ 「一个玩家一个分身」在数据层无法判定（无 people 表）",
+        "任务板没有 world/team 维度 ⇒ 换存档或组队时只能全服一张板",
+        "两处都不在本批修复范围，属 ADR-0001 阶段 2 / 阶段 3"
+      ]
+    }
+  ]
+}

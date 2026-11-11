@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "lifecycle",
+  "quality": "showcase",
+  "specification": {
+    "path": "E:\\我的世界ai\\.archify\\lifecycle-bot-20261111-093329\\candidate.json",
+    "sha256": "7423877f24d54eaeffc42db98c6acf82f0dd34dfb0899b44bd8dc9453fb00dc5",
+    "bytes": 6127
+  },
+  "artifact": {
+    "path": "E:\\我的世界ai\\.archify\\lifecycle-bot-20261111-093329\\bot-lifecycle.html",
+    "sha256": "99ee193cd2be051eb8e4019322431f16cf5907cb41f0e837e59906825c10d566",
+    "bytes": 832006
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "E:\\我的世界ai\\.archify\\lifecycle-bot-20261111-093329\\bot-lifecycle.finalize.json",
+    "summaryReceipt": "E:\\我的世界ai\\.archify\\lifecycle-bot-20261111-093329\\bot-lifecycle.finalize-summary.json",
+    "browserCheckReceipt": "E:\\我的世界ai\\.archify\\lifecycle-bot-20261111-093329\\bot-lifecycle.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-10T23:59:07.293Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3085,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "resolvedCrossovers": 2
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [
+        {
+          "left": {
+            "id": "t7",
+            "from": "connecting",
+            "to": "retrying",
+            "label": "连不上",
+            "collectionIndex": 6,
+            "artifactIndex": 7
+          },
+          "right": {
+            "id": "t10",
+            "from": "setup",
+            "to": "crashed",
+            "label": "setup 抛错",
+            "collectionIndex": 9,
+            "artifactIndex": 10
+          },
+          "point": [
+            579.3,
+            143.70000000000002
+          ]
+        },
+        {
+          "left": {
+            "id": "t8",
+            "from": "retrying",
+            "to": "connecting",
+            "label": "再试",
+            "collectionIndex": 7,
+            "artifactIndex": 8
+          },
+          "right": {
+            "id": "t10",
+            "from": "setup",
+            "to": "crashed",
+            "label": "setup 抛错",
+            "collectionIndex": 9,
+            "artifactIndex": 10
+          },
+          "point": [
+            579.2999999999998,
+            161.99999999999997
+          ]
+        }
+      ],
+      "detours": [],
+      "truncated": false
+    },
+    "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+  }
+}

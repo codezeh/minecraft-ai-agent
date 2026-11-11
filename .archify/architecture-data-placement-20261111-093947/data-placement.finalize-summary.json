@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "E:\\我的世界ai\\.archify\\architecture-data-placement-20261111-093947\\candidate.json",
+    "sha256": "2293659727114fb5adc31ec497a989606c0ad57472afb611cd38b713c383a743",
+    "bytes": 7075
+  },
+  "artifact": {
+    "path": "E:\\我的世界ai\\.archify\\architecture-data-placement-20261111-093947\\data-placement.html",
+    "sha256": "5e76f034b3b01607321346dd1ca5b3dc2f8e33d859ac944755416dbb51497d76",
+    "bytes": 829000
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "E:\\我的世界ai\\.archify\\architecture-data-placement-20261111-093947\\data-placement.finalize.json",
+    "summaryReceipt": "E:\\我的世界ai\\.archify\\architecture-data-placement-20261111-093947\\data-placement.finalize-summary.json",
+    "browserCheckReceipt": "E:\\我的世界ai\\.archify\\architecture-data-placement-20261111-093947\\data-placement.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-10T23:59:07.293Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3355,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "resolvedCrossovers": 6
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [
+        {
+          "left": {
+            "id": "agents-board",
+            "from": "agents",
+            "to": "board",
+            "label": "board:* RPC",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "right": {
+            "id": "agents-memory",
+            "from": "agents",
+            "to": "memory",
+            "label": "读写",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "point": [
+            656,
+            255
+          ],
+          "sharedNode": "agents"
+        },
+        {
+          "left": {
+            "id": "agents-board",
+            "from": "agents",
+            "to": "board",
+            "label": "board:* RPC",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "right": {
+            "id": "ms-identity",
+            "from": "mindserver",
+            "to": "identity",
+            "label": "核销绑定码",
+            "collectionIndex": 3,
+            "artifactIndex": 4
+          },
+          "point": [
+            480,
+            255
+          ]
+        },
+        {
+          "left": {
+            "id": "agents-board",
+            "from": "agents",
+            "to": "board",
+            "label": "board:* RPC",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "right": {
+            "id": "ms-vault",
+            "from": "mindserver",
+            "to": "vault",
+            "label": "unlock 门",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "point": [
+            771.6,
+            256
+          ]
+        },
+        {
+          "left": {
+            "id": "agents-memory",
+            "from": "agents",
+            "to": "memory",
+            "label": "读写",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "right": {
+            "id": "ms-identity",
+            "from": "mindserver",
+            "to": "identity",
+            "label": "核销绑定码",
+            "collectionIndex": 3,
+            "artifactIndex": 4
+          },
+          "point": [
+            656,
+            206
+          ]
+        },
+        {
+          "left": {
+            "id": "agents-memory",
+            "from": "agents",
+            "to": "memory",
+            "label": "读写",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "right": {
+            "id": "ms-vault",
+            "from": "mindserver",
+            "to": "vault",
+            "label": "unlock 门",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "point": [
+            656,
+            256
+          ]
+        },
+        {
+          "left": {
+            "id": "ms-token",
+            "from": "mindserver",
+            "to": "token",
+            "label": "每次启动重建",
+            "collectionIndex": 5,
+            "artifactIndex": 6
+          },
+          "right": {
+            "id": "agents-config",
+            "from": "agents",
+            "to": "config",
+            "label": "读配置",
+            "collectionIndex": 6,
+            "artifactIndex": 7
+          },
+          "point": [
+            656,
+            438
+          ]
+        }
+      ],
+      "detours": [],
+      "truncated": false
+    },
+    "hints": [
+      "agents → board and agents → memory cross next to agents: move node board or memory so the two reach agents from different sides (for example one level with it, one directly above or below it).",
+      "agents → board crosses mindserver → identity: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "agents → board crosses mindserver → vault: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "agents → memory crosses mindserver → identity: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "agents → memory crosses mindserver → vault: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor.",
+      "mindserver → token crosses agents → config: move the node of whichever is a branch, return, or second entrance to the other side of the main path, so that relationship runs through an empty corridor."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}

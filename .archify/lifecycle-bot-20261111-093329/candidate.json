@@ -1,0 +1,257 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Bot 子进程生命周期",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": ".archify/lifecycle-bot-20261111-093329/bot-lifecycle.html",
+    "repository": {
+      "url": "https://github.com/mindcraft-bots/mindcraft.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "6c548b3dc2940dc84d15e7caf3e71efbd89b68f1"
+    }
+  },
+  "mainPath": [
+    "spawning",
+    "setup",
+    "connecting",
+    "acting"
+  ],
+  "states": [
+    {
+      "id": "spawning",
+      "type": "start",
+      "label": "spawn 子进程",
+      "sublabel": "mindserver 拉起",
+      "tag": "起点",
+      "step": "01",
+      "sources": [
+        {
+          "path": "src/process/agent_process.js",
+          "line": 135,
+          "end_line": 152,
+          "label": "spawn(execPath, init_agent.js)"
+        }
+      ]
+    },
+    {
+      "id": "setup",
+      "type": "active",
+      "label": "初始化",
+      "sublabel": "读 profile / 建 Agent",
+      "tag": "运行中",
+      "step": "02",
+      "sources": [
+        {
+          "path": "src/process/init_agent.js",
+          "line": 15,
+          "end_line": 19,
+          "label": "子进程入口"
+        }
+      ]
+    },
+    {
+      "id": "connecting",
+      "type": "active",
+      "label": "连服",
+      "sublabel": "mineflayer → :25565",
+      "tag": "运行中",
+      "step": "03"
+    },
+    {
+      "id": "idle",
+      "type": "waiting",
+      "label": "空闲待命",
+      "sublabel": "等命令 / 等任务",
+      "tag": "等待",
+      "step": "04"
+    },
+    {
+      "id": "acting",
+      "type": "active",
+      "label": "执行动作",
+      "sublabel": "动作槽 + currentOperation",
+      "tag": "运行中",
+      "step": "05",
+      "sources": [
+        {
+          "path": "src/agent/action_manager.js",
+          "line": 357,
+          "end_line": 359,
+          "label": "currentOperation（唯一取消源）"
+        }
+      ]
+    },
+    {
+      "id": "finished",
+      "type": "success",
+      "label": "任务完成",
+      "sublabel": "正常收尾",
+      "tag": "终态"
+    },
+    {
+      "id": "retrying",
+      "type": "waiting",
+      "label": "退避重试",
+      "sublabel": "连服失败重来",
+      "tag": "上限 8 次",
+      "sources": [
+        {
+          "path": "src/process/agent_process.js",
+          "label": "backoff 重试与 unregister"
+        }
+      ]
+    },
+    {
+      "id": "unregistered",
+      "type": "failure",
+      "label": "永久摘除",
+      "sublabel": "8 次仍失败",
+      "tag": "终态"
+    },
+    {
+      "id": "crashed",
+      "type": "failure",
+      "label": "异常退出",
+      "sublabel": "未捕获拒绝 / setup 抛错",
+      "tag": "终态",
+      "sources": [
+        {
+          "path": "src/process/init_agent.js",
+          "line": 144,
+          "label": "非 0 退出码（原为 exit(0)）"
+        }
+      ]
+    },
+    {
+      "id": "orphaned",
+      "type": "neutral",
+      "label": "父进程消失",
+      "sublabel": "看护器自杀",
+      "tag": "终态",
+      "sources": [
+        {
+          "path": "src/process/proc_lifecycle.js",
+          "label": "makeParentWatcher"
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t1",
+      "from": "spawning",
+      "to": "setup",
+      "label": "进程起来"
+    },
+    {
+      "id": "t2",
+      "from": "setup",
+      "to": "connecting",
+      "label": "Agent 就绪"
+    },
+    {
+      "id": "t3",
+      "from": "connecting",
+      "to": "acting",
+      "label": "连上并接到动作"
+    },
+    {
+      "id": "t5",
+      "from": "acting",
+      "to": "idle",
+      "label": "动作结束"
+    },
+    {
+      "id": "t4",
+      "from": "idle",
+      "to": "acting",
+      "label": "再接到动作"
+    },
+    {
+      "id": "t6",
+      "from": "acting",
+      "to": "finished",
+      "label": "任务完成"
+    },
+    {
+      "id": "t7",
+      "from": "connecting",
+      "to": "retrying",
+      "label": "连不上",
+      "variant": "dashed"
+    },
+    {
+      "id": "t8",
+      "from": "retrying",
+      "to": "connecting",
+      "label": "再试"
+    },
+    {
+      "id": "t9",
+      "from": "retrying",
+      "to": "unregistered",
+      "label": "8 次仍失败",
+      "variant": "security"
+    },
+    {
+      "id": "t10",
+      "from": "setup",
+      "to": "crashed",
+      "label": "setup 抛错",
+      "variant": "security"
+    },
+    {
+      "id": "t11",
+      "from": "acting",
+      "to": "crashed",
+      "label": "未捕获拒绝",
+      "variant": "security"
+    },
+    {
+      "id": "t12",
+      "from": "idle",
+      "to": "orphaned",
+      "label": "父进程消失",
+      "variant": "dashed"
+    },
+    {
+      "id": "t13",
+      "from": "acting",
+      "to": "orphaned",
+      "label": "父进程消失",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "三个曾经会骗人的终态",
+      "items": [
+        "setup 抛错用 exit(0)：父进程以为正常结束 ⇒ 不重启、不卸载、面板只显示离线",
+        "history.save 抛错 + 调用点不接：未处理拒绝直接打挂进程（一个记忆写失败能杀死整只 bot）",
+        "缺同伙时 killAll()：一只 bot 拒绝开工，能把整套 mindserver 关掉（已改为只摘自己）"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "记忆坏了怎么活",
+      "items": [
+        "先抢救：截断处结构修复 → 救回 memory + turns + memory_bank",
+        "再抢救：正则取 memory 字面量 + 对 memory_bank 做大括号配平扫描",
+        "才认输：改名 .corrupt-<ts> 留证 + console.error 吵闹，绝不静默清零"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "谁能杀掉这只 bot",
+      "items": [
+        "父进程消失 → 看护器让它自杀（避免孤儿进程占着世界）",
+        "连服失败 8 次 → 永久 unregister（面板可重建同名）",
+        "退出码 >1 时只摘掉自己，不动整机：这是 agent_process 的硬约束"
+      ]
+    }
+  ]
+}

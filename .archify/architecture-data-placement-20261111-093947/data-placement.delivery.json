@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "7a1d1b78-0d59-4592-a837-c85c2aaf7874",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "E:\\我的世界ai\\.archify\\architecture-data-placement-20261111-093947\\candidate.json",
+  "output": "E:\\我的世界ai\\.archify\\architecture-data-placement-20261111-093947\\data-placement.html",
+  "specification": {
+    "sha256": "2293659727114fb5adc31ec497a989606c0ad57472afb611cd38b713c383a743",
+    "bytes": 7075
+  },
+  "artifact": {
+    "sha256": "5e76f034b3b01607321346dd1ca5b3dc2f8e33d859ac944755416dbb51497d76",
+    "bytes": 829000
+  }
+}

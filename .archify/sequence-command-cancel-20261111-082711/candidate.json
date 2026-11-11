@@ -1,0 +1,333 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "一次玩家操作 · 从下命令到取消与结算",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": ".archify/sequence-command-cancel-20261111-082711/command-cancel.html",
+    "repository": {
+      "url": "https://github.com/mindcraft-bots/mindcraft.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "6c548b3dc2940dc84d15e7caf3e71efbd89b68f1"
+    }
+  },
+  "participants": [
+    {
+      "id": "player",
+      "type": "external",
+      "label": "玩家面板",
+      "sublabel": "/console",
+      "icon": "person"
+    },
+    {
+      "id": "ms",
+      "type": "backend",
+      "label": "Mindserver",
+      "sublabel": "socket.io :8080",
+      "sources": [
+        {
+          "path": "src/mindcraft/mindserver.js",
+          "line": 1341,
+          "label": "requirePanel 角色闸门"
+        }
+      ]
+    },
+    {
+      "id": "board",
+      "type": "database",
+      "label": "任务板",
+      "sublabel": "board.sqlite",
+      "sources": [
+        {
+          "path": "src/agent/library/board_store.js",
+          "line": 145,
+          "label": "claims.key 唯一索引"
+        }
+      ]
+    },
+    {
+      "id": "bot",
+      "type": "backend",
+      "label": "Bot 子进程",
+      "sublabel": "init_agent.js",
+      "sources": [
+        {
+          "path": "src/process/init_agent.js",
+          "line": 15,
+          "end_line": 19,
+          "label": "子进程入口"
+        }
+      ]
+    },
+    {
+      "id": "slot",
+      "type": "backend",
+      "label": "动作槽",
+      "sublabel": "action_manager",
+      "sources": [
+        {
+          "path": "src/agent/action_manager.js",
+          "line": 357,
+          "end_line": 359,
+          "label": "currentOperation 唯一取消源"
+        }
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "backend",
+      "label": "模型层",
+      "sublabel": "prompter",
+      "sources": [
+        {
+          "path": "src/models/prompter.js",
+          "label": "prompt* 出口"
+        }
+      ]
+    },
+    {
+      "id": "mc",
+      "type": "external",
+      "label": "Paper 服务器",
+      "sublabel": ":25565"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 205,
+      "label": "① 接入"
+    },
+    {
+      "from": 212,
+      "to": 265,
+      "label": "② 下命令"
+    },
+    {
+      "from": 300,
+      "to": 383,
+      "label": "③ 认领（事务）"
+    },
+    {
+      "from": 392,
+      "to": 478,
+      "label": "④ 执行"
+    },
+    {
+      "from": 488,
+      "to": 664,
+      "label": "⑤ 取消链"
+    },
+    {
+      "from": 660,
+      "to": 710,
+      "label": "⑥ 结算"
+    }
+  ],
+  "messages": [
+    {
+      "id": "m1",
+      "from": "player",
+      "to": "ms",
+      "y": 160,
+      "label": "打开 /console?token=",
+      "variant": "default"
+    },
+    {
+      "id": "m2",
+      "from": "ms",
+      "to": "player",
+      "y": 192,
+      "label": "种 HttpOnly cookie，建 socket",
+      "variant": "return"
+    },
+    {
+      "id": "m3",
+      "from": "player",
+      "to": "ms",
+      "y": 222,
+      "label": "send-message「砍点木头」",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m4",
+      "from": "ms",
+      "to": "bot",
+      "y": 252,
+      "label": "chat-message 转发",
+      "variant": "default"
+    },
+    {
+      "id": "m5",
+      "from": "bot",
+      "to": "board",
+      "y": 311,
+      "label": "board:hello 绑定身份",
+      "variant": "security"
+    },
+    {
+      "id": "m6",
+      "from": "bot",
+      "to": "board",
+      "y": 341,
+      "label": "board:claim（BEGIN IMMEDIATE）",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m7",
+      "from": "board",
+      "to": "bot",
+      "y": 371,
+      "label": "changes=1 单已认领",
+      "variant": "return"
+    },
+    {
+      "id": "m8",
+      "from": "bot",
+      "to": "slot",
+      "y": 404,
+      "label": "开动作槽（timeout + ac.signal）",
+      "variant": "default"
+    },
+    {
+      "id": "m9",
+      "from": "slot",
+      "to": "llm",
+      "y": 434,
+      "label": "promptCodingResult(…, opts)",
+      "variant": "default"
+    },
+    {
+      "id": "m10",
+      "from": "slot",
+      "to": "mc",
+      "y": 464,
+      "label": "mineflayer 挖矿 / 移动",
+      "variant": "default"
+    },
+    {
+      "id": "m11",
+      "from": "player",
+      "to": "ms",
+      "y": 500,
+      "label": "!stop",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m12",
+      "from": "ms",
+      "to": "bot",
+      "y": 530,
+      "label": "中断信号",
+      "variant": "default"
+    },
+    {
+      "id": "m13",
+      "from": "bot",
+      "to": "slot",
+      "y": 560,
+      "label": "abort()",
+      "variant": "dashed"
+    },
+    {
+      "id": "m14",
+      "from": "slot",
+      "to": "llm",
+      "y": 590,
+      "label": "signal 已 abort ⇒ 六个出口全部取消",
+      "variant": "security",
+      "note": "六处：history.promptMemSavingResult / promptMemSaving · coder.promptCodingResult · vision.promptVisionResult / promptVision · conversation.promptShouldRespondToBot（最后这处曾漏接，本批补上）"
+    },
+    {
+      "id": "m15",
+      "from": "bot",
+      "to": "board",
+      "y": 668,
+      "label": "board:finish 结算",
+      "variant": "default"
+    },
+    {
+      "id": "m16",
+      "from": "board",
+      "to": "bot",
+      "y": 698,
+      "label": "已结算，预占转消耗",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "ms",
+      "from": 160,
+      "to": 538,
+      "type": "backend"
+    },
+    {
+      "participant": "bot",
+      "from": 252,
+      "to": 702,
+      "type": "backend"
+    },
+    {
+      "participant": "board",
+      "from": 309,
+      "to": 377,
+      "type": "database"
+    },
+    {
+      "participant": "slot",
+      "from": 402,
+      "to": 578,
+      "type": "backend"
+    },
+    {
+      "participant": "llm",
+      "from": 432,
+      "to": 602,
+      "type": "backend"
+    },
+    {
+      "participant": "mc",
+      "from": 462,
+      "to": 500,
+      "type": "external"
+    },
+    {
+      "participant": "board",
+      "from": 666,
+      "to": 702,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "接入与下命令",
+      "items": [
+        "面板用 URL 里的 token 换 HttpOnly cookie，之后整站不再带 token",
+        "管理与控制是两条路：send-message 只转发，执行权在 bot 自己手里",
+        "角色由握手时出示的哪份凭据决定，面板与 agent 是两份不同的随机串"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "认领是原子的",
+      "items": [
+        "board:claim 走 BEGIN IMMEDIATE，读-判断-写整段在事务内",
+        "claims.key 有 UNIQUE 索引兜底：判断被绕过也插不进第二行（DB 层拒）",
+        "认领与预占是两件事：认领管「谁做这单」，预占管「谁先用这批材料」"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "取消链为什么曾是死代码",
+      "items": [
+        "prompter 侧早就支持按 signal 取消，但调用点从不传 opts",
+        "于是 !stop 之后记忆摘要 / 代码生成 / 看图仍会跑满（最长 120s）",
+        "本批接上六处；无在飞操作时传 {}，与改前缺省逐字一致"
+      ]
+    }
+  ]
+}

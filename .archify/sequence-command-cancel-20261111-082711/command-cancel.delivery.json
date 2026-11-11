@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "e3837888-7b51-49db-ab96-38e1c33dc034",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\candidate.json",
+  "output": "E:\\我的世界ai\\.archify\\sequence-command-cancel-20261111-082711\\command-cancel.html",
+  "specification": {
+    "sha256": "1eabe665e0d3a511a5ac7801044df2bac1c93ab2fd31e03391b0e0c688c868ec",
+    "bytes": 7412
+  },
+  "artifact": {
+    "sha256": "f7d3a823ab5e15d056882b78d2d7d0929ba2925780b48e5f0939a8986564a3a9",
+    "bytes": 827961
+  }
+}

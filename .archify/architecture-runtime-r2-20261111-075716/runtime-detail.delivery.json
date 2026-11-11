@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "f97e7690-a812-4302-9362-9c116f98bdd0",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "E:\\我的世界ai\\.archify\\architecture-runtime-r2-20261111-075716\\candidate.json",
+  "output": "E:\\我的世界ai\\.archify\\architecture-runtime-r2-20261111-075716\\runtime-detail.html",
+  "specification": {
+    "sha256": "6d6dc088571d113de537722f6bac21ab967ce26c1d1e28081b1b4a898cc46f77",
+    "bytes": 8792
+  },
+  "artifact": {
+    "sha256": "e5f80df75eef0ff073f510b124339b130fbd364e2c61dd8490c8c4d098c2ff29",
+    "bytes": 831022
+  }
+}

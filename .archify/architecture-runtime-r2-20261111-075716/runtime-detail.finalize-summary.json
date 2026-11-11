@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "E:\\我的世界ai\\.archify\\architecture-runtime-r2-20261111-075716\\candidate.json",
+    "sha256": "6d6dc088571d113de537722f6bac21ab967ce26c1d1e28081b1b4a898cc46f77",
+    "bytes": 8792
+  },
+  "artifact": {
+    "path": "E:\\我的世界ai\\.archify\\architecture-runtime-r2-20261111-075716\\runtime-detail.html",
+    "sha256": "e5f80df75eef0ff073f510b124339b130fbd364e2c61dd8490c8c4d098c2ff29",
+    "bytes": 831022
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "E:\\我的世界ai\\.archify\\architecture-runtime-r2-20261111-075716\\runtime-detail.finalize.json",
+    "summaryReceipt": "E:\\我的世界ai\\.archify\\architecture-runtime-r2-20261111-075716\\runtime-detail.finalize-summary.json",
+    "browserCheckReceipt": "E:\\我的世界ai\\.archify\\architecture-runtime-r2-20261111-075716\\runtime-detail.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-10T23:59:07.293Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 9831,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedBends": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "agents-board",
+            "from": "agents",
+            "to": "board",
+            "label": "board:* RPC",
+            "collectionIndex": 4,
+            "artifactIndex": 5
+          },
+          "bends": 3,
+          "stretch": 1
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "agents → board needs 3 bends: move node agents or board so they share a row or column with matching centers, or sit diagonally with a clear corner."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}

@@ -1,0 +1,611 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "目标数据模型 · 全部为计划中",
+    "locale": "zh-CN",
+    "subtitle": "这些表目前一行代码都没有：阶段 2（身份）→ 3（存档与队伍）→ 4（联邦）才落地",
+    "quality_profile": "showcase",
+    "output": ".archify/erd-target-20261111-094315/target-erd.html"
+  },
+  "layout": {
+    "mode": "grid"
+  },
+  "entities": [
+    {
+      "id": "people",
+      "label": "people",
+      "sublabel": "真实的人",
+      "tag": "① 身份",
+      "row": 0,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "provider",
+          "type": "TEXT",
+          "key": "uk"
+        },
+        {
+          "name": "subject",
+          "type": "TEXT",
+          "key": "uk"
+        },
+        {
+          "name": "display_name",
+          "type": "TEXT"
+        },
+        {
+          "name": "created_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "avatar",
+      "label": "avatar",
+      "sublabel": "AI 分身",
+      "tag": "① 身份",
+      "row": 1,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "key": "pk"
+        },
+        {
+          "name": "person_id",
+          "type": "INTEGER",
+          "key": [
+            "fk",
+            "uk"
+          ],
+          "references": "people.id"
+        },
+        {
+          "name": "name",
+          "type": "TEXT"
+        },
+        {
+          "name": "created_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "avatar_key",
+      "label": "avatar_key",
+      "sublabel": "可轮换的钥匙",
+      "tag": "① 身份",
+      "row": 2,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "avatar_id",
+          "type": "TEXT",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "avatar.id"
+        },
+        {
+          "name": "version",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "pubkey",
+          "type": "TEXT",
+          "key": "uk"
+        },
+        {
+          "name": "activated_at",
+          "type": "INTEGER"
+        },
+        {
+          "name": "revoked_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "world",
+      "label": "world",
+      "sublabel": "存档",
+      "tag": "② 存档",
+      "row": 0,
+      "col": 3,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "TEXT",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "TEXT"
+        },
+        {
+          "name": "created_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "team",
+      "label": "team",
+      "sublabel": "按存档重置",
+      "tag": "③ 队伍",
+      "row": 1,
+      "col": 3,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "world_id",
+          "type": "TEXT",
+          "key": "fk",
+          "references": "world.id"
+        },
+        {
+          "name": "name",
+          "type": "TEXT"
+        },
+        {
+          "name": "created_by",
+          "type": "TEXT"
+        }
+      ]
+    },
+    {
+      "id": "team_member",
+      "label": "team_member",
+      "sublabel": "成员",
+      "tag": "③ 队伍",
+      "row": 2,
+      "col": 3,
+      "attributes": [
+        {
+          "name": "team_id",
+          "type": "INTEGER",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "team.id"
+        },
+        {
+          "name": "avatar_id",
+          "type": "TEXT",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "avatar.id"
+        },
+        {
+          "name": "role",
+          "type": "TEXT"
+        },
+        {
+          "name": "joined_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "team_chest",
+      "label": "team_chest",
+      "sublabel": "队内共享箱子",
+      "tag": "③ 队伍",
+      "row": 3,
+      "col": 3,
+      "attributes": [
+        {
+          "name": "world_id",
+          "type": "TEXT",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "world.id"
+        },
+        {
+          "name": "team_id",
+          "type": "INTEGER",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "team.id"
+        },
+        {
+          "name": "x",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "y",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "z",
+          "type": "INTEGER",
+          "key": "pk"
+        }
+      ]
+    },
+    {
+      "id": "reservation",
+      "label": "inventory_reservation",
+      "sublabel": "数量级预占",
+      "tag": "④ 库存",
+      "row": 0,
+      "col": 4,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "world_id",
+          "type": "TEXT",
+          "key": "fk",
+          "references": "world.id"
+        },
+        {
+          "name": "item",
+          "type": "TEXT"
+        },
+        {
+          "name": "qty",
+          "type": "INTEGER"
+        },
+        {
+          "name": "holder_avatar",
+          "type": "TEXT",
+          "key": "fk",
+          "references": "avatar.id"
+        },
+        {
+          "name": "expires_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "ledger",
+      "label": "inventory_ledger",
+      "sublabel": "领用结算",
+      "tag": "④ 库存",
+      "row": 1,
+      "col": 4,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "world_id",
+          "type": "TEXT",
+          "key": "fk",
+          "references": "world.id"
+        },
+        {
+          "name": "item",
+          "type": "TEXT"
+        },
+        {
+          "name": "delta",
+          "type": "INTEGER"
+        },
+        {
+          "name": "reason",
+          "type": "TEXT"
+        },
+        {
+          "name": "ref_job",
+          "type": "INTEGER"
+        },
+        {
+          "name": "at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "event",
+      "label": "event",
+      "sublabel": "追加写，永不改",
+      "tag": "⑤ 记忆",
+      "row": 0,
+      "col": 2,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "world_id",
+          "type": "TEXT",
+          "key": "fk",
+          "references": "world.id"
+        },
+        {
+          "name": "avatar_id",
+          "type": "TEXT",
+          "key": "fk",
+          "references": "avatar.id"
+        },
+        {
+          "name": "kind",
+          "type": "TEXT"
+        },
+        {
+          "name": "payload_json",
+          "type": "TEXT"
+        },
+        {
+          "name": "at",
+          "type": "INTEGER"
+        },
+        {
+          "name": "source_ip",
+          "type": "TEXT"
+        }
+      ]
+    },
+    {
+      "id": "relation",
+      "label": "relation",
+      "sublabel": "交友 / 结怨",
+      "tag": "⑤ 记忆",
+      "row": 1,
+      "col": 2,
+      "attributes": [
+        {
+          "name": "from_avatar",
+          "type": "TEXT",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "avatar.id"
+        },
+        {
+          "name": "to_avatar",
+          "type": "TEXT",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "avatar.id"
+        },
+        {
+          "name": "affinity",
+          "type": "INTEGER"
+        },
+        {
+          "name": "tags_json",
+          "type": "TEXT"
+        },
+        {
+          "name": "updated_at",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "known_peer",
+      "label": "known_peer",
+      "sublabel": "联邦名片",
+      "tag": "⑥ 联邦",
+      "row": 0,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "avatar_id",
+          "type": "TEXT",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "avatar.id"
+        },
+        {
+          "name": "pubkey",
+          "type": "TEXT"
+        },
+        {
+          "name": "host",
+          "type": "TEXT"
+        },
+        {
+          "name": "first_seen",
+          "type": "INTEGER"
+        },
+        {
+          "name": "last_seen",
+          "type": "INTEGER"
+        }
+      ]
+    },
+    {
+      "id": "visit_grant",
+      "label": "visit_grant",
+      "sublabel": "邀请凭证",
+      "tag": "⑥ 联邦",
+      "row": 1,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "INTEGER",
+          "key": "pk"
+        },
+        {
+          "name": "avatar_id",
+          "type": "TEXT",
+          "key": "fk",
+          "references": "avatar.id"
+        },
+        {
+          "name": "scope",
+          "type": "TEXT"
+        },
+        {
+          "name": "issued_at",
+          "type": "INTEGER"
+        },
+        {
+          "name": "expires_at",
+          "type": "INTEGER"
+        },
+        {
+          "name": "used_at",
+          "type": "INTEGER"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "r1",
+      "from": "people",
+      "to": "avatar",
+      "label": "一人一分身",
+      "fromCardinality": "one",
+      "toCardinality": "one"
+    },
+    {
+      "id": "r2",
+      "from": "avatar",
+      "to": "avatar_key",
+      "label": "可轮换",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r3",
+      "from": "world",
+      "to": "team",
+      "label": "按存档",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r4",
+      "from": "team",
+      "to": "team_member",
+      "label": "成员",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r6",
+      "from": "team",
+      "to": "team_chest",
+      "label": "专属箱子",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r7",
+      "from": "world",
+      "to": "reservation",
+      "label": "预占",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r9",
+      "from": "world",
+      "to": "ledger",
+      "label": "账本",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r10",
+      "from": "world",
+      "to": "event",
+      "label": "事件",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r11",
+      "from": "avatar",
+      "to": "event",
+      "label": "经历",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r12",
+      "from": "avatar",
+      "to": "relation",
+      "label": "关系（出）",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r14",
+      "from": "avatar",
+      "to": "known_peer",
+      "label": "认识",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    },
+    {
+      "id": "r15",
+      "from": "avatar",
+      "to": "visit_grant",
+      "label": "被邀请",
+      "fromCardinality": "one",
+      "toCardinality": "many"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "这张图不是现状",
+      "items": [
+        "13 张表全部是计划：当前代码库里一张都没有（grep world_id / team / people 全无命中）",
+        "落地顺序：① 身份 → ② 存档 → ③ 队伍 → ④ 库存 → ⑤ 记忆 → ⑥ 联邦",
+        "现在能用的等价物：身份=bots/<name>/identity.json，任务板=单库无 world/team 维度"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "三个关键约束",
+      "items": [
+        "avatar.person_id 唯一 ⇒ 「一个玩家一个分身」在数据层可判定（现在无法判定）",
+        "avatar.id 是随机 UUID、不是公钥哈希 ⇒ 换钥匙（avatar_key 轮换）不换人，邀请与关系不失效",
+        "world_id 把队伍/库存/事件切开 ⇒ 身份与关系跨存档，队伍按存档重置"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "为什么必须两张库而不是一张",
+      "items": [
+        "_global/mind.sqlite：people / avatar / avatar_key / relation / world / event（跨存档）",
+        "_worlds/<world_id>/board.sqlite：team / team_member / team_chest / reservation / ledger（按存档重置）",
+        "世界文件仍在磁盘上，由 Paper 独占；数据库只记账，不接管存档"
+      ]
+    }
+  ]
+}

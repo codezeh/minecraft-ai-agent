@@ -1,0 +1,414 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "运行时详图 · 进程 / 端口 / 数据落盘",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": ".archify/architecture-runtime-r2-20261111-075716/runtime-detail.html",
+    "repository": {
+      "url": "https://github.com/mindcraft-bots/mindcraft.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "6c548b3dc2940dc84d15e7caf3e71efbd89b68f1"
+    }
+  },
+  "components": [
+    {
+      "id": "panel",
+      "type": "backend",
+      "label": "启动面板",
+      "sublabel": "start-panel.ps1",
+      "tag": "父仓脚本",
+      "icon": "start",
+      "pos": [
+        40,
+        100
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "vault",
+      "type": "database",
+      "label": "凭据保管库",
+      "sublabel": ".secrets.db",
+      "tag": "AES-256-GCM",
+      "pos": [
+        305,
+        100
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/agent/library/secrets_vault.js",
+          "line": 50,
+          "end_line": 51,
+          "label": "默认库文件位置"
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "type": "database",
+      "label": "配置与密钥",
+      "sublabel": "keys.json · profiles/",
+      "pos": [
+        500,
+        100
+      ],
+      "size": [
+        160,
+        60
+      ],
+      "sources": [
+        {
+          "path": "settings.js",
+          "line": 3,
+          "end_line": 9,
+          "label": "host/端口/面板默认值"
+        }
+      ]
+    },
+    {
+      "id": "viewer",
+      "type": "frontend",
+      "label": "摄像头视图",
+      "sublabel": ":3000-3003",
+      "tag": "每 bot 一端口",
+      "pos": [
+        740,
+        100
+      ],
+      "size": [
+        170,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/mindcraft/mindcraft.js",
+          "line": 54,
+          "label": "viewer_port = 3000 + agentIndex"
+        }
+      ]
+    },
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "玩家浏览器",
+      "sublabel": "/console",
+      "icon": "person",
+      "pos": [
+        40,
+        395
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "mindserver",
+      "type": "backend",
+      "label": "Mindserver",
+      "sublabel": "express + socket.io :8080",
+      "tag": "控制面 · 12 管理事件",
+      "pos": [
+        280,
+        395
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "src/mindcraft/mindserver.js",
+          "line": 1341,
+          "end_line": 1362,
+          "label": "requirePanel 角色闸门"
+        },
+        {
+          "path": "src/mindcraft/mindserver.js",
+          "line": 965,
+          "label": "唯一打开板库的地方"
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "type": "backend",
+      "label": "Bot 子进程 ×N",
+      "sublabel": "init_agent.js → Agent",
+      "tag": "每 bot 一进程",
+      "pos": [
+        580,
+        395
+      ],
+      "size": [
+        190,
+        76
+      ],
+      "sources": [
+        {
+          "path": "src/mindcraft/mindcraft.js",
+          "line": 73,
+          "end_line": 84,
+          "label": "createAgent → AgentProcess"
+        },
+        {
+          "path": "src/process/agent_process.js",
+          "line": 135,
+          "end_line": 152,
+          "label": "spawn(execPath, init_agent.js)"
+        },
+        {
+          "path": "src/process/init_agent.js",
+          "line": 15,
+          "end_line": 19,
+          "label": "子进程入口"
+        }
+      ]
+    },
+    {
+      "id": "mcserver",
+      "type": "external",
+      "label": "Minecraft 服务器",
+      "sublabel": "Paper 1.21.8",
+      "tag": ":25565 · :25575",
+      "pos": [
+        940,
+        400
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "board",
+      "type": "database",
+      "label": "任务板",
+      "sublabel": "bots/_board/board.sqlite",
+      "tag": "21 个 board:* 事件",
+      "pos": [
+        280,
+        560
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/agent/library/board_store.js",
+          "line": 145,
+          "label": "claims.key 唯一索引"
+        },
+        {
+          "path": "src/agent/library/board_server.js",
+          "line": 358,
+          "end_line": 366,
+          "label": "board:add 入口"
+        }
+      ]
+    },
+    {
+      "id": "memory",
+      "type": "database",
+      "label": "人物记忆",
+      "sublabel": "bots/<name>/memory.json",
+      "tag": "进程私有",
+      "pos": [
+        585,
+        560
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "src/agent/history.js",
+          "line": 64,
+          "label": "memory_fp = bots/<name>/memory.json"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "mindcraft 子仓 · 运行时",
+      "wraps": [
+        "vault",
+        "config",
+        "viewer",
+        "mindserver",
+        "agents",
+        "board",
+        "memory"
+      ],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-mindserver",
+      "from": "browser",
+      "to": "mindserver",
+      "label": "socket.io",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mindserver-agents",
+      "from": "mindserver",
+      "to": "agents",
+      "label": "spawn ×N",
+      "variant": "emphasis"
+    },
+    {
+      "id": "agents-mc",
+      "from": "agents",
+      "to": "mcserver",
+      "label": "mineflayer",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mindserver-board",
+      "from": "mindserver",
+      "to": "board",
+      "label": "唯一写者",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "agents-board",
+      "from": "agents",
+      "to": "board",
+      "label": "board:* RPC",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "via": [
+        [
+          675.0,
+          520
+        ],
+        [
+          500,
+          520
+        ],
+        [
+          500,
+          592
+        ]
+      ]
+    },
+    {
+      "id": "agents-memory",
+      "from": "agents",
+      "to": "memory",
+      "label": "读写",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "mindserver-vault",
+      "from": "mindserver",
+      "to": "vault",
+      "label": "unlock 门",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "agents-config",
+      "from": "agents",
+      "to": "config",
+      "label": "读",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          675.0,
+          320
+        ],
+        [
+          580.0,
+          320
+        ]
+      ]
+    },
+    {
+      "id": "agents-viewer",
+      "from": "agents",
+      "to": "viewer",
+      "label": "推流",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          675.0,
+          200
+        ],
+        [
+          825.0,
+          200
+        ]
+      ]
+    },
+    {
+      "id": "panel-mindserver",
+      "from": "panel",
+      "to": "mindserver",
+      "label": "node main.js",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          130.0,
+          240
+        ],
+        [
+          380.0,
+          240
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "五个监听面",
+      "items": [
+        "8080 控制台 + 管理面（socket.io），默认只绑 127.0.0.1",
+        "3000-3003 每 bot 一个摄像头视图端口（prismarine-viewer）",
+        "25565 Minecraft 主端口；25575 RCON（停服走它，才刷盘）",
+        "25568 仅 viaproxy profile 打开，且当前绑 0.0.0.0（已知缺陷）"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "事件分两类，权限不同",
+      "items": [
+        "管理面 12 个（server-*、*-agent、set-agent-settings、listen-to-agents、shutdown）走 requirePanel",
+        "任务板 21 个 board:* 走身份绑定（payload.bot 必须等于握手裁决出的 agentName）",
+        "角色由握手时出示的哪份凭据决定，不看客户端自称"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "数据落在哪、谁能写",
+      "items": [
+        "任务板：全系统只有一个库，只有 mindserver 打开它（agent 走 RPC）",
+        "人物记忆：每个 bot 自己的 memory.json，损坏时有三级抢救 + 留证",
+        "凭据：.secrets.db 只由 mindserver 持有 HTTP 出口；keys.json 运行时挂载"
+      ]
+    }
+  ]
+}

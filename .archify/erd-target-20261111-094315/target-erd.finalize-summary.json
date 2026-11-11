@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "erd",
+  "quality": "showcase",
+  "specification": {
+    "path": "E:\\我的世界ai\\.archify\\erd-target-20261111-094315\\candidate.json",
+    "sha256": "6dde577e7b4ecc42ec325fcbfc5bf09ee6a352402fd1659ef06c170e811314e4",
+    "bytes": 12999
+  },
+  "artifact": {
+    "path": "E:\\我的世界ai\\.archify\\erd-target-20261111-094315\\target-erd.html",
+    "sha256": "a1b84b37c7e644a1f4f9e484e14ca0dd2029d1122c0c20fcb31f0f3c0edcc249",
+    "bytes": 877339
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "E:\\我的世界ai\\.archify\\erd-target-20261111-094315\\target-erd.finalize.json",
+    "summaryReceipt": "E:\\我的世界ai\\.archify\\erd-target-20261111-094315\\target-erd.finalize-summary.json",
+    "browserCheckReceipt": "E:\\我的世界ai\\.archify\\erd-target-20261111-094315\\target-erd.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-10T23:59:07.293Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3316,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}
