@@ -188,10 +188,14 @@ const check = (name, cond, detail = '') => {
         && /Promise\.race\(/.test(ms));
 
     // ── #21：身份表写操作走写前 CAS ──
-    check('C6 身份码/身份表的写操作走 mutateStoreFile（写前比对内容哈希）',
+    // ★ ADR 阶段 1 收尾：身份写入的并发保护从"内容哈希 CAS"统一到
+    //   identity_store 的 `mutateStore`（真进程间文件锁 + rev）。断言随之升级：
+    //   仍要求 3 个调用点走同一个入口，且该入口必须**委托**给 mutateStore，
+    //   不能退回到自己算哈希（否则又变成两套锁并存）。
+    check('C6 身份码/身份表的写操作走 mutateStoreFile（统一委托 mutateStore 真文件锁）',
         (ms.match(/mutateStoreFile\(/g) || []).length >= 4      // 定义 + 3 个调用点
-        && /const before = fileHashOf\(file\)/.test(ms)
-        && /if \(fileHashOf\(file\) !== before\)/.test(ms));
+        && /mutateStore\(file, \(store\) => mutate\(store\)/.test(ms)
+        && !/function fileHashOf/.test(ms));
 
     // ── #28：配置中心写前 CAS + 条件回滚 + 毫秒级备份名 ──
     check('C7 config_center 写前做 CAS（哈希不一致 → CONFLICT/409）',

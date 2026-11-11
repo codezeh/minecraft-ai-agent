@@ -16,7 +16,7 @@ import {
 import { validateNameFormat } from '../agent/connection_handler.js';
 // 第四轮审计 ①：玩家身份绑定（面板下发一次性码 / 查看绑定 / 解绑）
 import {
-    identityFileOf, codesFileOf, readStore, writeStore,
+    identityFileOf, codesFileOf, readStore, writeStore, mutateStore,
     makeCode, addCode, previewStatus, revokeBinding, revokeSessionCodes,
     DEFAULT_CODE_TTL_MS,
 } from './identity_store.js';
@@ -28,7 +28,6 @@ import {
 } from './offline_identity_risk.js';
 import { readFileSync, existsSync, readdirSync, writeFileSync, fstatSync, unlinkSync } from 'fs';
 // ★ R6 #21：身份存储的写前 CAS 要算内容哈希（见 mutateStoreFile）
-import { createHash } from 'crypto';
 // t20-C（R5-收口）：token 文件落盘后要收口 NTFS DACL。只用 execFile(argv)，**不用 shell**。
 import { execFile } from 'child_process';
 // M8 B1（2026-11-02）：任务板。**只有 mindserver 写库**（06 §3：每个 agent 是独立子进程，
@@ -500,49 +499,35 @@ function isStaleAgentConn(name) {
  * 裸"读-算-写"会静默抹掉别人的改动。这里做**写前 CAS**（比对内容哈希）+ 写后复核。
  * 不是跨进程锁；根治（单一写者）见 docs/audit-r6/fixes2/control.md 残留。
  */
-function fileHashOf(file) {
-    try {
-        return createHash('sha256').update(readFileSync(file, 'utf8'), 'utf8').digest('hex');
-    } catch (e) {
-        if (e?.code === 'ENOENT') return null;
-        return `unreadable:${e?.code ?? e?.message ?? e}`;
-    }
-}
-
 /**
- * 带写前 CAS 的"读-改-写"。
+ * 带"进程间文件锁 + rev"的读-改-写。
+ *
+ * ★ ADR 阶段 1 收尾（T7-2/t8 残留）：本函数原来自己算**内容哈希**做 CAS，与
+ * identity_store 的 `mutateStore`（真文件锁 + rev）在同一文件上**并存两套并发保护**。
+ * 现在统一委托给 `mutateStore`：锁只有一套，rev 由 writeStore 校验；本函数只额外保留
+ * `verify`（写后复核，失败重试）这个调用方需要的能力。
  *
  * @param {string} file
- * @param {(store:object)=>({store:object, result:any}|null)} mutate 返回 null = 无事可做（幂等）
+ * @param {(store:object)=>({store:object, result:any}|null)} mutate 返回 null = 无事可做
  * @param {{attempts?:number, what?:string, verify?:Function}} [opts]
  * @returns {{ok:boolean, result:any, reason?:string, skipped?:boolean, attempts?:number}}
  */
 function mutateStoreFile(file, mutate, { attempts = 4, what = '身份存储', verify = null } = {}) {
     if (typeof mutate !== 'function') return { ok: false, reason: 'no-mutator', result: null };
-    for (let i = 0; i < attempts; i += 1) {
-        const before = fileHashOf(file);
-        let out;
-        try {
-            out = mutate(readStore(file).store);      // 坏文件按空表（与 identity_store 同一口径）
-        } catch (e) {
-            return { ok: false, reason: String(e?.message ?? e), result: null };
+    for (let i = 1; i <= attempts; i += 1) {
+        // 内层 attempts:1 —— 重试交给外层，这样 verify 失败也能重算
+        const out = mutateStore(file, (store) => mutate(store), { attempts: 1 });
+        if (!out.ok) {
+            const r = String(out.reason ?? '');
+            if (r === 'conflict' || r.startsWith('lock')) continue;   // 锁忙/版本冲突：外层重试
+            return { ok: false, reason: out.reason, result: null };
         }
-        if (!out) return { ok: true, skipped: true, result: null };
-        if (fileHashOf(file) !== before) {
-            console.warn(`[mindserver] ${what} 在本次读-改-写期间被另一个进程改过（第 ${i + 1}/${attempts} 次），重读重算`);
-            continue;
-        }
-        const wrote = writeStore(file, out.store);
-        if (!wrote.ok) return { ok: false, reason: wrote.reason, result: null };
-        if (typeof verify === 'function') {
-            let landed = false;
-            try { landed = verify(readStore(file).store, out.result) === true; } catch { landed = false; }
-            if (!landed) {
-                console.warn(`[mindserver] ${what} 写后复核未通过（第 ${i + 1}/${attempts} 次），重读重算`);
-                continue;
-            }
-        }
-        return { ok: true, result: out.result, attempts: i + 1 };
+        if (out.skipped) return { ok: true, skipped: true, result: null };
+        if (typeof verify !== 'function') return { ok: true, result: out.result, attempts: i };
+        let landed = false;
+        try { landed = verify(readStore(file).store, out.result) === true; } catch { landed = false; }
+        if (landed) return { ok: true, result: out.result, attempts: i };
+        console.warn(`[mindserver] ${what} 写后复核未通过（第 ${i}/${attempts} 次），重读重算`);
     }
     return { ok: false, reason: 'conflict', result: null };
 }
@@ -1575,6 +1560,10 @@ export function createMindServer(host_public = false, port = 8080) {
                     // 透出去，面板才能说"身份表损坏、已留证 <路径>"，而不是只看到"一个绑定都没有"。
                     corrupt: idRead.corrupt === true,
                     backup: idRead.backup ?? null,
+                    // t8 残留：码表（identity-codes.json）损坏此前没透出 —— 面板只知道"没有待用码"，
+                    // 分不清"真的没有"与"码表坏了"。补两个字段，口径与身份表一致。
+                    codesCorrupt: codeRead.corrupt === true,
+                    codesBackup: codeRead.backup ?? null,
                     // 码本身不在这里回（它只出现在"刚生成"那一次的回执里）——
                     // 免得任何持 token 的客户端随手一拉就能捡走别人还没用的码。
                     pendingCodes: st.codes.map((c) => ({ expiresAt: c.expiresAt, sessionId: c.sessionId })),
