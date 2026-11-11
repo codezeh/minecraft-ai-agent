@@ -5,6 +5,7 @@ import { setSettings } from './settings.js';
 import { getFullState } from './library/full_state.js';
 import { since as traceSince, stats as traceStats, clear as traceClear, onPush as traceOnPush } from './library/trace_bus.js';
 import { startLoopLagWatch, describeLoopLag } from '../utils/loop_lag.js';
+import { mkdirSync } from 'node:fs';
 
 // agent's individual connection to the mindserver
 // always connect to localhost
@@ -175,6 +176,10 @@ class MindServerProxy {
 
                 const { boxSurfaces, readFails } = await import('./library/terrain3d.js');
                 const mapDir = mapDirOf(bot);
+                // ★ 真机验收发现：live 工具只设 MC_BOTS_ROOT、不建 <botsRoot>/<name>/map，
+                //   而 node:sqlite 不会建父目录 ⇒ 地形库打不开、[walkTo] 3D 扫描刷屏失败。
+                //   按本仓惯例（history 建 histories、memory_store 建自己的目录）由使用方建。
+                try { mkdirSync(mapDir, { recursive: true }); } catch { /* 建不了就让下面按"读不到"处理 */ }
                 const p = bot.entity.position;
                 const mode = opts?.mode === 'full' ? 'full' : 'around';
                 const lod = Math.min(Math.max(Number(opts?.lod) || 1, 1), 8);

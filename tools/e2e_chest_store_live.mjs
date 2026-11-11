@@ -371,6 +371,18 @@ bot.once('spawn', async () => {
         await sleep(900);
         await RC(`tp ${NAME} ${HOME.x - 20}.5 ${HOME.y} ${HOME.z + 0.5}`);
         await sleep(1500);
+        // ★ 真机验收发现：tp 是**服务端**动作，客户端 `bot.entity.position` 要等下一拍才更新。
+        //   原来只等背包稳定、没等位置 ⇒ store 仍按旧位置判断"距离够"，反证3 假成功
+        //   （实测 code=OK、多存 4 件、chest1 变 12）。
+        //   这里等"客户端位置真的离开主箱"再继续（只等同步，不改断言）。
+        {
+            const farX = HOME.x - 20;
+            for (let i = 0; i < 20; i++) {
+                const p = bot?.entity?.position;
+                if (p && Math.abs(p.x - farX) < 4) break;
+                await sleep(300);
+            }
+        }
         // ★ T38：tp 会触发 chunk 重载，客户端背包可能短暂读到 0（实测 store 因此报 NO_ITEM）。
         //   等到背包稳定显示 4 件再继续（**只是等同步，不改断言**）。
         for (let i = 0; i < 10 && invCount(bot, 'oak_log') < 4; i++) await sleep(300);

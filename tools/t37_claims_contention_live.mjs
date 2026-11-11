@@ -109,8 +109,15 @@ console.log('═══════════════════');
     const { io } = await import('socket.io-client');
     const { BoardClient } = await import('../src/agent/library/board_client.js');
     const { connectMindserver, awaitConnect } = await import('./lib/ms_token.mjs');
+    // ★ 真机验收发现：t37 在**父进程内** createMindServer，而它会把自己的 env 换成
+    //   "无 agentName 的 agent 凭据"（mindserver.js 里 agentToken 那段）。于是这里用
+    //   ms_token 的 env 优先拿到 agent 角色，又没 login-agent ⇒ board:hello 要 agentName 戳
+    //   ⇒ 12 条争用断言全 NO_PERMISSION。
+    //   正确做法：本脚本是**面板级**驱动（它本来就直接查库、造场景），显式用面板凭据连。
+    const { getHandshakeToken } = await import('../src/mindcraft/mindserver.js');
+    const panelToken = getHandshakeToken();
     const mk = (name) => {
-        const sock = connectMindserver(io, MS_PORT);
+        const sock = connectMindserver(io, MS_PORT, { auth: (cb) => cb({ token: panelToken }) });
         return { sock, client: new BoardClient({ name, skills: ['mine'], socket: sock }) };
     };
     const { sock: sockA, client: A } = mk('claimA');

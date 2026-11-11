@@ -205,15 +205,39 @@ export async function store(bot, item, count = 1, opts = {}) {
         if (!win) continue;
 
         try {
+            // ★ S（真机验收发现）：store 的账目原来**只信客户端**：箱内已有同类物品时，
+            //   物理搬了 16 却自报 stored=9 且 ok=false。fetch 早已用服务端真值修正过，
+            //   store 没跟上。这里同样取"存入前后箱内该物品总数的差值"当真值。
+            const countInChest = () => {
+                // 必须整体兜住：窗口可能已关/已被换掉，containerItems() 会抛；
+                // 让异常穿出去会改变外层（"距离过远应失败"那条反证就是这样被带偏的）。
+                try {
+                    const w = bot.currentWindow;
+                    if (!w || typeof w.containerItems !== 'function') return null;
+                    return w.containerItems().filter((i) => i?.name === item).reduce((n, i) => n + (i.count ?? 0), 0);
+                } catch {
+                    return null;
+                }
+            };
+            const chestBefore = countInChest();
+
             const r = await deposit(bot, item, target - storedTotal);   // ★ 只补剩下的
+
+            // 服务端真值优先（读不到就退回客户端报数，不改变原有行为）
+            let delivered = Number(r?.data?.stored ?? 0);
+            const chestAfter = countInChest();
+            if (chestBefore !== null && chestAfter !== null) {
+                const serverStored = chestAfter - chestBefore;
+                if (serverStored >= 0) delivered = serverStored;
+            }
             if (r.ok) {
-                await remember(chest, Number(r.data?.stored ?? 0));
+                await remember(chest, delivered);
                 return ok({ item, want, stored: storedTotal, chest: chest.position });
             }
             if (r.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
             if (r.code === 'INVENTORY_FULL') {
                 // 这个箱子满了（或者只收了一部分）→ 先记下真的搬进去的那几件，再换下一个
-                await remember(chest, Number(r.data?.stored ?? 0));
+                await remember(chest, delivered);
                 if (storedTotal >= target) {
                     return ok({ item, want, stored: storedTotal, chest: chest.position });
                 }
