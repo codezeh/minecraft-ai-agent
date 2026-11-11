@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { socket, request, emitControl } from '../api/socket'
+import { humanize, humanizeControl } from '../api/humanize'
 import { store, selectAgent } from '../stores/agents'
 
 // ---------- agent ----------
@@ -26,8 +27,10 @@ async function loadSettings(name: string) {
 // #65：高危操作两次点击确认（与 /vault 的删除一致），4 秒后自动复位
 const confirmDestroy = ref('')
 const confirmStop = ref(false)
+// S-1：create-agent 打开 allow_insecure_coding 的两次点击确认态（5 秒复位）
+const confirmInsecure = ref(false)
 
-function act(evt: string, name: string) {
+async function act(evt: string, name: string) {
   if (evt === 'destroy-agent' && confirmDestroy.value !== name) {
     confirmDestroy.value = name
     setTimeout(() => { if (confirmDestroy.value === name) confirmDestroy.value = '' }, 4000)
@@ -36,8 +39,8 @@ function act(evt: string, name: string) {
   if (evt === 'destroy-agent') confirmDestroy.value = ''
   // WEB-001：启停/重启/销毁是**有副作用**的控制命令，断线时绝不能 emit
   // （socket.io 会把事件存进 sendBuffer，重连后突然执行 —— 实测过 server-stop 迟到执行）。
-  const r = emitControl(evt, name)
-  if (!r.ok) { err.value = r.message; return }
+  const r = await emitControl(evt, name)
+  if (!r.ok) { err.value = humanizeControl(r.code, r.message); return }
   busy.value = true
   setTimeout(() => { busy.value = false }, 800)
 }
@@ -77,7 +80,7 @@ async function loadProfiles() {
   // #60：request() 在断线时立即以 OFFLINE 拒绝；原来没有 catch ⇒ 未处理拒绝 + 页面永远空白
   try {
     const r = await request<{ ok: boolean; profiles?: ProfileRow[]; dir?: string; reason?: string }>('get-profiles')
-    if (!r?.ok) { profilesErr.value = r?.reason || '读取失败'; return }
+    if (!r?.ok) { profilesErr.value = r?.reason ? humanize(r.reason) : '读取失败'; return }
     profiles.value = r.profiles || []
     profilesDir.value = r.dir || ''
   } catch (e: any) {
@@ -92,6 +95,13 @@ async function pick(p: ProfileRow) {
 
 async function createAgent() {
   if (!picked.value) return
+  // ★ S-1：服务端对 allow_insecure_coding 要求 confirm:true（= 本机 root，同「停止服务」那样两次点击）
+  if (form.value.allow_insecure_coding && !confirmInsecure.value) {
+    confirmInsecure.value = true
+    createMsg.value = 'allow_insecure_coding 等于把本机 root 交给模型：再点一次「创建」确认'
+    setTimeout(() => { confirmInsecure.value = false }, 5000)
+    return
+  }
   creating.value = true
   createMsg.value = ''
   // ★★★ WEB-009（2026-11-06 深度检查）：**create-agent 必须有 ack 超时**。
@@ -109,8 +119,8 @@ async function createAgent() {
   let ackTimer: ReturnType<typeof setTimeout> | null = null
   try {
     const pf = await request<{ ok: boolean; json?: any; reason?: string }>('get-profile', picked.value.file)
-    if (!pf?.ok || !pf.json) { createMsg.value = '读 profile 失败：' + (pf?.reason || '?'); return }
-    const settings = { ...form.value, profile: pf.json }
+    if (!pf?.ok || !pf.json) { createMsg.value = '读 profile 失败：' + humanize(pf?.reason); return }
+    const settings = { ...form.value, profile: pf.json, ...(confirmInsecure.value ? { confirm: true } : {}) }
     const name = pf.json.name
     const ack = await new Promise<{ timedOut: boolean; res?: any }>((resolve) => {
       ackTimer = setTimeout(() => resolve({ timedOut: true }), CREATE_ACK_TIMEOUT_MS)
@@ -125,7 +135,7 @@ async function createAgent() {
         ? `已确认 ${name} 创建成功（ack 丢了，但 agent 在列表里）`
         : `仍未看到 ${name}：可能创建失败，也可能后端还在处理。请稍等再刷新列表，别急着重复点。`
     } else {
-      createMsg.value = ack.res?.success ? `已创建 ${name}` : `失败：${ack.res?.error || '未知错误'}`
+      createMsg.value = ack.res?.success ? `已创建 ${name}` : `失败：${ack.res?.error ? humanize(ack.res.error) : '未知错误'}`
     }
   } catch (e: any) {
     // 原来这里没有 catch：request 的 rejection 直接变成 unhandled，界面什么都不显示
@@ -186,7 +196,7 @@ async function srvAction(kind: 'start' | 'stop') {
     const r = await request<any>(kind === 'start' ? 'server-start' : 'server-stop')
     srvMsg.value = r?.ok
       ? (kind === 'start' ? `已启动 pid=${r.pid}（等 Done 出现才算就绪）` : '已发出优雅停止')
-      : `失败：${r?.reason || '?'}${r?.hint ? ' — ' + r.hint : ''}`
+      : `失败：${humanize(r?.reason)}${r?.hint ? ' — ' + r.hint : ''}`
     setTimeout(refreshServer, 1200)
   } catch (e: any) {
     // #60：原来只有 try/finally（没有 catch）⇒ 断线点"启动服务"完全没反应

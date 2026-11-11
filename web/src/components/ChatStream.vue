@@ -6,11 +6,11 @@ const input = ref('')
 const listEl = ref<HTMLElement | null>(null)
 const showOutput = ref(true)
 
-function send() {
+async function send() {
   const text = input.value.trim()
   if (!text) return
   // #58：只有真的发出去了才清空输入框（原来无条件清空 ⇒ 断线时用户输入被静默吞掉）
-  if (!say(text)) return
+  if (!await say(text)) return
   input.value = ''
 }
 

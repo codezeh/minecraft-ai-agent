@@ -66,17 +66,8 @@ export class RequestError extends Error {
 /**
  * 带超时的 ack 调用。
  *
- * ★ WEB-001（2026-11-06 深度检查）：**断线时不许把事件塞进 sendBuffer**。
- *
- * 缺陷原貌：这里无条件 `socket.emit(...)`。`autoConnect: false` 且断线期间
- * socket.io 会把 emit 的事件**缓存**在 `socket.sendBuffer` 里；15 秒后界面报"超时失败"，
- * 但那个事件还在缓冲区 —— 一旦重连，`emitBuffered` 会把 **server-stop / restart-agent /
- * 游戏指令** 真发出去。用户看到"失败了"，几秒后服务却停了（或指令迟到执行、重复执行）。
- *
- * 现在的口径：
- *   1. 没连接 ⇒ 立即以 `OFFLINE` 拒绝，**不发**（因此也不可能进缓冲区）；
- *   2. 已发出但超时 ⇒ 以 `UNKNOWN_RESULT` 拒绝，文案明确"结果未知"，
- *      界面不许把它当"确定失败"去自动重试。
+ * ★ WEB-001：断线时不许把事件塞进 sendBuffer（重连会把旧命令真发出去）。
+ * 所以：没连接立即以 `OFFLINE` 拒绝且**不 emit**；已发出但超时则以 `UNKNOWN_RESULT` 拒绝。
  */
 export function request<T = any>(event: string, ...args: any[]): Promise<T> {
   const timeoutMs = 15000
@@ -99,23 +90,72 @@ export function request<T = any>(event: string, ...args: any[]): Promise<T> {
   })
 }
 
-export type ControlResult = { ok: true } | { ok: false; code: RequestErrorCode; message: string }
+/**
+ * 控制面的失败码：服务端统一回这五个（RATE_LIMITED / PANEL_ONLY / UNKNOWN_AGENT /
+ * NOT_RUNNING / NOT_IN_GAME），另外 start-agent 用 ALREADY_RUNNING；传输层是 OFFLINE /
+ * UNKNOWN_RESULT；BAD_REQUEST 是服务端对畸形载荷的补充码。
+ */
+export type ControlErrorCode =
+  | RequestErrorCode
+  | 'RATE_LIMITED'
+  | 'PANEL_ONLY'
+  | 'UNKNOWN_AGENT'
+  | 'NOT_RUNNING'
+  | 'NOT_IN_GAME'
+  | 'ALREADY_RUNNING'
+  | 'BAD_REQUEST'
+
+export type ControlResult =
+  | { ok: true; [key: string]: any }
+  | { ok: false; code: ControlErrorCode; message: string; retryAfterMs?: number }
+
+/** 服务端 ack 只有 `{ok:true}`（可带字段）和 `{ok:false, code, message}` 两种形状。 */
+const CONTROL_ACK_TIMEOUT_MS = 8000
+
+function normalizeControlResult(res: any): ControlResult {
+  if (res === true) return { ok: true }
+  if (res && typeof res === 'object' && typeof res.ok === 'boolean') {
+    if (res.ok) return { ...res, ok: true }
+    return {
+      ok: false,
+      code: (res.code as ControlErrorCode) || 'UNKNOWN_RESULT',
+      message: typeof res.message === 'string' && res.message ? res.message : '服务端拒绝了这条操作',
+      retryAfterMs: typeof res.retryAfterMs === 'number' ? res.retryAfterMs : undefined,
+    }
+  }
+  return { ok: false, code: 'UNKNOWN_RESULT', message: '已发出但回执无法识别，结果未知' }
+}
 
 /**
- * 发一个**有副作用**的事件（启停/重启/销毁 agent、给游戏发指令、关服…）。
+ * 发一个**有副作用**的事件（启停/重启/销毁 agent、给游戏发指令…），等 ack 才 resolve。
  *
- * 与 `request()` 的区别：这类事件服务端不一定回 ack，所以这里只保证一件事 ——
- * **没连接时绝不发**，免得它躺在缓冲区里等重连后突然执行（WEB-001）。
- *
- * ★ #57：服务端对这类事件仍**不回 ack**，所以 `ok:true` 只代表"已从浏览器发出"，
- *   不代表"服务端执行了"。调用方必须显式呈现 pending/unknown 态并监听失败帧。
- *
- * @returns ok:false 时 `code:'OFFLINE'`，调用方应把"没执行"告诉用户，而不是静默吞掉。
+ * 断线立即 `OFFLINE`（不发，见 WEB-001）；发出去 8 秒没回执只能报 `UNKNOWN_RESULT` ——
+ * 调用方必须把结果如实显示给用户，且不许把"结果未知"当成确定失败去自动重试。
  */
-export function emitControl(event: string, ...args: any[]): ControlResult {
+export function emitControl(event: string, ...args: any[]): Promise<ControlResult> {
   if (!socket.connected) {
-    return { ok: false, code: 'OFFLINE', message: '未连接到 mindserver，这条操作没有发出去：' + event }
+    return Promise.resolve({
+      ok: false,
+      code: 'OFFLINE',
+      message: '未连接到 mindserver，这条操作没有发出去：' + event,
+    })
   }
-  socket.emit(event, ...args)
-  return { ok: true }
+  return new Promise((resolve) => {
+    let done = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const finish = (r: ControlResult) => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      resolve(r)
+    }
+    timer = setTimeout(() => {
+      finish({ ok: false, code: 'UNKNOWN_RESULT', message: '已发出但没收到回执，结果未知' })
+    }, CONTROL_ACK_TIMEOUT_MS)
+    try {
+      ;(socket as any).emit(event, ...args, (res: any) => finish(normalizeControlResult(res)))
+    } catch (e: any) {
+      finish({ ok: false, code: 'OFFLINE', message: '发送失败：' + (e?.message || String(e)) })
+    }
+  })
 }

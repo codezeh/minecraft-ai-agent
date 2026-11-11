@@ -18,6 +18,7 @@ import {
   currentAgent, issueIdentityCode, identityStatus, unbindIdentity,
   type IdentityBindingRow, type IdentityMode,
 } from '../stores/agents'
+import { humanize } from '../api/humanize'
 
 const busy = ref(false)
 const err = ref('')
@@ -113,17 +114,6 @@ async function unbind(row: IdentityBindingRow) {
   } catch (e: any) {
     err.value = String(e?.message || e)
   }
-}
-
-/** 把服务端的 reason 翻成能照做的人话（不是给开发者看的错误码）。 */
-function humanize(reason?: string): string {
-  const r = String(reason || '')
-  if (r === 'panel_only') return '这条操作只允许从面板发起（agent 通道不能签发身份码）。'
-  if (r === 'unknown_agent') return 'mindserver 里没有这个 agent（可能已被删除）。'
-  if (r === 'rate_limited') return '太频繁了，等一分钟再试（防止刷出一堆码）。'
-  if (r === 'need_uuid_or_name') return '解绑需要指定是哪个玩家。'
-  if (!r) return '失败（服务端没有给出原因）'
-  return r
 }
 
 /** 当前模式的**人话**（含 owner 可达性）。 */

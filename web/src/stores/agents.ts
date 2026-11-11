@@ -1,5 +1,6 @@
 import { reactive, computed } from 'vue'
 import { socket, request, connect, emitControl, isOnline, pauseReconnect } from '../api/socket'
+import { humanizeControl } from '../api/humanize'
 import type { AgentInfo, FullState, TerrainResult } from '../api/types'
 
 export interface ChatLine {
@@ -355,7 +356,7 @@ export function selectAgent(name: string) {
 }
 
 /** 发消息给她。旧面板同一条通路：send-message → agent.respondFunc */
-export function say(text: string): boolean {
+export async function say(text: string): Promise<boolean> {
   const a = currentAgent.value
   const msg = text.trim()
   if (!a || !msg) return false
@@ -366,18 +367,13 @@ export function say(text: string): boolean {
     return false
   }
   // WEB-001：断线时不发（否则事件躺在 sendBuffer 里，重连后突然执行一条"迟到指令"）。
-  const r = emitControl('send-message', a.name, { from: 'ADMIN', message: msg })
+  const r = await emitControl('send-message', a.name, { from: 'ADMIN', message: msg })
   if (!r.ok) {
-    setError(r.message)
+    setError(humanizeControl(r.code, r.message))
     return false
   }
-  // #57：服务端不回 ack ⇒ 先标 pending，"已发出"只能在超时后成立（不是"已送达"）。
-  const chatSeq = pushChat({ kind: 'me', agent: a.name, text: msg, state: 'pending' })
-  setTimeout(() => {
-    const row = store.chat.find(c => c.seq === chatSeq)
-    if (row?.state === 'pending') settleChat(chatSeq, store.connected ? 'sent' : 'failed',
-      store.connected ? '服务端不回执，无法确认送达' : '发送后连接断开')
-  }, 2500)
+  // 现在服务端有 ack：拿到 ok 就是"已交给 agent 通道"，不用再靠 2.5 秒后猜。
+  pushChat({ kind: 'me', agent: a.name, text: msg, state: 'sent' })
   return true
 }
 
@@ -390,20 +386,15 @@ export async function agentAction(
   // 报告实测过"界面报超时失败，重连后 server-stop 真的执行了"。
   const key = `${a.name}:${evt}`
   if (store.pendingActions[key]) return false   // #65：连点不再重复下发
-  const r = emitControl(evt, a.name)
+  const r = await emitControl(evt, a.name)
   if (!r.ok) {
-    setError(r.message)
+    setError(humanizeControl(r.code, r.message))
     return false
   }
-  // #57：服务端不回 ack —— 标"已发起/结果未知"，由 agents-status 或失败帧收尾。
+  // ack 已经回答了"服务端执行了没"；这里的 pending 只是短时按钮锁，防止连点。
   store.pendingActions[key] = { event: evt, at: Date.now() }
   delete store.actionError[a.name]
-  setTimeout(() => {
-    if (!store.pendingActions[key]) return
-    delete store.pendingActions[key]
-    store.actionError[a.name] = `${evt}：已发出但 ${Math.round(15000 / 1000)} 秒内没有状态变化（结果未知）`
-    setError(`${a.name} 的 ${evt} 结果未知：服务端不回执，也没有状态变化`)
-  }, 15000)
+  setTimeout(() => { delete store.pendingActions[key] }, 3000)
   return true
 }
 

@@ -20,7 +20,8 @@ const targetPlayer = computed(() => player.value.trim() || nearbyPlayer.value)
 const offline = computed(() => !store.connected || store.agentsStale || !currentAgent.value?.in_game)
 
 function fire(cmd: string) {
-  say(cmd)
+  // say() 现在等 ack 才返回；失败原因已经由 store.setError 显示，这里不吞掉 Promise
+  void say(cmd)
 }
 
 const quick = computed(() => [

@@ -572,11 +572,15 @@ try {
             Add-Result '重置后世界 = 模板世界（重置生效）' ($templateFp -eq $afterFp) '逐文件 sha256 比对'
         }
 
-        if (-not $KeepRun) {
+        # ★ 真机验收发现：失败场景原来把运行目录一起删掉 ⇒ 最需要的现场（scenario-*.log）消失，
+        #   取证只能加 -KeepRun 重跑一轮。现在：**失败时自动保留**，成功时仍按 -KeepRun 决定。
+        $scenarioFailed = @($script:Results | Where-Object { $_.Scenario -eq $sc -and -not $_.Pass }).Count
+        if (-not $KeepRun -and $scenarioFailed -eq 0) {
             Remove-RunDirSafe -Dir $runDir
         }
         else {
-            Write-Host "  INFO  保留运行目录：$runDir（-KeepRun）" -ForegroundColor DarkGray
+            $why = if ($KeepRun) { '-KeepRun' } else { "本场景有 $scenarioFailed 条失败，保留现场" }
+            Write-Host "  INFO  保留运行目录：$runDir（$why）" -ForegroundColor DarkGray
         }
     }
 }

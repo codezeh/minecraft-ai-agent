@@ -160,7 +160,7 @@ onMounted(() => {
           {{ diag.memory.path }} · {{ diag.memory.bytes }} 字节 ·
           {{ diag.memory.turns }} 轮 · v{{ diag.memory.codeVersion }}
         </span>
-        <span v-else-if="diag.memory" class="bad small">{{ diag.memory.reason }}</span>
+        <span v-else-if="diag.memory" class="bad small">{{ humanize(diag.memory.reason) }}</span>
       </div>
       <pre v-if="diag.memory?.ok" class="mem">{{ diag.memory.memory || '（memory 为空）' }}</pre>
       <div v-else class="faint pad">点「刷新」读取她的记忆摘要。</div>

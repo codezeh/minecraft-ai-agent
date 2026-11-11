@@ -104,7 +104,7 @@ check('A 断线时没有留下缓冲事件', (S.buffered || 0) === 0, `→ buffe
 // ════════════════════════════════════════════════════════════
 S.emits.length = 0
 for (const evt of ['server-stop', 'restart-agent', 'start-agent', 'destroy-agent', 'send-message']) {
-  const r = emitControl(evt, 'x')
+  const r = await emitControl(evt, 'x')
   check(`B 断线时 emitControl(${evt}) 返回 ok:false`, r.ok === false && r.code === 'OFFLINE', `→ ${JSON.stringify(r)}`)
 }
 check('B 断线时 emitControl 一次都没 emit', S.emits.length === 0, `→ ${JSON.stringify(S.emits)}`)
@@ -126,11 +126,24 @@ const acked = await ackPromise
 check('C 已连接时 ack 结果能 resolve 回来', acked?.ok === true)
 
 S.emits.length = 0
-const rc = emitControl('restart-agent', 'bot1')
-check('C 已连接时 emitControl 返回 ok:true', rc.ok === true)
+const rcPromise = emitControl('restart-agent', 'bot1')
+const sentC = S.emits[0]
 check('C 已连接时 emitControl 真的发出去了',
-  S.emits.length === 1 && S.emits[0].ev === 'restart-agent' && S.emits[0].args[0] === 'bot1',
+  S.emits.length === 1 && sentC?.ev === 'restart-agent' && sentC.args[0] === 'bot1',
   `→ ${JSON.stringify(S.emits)}`)
+// ★ 新语义：emitControl 必须**带上 ack 回调**，并以服务端回执 resolve（不再"发了就当成功"）。
+const ctlAck = sentC.args[sentC.args.length - 1]
+check('C emitControl 带上了 ack 回调（服务端回执才代表执行结果）', typeof ctlAck === 'function')
+ctlAck({ ok: true })
+const rc = await rcPromise
+check('C 已连接时 emitControl 在 ack 后返回 ok:true', rc.ok === true, `→ ${JSON.stringify(rc)}`)
+
+S.emits.length = 0
+const rFailPromise = emitControl('restart-agent', 'bot1')
+S.emits[0].args[S.emits[0].args.length - 1]({ ok: false, code: 'RATE_LIMITED', message: 'too many' })
+const rFail = await rFailPromise
+check('C 服务端拒绝时 emitControl 把 code 原样带回来（调用方才能翻人话）',
+  rFail.ok === false && rFail.code === 'RATE_LIMITED', `→ ${JSON.stringify(rFail)}`)
 
 // ════════════════════════════════════════════════════════════
 // D. 已发出但没回执：必须报"结果未知"，不是"失败"
