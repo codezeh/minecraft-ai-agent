@@ -83,9 +83,15 @@ export function planExit({ code = 0, signal = null, livedMs = 0, quickExits = 0 
 }
 
 export class AgentProcess {
-    constructor(name, port) {
+    constructor(name, port, opts = {}) {
         this.name = name;
         this.port = port;
+        /**
+         * ★ ADR 阶段 1：这只 bot 的**独立凭据**。存在时覆盖继承来的共享
+         * `MINDSERVER_TOKEN`，于是"这份凭据属于谁"由服务端登记决定，客户端无法自称。
+         * 缺省为 null ⇒ 保持旧行为（兼容未升级的测试桩）。
+         */
+        this.agentToken = typeof opts.agentToken === 'string' && opts.agentToken ? opts.agentToken : null;
         /** 连续"起不足 10 秒就退出"的次数（正常活过 10 秒就清零）。 */
         this._quickExits = 0;
         /** 本次 spawn 的时刻（判"活了多久"）。 */
@@ -148,7 +154,13 @@ export class AgentProcess {
             // ★ F-EXEC-102（2026-11-06）：把自己的 pid 告诉子进程，子进程据此做**孤儿自杀**。
             // 为什么需要：agent 用 stdio:'inherit' 起，**没有 IPC**（拿不到 'disconnect'），
             // 而 Windows 上父进程死掉后 process.ppid 不会变成 1 ⇒ 只能靠"定期问 pid 还活着吗"。
-            env: { ...process.env, MINDSERVER_PID: String(process.pid) },
+            env: {
+                ...process.env,
+                MINDSERVER_PID: String(process.pid),
+                // 有独立凭据就用它：同一台机器上跑多只 bot 时，各自的凭据互不相同，
+                // 服务端据此拒绝"拿别人的凭据占别人的名字"。
+                ...(this.agentToken ? { MINDSERVER_TOKEN: this.agentToken } : {}),
+            },
         });
         this._spawnedAt = Date.now();
         

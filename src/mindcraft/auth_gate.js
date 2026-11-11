@@ -144,15 +144,37 @@ const EXTRA_CREDENTIALS = new Map();
 
 /**
  * 登记一份额外凭据及其角色。返回值只表示「登记成功」，不表示「现在有连接通过」。
+ *
+ * ★ ADR 阶段 1（2026-11-11）：**凭据要能证明"我是谁"**，不只是"我是 agent"。
+ *   原来一条 `agentToken` 给所有子进程共用 ⇒ 任何持它的进程都能 `login-agent` 抢任意名字
+ *   （可观测越权：唯一占用 + 限速 + 日志，但拦不住）。现在每只 bot 发**独立**凭据，
+ *   并把 agentName 一起登记；`credentialAgent()` 据此回答"这份凭据属于哪只 bot"。
+ *
  * @param {string} token
  * @param {'panel'|'agent'} role
+ * @param {string|null} [agentName] 仅 ROLE_AGENT 有意义；null = 旧式共享凭据（兼容用）
  * @returns {boolean}
  */
-export function registerCredential(token, role) {
+export function registerCredential(token, role, agentName = null) {
     if (typeof token !== 'string' || token.length === 0) return false;
     if (role !== ROLE_PANEL && role !== ROLE_AGENT) return false;
-    EXTRA_CREDENTIALS.set(token, role);
+    const name = (typeof agentName === 'string' && agentName.trim()) ? agentName.trim() : null;
+    EXTRA_CREDENTIALS.set(token, { role, agentName: name });
     return true;
+}
+
+/**
+ * 这份凭据属于哪只 bot（ROLE_AGENT 且登记时带了名字才有值）。
+ * 面板凭据、共享凭据、未登记的 token 一律返回 null。
+ * @param {string} token
+ * @returns {string|null}
+ */
+export function credentialAgent(token) {
+    if (typeof token !== 'string' || token.length === 0) return null;
+    for (const [t, info] of EXTRA_CREDENTIALS) {
+        if (tokenEquals(token, t)) return info.agentName ?? null;
+    }
+    return null;
 }
 
 /** 清空额外凭据（进程内多次 createMindServer 时用；单测也用它隔离）。 */
@@ -179,8 +201,8 @@ export function credentialRole(handshake, panelToken) {
     }
     if (typeof presented !== 'string' || presented.length === 0) return null;
     if (tokenEquals(presented, panelToken)) return ROLE_PANEL;
-    for (const [token, role] of EXTRA_CREDENTIALS) {
-        if (tokenEquals(presented, token)) return role;
+    for (const [token, info] of EXTRA_CREDENTIALS) {
+        if (tokenEquals(presented, token)) return info.role;
     }
     return null;
 }

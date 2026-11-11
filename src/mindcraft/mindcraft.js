@@ -1,4 +1,4 @@
-import { createMindServer, registerAgent, numStateListeners, getHandshakeToken } from './mindserver.js';
+import { createMindServer, registerAgent, numStateListeners, getHandshakeToken, issueAgentToken } from './mindserver.js';
 import { AgentProcess } from '../process/agent_process.js';
 import { getServer } from './mcserver.js';
 import open from 'open';
@@ -70,7 +70,14 @@ export async function createAgent(settings) {
             console.warn(`Attempting to connect anyway...`);
         }
 
-        const agentProcess = new AgentProcess(agent_name, mindserver_port);
+        // ★ ADR 阶段 1（2026-11-11）：每只 bot 一条**独立凭据**，随 spawn 的 env 传下去。
+        //   原来所有子进程共用一条 agentToken ⇒ 持它的进程能 login-agent 抢任意名字。
+        //   发不出来（名字非法等）就退回共享凭据并在日志里点名，不让 bot 起不来。
+        const agentToken = issueAgentToken(agent_name);
+        if (!agentToken) {
+            console.warn(`[agent:${agent_name}] 未能签发独立凭据，退回共享 agent 凭据（该进程仍可抢名字，见 ADR 阶段 1 残留）`);
+        }
+        const agentProcess = new AgentProcess(agent_name, mindserver_port, { agentToken });
         // ★ 第19条：让 AgentProcess 在"该摘掉自己"时（退出码>1 / 连续起不来）
         //   **只摘掉这个 agent**，而不是 process.exit 掉整个 mindserver。
         //   用注入而不是让 agent_process.js 反向 import 本文件：那会形成

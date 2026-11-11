@@ -388,9 +388,16 @@ function makeFakeSocket(id) {
     check('E4 顶层兜底真的装了（installCrashGuards 在 createMindServer 里被调用）',
         /installCrashGuards\(\);/.test(ms));
 
-    check('E5 login-agent / connect-agent-process 统一走身份裁决（agent 身份 + 唯一占用）',
+    // ★ ADR 阶段 1（2026-11-11）：断言从"调用形状"升级为"必须带凭据归属"。
+    //   原来只要求 `claimAgentChannel(conn, socket, { agentIdentity })` —— 那只能证明
+    //   「你是 agent」，证明不了「这个名字是你的」。现在每只 bot 一条独立凭据，
+    //   bindAgentChannel 必须把凭据反查出的 agentName 一起传进去，否则 A 能抢 B 的名字。
+    check('E5 login-agent / connect-agent-process 统一走身份裁决（agent 身份 + 唯一占用 + 凭据归属）',
         /function bindAgentChannel/.test(ms)
-        && /claimAgentChannel\(conn, socket, \{ agentIdentity: isAgentIdentity\(socket\) \}\)/.test(ms)
+        && /claimAgentChannel\(conn, socket, \{/.test(ms)
+        && /agentIdentity:\s*isAgentIdentity\(socket\)/.test(ms)
+        && /credentialAgentName:\s*credentialAgent\(tokenFromSocket\(socket\)\)/.test(ms)
+        && /requestedName:\s*agentName/.test(ms)
         && /bindAgentChannel\(agentName, 'login-agent'\)/.test(ms)
         && /bindAgentChannel\(agentName, 'connect-agent-process'\)/.test(ms));
     check('E5b disconnect 只清"自己仍然是持有者"的绑定（旧连接迟到的事件不许抹掉新主人）',

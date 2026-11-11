@@ -10,7 +10,7 @@ import { allowLocalOnly } from './local_only.js';
 // R6 #2：再加「凭据 → 角色」（面板 / agent）。角色由**出示的是哪一份凭据**决定。
 import {
     makeToken, makeHandshakeGate, authCookieHeader, hasAuthCookie,
-    sanitizeAgentSettings, registerCredential, ROLE_AGENT, ROLE_PANEL,
+    sanitizeAgentSettings, registerCredential, credentialAgent, tokenFromHandshake, ROLE_AGENT, ROLE_PANEL,
 } from './auth_gate.js';
 // 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
 import { validateNameFormat } from '../agent/connection_handler.js';
@@ -284,6 +284,38 @@ export function socketRole(socket) {
 }
 
 /**
+ * ★ ADR 阶段 1：从连接上取出它出示的凭据（用于反查"这份凭据属于哪只 bot"）。
+ * 任何异常一律返回 null —— 这里只做"能查到就查"的辅助判断，绝不因为取不到而抛。
+ * @param {object} socket
+ * @returns {string|null}
+ */
+export function tokenFromSocket(socket) {
+    try {
+        const t = tokenFromHandshake(socket?.handshake);
+        return typeof t === 'string' && t ? t : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * ★ ADR 阶段 1：给一只 bot 发**独立凭据**并登记归属。
+ *
+ * 原来所有子进程共用一条 `agentToken`：任何持有它的进程都能 `login-agent` 抢任意名字。
+ * 每只 bot 一条之后，"抢名字"这条路在 `claimAgentChannel` 里就会被 `identity-mismatch` 拒掉。
+ *
+ * @param {string} agentName
+ * @returns {string|null} 新凭据；agentName 非法时返回 null（调用方退回共享凭据并告警）
+ */
+export function issueAgentToken(agentName) {
+    const name = typeof agentName === 'string' ? agentName.trim() : '';
+    if (!name) return null;
+    const token = makeToken();
+    if (!registerCredential(token, ROLE_AGENT, name)) return null;
+    return token;
+}
+
+/**
  * ★★★ R4 S2#9：agent 通道的**唯一占用**裁决（纯决策，只更新 churn 计数，不碰 socket）。
  *
  * 缺陷原貌（`mindserver.js:686-703`）：`login-agent` / `connect-agent-process` 只做
@@ -305,6 +337,8 @@ export function socketRole(socket) {
  */
 export function claimAgentChannel(conn, socket, {
     agentIdentity = false,
+    credentialAgentName = null,
+    requestedName = null,
     now = Date.now(),
     maxTakeovers = 3,
     takeoverWindowMs = 30_000,
@@ -312,6 +346,13 @@ export function claimAgentChannel(conn, socket, {
     if (!conn) return { ok: false, takeover: false, previous: null, reason: 'unknown-agent' };
     if (!socket) return { ok: false, takeover: false, previous: null, reason: 'no-socket' };
     if (!agentIdentity) return { ok: false, takeover: false, previous: conn.socket ?? null, reason: 'identity-required' };
+    // ★ ADR 阶段 1：**凭据归属**。每只 bot 有独立凭据，登记时绑定了 agentName。
+    //   这份凭据只能占用它自己的名字；拿 A 的凭据去占 B 的名字一律拒绝。
+    //   credentialAgentName 为 null 表示"旧式共享凭据"（未逐 agent 发放），此时放行但留日志，
+    //   以免打断尚未升级的调用方；一旦全部升级，这条分支应当删掉并把 unknown 视为拒绝。
+    if (credentialAgentName && requestedName && credentialAgentName !== requestedName) {
+        return { ok: false, takeover: false, previous: conn.socket ?? null, reason: 'identity-mismatch' };
+    }
 
     const prev = conn.socket ?? null;
     if (!prev || prev === socket) {
@@ -1621,11 +1662,17 @@ export function createMindServer(host_public = false, port = 8080) {
                 console.warn(`[mindserver] ${why}: 未注册的 agent ${JSON.stringify(agentName)}（可能已删除）`);
                 return false;
             }
-            const claim = claimAgentChannel(conn, socket, { agentIdentity: isAgentIdentity(socket) });
+            const claim = claimAgentChannel(conn, socket, {
+                agentIdentity: isAgentIdentity(socket),
+                credentialAgentName: credentialAgent(tokenFromSocket(socket)),
+                requestedName: agentName,
+            });
             if (!claim.ok) {
                 console.warn(`[mindserver] ${why} 拒绝绑定 ${agentName}（${claim.reason}）：` +
                     `来源 socket=${socket.id ?? '?'}，当前持有者 socket=${claim.previous?.id ?? '-'}` +
-                    (claim.reason === 'identity-required' ? '（只有 agent 进程自己可以占用 agent 通道）' : ''));
+                    (claim.reason === 'identity-required' ? '（只有 agent 进程自己可以占用 agent 通道）'
+                        : claim.reason === 'identity-mismatch' ? '（这份凭据不属于这个名字：每只 bot 的凭据只能占用自己的名字）'
+                        : ''));
                 try { socket.emit('agent-channel-rejected', { agent: agentName, reason: claim.reason }); } catch { /* 断开中 */ }
                 return false;
             }
