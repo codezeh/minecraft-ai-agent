@@ -41,7 +41,9 @@ services:
     volumes:
       - ./services/viaproxy:/app/run
     ports:
-      - "25568:25568"
+      # R6 #52：原来没写宿主 IP ⇒ 绑到 0.0.0.0，与本文件其它端口"只绑回环"的口径冲突；
+      # 而且 25568 正是 restore-drill.ps1 的默认 -RconPort，演练端口预检会必然报占用。
+      - "127.0.0.1:25568:25568"
     profiles:
       - viaproxy
     stdin_open: true

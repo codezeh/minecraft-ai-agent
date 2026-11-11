@@ -104,4 +104,13 @@ RUN set -eu; \
 #   · .mindserver-token   mindserver 每次启动自己生成，宿主脚本要用它对接
 # 例：docker run -v "$PWD/profiles:/app/profiles:ro" -v "$PWD/keys.json:/app/keys.json:ro" ...
 
-CMD ["npm", "start"]
+# R6 #52：原来 CMD ["npm","start"] ⇒ PID 1 是 npm，`docker stop` 的 SIGTERM 未必转给 node。
+# 直接 exec node ⇒ node 是 PID 1，信号直达 shutdownOnce()。
+# 非 root 运行（node:22 镜像自带 node 用户，uid 1000 —— 与常见 Linux 宿主目录属主一致）。
+RUN chown -R node:node /app
+USER node
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:8080/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "main.js"]
