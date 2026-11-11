@@ -121,6 +121,39 @@ let agentToken = null;
 const agent_connections = {};
 const agent_listeners = [];
 
+// 每个 agent 的 bot-output 环形缓冲：有界 500 条 + 自增 seq，供 get-output 按 since 补拉。
+// 必须有界：输出是无上限的流，只增不减会把控制面进程吃满。
+const BOT_OUTPUT_LIMIT = 500;
+const botOutputBuffers = new Map();   // name -> { entries: [{ seq, line }], nextSeq }
+
+/**
+ * 控制面回执码（socket 协议层）——**不属于** `library/contract.js` 的 CODES 词表。
+ * 集中一份的原因：这些码是给面板翻译用的协议词汇，散落成裸字面量最容易拼错/漏改。
+ */
+const CONTROL_CODE = Object.freeze({
+    RATE_LIMITED: 'RATE_LIMITED',
+    PANEL_ONLY: 'PANEL_ONLY',
+    UNKNOWN_AGENT: 'UNKNOWN_AGENT',
+    NOT_RUNNING: 'NOT_RUNNING',
+    NOT_IN_GAME: 'NOT_IN_GAME',
+    ALREADY_RUNNING: 'ALREADY_RUNNING',
+    BAD_REQUEST: 'BAD_REQUEST',
+});
+
+/** 追加一行输出到该 agent 的环形缓冲（满了丢最旧的一条）。 */
+function pushBotOutput(name, message) {
+    const line = typeof message === 'string' ? message : JSON.stringify(message);
+    let buf = botOutputBuffers.get(name);
+    if (!buf) {
+        buf = { entries: [], nextSeq: 1 };
+        botOutputBuffers.set(name, buf);
+    }
+    buf.entries.push({ seq: buf.nextSeq, line });
+    buf.nextSeq += 1;
+    while (buf.entries.length > BOT_OUTPUT_LIMIT) buf.entries.shift();
+    return buf;
+}
+
 /** 本次启动的握手 token；`init()` 之外的调用方（自动开浏览器）靠它拼 `?token=`。 */
 export function getHandshakeToken() {
     return handshakeToken;
@@ -1389,6 +1422,8 @@ export function createMindServer(host_public = false, port = 8080) {
         console.log('Client connected');
 
         agentsStatusUpdate(socket);
+        // relay 与"订阅状态推送"解耦：地图/地形/诊断都是按需 ack，不该要求先 listen-to-agents。
+        registerMapRelay(socket);
 
         // ---- 配置向导：profile 列表 / 读取（纯文件操作，不涉及 agent）----
         const profilesDir = path.join(__dirname, '../../profiles');
@@ -1508,6 +1543,14 @@ export function createMindServer(host_public = false, port = 8080) {
         const knownAgent = (agentName) => {
             const name = typeof agentName === 'string' ? agentName.trim() : '';
             return name && Object.prototype.hasOwnProperty.call(agent_connections, name) ? name : null;
+        };
+
+        // 五个控制事件的统一回执：客户端没传 callback 时**静默**（裸调用会抛 TypeError 打挂控制面）。
+        const ackFn = (callback) => (payload) => {
+            if (typeof callback !== 'function') return;
+            try { callback(payload); } catch (e) {
+                console.warn(`[mindserver] 控制事件回执失败（客户端可能已断开）：${e?.message ?? e}`);
+            }
         };
 
         socket.on('identity-status', (agentName, callback) => {
@@ -1690,6 +1733,9 @@ export function createMindServer(host_public = false, port = 8080) {
             }
             // ★ R6 #2：spawn 新进程 = 管理面动作，只给面板。
             if (!requirePanel('create-agent', () => ack({ success: false, error: 'panel_only' }))) return;
+            // ★ S-1：`confirm` 是协议层确认标记，不是配置项 —— 先摘出来，免得混进 settings_spec 校验。
+            const confirm = settings?.confirm === true;
+            if (settings && typeof settings === 'object') delete settings.confirm;
             // ★★★ R4 S1#5：**先校验形状**（null / 字符串 / 数组 / profile 不是对象 ⇒ 当场拒绝）。
             //   不做这一步的话，下面 `key in settings` 会抛 TypeError ⇒ 打挂整个控制面。
             {
@@ -1699,6 +1745,13 @@ export function createMindServer(host_public = false, port = 8080) {
                     ack({ success: false, error: shapeErr });
                     return;
                 }
+            }
+            // ★ S-1：`allow_insecure_coding` = 让模型在本机写并执行代码（本机 root）。
+            //   开它必须带 confirm:true（同 PUT /api/config 的门），否则不 spawn、不写盘。
+            if (settings.allow_insecure_coding === true && !confirm) {
+                console.warn('[mindserver] 拒绝 create-agent：allow_insecure_coding 需要 confirm:true');
+                ack({ success: false, error: 'CONFIG_CONFIRM_REQUIRED' });
+                return;
             }
             for (let key in settings_spec) {
                 if (!(key in settings)) {
@@ -1973,88 +2026,118 @@ export function createMindServer(host_public = false, port = 8080) {
             agent.socket?.emit('restart-agent');
         });
 
-        socket.on('restart-agent', (agentName) => {
+        socket.on('restart-agent', (agentName, callback) => {
+            const ack = ackFn(callback);
             console.log(`Restarting agent: ${agentName}`);
             // ★ F-WEB-203：`restart-agent` 循环比"刷消息"更伤可用性 —— 每点一次就杀一个 bot 进程
             // 再拉起，反复点能把机器拖垮。按来源限 3 次/60 秒（正常使用远低于此）。
-            if (!takeToken(socket, 'restart-agent', 3, 60000)) return;
+            if (!takeToken(socket, 'restart-agent', 3, 60000)) {
+                ack({ ok: false, code: CONTROL_CODE.RATE_LIMITED, message: '太频繁：restart-agent 限 3 次/60 秒' });
+                return;
+            }
             // ★ R6 #2：重启 agent = 管理面动作，只给面板（agent 不能重启别人/自己）。
-            if (!requirePanel('restart-agent')) return;
+            if (!requirePanel('restart-agent', () => ack({ ok: false, code: CONTROL_CODE.PANEL_ONLY, message: '只有面板能操作' }))) return;
             // D25：停掉的 agent socket 为 null（面板上重启按钮仍可点），原来这里直接崩掉整个 mindserver
             // ★ R6 #25：名字一律过 knownAgent（原型链键不再是"任意字符串 = agent 名"）。
             const restartName = knownAgent(agentName);
             if (!restartName) {
                 console.warn(`[mindserver] 忽略 restart-agent：未知 agent ${JSON.stringify(agentName)}`);
+                ack({ ok: false, code: CONTROL_CODE.UNKNOWN_AGENT, message: `未知 agent：${String(agentName)}` });
                 return;
             }
             const conn = agent_connections[restartName];
             if (!conn?.socket) {
                 console.warn(`Agent ${agentName} is not running, cannot restart`);
+                ack({ ok: false, code: CONTROL_CODE.NOT_RUNNING, message: '这只 bot 没有在运行' });
                 return;
             }
             conn.socket.emit('restart-agent');
+            ack({ ok: true });
         });
 
-        socket.on('stop-agent', (agentName) => {
+        socket.on('stop-agent', (agentName, callback) => {
+            const ack = ackFn(callback);
             // ★ R6 #2：停一只是管理面动作（原来完全无限流、也不区分主体）。
-            if (!takeToken(socket, 'stop-agent', 10, 60000)) return;
-            if (!requirePanel('stop-agent')) return;
+            if (!takeToken(socket, 'stop-agent', 10, 60000)) {
+                ack({ ok: false, code: CONTROL_CODE.RATE_LIMITED, message: '太频繁：stop-agent 限 10 次/60 秒' });
+                return;
+            }
+            if (!requirePanel('stop-agent', () => ack({ ok: false, code: CONTROL_CODE.PANEL_ONLY, message: '只有面板能操作' }))) return;
             // ★ R6 #25：stopAgent('constructor') 原来会直接打到进程表上（原型链键）。
             const stopName = knownAgent(agentName);
             if (!stopName) {
                 console.warn(`[mindserver] 忽略 stop-agent：未知 agent ${JSON.stringify(agentName)}`);
+                ack({ ok: false, code: CONTROL_CODE.UNKNOWN_AGENT, message: `未知 agent：${String(agentName)}` });
                 return;
             }
             mindcraft.stopAgent(stopName);
             agentsStatusUpdate();
+            ack({ ok: true });
         });
 
-        socket.on('start-agent', async (agentName) => {
+        socket.on('start-agent', async (agentName, callback) => {
+            const ack = ackFn(callback);
             // ★★ R4 S1#3：`start-agent` 原来**完全无限流**，而它会走 forceRestart（= spawn 进程）。
             //   按来源限 6 次/60 秒（正常使用远低于此：点一次启动/重启算一次）。
             //   注意限流只是外层；真正的双开闸在 AgentProcess.start()（running 时拒绝）与
             //   forceRestart()（并发保护 + 等旧进程退出），两层都在。
             if (!takeToken(socket, 'start-agent', 6, 60000)) {
                 console.warn(`[mindserver] 拒绝 start-agent：触发限流（6 次/60s）`);
+                ack({ ok: false, code: CONTROL_CODE.RATE_LIMITED, message: '太频繁：start-agent 限 6 次/60 秒' });
                 return;
             }
             // ★ R6 #2：起进程 = 管理面动作，只给面板。
-            if (!requirePanel('start-agent')) return;
+            if (!requirePanel('start-agent', () => ack({ ok: false, code: CONTROL_CODE.PANEL_ONLY, message: '只有面板能操作' }))) return;
             const r = await mindcraft.startAgent(agentName);
             if (r && r.started === false) {
                 console.warn(`[mindserver] start-agent 未生效（${r.reason}）：${agentName}` +
                     (r.exited === false ? ' —— 旧进程未确认退出，拒绝再起一个（否则就是双开）' : ''));
                 try { socket.emit('start-agent-failed', { agent: agentName, reason: r.reason }); } catch { /* 断开中 */ }
+                // not-found 是"没有这只 bot"，其余（仍在跑/旧进程未退）都是 ALREADY_RUNNING
+                if (r.reason === 'not-found') {
+                    ack({ ok: false, code: CONTROL_CODE.UNKNOWN_AGENT, message: `未知 agent：${String(agentName)}` });
+                } else {
+                    ack({ ok: false, code: CONTROL_CODE.ALREADY_RUNNING, message: `已经在跑了（${r.reason ?? 'started=false'}）` });
+                }
+                agentsStatusUpdate();
+                return;
             }
             agentsStatusUpdate();
+            ack({ ok: true, started: true });
         });
 
-        socket.on('destroy-agent', async (agentName) => {
+        socket.on('destroy-agent', async (agentName, callback) => {
+            const ack = ackFn(callback);
             // ★★ R4 S1#4：`destroy-agent` 原来 fire-and-forget：`stop()` 发个 SIGINT 就 `delete` 表项。
             //   忽略 SIGINT 的子进程仍然活着（孤儿）⇒ 继续领单/续租，而控制面**再也管不到它**。
             //   现在：等确认退出（SIGINT → 等 → SIGKILL → 再等）；没确认就**不删**，
             //   并把失败原因回给面板（面板据此提示"还在跑，请查进程表"）。
             if (!takeToken(socket, 'destroy-agent', 3, 60000)) {
                 console.warn(`[mindserver] 拒绝 destroy-agent：触发限流（3 次/60s）`);
+                ack({ ok: false, code: CONTROL_CODE.RATE_LIMITED, message: '太频繁：destroy-agent 限 3 次/60 秒' });
                 return;
             }
             // ★ R6 #2：删 agent（连注册表一起）是管理面动作，只给面板。
-            if (!requirePanel('destroy-agent')) return;
+            if (!requirePanel('destroy-agent', () => ack({ ok: false, code: CONTROL_CODE.PANEL_ONLY, message: '只有面板能操作' }))) return;
             // ★ R6 #25：`agent_connections['constructor']` 是真值 ⇒ 原来会一路打到 destroyAgent。
             const destroyName = knownAgent(agentName);
             if (!destroyName) {
                 console.warn(`[mindserver] 忽略 destroy-agent：未知 agent ${JSON.stringify(agentName)}`);
+                ack({ ok: false, code: CONTROL_CODE.UNKNOWN_AGENT, message: `未知 agent：${String(agentName)}` });
                 return;
             }
             const r = await mindcraft.destroyAgent(destroyName);
             if (!r?.ok) {
                 console.error(`[mindserver] destroy-agent ${agentName} 未确认退出（${r?.reason}）—— **保留注册表**（孤儿仍在领单/续租，需要人工查进程表）`);
                 try { socket.emit('destroy-agent-failed', { agent: agentName, reason: r?.reason ?? 'unknown' }); } catch { /* 断开中 */ }
+                ack({ ok: false, code: CONTROL_CODE.NOT_RUNNING, message: `没能确认退出（${r?.reason ?? 'unknown'}），注册项已保留` });
                 return;
             }
-            delete agent_connections[agentName];
+            delete agent_connections[destroyName];
+            botOutputBuffers.delete(destroyName);   // 销毁即清缓冲，免得同名重建读到上一世的输出
             console.log(`[mindserver] destroy-agent ${agentName}：已确认退出（${r.reason}${r.escalated ? '，强杀' : ''}），注册项已删除`);
             agentsStatusUpdate();
+            ack({ ok: true, destroyed: true });
         });
 
         socket.on('stop-all-agents', () => {
@@ -2137,39 +2220,43 @@ export function createMindServer(host_public = false, port = 8080) {
             shutdownOnce('agent-task-done');
         });
 
-		socket.on('send-message', (agentName, data) => {
-			// ★ R6 #25：`agent_connections['constructor']` 是真值（`Object` 构造函数）⇒ 下面 `.socket`
-			//   会抛错。名字一律先过 knownAgent()。
+		socket.on('send-message', (agentName, data, callback) => {
+			const ack = ackFn(callback);
+			// ★ R6 #25：`agent_connections['constructor']` 是真值 ⇒ 下面 `.socket` 会抛错，名字先过 knownAgent()。
 			const sendTo = knownAgent(agentName);
 			if (!sendTo) {
 				console.warn(`Agent ${agentName} not in game, cannot send message via MindServer.`);
-                return;
-			}
-			// 第1条 ①：这条通路决定了「谁在说话」→ 权限等级，所以它必须落在握手门后。
-			// 门在 io.use(makeHandshakeGate)（见 createMindServer 顶部）：没 token 的连接
-			// 根本进不到 io.on('connection')，也就没有这个处理器。
-			// 另外补一条形状校验：from 必须是短字符串，别让对象/超长串进到 agent 侧的等级计算。
-			// ★ F-WEB-203（2026-11-06）：过去 send-message 只校验 data.from 的形状，不限制
-			// message 长度与调用频率；叠加 settings.max_commands=-1（→Infinity）与按量计费
-			// ⇒ 单连接就能刷爆 token 并把上下文挤出。两道内存闸（不引依赖）：
-			//   ① 单条 ≤ 2000 字符；② 每连接 30 条 / 10 秒（令牌桶，按时间回填）。
-			if (typeof data?.message === 'string' && data.message.length > 2000) {
-				console.warn(`[mindserver] 拒绝 send-message：message 过长（${data.message.length} > 2000）`);
+				ack({ ok: false, code: CONTROL_CODE.UNKNOWN_AGENT, message: `未知 agent：${String(agentName)}` });
 				return;
 			}
-			// F-WEB-203：send-message 限 30 条/10 秒/来源。桶按**远端地址**共享
-			// （挂 socket.data 上时断开重连即重置，可无限绕过 —— 复核席指出）。
-			// 与 restart-agent / create-agent / listen-to-agents 共用同一个 takeToken 实现，
-			// 只是 capacity/window 不同（见各处调用）。
-			if (!takeToken(socket, 'send-message', 30, 10000)) return;
+			// ★ F-WEB-203：两道内存闸 —— 单条 ≤ 2000 字符、每来源 30 条/10 秒。
+			if (typeof data?.message === 'string' && data.message.length > 2000) {
+				console.warn(`[mindserver] 拒绝 send-message：message 过长（${data.message.length} > 2000）`);
+				ack({ ok: false, code: CONTROL_CODE.BAD_REQUEST, message: '消息太长（上限 2000 字符）' });
+				return;
+			}
+			if (!takeToken(socket, 'send-message', 30, 10000)) {
+				ack({ ok: false, code: CONTROL_CODE.RATE_LIMITED, message: '太频繁：send-message 限 30 条/10 秒' });
+				return;
+			}
+			// 这条通路决定「谁在说话」→ 权限等级；from 必须是 1~32 字符的字符串。
 			if (!data || typeof data.from !== 'string' || !data.from || data.from.length > 32) {
 				console.warn(`[mindserver] 拒绝 send-message：from 非法（${JSON.stringify(data?.from ?? null)}）`);
+				ack({ ok: false, code: CONTROL_CODE.BAD_REQUEST, message: '"from" 必须是 1~32 字符的字符串' });
+				return;
+			}
+			const target = agent_connections[sendTo];
+			// 目标 bot 的通道是 null（没进服/已停）时显式回 NOT_IN_GAME，不再让 TypeError 被外层吞掉。
+			if (!target?.socket) {
+				ack({ ok: false, code: CONTROL_CODE.NOT_IN_GAME, message: '这只 bot 不在游戏里' });
 				return;
 			}
 			try {
-                agent_connections[sendTo].socket.emit('send-message', data);
+				target.socket.emit('send-message', data);
+				ack({ ok: true });
 			} catch (error) {
 				console.error('Error: ', error);
+				ack({ ok: false, code: CONTROL_CODE.NOT_IN_GAME, message: '这只 bot 不在游戏里' });
 			}
 		});
 
@@ -2182,7 +2269,27 @@ export function createMindServer(host_public = false, port = 8080) {
                 console.warn(`[mindserver] 丢弃伪造的 bot-output：连接未以 agent 身份（auth.token）互联，声称 agent=${JSON.stringify(agentName)}`);
                 return;
             }
+            // 落一份进环形缓冲：面板后接上时用 get-output?since= 补历史，不看漏已经刷过去的行。
+            // 只给已注册的 agent 建缓冲 —— 否则任意 agentName 都能新增一个键，缓冲"有界"就形同虚设。
+            const bufName = knownAgent(agentName);
+            if (bufName) pushBotOutput(bufName, message);
             io.emit('bot-output', agentName, message);
+        });
+
+        // 面板重连/切换后补拉某只 bot 的输出（有界缓冲，见 BOT_OUTPUT_LIMIT）。
+        socket.on('get-output', (payload, callback) => {
+            const ack = ackFn(callback);
+            const wanted = typeof payload === 'string' ? payload : payload?.agent;
+            const since = Number(payload?.since) || 0;
+            const name = knownAgent(wanted);
+            if (!name) { ack({ ok: false, code: CONTROL_CODE.UNKNOWN_AGENT }); return; }
+            if (!takeToken(socket, 'get-output', 60, 60000)) {
+                ack({ ok: false, code: CONTROL_CODE.RATE_LIMITED, retryAfterMs: 1000 });
+                return;
+            }
+            const buf = botOutputBuffers.get(name);
+            const entries = buf ? buf.entries.filter((e) => e.seq > since) : [];
+            ack({ ok: true, entries, latest: buf ? buf.nextSeq - 1 : 0 });
         });
 
         // agent 进程把结构化事件推上来 → 广播给所有面板（诊断页的事件流）
@@ -2196,19 +2303,22 @@ export function createMindServer(host_public = false, port = 8080) {
             io.emit('agent-event', agentName, e);
         });
 
-        socket.on('listen-to-agents', () => {
+        socket.on('listen-to-agents', (callback) => {
+            const ack = ackFn(callback);
             // ★★★ R4 S2#10：**幂等**。已经订阅过的连接直接忽略 —— 不消耗限流令牌、不重复注册 relay、
-            //   不会再往 agent_listeners 里塞第二个自己（原来重复 push ⇒ 同一个 socket 被 emit 两次
-            //   `state-update`，而且 removeListener 只摘掉一个，剩下的永远留在集合里 ⇒
-            //   `agent_listeners.length` 归不了零 ⇒ 1 Hz 轮询**永不停止**）。
-            if (agent_listeners.includes(socket)) return;
+            //   也不会再往 agent_listeners 里塞第二个自己（重复 push 会让同一 socket 收到两份 state-update）。
+            if (agent_listeners.includes(socket)) { ack({ ok: true }); return; }
             // ★ R6 #2：订阅状态广播是**面板**的能力（1 Hz 轮询 + relay 注册都会推高服务端负载）。
             //   agent 不订阅这个（它发 bot-output/agent-event，方向相反），所以只给面板。
-            if (!requirePanel('listen-to-agents')) return;
-            // ★ F-WEB-203：`listen-to-agents` 会让这个 socket 进入广播订阅集合（服务端按 socket 计数
-            // 起计时器），原来无限流 ⇒ 单连接反复订阅可推高服务端负载。按来源限 10 次/60 秒。
-            if (!takeToken(socket, 'listen-to-agents', 10, 60000)) return;
+            if (!requirePanel('listen-to-agents', () => ack({ ok: false, code: CONTROL_CODE.PANEL_ONLY, message: '只有面板能操作' }))) return;
+            // ★ F-WEB-203：按来源限 10 次/60 秒（单连接反复订阅可推高服务端负载）。
+            if (!takeToken(socket, 'listen-to-agents', 10, 60000)) {
+                // takeToken 不回剩余时间：按窗口/容量估一个（10 次/60s ⇒ 每 6 秒回一个令牌）
+                ack({ ok: false, code: CONTROL_CODE.RATE_LIMITED, retryAfterMs: 6000 });
+                return;
+            }
             addListener(socket);
+            ack({ ok: true });
         });
     });
 
@@ -2414,14 +2524,14 @@ const relayedSockets = new WeakSet();
  *   · `disconnect` 只 `removeListener` 一次 ⇒ 集合里还剩一个引用 ⇒ `length === 0` 永远不成立
  *     ⇒ **1 Hz 轮询永不停止**（服务端每秒还在给一个已断开的 socket emit）。
  *
- * 现在：同一 socket 重复调用 = 无操作；relay 每个 socket 只注册一次;集合归零就停表。
+ * 现在：同一 socket 重复调用 = 无操作；集合归零就停表。
+ * relay 不在这里注册（它已挪到 io.on('connection')，见 A5 解耦），本函数只负责订阅集合。
  *
  * @returns {boolean} 这次调用是否真的新增了订阅
  */
 export function addListener(listener_socket) {
     if (!listener_socket) return false;
     if (agent_listeners.includes(listener_socket)) return false;   // 幂等
-    registerMapRelay(listener_socket);   // 地图按需拉取，不进每秒 state-update
     agent_listeners.push(listener_socket);
     if (agent_listeners.length === 1) startStatePolling();
     return true;

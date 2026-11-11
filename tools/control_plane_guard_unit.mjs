@@ -329,12 +329,16 @@ function makeFakeSocket(id) {
     const added2 = addListener(s);
     check('D1 同一个 socket 重复订阅是**幂等**的（原来会往集合里塞第二个自己）',
         added1 === true && added2 === false && numStateListeners() === 1, `n=${numStateListeners()}`);
-    check('D1b relay 只注册一次：request-map / request-terrain / get-events 各恰好 1 个处理器' +
-        '（`socket.on` 是追加语义，重复注册会让一次请求变成 N 次 agent.emit）',
-        s.handlers['request-map']?.length === 1
-        && s.handlers['request-terrain']?.length === 1
-        && s.handlers['get-events']?.length === 1,
-        JSON.stringify(Object.fromEntries(Object.entries(s.handlers).map(([k, v]) => [k, v.length]))));
+    check('D1b relay 与订阅**解耦**：addListener 不再注册 relay，relay 在 io.on(\'connection\') 里注册' +
+        '（"拿地图/地形"不必先订阅状态推送；重复注册防护仍由 relayedSockets 提供）',
+        (() => {
+            const src = readFileSync(path.join(__dirname, '../src/mindcraft/mindserver.js'), 'utf8');
+            const addPos = src.indexOf('export function addListener');
+            const addBody = addPos === -1 ? '' : src.slice(addPos, src.indexOf('\n}', addPos));
+            return addBody !== '' && !addBody.includes('registerMapRelay')
+                && /agentsStatusUpdate\(socket\);\s*(?:\/\/[^\n]*\n\s*)?registerMapRelay\(socket\);/.test(src)
+                && /if \(relayedSockets\.has\(socket\)\) return false;/.test(src);
+        })());
     check('D1c 有订阅时 1 Hz 状态轮询在跑', isStatePolling() === true);
 
     const removed1 = removeListener(s);
@@ -379,10 +383,13 @@ function makeFakeSocket(id) {
     check('E2b destroy-agent 未确认退出时**不删**注册项、并告知面板',
         /if \(!r\?\.ok\)/.test(destroyBlock) && /destroy-agent-failed/.test(destroyBlock));
 
-    const createBlock = block("socket.on('create-agent'", 1800);
+    // ★ 窗口从 1800 改成"到 `for (let key in settings_spec)` 为止"：断言的是顺序，
+    //   固定字符窗口会因为新增校验/注释而假失败（S-1 confirm 门就撞过一次）。
+    const createStart = ms.indexOf("socket.on('create-agent'");
+    const forSpecPos = createStart === -1 ? -1 : ms.indexOf('for (let key in settings_spec)', createStart);
+    const createBlock = createStart === -1 || forSpecPos === -1 ? '' : ms.slice(createStart, forSpecPos);
     check('E3 create-agent 先校验 settings 形状，再走到 `for (let key in settings_spec)`',
-        /validateSettingsShape\(settings\)/.test(createBlock)
-        && createBlock.indexOf('validateSettingsShape(settings)') < createBlock.indexOf('for (let key in settings_spec)'));
+        createBlock !== '' && /validateSettingsShape\(settings\)/.test(createBlock));
     check('E3b create-agent 的回执走 ack()（裸 callback(...) 在客户端不带 ack 时会抛 TypeError 打挂控制面）',
         /const ack = \(payload\)/.test(createBlock) && !/callback\(\{ success/.test(createBlock));
     check('E4 顶层兜底真的装了（installCrashGuards 在 createMindServer 里被调用）',
