@@ -80,7 +80,8 @@
     默认不会给你明文口令 —— 想要就得明说。
 
 .PARAMETER FromConfig
-    自动备份模式（停止面板 / 每日计划任务用）：`enabled=false` 时跳过并记日志（exit 0）。
+    自动备份模式（停止面板 / 每日计划任务用）：`enabled=false` 时跳过并记日志，退出码 **4**
+    （不是 0：跳过 ≠ 成功，上层据此记 SKIP 而非 OK，见 R6 #51）。
     手动备份**不需要**它 —— 配置永远会被读取，只是手动跑不会因为 `enabled=false` 被拦下。
 
 .EXAMPLE
@@ -92,7 +93,8 @@
     powershell -ExecutionPolicy Bypass -File scripts\backup-world.ps1 -IncludeSecrets
 
 .NOTES
-    退出码：0 成功；1 失败；2 拒绝（服务端在跑，需先关服）；3 拒绝（Hot 未加 -Force）。
+    退出码：0 成功；1 失败；2 拒绝（服务端在跑，需先关服）；3 拒绝（Hot 未加 -Force）；
+            4 跳过（-FromConfig 模式下 config/backup.json 的 enabled=false —— 这是"没备份"，不是"备份成功"，R6 #51）。
 #>
 [CmdletBinding()]
 param(
@@ -136,9 +138,14 @@ $backupCfg = Get-BackupConfig -Root $root
 foreach ($w in $backupCfg.warnings) { Write-Host "WARN $w" -ForegroundColor Yellow }
 
 if ($FromConfig -and -not $backupCfg.enabled) {
-    Write-Host 'SKIP 自动备份已关闭（config/backup.json enabled=false）—— 本次不备份' -ForegroundColor Yellow
-    Write-BackupAutoLog -Root $root -Level 'SKIP' -Message '计划任务/自动备份跳过：总开关 enabled=false'
-    exit 0
+    # ★ R6 #51（2026-11-11）：这里原来 `exit 0` —— 于是"总开关关着、根本没备份"和
+    #   "备份成功"在退出码上完全一样，上层（scripts/lib/backup_config.ps1）就照抄一句
+    #   `OK 停服后自动备份成功` 进 backup-auto.log。日志里同时出现 SKIP 与 OK，
+    #   与 #10 叠加就是"以为有备份"的完整链条。
+    #   现在：跳过用独立退出码 4，上层据此记 SKIP 而不是 OK。
+    Write-Host 'SKIP 自动备份已关闭（config/backup.json enabled=false）—— 本次不备份（exit 4）' -ForegroundColor Yellow
+    Write-BackupAutoLog -Root $root -Level 'SKIP' -Message '计划任务/自动备份跳过：总开关 enabled=false（exit 4，不是成功）'
+    exit 4
 }
 if (-not $FromConfig -and -not $backupCfg.enabled) {
     Write-Host '注意：config/backup.json 的 enabled=false 只关"自动备份"；本次是手动备份，继续执行。' -ForegroundColor DarkGray

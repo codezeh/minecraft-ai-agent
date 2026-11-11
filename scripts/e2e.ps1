@@ -102,18 +102,47 @@ function Stop-E2E {
 
 # ── 找 JDK ────────────────────────────────────────────────────────
 function Resolve-Java {
+    # R6 #53：原来取 $cands[0]（顺序不确定）；多 JDK 时可能拿到 17，报错却只说"起服超时"。
     $cands = @(Get-ChildItem -Path (Join-Path $RepoRoot '.tools') -Filter 'jdk*' -Directory -ErrorAction SilentlyContinue |
                ForEach-Object { Join-Path $_.FullName 'bin/java.exe' } | Where-Object { Test-Path $_ })
     if ($cands.Count -eq 0) { Stop-E2E '找不到 JDK：.tools/jdk*/bin/java.exe' '把 JDK 21 放到 .tools/ 下（与 server/server.jar 配套）。' }
-    return $cands[0]
+    $best = $null
+    foreach ($c in $cands) {
+        $ver = $null
+        try {
+            $raw = (& $c -version 2>&1 | Select-Object -First 1) -join ' '
+            if ($raw -match 'version "(\d+)(?:\.(\d+))?') { $ver = if ($Matches[1] -eq '1') { [int]$Matches[2] } else { [int]$Matches[1] } }
+        } catch { }
+        if ($null -eq $ver) { continue }
+        if ($null -eq $best -or $ver -gt $best.Ver) { $best = [pscustomobject]@{ Path = $c; Ver = $ver } }
+    }
+    if (-not $best) { Stop-E2E '解析不出任何 JDK 的主版本号' '手动跑 .tools/jdk*/bin/java.exe -version 看输出。' }
+    if ($best.Ver -lt 21) { Stop-E2E ("JDK 主版本是 {0}，Paper 1.21.8 需要 21+" -f $best.Ver) '把 JDK 21 放到 .tools/ 下。' }
+    return $best.Path
 }
 
 # ── 起服/停服 ─────────────────────────────────────────────────────
+# R6 #53：先摘 junction 再 -Recurse 删（PS 5.1 会跟随 junction 删到 server-test 的真数据）。
+function Remove-RunDirSafe {
+    param([string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir)) { return }
+    foreach ($name in @('libraries', 'versions', 'cache')) {
+        $link = Join-Path $Dir $name
+        if (Test-Path -LiteralPath $link) {
+            $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+            if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                cmd /c rmdir "`"$link`"" 2>$null | Out-Null
+            }
+        }
+    }
+    Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 function New-RunDir {
     param([string]$ScenarioName, [string]$RconPassword)
 
     $runDir = Join-Path $RunRoot $ScenarioName
-    if (Test-Path -LiteralPath $runDir) { Remove-Item -LiteralPath $runDir -Recurse -Force }
+    Remove-RunDirSafe -Dir $runDir
     New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 
     # server.properties：模板 + 每次随机的 RCON 密码（密码不进仓库、不进日志）
@@ -491,9 +520,12 @@ try {
         Write-Step "场景：$sc"
 
         # 端口占用检查（宁可报错，也不要连到别人开的服上做断言）
-        $busy = @(Get-NetTCPConnection -LocalPort $MC_PORT -State Listen -ErrorAction SilentlyContinue)
-        if ($busy.Count -gt 0) {
-            Stop-E2E "端口 $MC_PORT 已被占用（pid $($busy[0].OwningProcess)）" '先停掉手工开的测试服：测试必须跑在自己起的那个实例上。'
+        # R6 #53：三个端口都要预检（原来只查 MC_PORT，撞 RCON/18093 会伪装成"起服超时"）。
+        foreach ($p in @($MC_PORT, $RCON_PORT, $MS_PORT)) {
+            $busy = @(Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue)
+            if ($busy.Count -gt 0) {
+                Stop-E2E "端口 $p 已被占用（pid $($busy[0].OwningProcess)）" '先停掉占用的实例：测试必须跑在自己起的那个实例上。'
+            }
         }
 
         $rconPass = -join ((1..24) | ForEach-Object { 'abcdef0123456789'[(Get-Random -Maximum 16)] })
@@ -534,14 +566,7 @@ try {
         }
 
         if (-not $KeepRun) {
-            # junction 不能直接删（会顺着删到 server-test），先摘链接再删目录
-            foreach ($d in @('libraries', 'versions', 'cache')) {
-                $link = Join-Path $runDir $d
-                if (Test-Path -LiteralPath $link) {
-                    cmd /c rmdir "`"$link`"" 2>$null | Out-Null
-                }
-            }
-            Remove-Item -LiteralPath $runDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-RunDirSafe -Dir $runDir
         }
         else {
             Write-Host "  INFO  保留运行目录：$runDir（-KeepRun）" -ForegroundColor DarkGray
@@ -561,6 +586,8 @@ finally {
     }
     Remove-Item Env:\MC_BOTS_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\E2E_RUN_ID -ErrorAction SilentlyContinue
+    # R6 #53：异常路径（Stop-E2E 直接 exit 1）原来会把 junction 留到下一轮。
+    if (-not $KeepRun -and $runDir) { Remove-RunDirSafe -Dir $runDir }
 }
 
 # ── 汇总 ─────────────────────────────────────────────────────────

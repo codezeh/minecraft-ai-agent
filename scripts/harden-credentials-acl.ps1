@@ -43,11 +43,16 @@ $root = Split-Path -Parent $PSScriptRoot
 $me   = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
 # 三个真实存在的凭据/隐私文件（报告点名的位置）
+# R6 #55：覆盖面。人设文件可能内嵌 API Key、vault 有盐、config 有准入策略。
 $fileTargets = @(
-    'mindcraft\.mindserver-token',     # 控制台握手 token
-    'mindcraft\keys.json',             # 模型 API Key
-    'server\server.properties',        # 主服：RCON 密码 + 服务器参数
-    'server-test\server.properties'    # ★ R5-009：测试服 RCON 密码（原本走继承 ACL，本机任何用户可读）
+    'mindcraft\.mindserver-token',
+    'mindcraft\keys.json',
+    'server\server.properties',
+    'server-test\server.properties',
+    'mindcraft\profiles\*.json',
+    'mindcraft\.env*',
+    'mindcraft\vault\*',
+    'config\*.json'
 )
 $dirTargets = @('mindcraft')
 
@@ -169,6 +174,13 @@ Write-Host ''
 
 $targets = @()
 foreach ($rel in $fileTargets) {
+    # R6 #55：支持通配（profiles\*.json / vault\* / .env*），逐个展开成真实文件。
+    if ($rel -match '[*?]') {
+        $hits = @(Get-Item -Path (Join-Path $root $rel) -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer })
+        if ($hits.Count -eq 0) { Write-Host ("[跳过] 无匹配：{0}" -f $rel) -ForegroundColor DarkYellow; continue }
+        foreach ($h in $hits) { $targets += [pscustomobject]@{ Path = $h.FullName; Dir = $false; Mode = 'file' } }
+        continue
+    }
     $p = Join-Path $root $rel
     if (Test-Path -LiteralPath $p) { $targets += [pscustomobject]@{ Path = $p; Dir = $false; Mode = 'file' } }
     else { Write-Host ("[跳过] 不存在：{0}" -f $rel) -ForegroundColor DarkYellow }

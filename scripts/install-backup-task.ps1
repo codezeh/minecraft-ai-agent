@@ -43,12 +43,42 @@
 param(
     [switch]$Uninstall,
     [string]$TaskName = 'Minecraft-AutoBackup',
-    [switch]$WhatIf
+        [switch]$WhatIf,
+    # R6 #54：Interactive = 重启后未登录就不跑；S4U = 用户不登录也跑（不要密码）。
+    [ValidateSet('Interactive', 'S4U')][string]$LogonType = 'Interactive',
+    # R6 #54：默认注册后立即跑一次并读 LastTaskResult（-SkipSmokeTest 可跳过）。
+    [switch]$SkipSmokeTest
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib/backup_config.ps1')
+
+# R6 #54：判定"计划任务真能跑"。判据 = LastTaskResult 已知且为 0/267009（运行中），
+# 且 backup-auto.log 在本次触发后新增了行（说明脚本真的被执行过）。
+function Invoke-TaskSmokeTest {
+    param([string]$TaskName, [string]$Root, [int]$TimeoutSec = 90)
+    $logPath = Join-Path $Root 'logs/backup-auto.log'
+    $before = 0
+    if (Test-Path -LiteralPath $logPath) { $before = @(Get-Content -LiteralPath $logPath).Count }
+    try { Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop }
+    catch { return [pscustomobject]@{ Ok = $false; ExitCode = $null; Detail = ("Start-ScheduledTask 失败：" + $_.Exception.Message) } }
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $info = $null
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($info -and $info.LastTaskResult -ne 267009) { break }
+    }
+    $after = 0
+    if (Test-Path -LiteralPath $logPath) { $after = @(Get-Content -LiteralPath $logPath).Count }
+    $grew = ($after -gt $before)
+    if (-not $info) { return [pscustomobject]@{ Ok = $false; ExitCode = $null; Detail = '读不到任务运行信息' } }
+    $code = $info.LastTaskResult
+    $ok = ($code -eq 0 -or $code -eq 267009) -and $grew
+    $detail = if ($grew) { ("backup-auto.log 新增 {0} 行" -f ($after - $before)) } else { 'backup-auto.log 没有新增行（任务可能没真的执行 backup-world.ps1）' }
+    return [pscustomobject]@{ Ok = $ok; ExitCode = $code; Detail = $detail }
+}
 
 function Write-Step([string]$m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Info([string]$m) { Write-Host "    $m" -ForegroundColor DarkGray }
@@ -108,7 +138,8 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
     -MultipleInstances IgnoreNew
 # 当前用户、交互式登录时运行：不需要存密码，也不会因为"未登录"而静默失败于凭据
-$principal = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) -LogonType Interactive -RunLevel Limited
+# R6 #54：默认 Interactive（不需要存密码）；-LogonType S4U 用于"重启后未登录也要跑"。
+$principal = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) -LogonType $LogonType -RunLevel Limited
 
 Write-Info "动作：$psExe $argStr"
 Write-Info ("触发：每天 {0}；工作目录：{1}" -f $cfg.dailyAt, $root)
@@ -149,4 +180,17 @@ Write-Host '说明：' -ForegroundColor DarkGray
 Write-Host '  · 任务只在**服务端已停**时真正备份；发现服务端在跑会跳过并写 logs/backup-auto.log'
 Write-Host '  · 关掉自动备份：把 config/backup.json 的 enabled 改成 false（任务会自动跳过），或本脚本 -Uninstall 彻底删掉'
 Write-BackupAutoLog -Root $root -Level 'INFO' -Message ("已注册计划任务 {0}（每日 {1}，keep={2}）" -f $TaskName, $cfg.dailyAt, $cfg.keep)
+
+# R6 #54：注册成功 != 真能跑。立即跑一次并读 LastTaskResult。
+if (-not $SkipSmokeTest) {
+    $smoke = Invoke-TaskSmokeTest -TaskName $TaskName -Root $root
+    if (-not $smoke.Ok) {
+        Write-Host ("FAIL 冒烟执行未通过：{0}" -f $smoke.Detail) -ForegroundColor Red
+        Write-Host '     任务注册成功，但没有证据表明它能真的备份。' -ForegroundColor Yellow
+        Write-BackupAutoLog -Root $root -Level 'ERROR' -Message ("计划任务冒烟失败：{0}" -f $smoke.Detail)
+        exit 1
+    }
+    Write-Host ("    冒烟通过：LastTaskResult={0}；{1}" -f $smoke.ExitCode, $smoke.Detail) -ForegroundColor Green
+    Write-BackupAutoLog -Root $root -Level 'INFO' -Message ("计划任务冒烟通过（LastTaskResult={0}）" -f $smoke.ExitCode)
+}
 exit 0

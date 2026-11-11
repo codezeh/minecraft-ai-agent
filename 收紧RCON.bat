@@ -35,18 +35,36 @@ echo.
 echo  If you click "No", nothing changes and RCON stays exposed.
 echo.
 
-powershell -NoProfile -Command "try { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$env:RCON_PS1) -ErrorAction Stop; exit 0 } catch { Write-Host ('[INFO] Elevation cancelled or failed: ' + $_.Exception.Message); exit 1 }"
+REM ---- R6 #48 (2026-11-11): this layer used to exit 0 as soon as the
+REM      elevated window was LAUNCHED. A netsh failure inside it (group
+REM      policy, rule conflict, AV) was only visible in a window that closes
+REM      immediately => "double-click -> exit 0" proved nothing.
+REM      Now: -Wait -PassThru, then propagate the child's REAL exit code.
+REM      Exit codes of the child: 0 = rule installed AND read back OK,
+REM      1 = could not install / read-back shape wrong.
+powershell -NoProfile -Command "try { $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$env:RCON_PS1) -ErrorAction Stop; exit $p.ExitCode } catch { Write-Host ('[INFO] Elevation cancelled or failed: ' + $_.Exception.Message); exit 2 }"
 
-if errorlevel 1 (
+set "RC=%ERRORLEVEL%"
+
+if "%RC%"=="2" (
     echo.
     echo  [INFO] Not elevated. Nothing was changed.
     echo.
     pause
-    exit /b 1
+    exit /b 2
+)
+if not "%RC%"=="0" (
+    echo.
+    echo  [ERROR] The elevated run FAILED ^(exit %RC%^): RCON may still be exposed.
+    echo          Read the elevated window output above, then run the self-check:
+    echo          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deny-rcon-25575-in.ps1 -Verify
+    echo.
+    pause
+    exit /b %RC%
 )
 
 echo.
-echo  An elevated window opened. Read its output for the result
-echo  and the three-step verification instructions.
-timeout /t 4 >nul
+echo  Done. The elevated run verified the rule by reading it back:
+echo  inbound / Block / TCP / local port 25575 / enabled.
+echo  Self-check (no admin needed): scripts\deny-rcon-25575-in.ps1 -Verify
 exit /b 0

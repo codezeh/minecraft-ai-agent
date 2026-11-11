@@ -53,6 +53,19 @@ function Write-SpawnContext([string]$what, [string]$workDir) {
     }
 }
 
+# ★ R6 #44/#49/#56（2026-11-11）：三条「没成功也报成功」的判据、bot 进游戏判定、
+#   「被服务的产物 vs 被校验的产物」比对，全部收进 scripts/lib/panel_guard.ps1。
+#   理由：这些判据以前是内联的 Write-Ok，除了真起一个服之外无法验证；而 ops-regression
+#   只能 grep 标识符（正是 #56 点名的「文本正则门禁」）。搬到 lib 之后，回归门禁可以
+#   **真的 dot-source 并喂假事实**，判据翻回「成功」就会红。
+$guardLib = Join-Path $PSScriptRoot 'lib\panel_guard.ps1'
+if (-not (Test-Path -LiteralPath $guardLib)) {
+    Write-Bad "[错误] 缺少判据库：$guardLib"
+    Write-Bad '        修法：从仓库重新检出 scripts/lib/panel_guard.ps1。'
+    exit 1
+}
+. $guardLib
+
 function Test-Port([int]$port) {
     $c = New-Object Net.Sockets.TcpClient
     try { $c.Connect('127.0.0.1', $port); return $true }
@@ -137,27 +150,12 @@ function Wait-ServerReady([datetime]$launchedAt, [int]$seconds) {
 }
 
 # 等 bot 真的进游戏（mindcraft 输出 spawned.）
-function Wait-BotSpawned([int]$seconds) {
-    $elapsed = 0
-    while ($elapsed -lt $seconds) {
-        if (Test-Path $mcOut) {
-            $tail = Get-Content $mcOut -Tail 200 -ErrorAction SilentlyContinue
-            if ($tail -match 'spawned\.') { Write-Ok "bot 已进游戏（${elapsed}s）"; return $true }
-            if ($tail -match 'not found in keys|exited too quickly') {
-                Write-Bad '[错误] bot 启动失败（缺 API key 或进程退出）'
-                Show-Tail $mcOut 20
-                return $false
-            }
-        }
-        Start-Sleep -Seconds 2
-        $elapsed += 2
-        Write-Host '.' -NoNewline -ForegroundColor DarkGray
-    }
-    Write-Host ''
-    Write-Warn2 "[提示] 等了 $seconds 秒还没看到 bot 进游戏，先打开面板看看（可能只是模型响应慢）"
-    Show-Tail $mcOut 12
-    return $true
-}
+#
+# ★ R6 #44（2026-11-11）：实现搬到 lib/panel_guard.ps1 的 Wait-BotSpawned ——
+#   唯一的行为变化是**超时返回 $false**。原来这里超时也 `return $true` ⇒
+#   调用点 `if (-not (Wait-BotSpawned 120)) { exit 1 }` 永远不触发，
+#   脚本会在一只没进游戏的 bot 上打印「已启动完成」。
+#   现在 spawned / 明确失败 / 超时 三态由 Get-BotSpawnHint 判定，超时按失败收尾。
 
 function Find-Java {
     $tools = Join-Path $root '.tools'
@@ -195,44 +193,94 @@ if (-not (Test-Path (Join-Path $root 'server\server.jar'))) {
     exit 1
 }
 
-# ---------- 0) 构建面板 ----------
-Write-Step '0/4' '构建面板（约 1~2 秒）...'
-$vite = Join-Path $root 'web\node_modules\vite\bin\vite.js'
+# ---------- 前置自检：RCON 暴露缓解是否还在（R6 #48）----------
+# 「收紧RCON.bat」是一条**不入库、换机即失效**的防火墙规则，之前没有任何脚本检查它：
+# 新机器上 25575 明文端口裸奔而没人知道。这里做只读自检（不拦不 WARN，不拦不 exit）：
+# 它是"部署硬要求"，缺了明确告知并指向那一条双击动作。
+$rconDenyScript = Join-Path $PSScriptRoot 'deny-rcon-25575-in.ps1'
+if (Test-Path -LiteralPath $rconDenyScript) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $rconDenyScript -Verify | Out-Null
+    $rconState = $LASTEXITCODE
+    if ($rconState -eq 0) {
+        Write-Ok 'RCON 入站已收紧（防火墙规则 deny-rcon-25575-in 在位且形态正确）'
+    } elseif ($rconState -eq 1) {
+        Write-Warn2 '[警告] 没有防火墙规则 deny-rcon-25575-in：RCON 25575 对外暴露（server-ip 为空 ⇒ 监听 0.0.0.0）。'
+        Write-Warn2 '        修法：双击仓库根的「收紧RCON.bat」（需要一次 UAC），它会验证规则真的生效。'
+    } else {
+        Write-Warn2 '[警告] 防火墙规则 deny-rcon-25575-in 存在但形态不对（不是 TCP 25575 入站 block / 未启用）。'
+        Write-Warn2 '        修法：双击「收紧RCON.bat」重装一次（它是幂等的：先删后加）。'
+    }
+}
+
+# ---------- 前置自检：凭据 ACL 覆盖面（R6 #55）----------
+$aclScript = Join-Path $PSScriptRoot 'harden-credentials-acl.ps1'
+if (Test-Path -LiteralPath $aclScript) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $aclScript | Out-Null
+    if ($LASTEXITCODE -eq 3) {
+        Write-Warn2 '[警告] 有凭据类文件仍是"本机所有用户可读"（体检 exit 3）。'
+        Write-Warn2 '        修法：powershell -NoProfile -File scripts\harden-credentials-acl.ps1 -Apply'
+    }
+}
+
+# ---------- 0) 构建并校验面板产物 ----------
+# ★ R6 #44-①（2026-11-11）：原来这里直接 `node vite.js build`，失败只 Write-Warn2
+#   「沿用上一次的 dist」，然后照常往下走并打印「已启动完成」—— 改过前端但没构建成功时，
+#   服务的是旧 UI 而脚本说成功。现在构建失败 = 启动失败。
+# ★ R6 #49（2026-11-11）：更重要的是**校验对象**。mindserver 本机实际服务
+#   `web\dist`（候选 ②），而 release.ps1 只验证 `mindcraft\web-dist`。
+#   以前这里直接把 vite 输出到 web\dist 且不做任何校验 ⇒ `release.ps1 -VerifyOnly`
+#   的 ALL PASS 会被读成「你打开的面板是这个版本」，其实它证明的是另一个目录。
+#   现在：构建/同步/打指纹/校验全部走 release.ps1 -SkipDocker（唯一产物写者），
+#   再逐文件比对 web\dist 与 mindcraft\web-dist —— 被服务的那份必须就是被校验的那份。
+Write-Step '0/4' '构建并校验面板产物（release.ps1 -SkipDocker）...'
+$releasePs1 = Join-Path $root 'scripts\release.ps1'
 $distIndex = Join-Path $root 'web\dist\index.html'
-# ★ R6 #8（2026-11-10）：缺依赖时**不许**静默跳过、更不许在跳过之后打印"已启动完成"并打开一个 404 的面板。
-#   这两种情况必须分开处理：
-#     · 已经有 web\dist  → 跳过构建是合理的（沿用上次产物），但要说清"用的是旧产物"
-#     · 没有 web\dist    → 面板必然 404，当场停手并给出可照做的命令（此时一个进程都还没起）
-if (-not (Test-Path $vite)) {
-    if (Test-Path $distIndex) {
-        Write-Warn2 '跳过构建：web\node_modules 未安装；沿用已存在的 web\dist'
-    } else {
-        Write-Bad '[错误] 缺少面板构建依赖，且没有可用的 web\dist —— 面板打开必然 404。'
-        Write-Bad '        修法：cd web; npm install   然后重跑本脚本。'
-        if (-not $dryRun) { exit 1 }
-    }
+$shippedDist = Join-Path $root 'mindcraft\web-dist'
+if (-not (Test-Path -LiteralPath $releasePs1)) {
+    Write-Bad "[错误] 找不到发布脚本：$releasePs1"
+    Write-Bad '        修法：从仓库重新检出 scripts/release.ps1（它是产物的唯一写者）。'
+    exit 1
+}
+
+if ($dryRun) {
+    Write-DryRun ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $releasePs1 + '" -SkipDocker    # 构建→同步→打指纹→校验（唯一产物写者）')
+    Write-DryRun ('比对 "' + (Join-Path $root 'web\dist') + '" 与 "' + $shippedDist + '"（被服务的必须就是被校验的）')
 } else {
-    if ($dryRun) {
-        Write-DryRun ('& "' + $node + '" "' + $vite + '" build     # cwd=' + (Join-Path $root 'web'))
-    } else {
-        Push-Location (Join-Path $root 'web')
-        & $node $vite build 2>&1 | Out-Null
-        $code = $LASTEXITCODE
-        Pop-Location
-        if ($code -eq 0) { Write-Ok '面板已构建' }
-        elseif (Test-Path $distIndex) { Write-Warn2 '[警告] 构建失败，沿用上一次的 dist' }
-        else {
-            Write-Bad '[错误] 面板构建失败，且没有可用的 web\dist —— 面板打开必然 404。'
-            Write-Bad '        先单独跑 cd web; npm run build 看详细报错，修好再重跑本脚本。'
-            exit 1
-        }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $releasePs1 -SkipDocker
+    $buildCode = $LASTEXITCODE
+    $buildOutcome = Resolve-BuildOutcome -ExitCode $buildCode -HasDist (Test-Path -LiteralPath $distIndex) -DistPath (Join-Path $root 'web\dist')
+    if ($buildOutcome.Action -ne 'ok') {
+        Write-Bad ('[错误] ' + $buildOutcome.Message)
+        Write-Bad '        修法：单独跑 cd web; npm run build 看完整报错；或跑 scripts\release.ps1 -SkipDocker 看发布链的哪一步失败。'
+        Write-Bad '        注意：此时不会启动任何东西 —— 宁可不启动，也不要在"不知道服务的是哪个版本"的状态下说已启动。'
+        exit $buildOutcome.ExitCode
     }
+    Write-Ok '面板产物已构建并通过发布链校验'
+
+    $drift = @(Get-DistDrift -Left (Join-Path $root 'web\dist') -Right $shippedDist)
+    if ($drift.Count -gt 0) {
+        Write-Bad '[错误] web\dist 与 mindcraft\web-dist 不一致 —— 被服务的产物不是被校验的产物（#49）'
+        foreach ($d in $drift | Select-Object -First 12) { Write-Bad ('        ' + $d) }
+        Write-Bad '        修法：跑 scripts\release.ps1（不带 -SkipDocker 也行）把两边重新对齐；不要手工改产物。'
+        exit 1
+    }
+    Write-Ok 'web\dist 与 mindcraft\web-dist 逐文件一致（被服务的就是被校验的那份）'
 }
 
 # ---------- 1) Minecraft 服务器 ----------
 Write-Step '1/4' 'Minecraft 服务器'
-if (Test-Port 25565) {
-    Write-Ok '已在运行（25565 已监听），跳过'
+# ★ R6 #44-③（2026-11-11）：原来「25565 有监听」就等于「本项目已在运行」。
+#   8080 被别的服务占 ⇒ 面板不是本项目；25565 被别的整合包占 ⇒ 等的是别人的服。
+#   现在：监听着还不够，必须**同时**存在本项目的 server.jar 进程（Get-ServerJava 按绝对路径匹配）。
+$mcListening = Test-Port 25565
+$mcState = Resolve-McPortState -Listening $mcListening -OurJavaPresent ([bool](Get-ServerJava)) -Port 25565
+if ($mcState -eq 'ours') {
+    Write-Ok '本项目服务端已在运行（25565 已监听，且是本项目的 server.jar），跳过'
+} elseif ($mcState -eq 'foreign') {
+    Write-Bad '[错误] 25565 已被**别的程序**占用：端口在监听，但找不到本项目的 server\server.jar 进程。'
+    Write-Bad '        这不是"已启动"，也不是"本项目在跑"——继续下去只会连到别人的服务器上。'
+    Write-Bad '        修法：netstat -ano | findstr :25565 找到 pid；若是别的整合包请先关掉，或改本项目端口。'
+    exit 1
 } else {
     $stale = Get-ServerJava
     if ($stale) {
@@ -269,8 +317,23 @@ if (Test-Port 25565) {
 
 # ---------- 2) mindserver + bot ----------
 Write-Step '2/4' 'mindserver + bot'
-if (Test-Port 8080) {
-    Write-Ok '已在运行（8080 已监听），跳过'
+# ★ R6 #44-③（2026-11-11）：原来「8080 有监听」就等于「面板已在运行」。
+#   8080 被别的服务占时，浏览器打开的是别人的页面，而脚本说"已启动完成"。
+#   现在：探一次 GET /console，只认本项目 mindserver 的应答
+#   （无 token 时它回 401 + "unauthorized: 需要握手 token…"；闸门放开时回 Vue 外壳）。
+$panelListening = Test-Port 8080
+$panelState = 'free'
+if ($panelListening) {
+    $probe = Get-PanelProbe -Port 8080
+    $panelState = Resolve-PanelPortState -Listening $true -Probe $probe -Port 8080
+}
+if ($panelState -eq 'ours') {
+    Write-Ok '本项目 mindserver 已在运行（8080 应答本项目握手门），跳过'
+} elseif ($panelState -eq 'foreign') {
+    Write-Bad '[错误] 8080 已被**别的东西**占用：端口在监听，但应答的不是本项目面板。'
+    Write-Bad ("        探测结果：HTTP {0} {1}" -f $probe.Status, $(if ($probe.Ok) { '' } else { '（' + $probe.Error + '）' }))
+    Write-Bad '        继续下去会在一个陌生页面上说"已启动完成"。请先让出 8080 再重跑。'
+    exit 1
 } else {
     # ★ F-REG-004（2026-11-06）：**启动前预检 mindcraft\node_modules**。
     #
@@ -331,7 +394,19 @@ if (Test-Port 8080) {
 Write-Step '3/4' '等她进游戏'
 if ($dryRun) {
     Write-DryRun '本应等待 bot 进游戏（Wait-BotSpawned 120s，已跳过）'
-} elseif (-not (Wait-BotSpawned 120)) { exit 1 }
+} elseif (-not (Wait-BotSpawned -Seconds 120 -LogFile $mcOut)) {
+    # ★ R6 #44-②（2026-11-11）：这里以前**永远不会**进来（超时也 return $true）。
+    #   现在超时/失败都会到这里，并且必须把"服务已在跑、别重复启动"讲清楚。
+    Show-Tail $mcOut 20
+    Write-Host ''
+    Write-Bad '[错误] 启动未确认：节点已起，但 bot 没进游戏（脚本不把这种情况算成功）。'
+    Write-Bad '        排查顺序：① logs\mindcraft-console.log 里的报错 ② keys.json 是否有可用 API key'
+    Write-Bad '                  ③ 服务器是否真的加载完（logs\server-console.log 有 Done 吗）'
+    Write-Host '  [重要] Minecraft 服务端与 Mindserver 已在后台运行（本脚本已启动它们）。' -ForegroundColor Yellow
+    Write-Host '         不要重复双击本脚本（会撞端口）。要停止请双击 停止面板.bat。' -ForegroundColor Yellow
+    Read-Host '按回车退出'
+    exit 1
+}
 
 # ★ t34：演练到这里收尾。后面的 token 逻辑依赖 mindserver 真的写出 token 文件，
 #   演练没起服必然取不到 token —— 若继续往下走只会以 exit 1 结束，那就失去演练意义了。

@@ -316,7 +316,7 @@ else {
 # ──────────────────────────────────────────────────────────────
 # [3/8] 同步产物到 mindcraft/web-dist
 # ──────────────────────────────────────────────────────────────
-Write-Step '同步产物：web/dist → mindcraft/web-dist（含逐文件 sha256 清单）'
+Write-Step '同步产物：web/dist → mindcraft/web-dist（只拷产物；清单由本脚本写）'
 
 if ($VerifyOnly) {
     Write-Warn2 'VerifyOnly：跳过同步，直接校验 mindcraft/web-dist 现有内容'
@@ -326,7 +326,7 @@ else {
         Stop-Release "找不到同步工具：$SyncTool" 'mindcraft 仓库不完整，请重新 clone 或切到正确分支。'
     }
     Invoke-Tool -Command @('node') -Arguments @($SyncTool) -WorkDir $MindDir | Out-Null
-    Write-Ok 'web-dist 已同步，MANIFEST.json 的 files 表已重写'
+    Write-Ok 'web-dist 已同步（同步工具只拷产物；MANIFEST.json 由下一步写出，见 R6 #50）'
 }
 
 # ──────────────────────────────────────────────────────────────
@@ -343,7 +343,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $WebDist 'index.html'))) {
     Stop-Release "产物里没有 index.html：$WebDist" '产物是空壳，镜像里 /console 会 404。重新运行本脚本（去掉 -VerifyOnly）。'
 }
 if (-not (Test-Path -LiteralPath $Manifest)) {
-    Stop-Release "产物里没有 MANIFEST.json：$Manifest" '重新运行本脚本（去掉 -VerifyOnly）让同步步骤重写清单。'
+    Stop-Release "产物里没有 MANIFEST.json：$Manifest" '重新运行本脚本（去掉 -VerifyOnly）。清单只有本脚本会写，tools/sync_web_dist.mjs 不写它。'
 }
 Write-Ok 'web-dist 结构完整（index.html + MANIFEST.json）'
 
@@ -375,10 +375,34 @@ const bad = (m, fix) => {
 };
 const ok = (m) => { pass++; console.log(`  PASS  ${m}`); };
 
-const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-const files = manifest.files || {};
+// ★ R6 #50（2026-11-11）：清单是**本助手**（即 scripts/release.ps1）独有的写者。
+//   files 表按**磁盘实际内容**重算，不再从旧清单里读 —— 这样 tools/sync_web_dist.mjs
+//   不需要（也不再）写清单：它只拷产物，元数据与 files 一律由这里产生。
+const SELF = new Set(['MANIFEST.json', 'README.md']);
+const walk = (dir, base = '') => {
+  const out = [];
+  for (const n of fs.readdirSync(dir)) {
+    const abs = path.join(dir, n);
+    const rel = base ? `${base}/${n}` : n;
+    if (fs.statSync(abs).isDirectory()) out.push(...walk(abs, rel));
+    else out.push(rel);
+  }
+  return out;
+};
+const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : {};
+// 磁盘真相（写清单时用它；算产物指纹也用它，否则"产物被改"就只能靠 artifact.hash 一条拦）
+const diskFiles = {};
+for (const rel of walk(distDir)) {
+  if (SELF.has(rel)) continue;
+  diskFiles[rel] = sha256File(path.join(distDir, rel));
+}
+const diskNames = Object.keys(diskFiles).sort();
+if (diskNames.length === 0) bad('产物目录里没有任何可校验的文件', '先在仓库根跑 scripts/release.ps1（去掉 -VerifyOnly）生成产物。');
+// verify 时以**清单记录**为基准逐条比对磁盘（否则 files 从磁盘重算 = 同义反复）；
+// stamp 时以磁盘为准。R6 #50 复核补强。
+const recorded = (mode === 'verify' && manifest.files && Object.keys(manifest.files).length) ? manifest.files : null;
+const files = recorded ?? diskFiles;
 const names = Object.keys(files).sort();
-if (names.length === 0) bad('MANIFEST.json 的 files 为空', '重新运行 scripts/release.ps1 生成产物。');
 
 // ── 1. 逐文件核对（防手改 / 防漏拷） ──
 for (const rel of names) {
@@ -390,17 +414,7 @@ for (const rel of names) {
 ok(`${names.length} 个产物文件与清单逐条一致`);
 
 // ── 2. 反向：不许有清单未记录的野文件（上一版残留最容易卡在这） ──
-const walk = (dir, base = '') => {
-  const out = [];
-  for (const n of fs.readdirSync(dir)) {
-    const abs = path.join(dir, n);
-    const rel = base ? `${base}/${n}` : n;
-    if (fs.statSync(abs).isDirectory()) out.push(...walk(abs, rel));
-    else out.push(rel);
-  }
-  return out;
-};
-const SELF = new Set(['MANIFEST.json', 'README.md']);
+//   walk / SELF 在上面的 files 计算处定义（R6 #50：files 由磁盘重算）。
 const extras = walk(distDir).filter((f) => !SELF.has(f) && !names.includes(f));
 if (extras.length) bad(`产物里有清单未记录的野文件: ${extras.join(', ')}`, '产物目录被污染；重新运行 scripts/release.ps1。');
 ok('产物目录没有清单未记录的野文件');
@@ -435,8 +449,9 @@ sourceFiles.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 const sourceHash = 'sha256:' + sha256Buf(sourceFiles.map((f) => `${f.rel}\0${f.hash}\n`).join(''));
 ok(`源码指纹 ${sourceHash}（${sourceFiles.length} 个输入文件）`);
 
-const artifactHash = 'sha256:' + sha256Buf(names.map((rel) => `${rel}\0${files[rel]}\n`).join(''));
-ok(`产物指纹 ${artifactHash}（${names.length} 个产物文件）`);
+// 产物指纹按**磁盘实际内容**算（物理真相）；与清单里记录的 artifact.hash 比才有意义。
+const artifactHash = 'sha256:' + sha256Buf(diskNames.map((rel) => `${rel}\0${diskFiles[rel]}\n`).join(''));
+ok(`产物指纹 ${artifactHash}（${diskNames.length} 个产物文件）`);
 
 // ── 5. verify 模式：与清单里记录的值比对（这就是"漂移检测"的绑定处） ──
 if (mode === 'verify') {
@@ -444,7 +459,7 @@ if (mode === 'verify') {
   const recArtifact = manifest.artifact && manifest.artifact.hash;
   if (!rec || !recArtifact) {
     bad('MANIFEST.json 里没有发布元数据（source.hash / artifact.hash / generatedAt）',
-      '清单是旧格式；在仓库根运行 scripts/release.ps1（不要只跑 tools/sync_web_dist.mjs）。');
+      '清单是旧格式；在仓库根运行 scripts/release.ps1。清单的唯一写者是本脚本 —— tools/sync_web_dist.mjs 只同步产物、不改清单（R6 #50）。');
   }
   if (rec !== sourceHash) {
     bad(`产物与源码不一致：清单记录 ${rec}，当前 web/ 源码是 ${sourceHash}`,

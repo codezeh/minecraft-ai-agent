@@ -21,6 +21,56 @@
 # 注意：防火墙规则**不入库、换机失效**，属"部署硬要求"。
 #       无法用 git diff 证明，只能实测（这也是 F-SEC-202 的 honest 边界）。
 
+# ★ R6 #48（2026-11-11）：新增 -Verify —— 只读自检，不需要管理员、不改任何东西。
+#   为什么必须有它：这条防火墙规则**不入库、换机即失效**，在此之前没有任何脚本能验证它
+#   （报告原话："该防护无法被任何脚本验证"）。start-panel 的前置检查现在会调用它，
+#   于是"新机器上 25575 裸奔"从"没人知道"变成"每次启动都提示"。
+#   退出码：0 = 规则在位且形态正确；1 = 规则不存在；2 = 规则存在但形态不对（未启用/方向错/端口错）。
+[CmdletBinding()]
+param(
+    [switch]$Verify
+)
+
+$ruleName = 'deny-rcon-25575-in'
+
+# 只读地判定规则当前形态：ok / missing / malformed
+function Get-RconRuleState {
+    param([string]$Name)
+    $rule = Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $rule) { return 'missing' }
+    $portOk = $false; $protoOk = $false
+    try {
+        $pf = $rule | Get-NetFirewallPortFilter
+        $protoOk = ("{0}" -f $pf.Protocol) -eq 'TCP'
+        $portOk = (@("$($pf.LocalPort)" -split ',') -contains '25575')
+    } catch { return 'malformed' }
+    $dirOk = ("{0}" -f $rule.Direction) -eq 'Inbound'
+    $actOk = ("{0}" -f $rule.Action) -eq 'Block'
+    $enaOk = ("{0}" -f $rule.Enabled) -eq 'True'
+    if ($dirOk -and $actOk -and $enaOk -and $protoOk -and $portOk) { return 'ok' }
+    return 'malformed'
+}
+
+if ($Verify) {
+    $state = Get-RconRuleState -Name $ruleName
+    if ($state -eq 'ok') {
+        Write-Host "  [ok] 防火墙规则 $ruleName 在位：TCP 25575 入站 block、已启用" -ForegroundColor Green
+        exit 0
+    }
+    if ($state -eq 'missing') {
+        Write-Host "  [missing] 没有防火墙规则 $ruleName —— RCON 25575 仍对外暴露" -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "  [malformed] 防火墙规则 $ruleName 存在但形态不对（应: 入站/Block/TCP/25575/已启用）" -ForegroundColor Yellow
+    try {
+        $r = Get-NetFirewallRule -DisplayName $ruleName | Select-Object -First 1
+        $pf = $r | Get-NetFirewallPortFilter
+        Write-Host ("      实际: Enabled={0} Direction={1} Action={2} Protocol={3} LocalPort={4}" -f `
+            $r.Enabled, $r.Direction, $r.Action, $pf.Protocol, $pf.LocalPort) -ForegroundColor DarkGray
+    } catch { }
+    exit 2
+}
+
 $ErrorActionPreference = 'Stop'
 
 # 管理员检查
@@ -35,7 +85,7 @@ if (-not $isAdmin) {
     exit 1
 }
 
-$ruleName = 'deny-rcon-25575-in'
+$ruleName = 'deny-rcon-25575-in'   # 定义在文件上部（-Verify 也要用）
 
 # 先删同名旧规则（幂等）
 netsh advfirewall firewall delete rule name="$ruleName" 2>$null | Out-Null
@@ -49,6 +99,17 @@ netsh advfirewall firewall add rule `
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host '  [错误] 添加规则失败（退出码 ' $LASTEXITCODE '）' -ForegroundColor Red
+    Read-Host '按回车退出'
+    exit 1
+}
+
+# ★ R6 #48（2026-11-11）：netsh 退出码 0 只证明"命令没报错"，不证明规则长成了要的样子
+#   （组策略/安全软件可以吞掉它）。加完必须**独立回读**一次，形态不对就如实失败。
+$state = Get-RconRuleState -Name $ruleName
+if ($state -ne 'ok') {
+    Write-Host ("  [错误] 规则已提交但回读形态不对：{0}" -f $state) -ForegroundColor Red
+    Write-Host '         期望：入站 / Block / TCP / 本地端口 25575 / 已启用。' -ForegroundColor Yellow
+    Write-Host '         可能原因：组策略接管了防火墙、或安全软件还原了规则。' -ForegroundColor Yellow
     Read-Host '按回车退出'
     exit 1
 }

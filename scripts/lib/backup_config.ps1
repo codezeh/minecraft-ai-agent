@@ -196,6 +196,13 @@ function Invoke-BackupOnServerStop {
             Write-BackupAutoLog -Root $Root -Level 'SKIP' -Message '停服后自动备份跳过：检测到服务端仍在运行（exit 2）'
             Write-Host '  · 自动备份：跳过（检测到服务端仍在运行）' -ForegroundColor Yellow
             $result.skipped = $true; $result.reason = 'server running'
+        } elseif ($code -eq 4) {
+            # ★ R6 #51（2026-11-11）：backup-world.ps1 用 4 = "总开关关着，本次跳过"。
+            #   以前这条会和成功一样落到下面那句 `OK 停服后自动备份成功` ——
+            #   "没开备份"在日志里长成了"备份成功"。
+            Write-BackupAutoLog -Root $Root -Level 'SKIP' -Message '停服后自动备份跳过：总开关 enabled=false（exit 4，未备份）'
+            Write-Host '  · 自动备份：跳过（config/backup.json 的 enabled=false —— 本次没有备份）' -ForegroundColor Yellow
+            $result.skipped = $true; $result.reason = 'enabled=false'
         } else {
             Write-BackupAutoLog -Root $Root -Level 'ERROR' -Message "停服后自动备份失败：backup-world.ps1 exit=$code（停服不受影响）"
             Write-Host "  · 自动备份：失败（exit=$code），停服已完成，不受影响" -ForegroundColor Yellow
