@@ -47,8 +47,13 @@ export class HuggingFace {
       //   `makeRequestOptions` 才把 `options.signal` 交给 fetch（dist/index.js:883 / :182）。
       //   所以：signal 必须放**第二参**（放 args 里会被 JSON 序列化进请求体），
       //   每次尝试一个显式总期限（覆盖含流式读体），并在 finally 里一定清掉定时器。
-      const dl = callDeadlineSignal(LLM_MAX_CALL_MS,
-        () => console.warn(`[huggingface] 单次调用超过 ${LLM_MAX_CALL_MS}ms 期限，已中断`));
+      // ★ R6 #38：**遵守调用方给的期限**。原来这里写死 LLM_MAX_CALL_MS（120s），
+      //   而其余 17 个适配器都按 prompter._callOptions 算出的 opts.timeoutMs 收口 ——
+      //   动作只剩 5 秒时，这个适配器仍能占满 120 秒（玩家按停后长时间无响应）。
+      //   口径与 fetchWithDeadline 一致：给了正数就用它，否则回落到单次上限。
+      const dlMs = Number(opts?.timeoutMs) > 0 ? Number(opts.timeoutMs) : LLM_MAX_CALL_MS;
+      const dl = callDeadlineSignal(dlMs,
+        () => console.warn(`[huggingface] 单次调用超过 ${dlMs}ms 期限，已中断`));
       try {
         // Consume the streaming response chunk by chunk
         for await (const chunk of this.huggingface.chatCompletionStream({

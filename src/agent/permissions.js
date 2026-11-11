@@ -93,8 +93,9 @@ export const OWNER_ONLY_COMMANDS = Object.freeze([
 /**
  * 信任级可用的命令（走 / 跟 / 采集 / 制作 / 建造 / 存取 / 查询与记忆 / 非破坏性控制）。
  *
- * 注意 `!jobs` 系列还没实现（任务板在 06，M-later）；先登记成信任级，
- * 「下的单最高 6 级」将来由任务板按 `maxJobLevel()` 卡。
+ * ★ R6 #42：这张表**只登记已经实现的命令**。`!pauseJob` / `!resumeJob` / `!addSharedJob`
+ * 已移除（任务板那批实现后加回），重复的 `!cancelJob` 也删掉了。
+ * 「登记 ⊆ 实现」由 `registeredButMissing()` 反向自检（用例 + preflight 可调）。
  */
 export const TRUSTED_COMMANDS = Object.freeze([
     // 走 / 脱困 / 跟
@@ -121,9 +122,19 @@ export const TRUSTED_COMMANDS = Object.freeze([
     //   它不是普通控制命令：参数原样进系统提示（prompter.js 的 $SELF_PROMPT）、无长度上限、
     //   且每 2 秒重复注入并落 memory.json ⇒ 一次注入长期生效。
     '!stop', '!stay', '!stfu', '!endGoal',
-    // 任务板（未实现的先登记，见上面注释）
-    '!do', '!listSkills', '!jobs', '!cancelJob', '!addSharedJob',
-    '!cancelJob', '!pauseJob', '!resumeJob',
+    // 任务板（已实现的：!do !listSkills !jobs !cancelJob !addJob）
+    //
+    // ★ R6 #42（A13）：这张表原来登记了 3 条**全仓 0 实现**的命令 ——
+    //   `!pauseJob` / `!resumeJob` / `!addSharedJob`，还重复登记了一次 `!cancelJob`。
+    //   后果：信任级玩家（或模型照着命令文档）调用它们时，`commandExists` 为假 ⇒
+    //   只回一句 `Command '!pauseJob' does not exist.`，白烧一轮模型调用；
+    //   而"登记 ⊆ 实现"这件事没有任何自检（旧自检只查反方向）。
+    //
+    //   本批的选择是**从表里移除**（不是实现）：三条都需要任务板新增"暂停/恢复/共享单"
+    //   的库层状态机（board_store/board_client），属任务板那一批的活；这里先让
+    //   "权限表 = 现实"重新成立，并加上 `registeredButMissing()` 做反向自检。
+    //   待那批实现落地后，把名字加回这里即可（自检会立刻变红，提醒登记）。
+    '!do', '!listSkills', '!jobs', '!cancelJob',
 ]);
 
 const OWNER_ONLY = new Set(OWNER_ONLY_COMMANDS);
@@ -292,24 +303,104 @@ export function maxJobLevel(level) {
 /**
  * 调度器跑任务单时的等级 —— 按 `job.source` 判（08 §5）。
  *
- * 任务板（06）还没落地，但接口先定好，免得落地时又各写一套：
- *   - `source: 'player'` + `sourceName: 'Zeh'` → 按那个人定级（玩家下的单）
- *   - `source: 'self'` / `'idle'`             → 自己找的事，只算信任级（08 §6.1）
- *   - `source: 'system'` / `'internal'`       → 代码/流程发起，按主人级
- *   - 认不出来（没 source）                    → 信任级（不给主人权，也不至于跑不动）
+ * ★ R6 #43（A14）：这个接口原来有两个毛病：
+ *   ① **零调用** —— `board_scheduler` / `board_client` / `executor` / `control` 全都没有
+ *      调它 ⇒「任务单最高级」这条规则从未被执行。
+ *   ② 一旦接上也是错的 —— 它调 `resolveLevel({ author, permissions })` **不传 uuid/identity**，
+ *      而命令路径（`commands/index.js`）传了。差别正好落在 resolveLevel 第 4 步：
+ *      开了身份绑定时，聊天命令按 uuid 判、任务单却按名字判 ⇒ **任务单是绕过身份绑定的入口**。
+ *
+ * 现在：第三参 `opts` 透传 `{uuid, identity}`，与聊天路径同一套判据；单子上的
+ * `source` 支持两种写法 —— `'player'`（配 `sourceName`）与 `'player:<名字>'`
+ * （`!addJob` 实际写的就是后者，原来会落进默认分支被当信任级）。
+ *
+ * 调用状态：**未接线（刻意如此）**。`board_scheduler._runJob()` 目前**没有**调用它 ——
+ * 接线前必须先能拿到下单人的 `identity` + `uuid`（`commands/index.js` 的
+ * `identityContextOf` / `playerUuidOf`）；**不许用 `{identity:null, uuid:null}` 接线**，
+ * 那等于退回"按名字定级"，正是这条缺陷要堵的身份旁路。详见 docs/audit-r6/fixes2/agent.md。
  *
  * @param {{source?:string, sourceName?:string}|null} job
  * @param {{owner?:string, trusted?:string[]}|null} permissions
+ * @param {{uuid?:string|null, identity?:object|null, internal?:boolean}} [opts]
  * @returns {'owner'|'trusted'|'other'}
  */
-export function levelForJobSource(job, permissions) {
+export function levelForJobSource(job, permissions, opts = {}) {
     const src = String(job?.source ?? '').trim().toLowerCase();
-    if (src === 'player' || src === 'user') {
-        return resolveLevel({ author: job?.sourceName ?? null, permissions });
+    const author = jobAuthorOf(job);
+    if (src === 'player' || src.startsWith('player:') || src === 'user' || src.startsWith('user:')) {
+        if (!author && opts.internal !== true) {
+            // 玩家单却没有作者名：调用方漏传 ⇒ 只给信任级（不给主人权），并把这条写清楚
+            return LEVEL.TRUSTED;
+        }
+        return resolveLevel({
+            author,
+            permissions,
+            uuid: opts.uuid ?? null,
+            identity: opts.identity ?? null,
+        });
     }
     if (src === 'system' || src === 'internal') return LEVEL.OWNER;
     if (src === 'self' || src === 'idle') return LEVEL.TRUSTED;
     return LEVEL.TRUSTED;
+}
+
+/**
+ * 单子的"下单人"名字。
+ *
+ * `!addJob` 写的是 `source: 'player:<名字>'`，而更早的接口约定是
+ * `{source:'player', sourceName}` —— 两种都认（同一规则两处实现是这一批的老病，
+ * 这里**只在这一处**解析，两种写法收敛到同一个 author）。
+ *
+ * @param {{source?:string, sourceName?:string}|null} job
+ * @returns {string|null}
+ */
+export function jobAuthorOf(job) {
+    const explicit = typeof job?.sourceName === 'string' ? job.sourceName.trim() : '';
+    if (explicit) return explicit;
+    const src = String(job?.source ?? '').trim();
+    const m = /^(?:player|user):(.+)$/i.exec(src);
+    const name = m ? m[1].trim() : '';
+    return name || null;
+}
+
+/**
+ * 任务单开工前的权限闸门（★ R6 #43 的"真正被执行"那一步）。
+ *
+ * 语义：单子可以声明自己需要多高的级（`job.level`，0–9，缺省 0 = 不额外要求）；
+ * 允许的上限由**下单人**的等级决定（08 §5：信任级最多 6 级、guest 0 级、主人 9 级）。
+ *   · `job.level` 超过下单人上限 ⇒ `allowed:false`（**局部失败**：这一张单不跑，
+ *     别的单、别的 bot、面板全都照常 —— 绝不因为一张单去关整机）；
+ *   · 没有 `job.level` ⇒ 按 0 处理（今天的单都不声明，等于恒放行，行为不变）。
+ *
+ * @param {object|null} job
+ * @param {{owner?:string, trusted?:string[]}|null} permissions
+ * @param {{uuid?:string|null, identity?:object|null, internal?:boolean}} [opts]
+ * @returns {{allowed:boolean, level:string, cap:number, requiredLevel:number, author:string|null, reason:string}}
+ */
+export function jobPermissionGate(job, permissions, opts = {}) {
+    const level = levelForJobSource(job, permissions, opts);
+    const cap = maxJobLevel(level);
+    const raw = Number(job?.level ?? job?.requiredLevel ?? 0);
+    const requiredLevel = Number.isFinite(raw) ? Math.max(0, Math.min(9, Math.floor(raw))) : 0;
+    const author = jobAuthorOf(job);
+    if (requiredLevel > cap) {
+        return {
+            allowed: false,
+            level,
+            cap,
+            requiredLevel,
+            author,
+            reason: `这张单要 ${requiredLevel} 级，而下单人${author ? `「${author}」` : ''}的等级是 ${level}（最多 ${cap} 级）`,
+        };
+    }
+    return {
+        allowed: true,
+        level,
+        cap,
+        requiredLevel,
+        author,
+        reason: `下单人${author ? `「${author}」` : ''}等级 ${level}（最多 ${cap} 级），本单要 ${requiredLevel} 级`,
+    };
 }
 
 /**
@@ -459,13 +550,40 @@ export function isSlashAllowed(text, level = null) {
     return true;
 }
 
+/**
+ * 文本安检：**逐行**判斜杠命令。
+ *
+ * ★ R6 #39（A10）：原来 `offending` 算完只用于 `if (!offending.length)`，
+ *   随后把**整串**丢给 `isSlashAllowed(text)` → `slashCommandName()` 只取第一个
+ *   空白分隔词 ⇒ 文本 `"/skin clear\n/op 某人"` 取到 `skin`，白名单命中，**第二行的
+ *   `/op` 完全没被检查**。而 `sendSlashCommand` 不折行，`bot.chat` 里的换行在
+ *   Minecraft 中等价于连发多条命令 —— 权限白名单被一个换行绕过。
+ *
+ * 现在：以 `/` 开头的**每一行**都要各自过白名单，任何一行不过就整体拒绝，
+ * 并把**具体行号与内容**带回去（原来算出来的行号被丢弃，排障只能靠猜）。
+ *
+ * @param {string} message
+ * @returns {{allowed:boolean, reason:string, line?:number, offending?:string}}
+ */
 export function inspectChatText(message) {
     const text = String(message ?? '');
     const lines = text.split(/\r?\n/);
-    const offending = lines.filter(l => /^\s*\//.test(l));
+    // 行号 1-based，与编辑器/日志一致；先 trim 再判前导 `/`（缩进后的 `/op` 照样是命令）
+    const offending = [];
+    lines.forEach((raw, i) => {
+        const line = raw.trim();
+        if (line.startsWith('/')) offending.push({ line, no: i + 1 });
+    });
     if (!offending.length) return { allowed: true, reason: 'plain-text' };
-    if (isSlashAllowed(text)) return { allowed: true, reason: 'slash-whitelisted' };
-    return { allowed: false, reason: 'slash-blocked' };
+    // 逐行判：**每一行**都必须自己过白名单（不再用整串的第一个词代表全部行）
+    const bad = offending.find(({ line }) => !isSlashAllowed(line));
+    if (!bad) return { allowed: true, reason: 'slash-whitelisted' };
+    return {
+        allowed: false,
+        reason: `slash-blocked@line ${bad.no}`,
+        line: bad.no,
+        offending: bad.line.slice(0, 80),
+    };
 }
 
 /**
@@ -477,4 +595,22 @@ export function inspectChatText(message) {
  */
 export function unclassifiedCommands(names = []) {
     return [...new Set(names)].filter(n => !OWNER_ONLY.has(n) && !TRUSTED.has(n));
+}
+
+/**
+ * **反方向**自检：权限表里登记了、但实现里根本没有的命令（★ R6 #42）。
+ *
+ * 为什么必须补这一条：原来的 `unclassifiedCommands()` 只查"实现了但没登记"，
+ * 于是 `!pauseJob` / `!resumeJob` / `!addSharedJob` 在表里躺了很久都没人发现 ——
+ * 表现是玩家/模型调用时只得到一句 `Command '…' does not exist.`（白烧一轮模型调用）。
+ *
+ * @param {string[]} implementedNames 从 `commands/*.js` 的 `name:` 扫出来的名字
+ * @returns {string[]} 登记了却没实现的名字（应为空）
+ */
+export function registeredButMissing(implementedNames = []) {
+    const impl = new Set((Array.isArray(implementedNames) ? implementedNames : [])
+        .map(n => String(n ?? '').trim())
+        .filter(Boolean));
+    const registered = [...new Set([...OPEN_COMMANDS, ...OWNER_ONLY_COMMANDS, ...TRUSTED_COMMANDS])];
+    return registered.filter(n => !impl.has(n));
 }

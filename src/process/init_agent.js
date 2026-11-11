@@ -86,6 +86,29 @@ const argv = yargs(args)
         //  租约还挂着 → 别的 bot 在这 30 秒里拿不到单；而进程一死就**没人能摘了**。
         //  注意顺序：**摘租约（步骤 ④⑤）必须在断开连接/退出之前**，所以这里是 await 到底再 exit。
         let graceful = false;
+        // ★ R6 #36：退出路径上的 RPC 一律**有界等待**（board socket 半死时 ack 永不回来）。
+        //   返回 true=完成，false=超时（已记日志），调用方必须继续往下走。
+        const EXIT_RPC_TIMEOUT_MS = 500;
+        const waitBounded = async (label, fn) => {
+            let timer = null;
+            try {
+                const timeout = new Promise((resolve) => {
+                    timer = setTimeout(() => resolve({ timedOut: true }), EXIT_RPC_TIMEOUT_MS);
+                    try { timer.unref?.(); } catch { /* ignore */ }
+                });
+                const work = Promise.resolve().then(fn).then((v) => ({ value: v }), (e) => ({ error: e }));
+                const got = await Promise.race([work, timeout]);
+                if (got?.timedOut) {
+                    console.error(`[agent:${argv.name}] 退出路径：${label} 超过 ${EXIT_RPC_TIMEOUT_MS}ms 无 ack ⇒ `
+                        + '不再等它（继续退出；这张单/预约可能留到租约过期回收）');
+                    return false;
+                }
+                if (got?.error) throw got.error;
+                return true;
+            } finally {
+                if (timer) { clearTimeout(timer); timer = null; }
+            }
+        };
         const gracefulStop = async (trigger) => {
             if (graceful) return false;
             graceful = true;
@@ -96,17 +119,15 @@ const argv = yargs(args)
             try { agent?.board?.stop?.('preempt'); } catch { /* 心跳从此一拍都不发 */ }
             const id = agent?.scheduler?.currentJobId ?? agent?.actions?.currentJobId ?? null;
             if (id != null) {
-                try {
-                    // ④ 单回共享池：一次性把 state/租约/assignee 都清掉。
-                    //    ★ 为什么不能只 `releaseLease()`（只清 lease）：`expireLeases` 只回收
-                    //    `lease_until IS NOT NULL` 的单 ⇒ 租约清成 NULL 而状态还留在 claimed
-                    //    就**再也不会被回收**（比过期更糟：永久僵尸单）。而 assignee 不清，
-                    //    `claimFor` 的候选条件（assignee IS NULL OR = 我）也让别人抢不到。
-                    await agent?.board?.update?.(id, {
-                        state: 'ready', lease_owner: null, lease_until: null, assignee: null,
-                    });
-                } catch { /* 交还失败也要继续退出：别把退出路径挂死 */ }
-                try { await agent?.board?.release?.(id); } catch { /* 放预约 */ }
+                // ④ 单回共享池：一次性把 state/租约/assignee 都清掉。
+                //    ★ 不能只 `releaseLease()`（只清 lease）：`expireLeases` 只回收
+                //    `lease_until IS NOT NULL` 的单 ⇒ 租约清成 NULL 而状态还留在 claimed
+                //    就**再也不会被回收**（永久僵尸单）。assignee 不清，别人也抢不到。
+                //    ★ R6 #36：两处都走有界等待 —— 无超时的 await 会让 gracefulStop 永不返回。
+                await waitBounded(`board.update(${id})`, () => agent?.board?.update?.(id, {
+                    state: 'ready', lease_owner: null, lease_until: null, assignee: null,
+                }));
+                await waitBounded(`board.release(${id})`, () => agent?.board?.release?.(id));
             }
             // ⑤ 最后才断板连接 + 退出（顺序反了就等于"先死再摘"）
             try { agent?.board?.socket?.disconnect?.(); } catch { /* ignore */ }

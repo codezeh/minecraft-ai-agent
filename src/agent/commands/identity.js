@@ -10,7 +10,7 @@
  */
 import {
     codesFileOf, identityFileOf, readStore, writeStore,
-    consumeCode, bindFromCode, recordClaim, isWeakBinding, BOUND_LEVEL,
+    consumeCodeAtomic, bindFromCode, recordClaim, isWeakBinding, BOUND_LEVEL,
 } from '../../mindcraft/identity_store.js';
 // 面板按钮的**唯一真相**住在 permissions.js（拒绝话术与 !claim 都引它，改一处即可）
 import { PANEL_CODE_LOCATION } from '../permissions.js';
@@ -70,23 +70,29 @@ function claim(agent, code) {
     }
 
     const codesPath = codesFileOf(agentName);
-    const read = readStore(codesPath);
-    const consumed = consumeCode(read.store, { code: raw });
+    // ★ t2 移交：核销走**原子版**（加锁读改写 + rev 乐观锁 + 冲突重试），不再"读→算→写"三步裸跑。
+    const consumed = consumeCodeAtomic(codesPath, raw);
     if (!consumed.ok) {
-        if (consumed.reason === 'no-codes' || consumed.reason === 'missing') {
+        const why = String(consumed.reason ?? '');
+        if (why === 'no-codes' || why === 'missing') {
+            // 失败时才读一次表拿诊断（成功路径不额外读盘）
+            const diag = readStore(codesPath);
             return `[身份] 现在没有可用的绑定码。取码：打开面板 → ${PANEL_CODE_LOCATION}（5 分钟内有效、只能用一次）。`
-                + (read.ok ? '' : `（码文件：${read.reason}）`);
+                + (diag.ok ? '' : `（码文件：${diag.reason}）`);
         }
-        // ★ 区分"过期"与"无效"：到期时间在 addCode 时就写进去了，这里只能按找不到来判 ——
-        //   为了能说清，过期的码在 pruneCodes 时就被删掉了，所以走到这里 = 没用过也是无效。
-        return '[身份] 绑定码无效或已被使用（每码只能用一次）。重新取码：打开面板 → '
-            + `${PANEL_CODE_LOCATION}。`
-    }
-
-    // 码有效 ⇒ 立刻核销（先把码从表里删掉，再落绑定：即使后面写绑定失败，码也不会被重复使用）
-    const codeWrite = writeStore(codesPath, consumed.store);
-    if (!codeWrite.ok) {
-        return `[身份] 绑定失败：码文件写不回去（${codeWrite.reason}）。这次没有绑定，请检查目录权限。`;
+        if (why === 'conflict' || why === 'lock-timeout' || why.startsWith('lock')) {
+            // 码表正被面板侧（签发/作废）占着：**没有**核销任何码，玩家重试一次即可
+            return '[身份] 绑定失败：码表正被另一个进程占用（面板可能正在签发/作废绑定码），'
+                + '这次没有核销任何码，请过几秒**重试**一次。';
+        }
+        if (why === 'invalid' || why === 'empty') {
+            // ★ 区分"过期"与"无效"：到期时间在 addCode 时就写进去了，这里只能按找不到来判 ——
+            //   为了能说清，过期的码在 pruneCodes 时就被删掉了，所以走到这里 = 没用过也是无效。
+            return '[身份] 绑定码无效或已被使用（每码只能用一次）。重新取码：打开面板 → '
+                + `${PANEL_CODE_LOCATION}。`;
+        }
+        return `[身份] 绑定失败：码表写不进去（${why || '未知原因'}）。这次没有核销任何码，`
+            + '请检查目录权限后重试。';
     }
 
     const idPath = identityFileOf(agentName);

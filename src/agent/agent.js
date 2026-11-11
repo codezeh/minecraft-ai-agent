@@ -6,7 +6,7 @@ import { initModes } from './modes.js';
 import { initBot } from '../utils/mcdata.js';
 import { containsCommand, commandExists, executeCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
 // 聊天输出安检 + 斜杠命令白名单（M1 安全，08 §5 / 09 §4）
-import { inspectChatText } from './permissions.js';
+import { inspectChatText, resolveLevel, canRunCommand, commandLevel, LEVEL } from './permissions.js';
 // F-AI-205：这一轮是否算"用过命令"（被权限拒绝不算，否则自提示循环永不自停）
 import { isPermissionDeniedResult, shouldCountAsUsedCommand } from './used_command.js';
 import { ActionManager } from './action_manager.js';
@@ -15,6 +15,8 @@ import { MemoryBank } from './memory_bank.js';
 import * as landmarks from './library/landmarks.js';
 import * as skills from './library/skills.js';
 import { SelfPrompter } from './self_prompter.js';
+// ★ ADR §10.2-3：任务收场动作的唯一判据（只有"任务成功"才允许关整机）
+import { applyTaskEnd } from './tasks/task_end_policy.js';
 import convoManager from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
 import { addBrowserViewer } from './vision/browser_viewer.js';
@@ -238,20 +240,38 @@ export class Agent {
             this.board = null;
         }
 
-        // 启动自检：permissions.owner 没配时明确提示，别让"危险命令静默不可用"变成谜。
-        // 默认状态（不配 owner）按 08 §5 是"人人信任级"：聊天/走/跟/采集/制作/建造/存取都能用，
-        // 但 !newAction、斜杠命令、!attackPlayer、!setMode、!restart 这些会被拒。
+        // 启动自检 —— ★ R6 #35（A3）：**这里原来自己抄了一份口径，而且抄反了。**
+        //
+        //   旧文案：「未配置 permissions.owner ⇒ 当前人人『信任级』，可用 聊天/走/跟/采集/…」。
+        //   而 `resolveLevel` 早已是 F-AI-201 fail-closed：没 owner ⇒ OTHER ⇒
+        //   `canRunCommand` 一律 false ⇒ **所有玩家聊天命令都不响应**。
+        //   照日志排障会得出"命令实现坏了"的相反结论 —— 这是"同一规则两处实现"的教科书案例，
+        //   而且落在新用户第一次装就一定读到的地方。
+        //
+        // 现在这段**不再自述规则**：直接拿样本命令去问权限模块（resolveLevel + canRunCommand），
+        // 打印的是**判定结果**而不是手抄的文案 ⇒ 文案不可能再和实现相反（漂移时日志先红）。
         try {
             const perms = settings.profile?.permissions;
             const owner = typeof perms?.owner === 'string' ? perms.owner.trim() : '';
+            const probe = owner || '<任意玩家>';
+            const level = resolveLevel({ author: probe, permissions: perms });
+            const samples = ['!collectBlocks', '!jobs', '!newAction', '!goal'];
+            const usable = samples.filter((c) => canRunCommand(level, c));
+            const blocked = samples.filter((c) => !canRunCommand(level, c));
+            console.log(`[权限] 实测等级：${owner ? `玩家「${probe}」` : '没配 owner 时的任意玩家'} = ${level}`
+                + `${level === LEVEL.OTHER ? '（other = 只聊天）' : ''}`);
             if (!owner) {
-                console.log('[权限] 未配置 permissions.owner —— 当前人人「信任级」。');
-                console.log('        可用：聊天 / 走 / 跟 / 采集 / 制作 / 建造 / 存取');
-                console.log('        不可用：!newAction、斜杠命令、!attackPlayer、!setMode、!restart、!discard、!givePlayer');
+                console.log('[权限] 未配置 permissions.owner ⇒ **所有玩家聊天命令都不响应**（F-AI-201 fail-closed）。');
+                console.log('        这不是命令实现坏了，是有意的默认拒绝；配上 owner 立刻恢复。');
                 console.log('        要解锁：在 profile 里加 "permissions": { "owner": "你的游戏名" }，然后重启这只 bot（区分大小写）');
             } else {
                 console.log(`[权限] 主人 = ${owner}（名单外的人只能聊天）`);
             }
+            console.log(`        按当前实现判定可用：${usable.length ? usable.join(' / ') : '无'}`);
+            console.log(`        按当前实现判定拒绝：${blocked.length ? blocked.join(' / ') : '无'}`
+                + `（各自门槛：${blocked.map((c) => `${c}=${commandLevel(c)}`).join('、') || '—'}）`);
+            // 诚实边界：开了身份绑定后，真实等级还取决于 uuid（这里只是"按名字"的预览）。
+            console.log('        注：若开了身份绑定（identity_binding），真实等级按 uuid 查绑定表，可能与上面不同。');
         } catch { /* 提示失败不影响启动 */ }
         
         // Validate Name Format
@@ -721,10 +741,10 @@ export class Agent {
             const user_command_name = containsCommand(message);
             if (user_command_name) {
                 if (!commandExists(user_command_name)) {
-                    this.routeResponse(source, `Command '${user_command_name}' does not exist.`);
+                    this.routeResponse(source, `Command '${user_command_name}' does not exist.`, { internal: is_internal });
                     return false;
                 }
-                this.routeResponse(source, `*${source} used ${user_command_name.substring(1)}*`);
+                this.routeResponse(source, `*${source} used ${user_command_name.substring(1)}*`, { internal: is_internal });
                 if (user_command_name === '!newAction') {
                     // all user-initiated commands are ignored by the bot except for this one
                     // add the preceding message to the history to give context for newAction
@@ -732,7 +752,7 @@ export class Agent {
                 }
                 let execute_res = await executeCommand(this, message, perm);
                 if (execute_res) 
-                    this.routeResponse(source, execute_res);
+                    this.routeResponse(source, execute_res, { internal: is_internal });
                 return true;
             }
         }
@@ -858,7 +878,7 @@ export class Agent {
                 this.self_prompter.handleUserPromptedCmd(self_prompt, isAction(command_name));
 
                 if (settings.show_command_syntax === "full") {
-                    this.routeResponse(source, res);
+                    this.routeResponse(source, res, { internal: is_internal });
                 }
                 else if (settings.show_command_syntax === "shortened") {
                     // show only "used !commandname"
@@ -866,13 +886,13 @@ export class Agent {
                     let chat_message = `*used ${command_name.substring(1)}*`;
                     if (pre_message.length > 0)
                         chat_message = `${pre_message}  ${chat_message}`;
-                    this.routeResponse(source, chat_message);
+                    this.routeResponse(source, chat_message, { internal: is_internal });
                 }
                 else {
                     // no command at all
                     let pre_message = res.substring(0, res.indexOf(command_name)).trim();
                     if (pre_message.trim().length > 0)
-                        this.routeResponse(source, pre_message);
+                        this.routeResponse(source, pre_message, { internal: is_internal });
                 }
 
                 let execute_res = await executeCommand(this, res, perm);
@@ -944,9 +964,25 @@ export class Agent {
         return true;
     }
 
-    async routeResponse(to_player, message) {
+    /**
+     * 把一条回复播出去。
+     *
+     * ★ R6 #80（A20）：`self_prompt` 原来又按**名字**猜内部来源
+     *   （`to_player === 'system' || to_player === this.name`）—— 与 BOT-001 已经清掉的
+     *   同类判据是同一个病：玩家把游戏名起成 `system`（或与 bot 同名），他的回复就会被
+     *   当成"内部触发"，进而**改投给 `last_sender`（另一个人）**，说话的人收不到回答。
+     *   现在内部来源只认调用方显式传的 `{ internal: true }`（来自 `handleMessage` 的
+     *   `opts.internal`，字符串伪造不出来）。所有调用点都已显式传，不再有名字分支。
+     *
+     * @param {string} to_player 回复目标（发言人 / 'system' 这类可读标签）
+     * @param {string} message
+     * @param {{internal?:boolean}} [opts]
+     */
+    async routeResponse(to_player, message, opts = {}) {
         if (this.shut_up) return;
-        let self_prompt = to_player === 'system' || to_player === this.name;
+        // 只有显式的内部回合才允许"改投给上一位说话的人"；
+        // 没传 opts 的旧调用点按"外部"处理（宁可回错人，也不把玩家的话改投）。
+        const self_prompt = opts?.internal === true;
         if (self_prompt && this.last_sender) {
             // this is for when the agent is prompted by system while still in conversation
             // so it can respond to events like death but be routed back to the last sender
@@ -1014,6 +1050,15 @@ export class Agent {
      * @returns {boolean} 是否真的发出去了
      */
     sendSlashCommand(text) {
+        // ★ R6 #39：**拒绝多行**。`bot.chat` 里的换行 = 连发多条命令，
+        //   而白名单安检是按"一条命令"设计的 —— 只要带换行，就不该从这条入口出去。
+        //   （逐行安检已经在 inspectChatText 里，这里是第二道：多行本身就不符合本入口的契约。）
+        const raw = String(text ?? '');
+        if (/\r|\n/.test(raw)) {
+            console.warn('[安全] 拒绝发送含换行的斜杠命令（换行在 Minecraft 里等于连发多条）：'
+                + raw.slice(0, 80));
+            return false;
+        }
         const verdict = inspectChatText(text);
         if (!verdict.allowed) {
             console.warn(`[安全] 拒绝发送不在白名单里的斜杠命令（${verdict.reason}）：${String(text).slice(0, 80)}`);
@@ -1189,6 +1234,18 @@ export class Agent {
         this.saveMemoryQuietly();
         process.exit(code);
     }
+    /**
+     * 每拍检查"任务是不是该结束了"，并按**结束理由**决定怎么收场。
+     *
+     * ★ ADR-0001 §10.2 第 3 条：原来这里只要 `this.task.isDone()` 返回真值就
+     *   `this.killAll()` —— 而"进行中缺同伙"返回的正是真值 ⇒ **一只 bot 的同伙掉线
+     *   就能把整套服务关掉**（其它 bot / 面板 / 任务板数据库一起没）。一期（#17）
+     *   只堵了开工阶段的两处，这条更长的路径一直留着。
+     *
+     *   现在收场动作只有一个判据来源：`task_end_policy.decideTaskEnd()` ——
+     *   只有「任务成功」才关整机；缺同伙 / 超时 / 任何没标清的失败**只摘自己**
+     *   （`cleanKill(msg, 4)`，退出码 > 1 ⇒ `planExit()` 走 unregister）。
+     */
     async checkTaskDone() {
         if (this.task.data) {
             let res = this.task.isDone();
@@ -1197,7 +1254,8 @@ export class Agent {
                 await this.history.save();
                 // await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 second for save to complete
                 console.log('Task finished:', res.message);
-                this.killAll();
+                // ★ 唯一允许碰 killAll 的地方（且只对"任务成功"生效）
+                applyTaskEnd(this, res, { onAction: (d) => console.log(`[task] 收场动作=${d.action}（理由=${d.reason}）`) });
             }
         }
     }

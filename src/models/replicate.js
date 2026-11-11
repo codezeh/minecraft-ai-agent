@@ -57,8 +57,11 @@ export class ReplicateAPI {
 		// ★★★ H5（第四轮复审）：`replicate` SDK **没有 timeout 选项**（审计矩阵里属"无期限"那 3 个之一），
 		//   但 `run()/stream()` 都接受 `options.signal`（replicate/index.d.ts:126-149）。
 		//   这里每次尝试一个显式总期限（覆盖流式读体），finally 里一定清掉定时器。
-		const dl = callDeadlineSignal(LLM_MAX_CALL_MS,
-			() => console.warn(`[replicate] 单次调用超过 ${LLM_MAX_CALL_MS}ms 期限，已中断`));
+		// ★ R6 #38：**遵守调用方给的期限**（原来写死 LLM_MAX_CALL_MS = 120s，
+		//   与其余适配器"模型请求 ≤ 动作剩余时间"的约定不一致）。
+		const dlMs = Number(opts?.timeoutMs) > 0 ? Number(opts.timeoutMs) : LLM_MAX_CALL_MS;
+		const dl = callDeadlineSignal(dlMs,
+			() => console.warn(`[replicate] 单次调用超过 ${dlMs}ms 期限，已中断`));
 		try {
 			console.log('Awaiting Replicate API response...');
 

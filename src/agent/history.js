@@ -436,8 +436,33 @@ export class History {
         // ── 2) turns 从最旧的开始丢，直到进入预算（至少留 6 条，保证上下文连贯）──
         const turns = [...(out.turns || [])];
         const MIN_TURNS = 6;
-        while (turns.length > MIN_TURNS && byteLen({ ...out, turns }) > LIMIT) {
-            turns.shift();
+        const baseOver = byteLen({ ...out, turns }) - LIMIT;
+        if (baseOver > 0) {
+            // ★ R6 #79（A19）：原来 `while (… ) turns.shift()` **每丢一条就 JSON.stringify
+            //   整个结构一次**（turns≈60 时一轮 save 几十次全量序列化，而且全程同步、
+            //   与心跳/网络同线程 ⇒ 直接拖慢 update() 与消息响应）。
+            //   现在只量**一次**总量，再按"每条大致多少字节"一次算出该丢几条；
+            //   边界上最多再用一次精确复核修正（不再是 O(n²)）。
+            const perTurn = turns.map((t) => byteLen(t) + 1);   // +1 ≈ JSON 里的逗号/换行
+            let over = baseOver;
+            let drop = 0;
+            while (drop < turns.length - MIN_TURNS && over > 0) {
+                over -= perTurn[drop];
+                drop += 1;
+            }
+            // 估算可能差一两条：用**有界**的精确复核修正（最多各 4 次，不再是 O(n²)）
+            for (let i = 0; i < 4 && drop > 0; i++) {
+                if (byteLen({ ...out, turns: turns.slice(drop - 1) }) <= LIMIT) drop -= 1;
+                else break;
+            }
+            for (let i = 0; i < 4 && drop < turns.length - MIN_TURNS; i++) {
+                if (byteLen({ ...out, turns: turns.slice(drop) }) <= LIMIT) break;
+                drop += 1;
+            }
+            if (drop > 0) {
+                console.log(`[memory] 超出预算 ${baseOver} 字节：一次丢弃最旧 ${drop} 条 turns（原来逐条重算）`);
+                turns.splice(0, drop);
+            }
         }
         // ── 3) 还超：把最旧的几条超长内容截断（先 500 字符，再 120 字符）──────
         for (const keep of [500, 120]) {

@@ -18,6 +18,14 @@ import {
     MIN_POLL_INTERVAL_MS,
     MAX_POLL_INTERVAL_MS,
 } from './wait_for_teammates.js';
+// ★ ADR §10.2-3：任务**进行中**发现缺同伙时，结束理由必须能区分，
+//   且只有「任务成功」才允许关整机（其余一律只摘自己）。判定与副作用都在这个零依赖文件里。
+import { TASK_END, TEAMMATE_STATE, teammateState } from './task_end_policy.js';
+
+/** 进行中缺同伙时的**宽限期**（默认 60s，可用 `MC_TASK_TEAMMATE_GRACE_MS` 覆盖）。 */
+const TEAMMATE_GRACE_MS = readEnvMs(
+    'MC_TASK_TEAMMATE_GRACE_MS', DEFAULT_WAIT_TIMEOUT_MS, MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS,
+);
 
 /** 等同伙的超时（可用 `MC_TASK_WAIT_BOTS_MS` 覆盖；默认 60s）。 */
 const WAIT_BOTS_TIMEOUT_MS = readEnvMs(
@@ -266,6 +274,10 @@ export class Task {
         this.validator = null;
         this.reset_function = null;
         this.blocked_actions = [];
+        // ★ ADR §10.2-3：「进行中缺同伙」的宽限起始时刻（null = 此刻不缺口）。
+        this.teammatesMissingSince = null;
+        // 时钟可注入 ⇒ 离线用例能在毫秒内钉死"等多久才判失败"，不必真等 60 秒。
+        this._now = () => Date.now();
         this.task_data = task_data;
         if (task_data) {
             console.log('Starting task', task_data.task_id);
@@ -448,6 +460,21 @@ export class Task {
         return null;
     }
 
+    /**
+     * 现在这项任务该怎么结束（`null` = 还在跑）。
+     *
+     * ★ ADR-0001 §10.2 第 3 条（比 R6 #17 更长的一条路径）：**进行中**缺同伙原来直接
+     *   返回 `{message:'No other agents found', score:0}`，而 `agent.checkTaskDone()`
+     *   只看返回值真假 ⇒ `killAll()` ⇒ `socket.emit('shutdown')` ⇒ 整机退出。
+     *
+     *   现在两件事：
+     *   ① **能等就等**：第一次发现不齐时开一段宽限（默认 60s，见 `TEAMMATE_GRACE_MS`），
+     *      期间继续跑、继续数人数；人齐了这个计时器自动清空（迟到/中途掉线再回来都不再误判）。
+     *   ② 宽限也用完还不齐 ⇒ 返回带 `endReason:'teammates_missing'` 的结果，
+     *      由 `task_end_policy.decideTaskEnd()` 判成"只摘自己"（**不是**关整机）。
+     *
+     * 成功/超时同样带 `endReason`，让"收场动作"有唯一判据（别在别的文件里再猜一次）。
+     */
     isDone() {
         let res = null;
         if (this.validator)
@@ -458,25 +485,35 @@ export class Task {
                 this.agent.bot.chat(`/clear ${agent}`);
             }
             // this.agent.bot.chat(`/clear @a`);
-            return {"message": 'Task successful', "score": res.score};
+            this.teammatesMissingSince = null;
+            return {"message": 'Task successful', "score": res.score, endReason: TASK_END.SUCCESS};
         }
-        let other_names = this.available_agents.filter(n => n !== this.name);
-        const elapsedTime = (Date.now() - this.taskStartTime) / 1000;
-
-        if (elapsedTime >= 30 && this.available_agents.length !== this.data.agent_count) {
+        const now = this._now();
+        const elapsedTime = (now - this.taskStartTime) / 1000;
+        const needCount = Number(this.data?.agent_count) || 1;
+        const presentCount = Array.isArray(this.available_agents) ? this.available_agents.length : 0;
+        // ★ ADR §10.2-3：不齐 ⇒ 先等（宽限内不判失败）；只有宽限用完才算"缺同伙"。
+        const tm = teammateState({
+            now, elapsedSec: elapsedTime, present: presentCount, required: needCount,
+            missingSince: this.teammatesMissingSince, graceMs: TEAMMATE_GRACE_MS,
+        });
+        this.teammatesMissingSince = tm.missingSince;
+        if (tm.state === TEAMMATE_STATE.MISSING) {
             console.log('No other agents found. Task unsuccessful.');
-            return {"message": 'No other agents found', "score": 0};
+            return {"message": 'No other agents found', "score": 0, endReason: TASK_END.TEAMMATES_MISSING};
         }
-        
+        if (tm.state === TEAMMATE_STATE.WAITING && elapsedTime >= 30) {
+            return false;   // 继续跑：等晚到的同伙（原实现直接判失败 ⇒ killAll 关整机）
+        }
+
         if (this.taskTimeout) {
             if (elapsedTime >= this.taskTimeout) {
                 console.log('Task timeout reached. Task unsuccessful.');
                 if (res) {
-                    return {"message": 'Task timeout reached', "score": res.score};
+                    return {"message": 'Task timeout reached', "score": res.score, endReason: TASK_END.TIMEOUT};
                 } else {
-                    return {"message": 'Task timeout reached', "score": 0};
+                    return {"message": 'Task timeout reached', "score": 0, endReason: TASK_END.TIMEOUT};
                 }
-                
             }
         }
         return false;

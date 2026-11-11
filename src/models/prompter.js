@@ -314,6 +314,15 @@ export class Prompter {
             cancelled.operationId = callOpts.operationId;   // 诊断字段：t2 的 ModelResult 不认未知构造字段，故后挂
             return this._convoResult(cancelled);
         }
+        // ★ R6 #37：动作期限已过 ⇒ **一次请求都不发**（原来会夹成 1 秒硬发一次）
+        if (callOpts.expired) {
+            const expired = new ModelResult({
+                status: STATUS.TIMEOUT, errorCode: ERROR_CODE.TIMEOUT,
+                errorMessage: '动作期限已过，未发请求',
+            });
+            expired.operationId = callOpts.operationId;
+            return this._convoResult(expired);
+        }
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
 
@@ -421,8 +430,14 @@ export class Prompter {
         const operationId = opts?.operationId ?? null;
         const deadline = Number.isFinite(opts?.deadline) ? Number(opts.deadline) : null;
         let timeoutMs = LLM_MAX_CALL_MS;
+        // ★ R6 #37：**先判"已超期"，再夹取。**
+        //   病根：`deadline - now` 为负时被 `Math.max(1000, …)` 抬成 1 秒 ⇒ 过期操作
+        //   照样发一次模型请求（白花调用；若该路径 signal 为空，还能拿到一条"过期回答"写进 history）。
+        //   语义上"已超期"应当是**立即失败**，不是"给 1 秒碰运气"。
+        //   这里只算标志，短路在各个 promptXxxResult 入口（那里才知道该包成哪种 ModelResult）。
+        const expired = deadline !== null && deadline - Date.now() <= 0;
         if (deadline) timeoutMs = Math.max(1000, Math.min(LLM_MAX_CALL_MS, deadline - Date.now()));
-        return { signal, timeoutMs, operationId };
+        return { signal, timeoutMs, operationId, expired };
     }
 
     /**
@@ -433,8 +448,12 @@ export class Prompter {
     _convoResult(result) {
         const r = coerceModelResult(result, 'promptConvo');
         this.last_convo_status = r.status;
-        if (r.truncated) this.last_convo_truncated = true;
-        if (r.failed) this.last_convo_error_code = r.errorCode ?? null;
+        // ★ R6 #78（A18）：这两个标志原来是"只置位、永不复位"——
+        //   第一次截断之后 logTotals() 永远报 lastConvoTruncated=true，
+        //   错误码也停在旧值上（成本/质量对账因此失真，正是它要消灭的"死标志"病换了个形状）。
+        //   现在每轮**全量赋值**：本轮没截断就是 false，本轮成功就把错误码清成 null。
+        this.last_convo_truncated = r.truncated === true;
+        this.last_convo_error_code = r.failed ? (r.errorCode ?? null) : null;
         noteModelResult(r, 'convo');
         return r;
     }
@@ -481,6 +500,15 @@ export class Prompter {
             });
             cancelled.operationId = callOpts.operationId;
             return this._codeResult(cancelled);
+        }
+        // ★ R6 #37：期限已过 ⇒ 不发请求，直接给 TIMEOUT（同 promptConvoResult）
+        if (callOpts.expired) {
+            const expired = new ModelResult({
+                status: STATUS.TIMEOUT, errorCode: ERROR_CODE.TIMEOUT,
+                errorMessage: '动作期限已过，未发请求',
+            });
+            expired.operationId = callOpts.operationId;
+            return this._codeResult(expired);
         }
         if (this.awaiting_coding) {
             console.warn('Already awaiting coding response, returning no response.');
@@ -546,6 +574,15 @@ export class Prompter {
             cancelled.operationId = callOpts.operationId;
             return this._memResult(cancelled);
         }
+        // ★ R6 #37：期限已过 ⇒ 不发请求（记忆摘要原来会在超时边缘白发一次）
+        if (callOpts.expired) {
+            const expired = new ModelResult({
+                status: STATUS.TIMEOUT, errorCode: ERROR_CODE.TIMEOUT,
+                errorMessage: '动作期限已过，未发请求',
+            });
+            expired.operationId = callOpts.operationId;
+            return this._memResult(expired);
+        }
         // ★ H4：本轮摘要是否被截断（history.js 的写盘段读这个标志做第二道保险）。
         this.last_memory_summary_truncated = false;
         await this.checkCooldown();
@@ -608,6 +645,15 @@ export class Prompter {
             cancelled.operationId = callOpts.operationId;
             return coerceModelResult(cancelled, 'promptShouldRespondToBot');
         }
+        // ★ R6 #37：期限已过 ⇒ 不发请求
+        if (callOpts.expired) {
+            const expired = new ModelResult({
+                status: STATUS.TIMEOUT, errorCode: ERROR_CODE.TIMEOUT,
+                errorMessage: '动作期限已过，未发请求',
+            });
+            expired.operationId = callOpts.operationId;
+            return coerceModelResult(expired, 'promptShouldRespondToBot');
+        }
         await this.checkCooldown();
         const started = Date.now();
         let prompt = this.profile.bot_responder;
@@ -652,6 +698,15 @@ export class Prompter {
             });
             cancelled.operationId = callOpts.operationId;
             return coerceModelResult(cancelled, 'promptVision');
+        }
+        // ★ R6 #37：期限已过 ⇒ 不发请求
+        if (callOpts.expired) {
+            const expired = new ModelResult({
+                status: STATUS.TIMEOUT, errorCode: ERROR_CODE.TIMEOUT,
+                errorMessage: '动作期限已过，未发请求',
+            });
+            expired.operationId = callOpts.operationId;
+            return coerceModelResult(expired, 'promptVision');
         }
         await this.checkCooldown();
         const started = Date.now();

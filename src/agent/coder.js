@@ -1,4 +1,4 @@
-import { writeFile, readFile, mkdirSync } from 'fs';
+import { writeFile, readFileSync, mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { makeCompartment, lockdown } from './library/lockdown.js';
@@ -63,19 +63,32 @@ export class Coder {
         this.fp = '/bots/'+agent.name+'/action-code/';
         this.code_template = '';
         this.code_lint_template = '';
-
-        readFile(path.join(__dirname, '../../bots/execTemplate.js'), 'utf8', (err, data) => {
-            if (err) throw err;
-            this.code_template = data;
-        });
-        readFile(path.join(__dirname, '../../bots/lintTemplate.js'), 'utf8', (err, data) => {
-            if (err) throw err;
-            this.code_lint_template = data;
-        });
+        // ★ R6 #40（A11）：模板读取**同步 + 兜住**。
+        //   原来：`readFile(path, 'utf8', (err, data) => { if (err) throw err; ... })` ——
+        //   回调里的 throw 不在任何 try 里 ⇒ uncaught exception ⇒ 整个进程退出。
+        //   表现是"bot 起来几秒就没了"，而不是"代码动作不可用"；两个模板文件缺一个就全挂。
+        //   现在：错误只记在 `templateError` 上，`generateCode()` 入口发现后返回明确的失败串。
+        this.templateError = null;
+        const readTemplate = (file, field) => {
+            try {
+                this[field] = readFileSync(path.join(__dirname, '../../bots/', file), 'utf8');
+            } catch (e) {
+                const msg = `读取代码模板 ${file} 失败：${e?.message ?? e}`;
+                this.templateError = this.templateError ? `${this.templateError}；${msg}` : msg;
+                console.error(`[coder] ${msg} —— 代码动作（!newAction）本轮不可用，其它功能照常。`);
+            }
+        };
+        readTemplate('execTemplate.js', 'code_template');
+        readTemplate('lintTemplate.js', 'code_lint_template');
         mkdirSync('.' + this.fp, { recursive: true });
     }
 
     async generateCode(agent_history) {
+        // ★ R6 #40：模板缺失 ⇒ 明确失败（而不是让回调里的 throw 带走进程）。
+        //   返回人话（不抛），上层会把这一轮记成"她这次没动"。
+        if (this.templateError) {
+            return `Code action unavailable: ${this.templateError}`;
+        }
         this.agent.bot.modes.pause('unstuck');
         lockdown();
         // this message history is transient and only maintained in this function
@@ -164,9 +177,36 @@ export class Coder {
                 no_code_failures++;
                 continue;
             }
-            const result = await this._stageCode(code);
+            // ★ R6 #41（A12）：`_stageCode` / `_lintCode` 原来在 try **之外** ——
+            //   模型生成的代码有语法错时 `compartment.evaluate()` 抛 SyntaxError，
+            //   异常直接冒出 generateCode，MAX_ATTEMPTS=5 的重试预算一次都用不上。
+            //   用户看到"她这次没动"，而不是"代码写错了、我重写了"。
+            //   现在与下面 lint 分支同形：把错误文本塞回 messages 再 continue。
+            let result;
+            try {
+                result = await this._stageCode(code);
+            } catch (e) {
+                if (this.agent.bot.interrupt_code)
+                    return null;
+                const errText = `Error: Code failed to compile/stage:\n${e?.stack ?? e?.message ?? e}`;
+                console.warn("Staging error:\n" + errText + "\n");
+                messages.push({ role: 'assistant', content: res });
+                messages.push({ role: 'system', content: errText + '\nPlease try again with valid JavaScript.' });
+                continue;
+            }
             const executionModule = result.func;
-            const lintResult = await this._lintCode(result.src_lint_copy);
+            let lintResult;
+            try {
+                lintResult = await this._lintCode(result.src_lint_copy);
+            } catch (e) {
+                if (this.agent.bot.interrupt_code)
+                    return null;
+                const errText = `Error: Code lint failed to run:\n${e?.message ?? e}`;
+                console.warn("Lint runner error:\n" + errText + "\n");
+                messages.push({ role: 'assistant', content: res });
+                messages.push({ role: 'system', content: errText + '\nPlease try again.' });
+                continue;
+            }
             if (lintResult) {
                 const message = 'Error: Code lint error:'+'\n'+lintResult+'\nPlease try again.';
                 console.warn("Linting error:"+'\n'+lintResult+'\n');
