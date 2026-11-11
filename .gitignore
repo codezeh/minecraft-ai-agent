@@ -163,3 +163,10 @@ config.local.js
 !.env.example.*
 !.Env.example
 !.ENV.example
+
+# archify 图表产物：HTML 入库，截图/校验证据不入库（可重生成、体积大）
+.archify/**/visual/
+.archify/**/visual2/
+.archify/**/bc*/
+.archify/**/review-*/
+.archify/**/*.visual-check.*
