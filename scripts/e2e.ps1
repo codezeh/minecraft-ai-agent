@@ -109,10 +109,17 @@ function Resolve-Java {
     $best = $null
     foreach ($c in $cands) {
         $ver = $null
+        $prevEap = $ErrorActionPreference
+        $raw = $null
         try {
+            # 修（PS 5.1 专属坑）：本脚本 EAP=Stop 时，java -version 把版本行写到 stderr，
+            # 经 2>&1 会变成 ErrorRecord 并抛 NativeCommandError，被 catch 吞掉 ⇒ 版本号恒 null，
+            # 上层报 "解析不出任何 JDK 的主版本号"。这里只在读版本时临时降级为 Continue
+            # （与 Invoke-Rcon 同法），读完立刻还原；不用 -ErrorAction 掩盖真错。
+            $ErrorActionPreference = 'Continue'
             $raw = (& $c -version 2>&1 | Select-Object -First 1) -join ' '
-            if ($raw -match 'version "(\d+)(?:\.(\d+))?') { $ver = if ($Matches[1] -eq '1') { [int]$Matches[2] } else { [int]$Matches[1] } }
-        } catch { }
+        } catch { } finally { $ErrorActionPreference = $prevEap }
+        if ($raw -match 'version "(\d+)(?:\.(\d+))?') { $ver = if ($Matches[1] -eq '1') { [int]$Matches[2] } else { [int]$Matches[1] } }
         if ($null -eq $ver) { continue }
         if ($null -eq $best -or $ver -gt $best.Ver) { $best = [pscustomobject]@{ Path = $c; Ver = $ver } }
     }

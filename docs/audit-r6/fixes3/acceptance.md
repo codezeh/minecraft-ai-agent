@@ -3,7 +3,7 @@
 > 汇总人：qa-report（acceptance-r6b，t5，attempt 1，2026-11-12 00:1x–00:4x CST）
 > 输入：`fixes3/{e2e,smoke,panel,static}.md` + `fixes3/evidence/`（根目录 35 个文件 + `static/` 8 个）
 > **口径**：数字一律照抄子报告，不四舍五入、不美化、不合并口径不同的分母；本轮汇总**未改任何产品代码**，**未新起任何服务/端口**（只做了只读核对）。
-> 子报告：`e2e.md`（502 行，含 §7 阻塞项修复、§8 claims/restart；§0 的失效判断已就地标「已闭」）、`smoke.md`（274 行）、`panel.md`（271 行）、`static.md`（267 行）。
+> 子报告：`e2e.md`（501 行，含 §7 阻塞项修复、§8 claims/restart；§0 的失效判断已就地标「已闭」）、`smoke.md`（274 行）、`panel.md`（271 行）、`static.md`（267 行）。
 
 ---
 
