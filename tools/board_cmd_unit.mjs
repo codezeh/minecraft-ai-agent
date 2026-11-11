@@ -120,7 +120,8 @@ const mkAgent = (board) => ({
 
     // 假 socket 对，把 server 挂上，client 走真事件链
     const handlers = new Map();
-    const serverSocket = { on: (e, fn) => handlers.set(e, fn) };
+    // ★ ADR 阶段 1：board 层不再对未知角色放行写事件；本文件测面板命令，桩要明确是面板。
+    const serverSocket = { on: (e, fn) => handlers.set(e, fn), data: { role: 'panel' } };
     const clientSocket = {
         on() { },
         emit(e, payload, ack) {
@@ -151,7 +152,8 @@ const mkAgent = (board) => ({
     mkdirSync(dir, { recursive: true });
     const { db } = openBoard(dir);
     const handlers = new Map();
-    const serverSocket = { on: (e, fn) => handlers.set(e, fn) };
+    // ★ ADR 阶段 1：board 层不再对未知角色放行写事件；本文件测面板命令，桩要明确是面板。
+    const serverSocket = { on: (e, fn) => handlers.set(e, fn), data: { role: 'panel' } };
     const clientSocket = { on() { }, emit(e, p, ack) { const h = handlers.get(e); if (!h) return ack?.({ ok: false }); h(p, ack); } };
     const io = { on: (e, fn) => { if (e === 'connection') fn(serverSocket); }, emit() { } };
     attachBoardServer({ io, db, registry: new Map([['collect', {}]]), validateArgs: (s, a) => ({ ok: true, args: a ?? {} }) });

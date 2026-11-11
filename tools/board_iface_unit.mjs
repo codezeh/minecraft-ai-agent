@@ -37,6 +37,10 @@ function makeFakePair() {
     const handlers = new Map();      // event → handler
     const serverSocket = {
         on(event, fn) { handlers.set(event, fn); },
+        // ★ ADR 阶段 1（2026-11-11）：board 层不再对"未知角色"放行写事件。
+        //   本文件测的是**面板驱动**的整条事件链，所以桩要明确自己是面板。
+        //   （生产路径上 role 由 makeHandshakeGate 写入，不可能为空。）
+        data: { role: 'panel' },
     };
     const clientSocket = {
         on() { /* client 侧的 board:changed 监听忽略 */ },

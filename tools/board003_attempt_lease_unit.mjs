@@ -180,26 +180,39 @@ function claimExpireReclaim(db, bot = 'worker') {
 // ── ⑧ 协议层端到端：两个**同名**客户端（进程崩了重连的真实形态）──────────
 {
     const db = freshDb();
-    const handlers = new Map();
-    const serverSocket = { on(event, fn) { handlers.set(event, fn); } };
-    const clientSocket = {
-        on() { },
-        emit(event, payload, ack) {
-            const h = handlers.get(event);
-            if (!h) { ack?.({ ok: false, reason: `no handler for ${event}` }); return; }
-            h(payload, ack);
-        },
+    // ★ ADR 阶段 1（2026-11-11）：真实形态是**两条连接、同一个名字**（旧进程崩了，新进程重连）。
+    //   原来这里两个 client 共用一个 serverSocket —— 服务端看到的是同一条连接，
+    //   在"每只 bot 一条独立凭据 + 一条连接只代表一只 bot"之后不再是真实拓扑，必须分开。
+    const mkPeer = () => {
+        const handlers = new Map();
+        const srv = { on(event, fn) { handlers.set(event, fn); }, data: { role: 'agent', agentName: 'worker' } };
+        const cli = {
+            on() { },
+            emit(event, payload, ack) {
+                const h = handlers.get(event);
+                if (!h) { ack?.({ ok: false, reason: `no handler for ${event}` }); return; }
+                h(payload, ack);
+            },
+        };
+        return { srv, cli };
     };
+    const peerOld = mkPeer();
+    const peerNew = mkPeer();
+    let onConnection = null;
     const io = {
-        on(event, fn) { if (event === 'connection') fn(serverSocket); },
+        on(event, fn) { if (event === 'connection') onConnection = fn; },
         emit() { },
     };
     let clock = T0;
     const srv = attachBoardServer({ io, db, now: () => clock });
+    onConnection(peerOld.srv);
+    onConnection(peerNew.srv);
 
     const job = addJob(db, { skill: 'mine', title: '同名重连', priority: 5 }, { now: T0 });
-    const c1 = new BoardClient({ socket: clientSocket, name: 'worker' });   // 旧进程
-    const c2 = new BoardClient({ socket: clientSocket, name: 'worker' });   // 重启后的新进程（同名）
+    const c1 = new BoardClient({ socket: peerOld.cli, name: 'worker' });   // 旧进程
+    const c2 = new BoardClient({ socket: peerNew.cli, name: 'worker' });   // 重启后的新进程（同名，另一条连接）
+    // 真实 agent 起来第一件事就是 board:hello（绑定身份 + 登记能力）；不 hello 就没有可信名字。
+    await c1.hello(); await c2.hello();
 
     const r1 = await c1.claim();
     check('⑧ 旧进程领到单', r1.ok === true && r1.data?.job?.id === job.id, `ok=${r1.ok}`);

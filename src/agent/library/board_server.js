@@ -139,6 +139,9 @@ export function attachBoardServer(deps = {}) {
     // ══════════════════════════════════════════════════════════════════════
 
     const ROLE_AGENT = 'agent';
+    // ★ ADR 阶段 1：与 auth_gate.js 的 ROLE_PANEL 同值。本文件刻意**不 import**
+    //   那两个常量（避免把 auth_gate 的运行时依赖拖进任务板层），只用字面量对齐。
+    const ROLE_PANEL = 'panel';
 
     // ── 错误码口径（为什么只有 NO_PERMISSION / TOO_MUCH 两个）─────────────
     //   `contract.js` 的 `CODES` 是**全仓唯一**的错误码表，未注册的码会让
@@ -173,11 +176,12 @@ export function attachBoardServer(deps = {}) {
             //   所以这里不再"信 payload 里的 bot"，而是拿它跟戳**对账**：
             //     · 不一致 → 拒（这正是"一个 agent 进程冒充另一只 bot"的那一步）
             //     · 戳为空 → 拒（还没 login-agent，就没有可信名字；宁可报错让人先握手）
-            //   ⚠️ 诚实边界：这仍是"持有 agent 凭据的进程"粒度，不是 per-agent 凭据。
-            //      一个持 agent 凭据的进程仍可以 login-agent 去抢别人的名字 ——
-            //      但那会被 claimAgentChannel 的唯一占用 + 接管限速 + 日志记下，且会顶掉
-            //      对方通道（肉眼可见），属"可观测的越权"，不是静默冒充。
-            //      真正封闭要做 per-agent 凭据（(name × 进程) 一对一），后续任务。
+            //   ★ ADR 阶段 1（2026-11-11）：**per-agent 凭据已经落地**。
+            //     每只 bot 一条独立凭据并在 auth_gate 里登记归属；`claimAgentChannel`
+            //     会把"凭据属于谁"与"申请占用谁的名字"对账，不一致就 `identity-mismatch` 拒。
+            //     所以 `socket.data.agentName` 现在背后有**两重**服务端依据：
+            //     ① 凭据归属（这份凭据是不是它的）② 唯一占用裁决（这一刻有没有别人占着）。
+            //     这里保留"对账 payload 与戳"是因为客户端仍可能拼错名字，属于输入校验。
             const stamped = String(socket.data?.agentName ?? '').trim();
             if (!stamped) {
                 return {
@@ -237,10 +241,19 @@ export function attachBoardServer(deps = {}) {
             }
             return { ok: true, bot: claimed, role };
         }
-        // ★ 面板 / 控制层 / 离线夹具（角色未知）：
+        // ★ ADR 阶段 1：把「未知角色」从"等同面板"里摘出来。
+        //   生产路径上每个 socket 都过 makeHandshakeGate，`!role` 会被直接 reject，
+        //   所以 null 只可能来自单测桩。但"桩恰好能写生产数据"是危险的默认值，
+        //   这里显式拒绝：写事件必须有明确角色（agent 或 panel），未知一律 NO_PERMISSION。
+        if (role !== ROLE_PANEL) {
+            return {
+                ok: false, code: 'NO_PERMISSION',
+                reason: `这条连接没有明确角色（role=${role === null ? 'null' : String(role)}）：写事件只接受 agent 或 panel`,
+            };
+        }
+        // 面板 / 控制层：
         //   · 报了名字 → 必须是它 hello 过的（防一条连接在中途换名字）
-        //   · 没报名字 → **放行**（`!cancelJob` 这种控制层命令本来就不带 bot；
-        //     这类连接的鉴权在 t1 的握手门里，不在本文件。见上方"残留缺口"）
+        //   · 没报名字 → 放行（`!cancelJob` 这种控制层命令本来就不带 bot）
         if (claimed && bots.size && !bots.has(claimed)) {
             return {
                 ok: false, code: 'NO_PERMISSION',

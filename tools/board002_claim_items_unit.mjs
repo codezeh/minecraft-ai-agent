@@ -45,10 +45,15 @@ const T0 = 1_700_000_000_000;
  * 假 socket 对（与 board_iface_unit 同款）：client.emit → 服务端 handler → ack 回 client。
  * `sent` 记录 client 真正发出去的 payload —— 报告要求"断言实际传输载荷"。
  */
-function makeFakePair() {
+function makeFakePair(agentName) {
     const handlers = new Map();
     const sent = [];
-    const serverSocket = { on(event, fn) { handlers.set(event, fn); } };
+    // ★ ADR 阶段 1（2026-11-11）：每条连接要有明确角色；agent 连接还必须有服务端裁决的
+    //   agentName 戳（board:hello 拿它跟 payload.bot 对账）。桩要如实反映生产拓扑。
+    const serverSocket = {
+        on(event, fn) { handlers.set(event, fn); },
+        data: { role: 'agent', ...(agentName ? { agentName } : {}) },
+    };
     const clientSocket = {
         sent,
         on() { /* client 侧的 board:changed 监听忽略 */ },
@@ -73,13 +78,14 @@ const server = (db, pair) => attachBoardServer({
 // ── ① 协议层：没有 items → 物品资格单领不到；带上物品 → 能领到 ────────────
 {
     const db = freshDb();
-    const pair = makeFakePair();
+    const pair = makeFakePair('worker');
     const srv = server(db, pair);
     const needTool = addJob(db, {
         skill: 'mine', title: '需要石镐', priority: 5, requires: { items: ['stone_pickaxe'] },
     }, { now: T0 });
 
     const c = new BoardClient({ socket: pair.clientSocket, name: 'worker' });
+    await c.hello();                                    // 真实 agent 起来先 hello（绑定身份）
     const blind = await c.claim();                      // 老形状：只发 bot（= 缺陷原貌）
     check('① 不带背包上报时，物品资格单领不到（缺陷原貌，修复前恒为此形态）',
         blind.ok === true && !blind.data?.job, `job=${blind.data?.job?.id ?? 'null'}`);
@@ -96,7 +102,7 @@ const server = (db, pair) => attachBoardServer({
 // ── ② 断言**实际传输载荷**：只有物品名、去重、限长 ───────────────────────
 {
     const db = freshDb();
-    const pair = makeFakePair();
+    const pair = makeFakePair('worker');
     const srv = server(db, pair);
     addJob(db, { skill: 'mine', title: '普通单', priority: 5 }, { now: T0 });
 
@@ -208,21 +214,26 @@ const server = (db, pair) => attachBoardServer({
 // ── ⑥ 多机器人能力差异：同一张单，有镐的能领、没镐的领不到 ───────────────
 {
     const db = freshDb();
-    const pair = makeFakePair();
-    const srv = server(db, pair);
+    // ★ ADR 阶段 1：两只不同的 bot = 两条不同的连接（原来共用一条 socket 不真实，
+    //   而且一条 agent 连接只能代表一只 bot，共享会让第二只的 hello 顶掉第一只）。
+    const pairPoor = makeFakePair('poor');
+    const pairRich = makeFakePair('rich');
     const job = addJob(db, {
         skill: 'mine', title: '需要石镐（共享单）', priority: 5, assignee: null,
         requires: { items: ['stone_pickaxe'] },
     }, { now: T0 });
+    const srvPoor = server(db, pairPoor);
+    const srvRich = server(db, pairRich);
 
-    const poor = new BoardClient({ socket: pair.clientSocket, name: 'poor' });
-    const rich = new BoardClient({ socket: pair.clientSocket, name: 'rich' });
+    const poor = new BoardClient({ socket: pairPoor.clientSocket, name: 'poor' });
+    const rich = new BoardClient({ socket: pairRich.clientSocket, name: 'rich' });
+    await poor.hello(); await rich.hello();
     const r1 = await poor.claim({ items: ['oak_log'] });
     const r2 = await rich.claim({ items: ['stone_pickaxe', 'oak_log'] });
     check('⑥ 没工具的那只领不到、有工具的那只领到（能力差异生效）',
         !r1.data?.job && r2.data?.job?.id === job.id,
         `poor=${r1.data?.job?.id ?? 'null'} rich=${r2.data?.job?.id ?? 'null'}`);
-    srv.stop();
+    srvPoor.stop(); srvRich.stop();
 }
 
 console.log(`\n${fail === 0 ? `ALL PASS: ${pass} passed, 0 failed` : `HAS FAILURES: ${fail} failed, ${pass} passed`}`);
