@@ -10,8 +10,11 @@
  */
 import {
     codesFileOf, identityFileOf, readStore, writeStore,
-    consumeCodeAtomic, bindFromCode, recordClaim, isWeakBinding, BOUND_LEVEL,
+    consumeCodeAtomic, bindFromCode, recordClaim, isWeakBinding, resolveBinding, BOUND_LEVEL,
 } from '../../mindcraft/identity_store.js';
+// 阶段 2 切片 2：邀请/撤销 = 改"人"与白名单，走 people_store + 服务端 RCON（不双写 whitelist.json）
+import { mutatePeople, ensurePerson, findPerson, linkAvatar, PERSON_STATE } from '../../mindcraft/people_store.js';
+import { applyWhitelist } from '../library/whitelist_gate.js';
 // 面板按钮的**唯一真相**住在 permissions.js（拒绝话术与 !claim 都引它，改一处即可）
 import { PANEL_CODE_LOCATION } from '../permissions.js';
 
@@ -127,6 +130,104 @@ function claim(agent, code) {
     return `[身份] 绑定成功：你现在的等级是 ${bound.binding.level}（${how}）。`;
 }
 
+/**
+ * 判断发言人是不是这只 bot 的 **owner**（`!invite`/`!revoke` 的权限来源）。
+ *
+ * 口径：只有已绑定的 owner 能邀请——"玩家自己邀请朋友"，而不是"面板替所有人决定"。
+ * 未绑定时明确拒绝，并告诉他先 `!claim`。
+ */
+export function ownerGate(agent) {
+    const who = whois(agent, agent?.command_author ?? null);
+    if (!who.name) return { ok: false, say: '[身份] 没能识别你是谁（没有发言人），这次操作没有生效。' };
+    const store = readStore(identityFileOf(agent?.name ?? agent?.bot?.username ?? 'agent')).store;
+    // ★ resolveBinding **总是**返回对象（未绑定时 level:null / reason:'unbound'），
+    //   所以这里必须按 level 判，不能按返回值真假判（写错会把"没绑定"说成"权限是 null"）。
+    const hit = resolveBinding(store, { uuid: who.uuid, name: who.name });
+    if (!hit.level) {
+        const why = hit.reason === 'expired' ? '你的绑定已过期，请重新 !claim。'
+            : '你还没绑定这只分身。先在面板拿一次性码，然后 !claim <码>。';
+        return { ok: false, say: `[身份] ${why}` };
+    }
+    if (hit.level !== BOUND_LEVEL) {
+        return { ok: false, say: `[身份] 你的权限是 ${hit.level}，不是 ${BOUND_LEVEL}；邀请/撤销只给 owner。` };
+    }
+    return { ok: true, who, binding: hit };
+}
+
+/**
+ * `!invite <玩家名>`：把一个人加进"人"表 + 让服务端把他加进白名单。
+ *
+ * 顺序很重要：**先让服务端改白名单，成功了才写人表**。
+ * 反过来写会造出"表里说邀请了、服务端其实没加"的假记录（R6 的假成功就是这么来的）。
+ */
+export async function invite(agent, playerName, apply = applyWhitelist) {
+    const gate = ownerGate(agent);
+    if (!gate.ok) return gate.say;
+    const target = String(playerName ?? '').trim();
+    if (!target) return '[身份] 用法：!invite <玩家名>（对方用同一个名字进服）。';
+
+    const wl = await apply('add', target);
+    if (!wl.ok) {
+        return `[身份] 没加进白名单，所以这次邀请**没有生效**：${wl.reason}`
+            + (wl.reply ? `（服务端原文：${wl.reply}）` : '');
+    }
+
+    const avatarName = agent?.name ?? agent?.bot?.username ?? 'agent';
+    const out = mutatePeople((store) => {
+        const ens = ensurePerson(store, { name: target });
+        const person = ens.result.person;
+        person.state = PERSON_STATE.ACTIVE;
+        person.invited_by = gate.who.name;
+        person.invited_at = Date.now();
+        const link = linkAvatar(ens.store, { avatarName, personId: person.id });
+        if (!link.result.ok) {
+            // 这只 bot 已属于别人：白名单已经加成功了，这里如实说清
+            return { store: ens.store, result: { conflict: true, by: link.result.by, person } };
+        }
+        return { store: ens.store, result: { conflict: false, person } };
+    });
+    if (!out.ok) {
+        return `[身份] 白名单已加，但人表写不进去（${out.reason}）——这次邀请只完成了一半，请让面板核对。`;
+    }
+    if (out.result?.conflict) {
+        return `[身份] 已把 ${target} 加进白名单，但这只分身归别人所有，没有挂到这个人名下。`
+            + `如果这是有意为之，请先在面板解绑原主人。`;
+    }
+    return `[身份] 已邀请 ${target}：白名单已生效（服务端确认），并把他/她记进人表。`
+        + ` ${target} 现在可以用这个名字进服。`;
+}
+
+/**
+ * `!revoke <玩家名>`：撤邀请——先让服务端移出白名单，成功了再把状态标成 revoked。
+ * 人表**不删**（留证：谁在什么时候撤过谁）。
+ */
+export async function revoke(agent, playerName, apply = applyWhitelist) {
+    const gate = ownerGate(agent);
+    if (!gate.ok) return gate.say;
+    const target = String(playerName ?? '').trim();
+    if (!target) return '[身份] 用法：!revoke <玩家名>。';
+
+    const wl = await apply('remove', target);
+    if (!wl.ok) {
+        return `[身份] 没能把他移出白名单，所以这次撤销**没有生效**：${wl.reason}`
+            + (wl.reply ? `（服务端原文：${wl.reply}）` : '');
+    }
+
+    const out = mutatePeople((store) => {
+        const person = findPerson(store, { name: target });
+        if (!person) return null;                       // 不在人表：白名单已移出，无事可做
+        person.state = PERSON_STATE.REVOKED;
+        person.revoked_at = Date.now();
+        person.revoked_by = gate.who.name;
+        return { store, result: { person } };
+    });
+    if (!out.ok) {
+        return `[身份] 白名单已移出，但人表写不进去（${out.reason}）——请让面板核对。`;
+    }
+    return `[身份] 已撤销 ${target} 的邀请：服务端已把他/她移出白名单。`
+        + (out.skipped ? '（人表里本来就没有这个人，只改了白名单。）' : '');
+}
+
 export const identityList = [
     {
         name: '!claim',
@@ -136,6 +237,26 @@ export const identityList = [
         },
         perform: function (agent, code) {
             return claim(agent, code);
+        },
+    },
+    {
+        name: '!invite',
+        description: 'Invite a player: add them to the server whitelist and record them as a person (owner only).',
+        params: {
+            player: { type: 'string', description: 'Their in-game name.' },
+        },
+        perform: function (agent, player) {
+            return invite(agent, player);
+        },
+    },
+    {
+        name: '!revoke',
+        description: 'Revoke an invitation: remove them from the whitelist (owner only). Keeps an audit record.',
+        params: {
+            player: { type: 'string', description: 'Their in-game name.' },
+        },
+        perform: function (agent, player) {
+            return revoke(agent, player);
         },
     },
 ];
