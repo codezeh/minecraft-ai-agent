@@ -172,9 +172,11 @@ console.log('④ 凭证核销');
         uses.slice(0, 3).every((r) => r.ok) && uses[3].ok === false && uses[3].reason === 'already-used',
         uses.map((r) => r.ok ? r.usesLeft : r.reason));
 
-    // ★ 真并发：4 个进程同时核销同一张一次性凭证，**只许 1 个成功**。
+    // ★ 真并发：**12** 个进程同时核销同一张一次性凭证，**只许 1 个成功**。
     //   这条才钉住 UPDATE 里的 `used_count < max_uses`（只靠上面的 diagnose，单进程永远看不出差别：
-    //   4 个进程都会在 UPDATE 之前读到 used_count=0）。
+    //   所有进程都会在 UPDATE 之前读到 used_count=0）。
+    //   ⚠ 进程数不能少：复核实测 **4 进程 0/6 轮复现不出双花**（窗口太窄），12 进程才稳定复现。
+    //   "去掉守卫能红"是**概率性**的证据；确定性的那条是下面的 SQL 结构断言 + 交错探针。
     {
         const g = F.issueVisitGrant({ hostId: 'host-1', guestId: 'peer-a', grantId: 'vg-race', ttlMs: 600_000 }, { now: Date.now() });
         G.closeGlobalDb();
@@ -197,15 +199,16 @@ process.stdout.write(JSON.stringify(r) + '\\n');
             cp.stderr.on('data', (d) => { err += d; });
             cp.on('close', (code) => resolve({ code, out, err }));
         });
-        const outs = await Promise.all([spawnOne(), spawnOne(), spawnOne(), spawnOne()]);
+        const RACE_PROCS = 12;   // 见上：4 太少，窗口太窄
+        const outs = await Promise.all(Array.from({ length: RACE_PROCS }, () => spawnOne()));
         const results = outs.map((o) => {
             const line = String(o.out).trim().split('\n').filter(Boolean).pop();
             try { return JSON.parse(line); } catch { return { ok: false, reason: `child-exit-${o.code}`, err: String(o.err).slice(0, 200) }; }
         });
         const winners = results.filter((r) => r.ok === true);
-        chk('★ 4 进程同时核销同一张一次性凭证：恰好 1 个成功', winners.length === 1,
+        chk('★ 12 进程同时核销同一张一次性凭证：恰好 1 个成功', winners.length === 1,
             results.map((r) => (r.ok ? 'ok' : r.reason)));
-        chk('★ 并发里失败的那 3 个必须是 already-used（不是别的错）',
+        chk('★ 并发里失败的那些必须是 already-used（不是别的错）',
             results.filter((r) => !r.ok).every((r) => r.reason === 'already-used' || r.reason === 'lost-race'),
             results.filter((r) => !r.ok).map((r) => r.reason));
         const used = dbOf().prepare('SELECT used_count FROM visit_grants WHERE grant_id = ?').get('vg-race');

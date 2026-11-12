@@ -235,7 +235,16 @@ export function truncate(text, { maxLines = 80, maxChars = 6000, head = 25, tail
         }
         return lineTrimmed;
     }
-    return text.slice(0, Math.max(0, maxChars - 40)) + `\n……（输出共 ${text.length} 字符，已截断）`;
+    // ★ F2（复核发现）：原实现按固定 40 字符预留提示位，但提示语里有 `text.length`
+    //   （位数随内容变长），于是 maxChars 很小时会**违反自己的上限**（实测 40 → 42 字符）。
+    //   改成：先按最短提示语算预留，再按真实提示语长度精确调整。
+    const fullNote = `\n……（输出共 ${text.length} 字符，已截断）`;
+    const minNote = '\n……（已截断）';
+    if (maxChars <= minNote.length) return minNote.slice(0, Math.max(0, maxChars));
+    const note = maxChars - (maxChars - fullNote.length) >= 0 && maxChars >= fullNote.length
+        ? fullNote
+        : minNote;
+    return text.slice(0, Math.max(0, maxChars - note.length)) + note;
 }
 
 /**

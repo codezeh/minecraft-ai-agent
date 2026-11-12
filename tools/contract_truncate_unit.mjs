@@ -100,5 +100,14 @@ t('#77 数字字符串仍可接受（Number() 归一化，不误伤 "12" 这类�
     );
 });
 
+// ★ F2（复核发现）：提示语里含 text.length（位数可变），原来按固定 40 字符预留，
+//   小 maxChars 时会违反自己的上限（实测 40 → 42）。这条覆盖各边界。
+t('F2 任意 maxChars 下都不超上限（含很小与临界值）', () => {
+    for (const mc of [10, 20, 40, 41, 42, 60, 100, 6000]) {
+        const out = truncate('x'.repeat(500), { maxChars: mc, maxLines: 1_000_000 });
+        assert.ok(out.length <= mc, `maxChars=${mc} 实际 ${out.length}`);
+    }
+});
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURES'}: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

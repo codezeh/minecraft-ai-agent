@@ -185,6 +185,14 @@ function ensureSchema(db) {
 /**
  * 打开（必要时创建）全局库。只读模式不建目录/不建表/不迁移，库不存在直接抛。
  *
+ * ⚠ **@internal 返回的是裸 `DatabaseSync` 句柄 —— 它会绕过 `recordEvent` 的 kind 白名单。**
+ *   「events 只能追加写」的三层护栏里，库层触发器只挡 **UPDATE / DELETE**；
+ *   用这个裸句柄直接 `INSERT INTO events` 仍可写入**未登记 kind**（白名单是代码层约定 + 测试）。
+ *   内部使用者（federation）确实需要裸句柄做自己的表查询，所以这里没有收窄成受限 API；
+ *   但**业务代码不要直接用它写 events**，一律走 `recordEvent()`。
+ *   若将来要把白名单变成真正的 DB 能力边界，做法是：用 `EVENT_KINDS` 这**同一个常量**生成
+ *   `CHECK (kind IN (...))` 的迁移（仍只有一份真相），而不是手抄第二份列表。
+ *
  * @param {{path?:string, readOnly?:boolean, quiet?:boolean}} [opts]
  * @returns {{db:DatabaseSync, path:string, created:boolean, readOnly:boolean, warnings:string[]}}
  */
