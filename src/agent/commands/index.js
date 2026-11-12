@@ -7,7 +7,9 @@ import settings from '../settings.js';
 // 发言人分级（M1 安全，08 §5）：命令能不能执行由「谁说的」定，不由模型说了什么定
 import { resolveLevel, canRunCommand, permissionDeniedReply, LEVEL } from '../permissions.js';
 // 第四轮审计 ①：身份绑定表（角色 → 等级）。**身份优先，名字只是回退**
-import { identityFileOf, readStore, resolveBinding, sessionFresh } from '../../mindcraft/identity_store.js';
+import { sessionFresh } from '../../mindcraft/identity_store.js';
+// ★ 决策 A：身份**唯一判定入口**（以 people 校真，identity.json 只是缓存）
+import { resolveIdentityAuthority } from '../../mindcraft/identity_authority.js';
 // ★ t27：online-mode 与 offline_owner_mode 的**唯一合成判据入口**（不在本文件另算一遍）
 import { readServerOnlineMode, resolveIdentityPolicy } from '../../mindcraft/offline_identity_risk.js';
 
@@ -384,9 +386,8 @@ export function identityContextOf(agent) {
         // 每执行一条命令读一次表：绑定/解绑是低频事件，而"读到旧表"会让解绑失效很久。
         resolve: ({ uuid, name }) => {
             if (!agentName) return null;
-            const read = readStore(identityFileOf(agentName));
-            if (!read.ok && !read.store.bindings.length) return null;
-            const hit = resolveBinding(read.store, { uuid, name });
+            // ★ 决策 A：以 people 校真（人不在表/被撤/缓存对不上 ⇒ fail-closed 返回 level:null）
+            const hit = resolveIdentityAuthority(agentName, { uuid, name });
             // ★ 记的是**最终裁决**（可能已被下面的 offline 策略降级），
             //   拒绝话术读它来决定"说真话还是让玩家去 claim"。
             const settle = (result) => { ctx.lastResolved = result; return result; };
@@ -490,6 +491,8 @@ export async function executeCommand(agent, message, perm = {}) {
                 isOtherBot,
                 // t20：弱绑定被拒时话术要换成"离线服证明不了你是你"，而不是"去 claim 一次"
                 offlineWeak: hit?.weak === true && /^offline-weak/.test(String(hit?.reason ?? '')),
+                // ★ 决策 A：people 判定的失败原因（no-person / person-revoked / mismatch）
+                authorityReason: hit?.reason ?? null,
                 offlineMode: identity.offlineOwnerMode,
                 sessionMinutes: identity.sessionMinutes,
             });

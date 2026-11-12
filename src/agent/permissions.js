@@ -60,7 +60,7 @@ export const GUEST = LEVEL.OTHER;
  * 安全边界：`!claim` 的凭据是**面板下发的一次性码**（短时、单次、绑面板会话），
  * 不是"谁喊一声就给"。码错/过期/被用过 ⇒ 什么都不变（见 identity_store.consumeCode）。
  */
-export const OPEN_COMMANDS = Object.freeze(['!claim']);
+export const OPEN_COMMANDS = Object.freeze(['!claim', '!recover']);
 
 const OPEN = new Set(OPEN_COMMANDS);
 
@@ -427,6 +427,15 @@ export function permissionDeniedReply(level, commandName, author, opts = {}) {
                     ? `（当前策略 session：刚 !claim 后的 ${opts.sessionMinutes ?? 60} 分钟内才有效）`
                     : '（当前策略 deny：离线服上 owner 不可达）')
                 + ' 根治：开正版验证，或装登录插件（如 AuthMe）。';
+        }
+        if (opts.bindingRequired && opts.authorityReason === 'person-revoked') {
+            return base + '你在人表（people）里已被撤销（state=revoked）⇒ 旧绑定不再生效。'
+                + '让主人在面板人表里恢复，或要一个新恢复码后 !recover <码>。';
+        }
+        if (opts.bindingRequired && (opts.authorityReason === 'no-person'
+            || opts.authorityReason === 'no-people' || opts.authorityReason === 'person-mismatch')) {
+            return base + '这只分身还没在 people（权威人表）里挂到人 ⇒ 旧绑定不生效。'
+                + '让面板「改挂到这只 bot」，或在游戏里 !recover <恢复码>。';
         }
         if (opts.bindingRequired && !opts.isOtherBot) {
             // 文案必须与面板**实际的按钮**一致（R4 t24：原来指向一个不存在的按钮，用户点不到）。
