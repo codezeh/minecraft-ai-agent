@@ -301,6 +301,11 @@ function Invoke-ClaimsScenario {
     param([string]$RunDir)
 
     $env:MC_BOTS_ROOT = Join-Path $RunDir 'bots'
+    # 阶段 3（2026-11-13 真机验收发现）：**必须隔离 MC_WORLD_DIR**。
+    #   否则进程内 createMindServer → prepareBoardDirForCurrentWorld() → currentWorldDir()
+    #   会解析到**生产** <repo>/server/world 并在那里懒生成 world-id.json
+    #   （实测写进了 w-20261112-4f1ae8ed，createdAt 正好是起服时刻）。
+    $env:MC_WORLD_DIR = Join-Path $RunDir 'world'
     # 直接驱动既有 tools/t37_claims_contention_live.mjs。
     # t11 期间它曾被 ① 身份门打死（自建 socket 不带握手 token），当时的临时替代
     # e2e_claims_live.mjs 已删除：t23 给 t37 补了 token（走 tools/lib/ms_token.mjs），
@@ -348,6 +353,11 @@ function Invoke-RestartScenario {
     if (-not (Test-Path -LiteralPath $script)) { Stop-E2E "找不到 $script" 'mindcraft 仓库不完整。' }
 
     $env:MC_BOTS_ROOT = Join-Path $RunDir 'bots'
+    # 阶段 3（2026-11-13 真机验收发现）：**必须隔离 MC_WORLD_DIR**。
+    #   否则进程内 createMindServer → prepareBoardDirForCurrentWorld() → currentWorldDir()
+    #   会解析到**生产** <repo>/server/world 并在那里懒生成 world-id.json
+    #   （实测写进了 w-20261112-4f1ae8ed，createdAt 正好是起服时刻）。
+    $env:MC_WORLD_DIR = Join-Path $RunDir 'world'
     $env:E2E_RUN_ID = (Get-Date -Format 'yyyyMMddHHmmss')
 
     # ── 第一次起服：建场地 ──
@@ -475,6 +485,11 @@ function Invoke-ChestScenario {
     $liveScript = Join-Path $MindDir 'tools/e2e_chest_store_live.mjs'
     if (-not (Test-Path -LiteralPath $liveScript)) { Stop-E2E "找不到 $liveScript" 'mindcraft 仓库不完整。' }
     $env:MC_BOTS_ROOT = Join-Path $RunDir 'bots'
+    # 阶段 3（2026-11-13 真机验收发现）：**必须隔离 MC_WORLD_DIR**。
+    #   否则进程内 createMindServer → prepareBoardDirForCurrentWorld() → currentWorldDir()
+    #   会解析到**生产** <repo>/server/world 并在那里懒生成 world-id.json
+    #   （实测写进了 w-20261112-4f1ae8ed，createdAt 正好是起服时刻）。
+    $env:MC_WORLD_DIR = Join-Path $RunDir 'world'
 
     # ── 第一段：起服 → 守恒 + 反证 → 停服 ──
     $server = Start-TestServer -RunDir $RunDir -Java $Java
@@ -596,6 +611,7 @@ finally {
         Write-Host ("  INFO  机器上还有 $($left.Count) 个 java 进程（可能是别人的跑批，未动）") -ForegroundColor DarkGray
     }
     Remove-Item Env:\MC_BOTS_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:\MC_WORLD_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:\E2E_RUN_ID -ErrorAction SilentlyContinue
     # R6 #53：异常路径（Stop-E2E 直接 exit 1）原来会把 junction 留到下一轮。
     if (-not $KeepRun -and $runDir) { Remove-RunDirSafe -Dir $runDir }
