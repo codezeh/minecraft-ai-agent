@@ -1,0 +1,145 @@
+# ============================================================================
+# config/worldguard-regions.yml — WorldGuard 区域「草案」（D5 三件套 · 事前限制）
+#
+# 【这是什么】
+#   给人填写、给 scripts/worldguard-check.ps1 做只读体检的区域清单草案。
+#   它 **不是** WorldGuard 的线上文件，装完插件也不会被自动读取。
+#
+# 【线上文件在哪】
+#   server/plugins/WorldGuard/worlds/<level-name>/regions.yml
+#   官方文档（regions/storage）里写作 "region.yml"，历史实现是 regions.yml ——
+#   体检脚本两种文件名都认，按实际存在的那个核对。当前 level-name=world。
+#
+# 【怎么落地：二选一】
+#   A) 命令法（推荐，不用停服、可逐条回滚）
+#      填好坐标后，按 docs/audit-r6/fixes4/worldguard.md 的「落地命令」一节，
+#      逐条执行 /rg define + /rg addmember + /rg flag。
+#   B) 文件法
+#      停服 → 把下面 regions: 的内容合并进线上 regions.yml → 起服
+#      （或运行中 /rg load 重载区域文件；YAML 存储允许运行中改文件）
+#
+# 【坐标怎么填（禁止编造，必须实地取点）】
+#   游戏内站在要圈的方块上按 F3，读左下 "XYZ: 123.45 / 64.00 / -67.89"。
+#   对角各站一次，得到两个点；min 取每轴较小值，max 取较大值。
+#   y 轴建议覆盖实际使用高度（0..255 太大会拖慢判断，按建筑高度收紧更好）。
+#   占位符：__FILL_ME__（数值）、__PLAYER_NAME__ / __TEAM_MEMBER__（玩家名）。
+#   **未填 = 未生效**：本文件当前不提供任何保护，别把它当成"已经圈好了"。
+#
+# 【优先级约定】数字越大越优先；重叠处高优先级覆盖低优先级
+#   __global__ 0  <  visitor_hub 20  <  private_area_* 50  <  team_chest_* 100
+#
+# 【为什么几乎不写 build: deny】
+#   官方 Region Flags 文档明确：不要用保护类 flag 去整体保护/整体放开，用成员
+#   资格或 passthrough。区域默认就是「成员可建、非成员不可建」，再写 build: deny
+#   会把成员（包括你自己）一起挡掉，只能靠 /rg bypass 才能动，弊大于利。
+# ============================================================================
+
+schema: 1
+world: __FILL_WORLD__
+
+regions:
+
+  # --------------------------------------------------------------------------
+  # 全局区域：只占位，不设 flag。
+  # 想全服禁某件事（如全服禁 TNT）才在这里加 flag；加之前先想清楚影响面，
+  # 因为它是所有区域里优先级最低的一层，任何区域都能覆盖它。
+  # --------------------------------------------------------------------------
+  __global__:
+    type: global
+    priority: 0
+    flags: {}
+
+  # --------------------------------------------------------------------------
+  # 访客区 / 出生点：任何人都能进，但别乱拆乱打。
+  # - 不写 entry: deny（访客要能进来）
+  # - 不写 build: deny（默认非成员就建不了；写了成员也建不了）
+  # - greeting 用引号包住，避免中文里的冒号被 YAML 当成键值分隔
+  # --------------------------------------------------------------------------
+  visitor_hub:
+    type: cuboid
+    priority: 20
+    min:
+      x: __FILL_ME__
+      y: __FILL_ME__
+      z: __FILL_ME__
+    max:
+      x: __FILL_ME__
+      y: __FILL_ME__
+      z: __FILL_ME__
+    members:
+      players: []
+    flags:
+      pvp: deny
+      tnt: deny
+      mob-spawning: deny
+      greeting: "访客区：仅参观，请勿破坏。共享仓在 team_chest 区域。"
+
+  # --------------------------------------------------------------------------
+  # 私人区：每人一份，把 id 改成 private_<玩家名> 再复制。
+  # entry: deny 的默认作用组是 nonmembers（官方文档明说 entry/exit 默认 nonmember），
+  # 所以这一条等于「非成员连进都进不来」，成员照常进出。
+  # 注意：机器人也属于非成员，私人区围住的路会让它们绕不过去，选点留出通道。
+  # --------------------------------------------------------------------------
+  private_area_01:
+    type: cuboid
+    priority: 50
+    min:
+      x: __FILL_ME__
+      y: __FILL_ME__
+      z: __FILL_ME__
+    max:
+      x: __FILL_ME__
+      y: __FILL_ME__
+      z: __FILL_ME__
+    members:
+      players:
+        - __PLAYER_NAME__
+    owners:
+      players:
+        - __PLAYER_NAME__
+    flags:
+      entry: deny
+      pvp: deny
+
+  # --------------------------------------------------------------------------
+  # 队伍共享仓：圈住 team_chest 表里登记过的那几个容器。
+  # 账本真相在板库 team_chest(world_id, team_id, x, y, z) —— 见
+  # docs/adr/ADR-0001-联邦身份与本地状态所有权.md。
+  # WorldGuard 只回答「谁的手能碰到箱子」，不记账、不校验数量，
+  # 所以容器清单必须与 team_chest 表**逐格一致**，否则会出现
+  # 「WG 放行但账本不记」的黑洞（东西进出没人知道）。
+  #
+  # 【反例，别照着抄】
+  #   flags:
+  #     chest-access: allow      # ← 危险：flag 默认作用组是 everyone，
+  #                              #   这等于把"非成员也能开箱"打开
+  # 成员本来就能开箱（成员资格 + build 隐式值），不需要再写 chest-access。
+  # --------------------------------------------------------------------------
+  team_chest_01:
+    type: cuboid
+    priority: 100
+    min:
+      x: __FILL_ME__
+      y: __FILL_ME__
+      z: __FILL_ME__
+    max:
+      x: __FILL_ME__
+      y: __FILL_ME__
+      z: __FILL_ME__
+    members:
+      players:
+        - __TEAM_MEMBER__
+    flags:
+      pvp: deny
+      greeting: "队伍共享仓：这里的东西只走 team_chest 表记账，别用箱子当第二本账。"
+
+# ============================================================================
+# 填完自查（体检脚本会复读这几条，手工也能对一遍）
+#   1. 三个区域的 min/max 六个数字都是实数，且 min <= max；
+#   2. 区域之间该嵌套的嵌套、该避开的避开；重叠就用优先级说话；
+#   3. members 里的名字**必须在 server/whitelist.json 里**，否则那人进不来，
+#      成员关系等于空的（online-mode=false 下名字还可能是别人顶替的）；
+#   4. 用到 owners.groups 的话本服必须有权限插件（当前没有：只有 ops.json），
+#      否则组名不生效 —— 体检脚本会为这条 WARN；
+#   5. 落地上线后跑 /rg list 看到区域名，再跑 /rg info <id> 看 flags 是否符合预期。
+# ============================================================================
