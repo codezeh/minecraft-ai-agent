@@ -116,9 +116,22 @@ function armSubscribeWatch(delayMs = 12000) {
       store.subscribeError = '仍然收不到状态更新：可能被服务端限流（10 次/60 秒）或 relay 未注册。请稍后点「重试订阅」。'
       return
     }
-    socket.emit('listen-to-agents')
-    store.subscribeError = `未收到状态更新，正在重新订阅（第 ${subAttempt} 次）…`
-    armSubscribeWatch(5000 * subAttempt)
+    // ★ S-3 收尾：listen-to-agents 现在有 ack，别再靠"有没有状态帧"猜。
+    void request<{ ok?: boolean; code?: string; retryAfterMs?: number }>('listen-to-agents')
+      .then((r) => {
+        if (r && r.ok === false && r.code === 'RATE_LIMITED') {
+          const wait = Number(r.retryAfterMs ?? 0)
+          store.subscribeError = `订阅被限流${wait > 0 ? `，约 ${Math.ceil(wait / 1000)} 秒后自动重试` : ''}。`
+          armSubscribeWatch(wait > 0 ? wait : 5000 * subAttempt)
+          return
+        }
+        store.subscribeError = `未收到状态更新，正在重新订阅（第 ${subAttempt} 次）…`
+        armSubscribeWatch(5000 * subAttempt)
+      })
+      .catch(() => {
+        store.subscribeError = `未收到状态更新，正在重新订阅（第 ${subAttempt} 次）…`
+        armSubscribeWatch(5000 * subAttempt)
+      })
   }, delayMs)
 }
 
@@ -133,7 +146,14 @@ export function retrySubscribe() {
   subAttempt = 0
   store.subscribed = false
   store.subscribeError = ''
-  socket.emit('listen-to-agents')
+  void request<{ ok?: boolean; code?: string; retryAfterMs?: number }>('listen-to-agents')
+    .then((r) => {
+      if (r && r.ok === false && r.code === 'RATE_LIMITED') {
+        const wait = Number(r.retryAfterMs ?? 0)
+        store.subscribeError = `订阅被限流${wait > 0 ? `，约 ${Math.ceil(wait / 1000)} 秒后自动重试` : ''}。`
+      }
+    })
+    .catch(() => { /* 下面 armSubscribeWatch 会兜底重试 */ })
   armSubscribeWatch()
 }
 
