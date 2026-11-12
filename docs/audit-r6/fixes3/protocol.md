@@ -211,3 +211,24 @@ RELEASE_EXIT=0  → 源码指纹 sha256:0c18a1c4bea5…（32 个输入文件）�
 5. 没有为 ack / 环形缓冲新增单测：`mindserver` 的 handler 级测试需要假 socket 服务端夹具，
    本轮为保持任务书给定的用例数（49/73/53）未新增；新行为目前由源码接线断言 + 上面这次真机
    验证覆盖。
+
+---
+
+## 收尾补记（captain，2026-11-12）
+
+本文件先前记录的三项遗留，现全部收口：
+
+1. **agent 摘除即清输出缓冲**：新增 `forgetAgentConn(name)`（同时 `delete agent_connections` 与
+   `botOutputBuffers.delete`），在三个摘除点统一使用 —— create-agent 的残留注册项、
+   createAgent 失败回滚、destroy-agent。子进程自杀走 unregister→destroyAgent 时不再残留。
+   断言 C12 同步升级：要求走 `forgetAgentConn` 且该函数必须清缓冲（加强，不是放宽）。
+2. **订阅走 ack**：`agents.ts` 的 `armSubscribeWatch` / `retrySubscribe` 改用
+   `request('listen-to-agents')`，用服务端给的 `retryAfterMs` 安排重试并把等待时间写进
+   `subscribeError`；请求失败仍走原看门狗兜底。
+3. **relay 加面板门**：`registerMapRelay` 对非面板连接**直接不注册** `request-map` /
+   `request-terrain` / 诊断 relay。agent 自身走 `get-map` / `get-terrain`，不需要 `request-*`，
+   所以这是纯收紧。
+
+验证：`control_plane_r6` 53/53、`control_plane_guard` 73/73、`mindserver_gate` 49/49；
+`npm test` 142/142（5 跳过）；`npm run gate` 0；`vue-tsc` 0；
+`web_dist_manifest_unit` 10/10；`VerifyOnly` 8/8；`ops-regression` 87/87。
