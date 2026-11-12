@@ -191,12 +191,20 @@ export function normalizeTarget(t) {
     return null;
 }
 
+// R6 #77：逐分量 Number.isFinite，任一非法返回 null（原来 Math.floor('a') → NaN 还被判合法，
+// 下游 path_3d 把这当成"目标合法但寻路失败"，报 NO_START/NO_PATH，把传参错误伪装成寻路问题）。
 function floor3(p) {
-    return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+    if (!p || typeof p !== 'object') return null;
+    const x = Number(p.x), y = Number(p.y), z = Number(p.z);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+    return { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) };
 }
 
 function floorXZ(p) {
-    return { x: Math.floor(p.x), z: Math.floor(p.z) };
+    if (!p || typeof p !== 'object') return null;
+    const x = Number(p.x), z = Number(p.z);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    return { x: Math.floor(x), z: Math.floor(z) };
 }
 
 /**
@@ -212,13 +220,22 @@ export function truncate(text, { maxLines = 80, maxChars = 6000, head = 25, tail
 
     if (tooManyLines) {
         const omitted = Math.max(0, lines.length - head - tail);
-        return [
+        const lineTrimmed = [
             ...lines.slice(0, head),
             `……（共 ${lines.length} 行，省略 ${omitted} 行）`,
             ...lines.slice(-tail),
         ].join('\n');
+        // R6 #76：行裁剪后可能仍然超字符（100 行 × 每行 5000 字符 → 50 行 × 5000 = 25 万字符，
+        // 正好是它要防的场景的变体）。原来这里直接 return，字符裁剪被完全短路。
+        if (lineTrimmed.length > maxChars) {
+            // 提示语把"行数"和"字符数"都保住：只做字符裁剪会把"省略 N 行"一起切掉，模型就不知道被省了多少。
+            const note = `\n……（共 ${lines.length} 行 / ${text.length} 字符，省略 ${omitted} 行，按 ${maxChars} 字符截断）`;
+            const cut = Math.max(0, maxChars - note.length);
+            return lineTrimmed.slice(0, cut) + note;
+        }
+        return lineTrimmed;
     }
-    return text.slice(0, maxChars) + `\n……（输出共 ${text.length} 字符，已截断）`;
+    return text.slice(0, Math.max(0, maxChars - 40)) + `\n……（输出共 ${text.length} 字符，已截断）`;
 }
 
 /**

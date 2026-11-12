@@ -43,6 +43,18 @@ const {
     recordClaim, sessionFresh, resetSessionClaims,
 } = await import('../src/mindcraft/identity_store.js');
 const { LEVEL, resolveLevel, canRunCommand } = await import('../src/agent/permissions.js');
+// ★ 决策 A：people 是权威 —— 造数据时也要把"这只 bot 归谁"一起造出来，否则（正确地）不授权
+const { mutatePeople, ensurePerson, linkAvatar, retireAvatar } = await import('../src/mindcraft/people_store.js');
+
+/** 把这只 bot 硬挂到某个人名下（退役旧记录）——模拟 people 权威表里的归属。 */
+function hardLink(agentName, playerName) {
+    mutatePeople((store) => {
+        const ens = ensurePerson(store, { name: playerName });
+        retireAvatar(ens.store, { avatarName: agentName });
+        const link = linkAvatar(ens.store, { avatarName: agentName, personId: ens.result.person.id });
+        return { store: ens.store, result: link.result };
+    });
+}
 
 const AGENT = 'botA';
 
@@ -284,6 +296,8 @@ const now = Date.now();
         const { identityContextOf } = await import('../src/agent/commands/index.js');
         const write = writeStore(identityFileOf(AGENT), weakStore);
         check('E2 前置：弱绑定已写进该 agent 的身份表', write.ok === true);
+        // 决策 A：people 里这只 bot 归 NAME，缓存才允许生效（否则 fail-closed）
+        hardLink(AGENT, NAME);
 
         const ctx = identityContextOf({
             name: AGENT, prompter: { profile: { permissions: PERMS } },
@@ -329,6 +343,7 @@ const now = Date.now();
         check('E4 正版 uuid 不算弱绑定', isWeakBinding(strongStore.bindings[0]) === false
             && isOfflineDerivedUuid(PREMIUM_UUID, NAME) === false);
         writeStore(identityFileOf(AGENT), strongStore);
+        hardLink(AGENT, NAME);
         const strongCtx = identityContextOf({
             name: AGENT, prompter: { profile: { permissions: PERMS } },
             bot: { username: AGENT, players: { [NAME]: { uuid: PREMIUM_UUID } } } });
@@ -386,6 +401,7 @@ const now = Date.now();
     const WEAK = offlineUuidOf(NAME2);                 // 离线派生 ⇒ 弱
     const weakStore2 = bindFromCode(emptyStore(), { uuid: WEAK, name: NAME2, now: Date.now() }).store;
     writeStore(identityFileOf(AGENT), weakStore2);
+    hardLink(AGENT, NAME2);
     const fakeAgent = {
         name: AGENT,
         prompter: { profile: { permissions: { owner: NAME2 } } },
