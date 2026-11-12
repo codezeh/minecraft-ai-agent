@@ -38,6 +38,11 @@ import {
     // ADR 阶段 3 / D13：队伍三张表（team / team_member / team_chest）
     createTeam, joinTeam, leaveTeam, listTeams, addTeamChest, listTeamChest,
 } from './board_store.js';
+// ADR 阶段 3 / D7：共享库存（预占 / 结算 / 对账 / 缓存）
+import {
+    refreshContainerCache, markContainerDirty, reserveStock, settleTake,
+    reconcileContainers, inventorySnapshot, inventoryLedger, expireReservations,
+} from './board_inventory.js';
 // ★ BOARD-002：归一化 agent 随 claim 上报的"我身上有什么"（跨 client/server 共用的纯函数）
 import { normalizeReportedItems, normalizeClaimKeys } from './board_claims.js';
 
@@ -183,6 +188,19 @@ export function attachBoardServer(deps = {}) {
             if (!file) throw new Error('拿不到板库文件路径（内存库/尚未落盘）：无法判断这块库属于哪个存档');
             return fn(file);            // 解析不出会抛 WORLD_ID_UNRESOLVABLE，上层翻成 NO_BOARD
         };
+
+    /**
+     * 这条连接是不是"访客"（ADR D7-6）。**只认服务端注入的判定**，绝不读 payload.visitor
+     * —— 客户端自己说"我是访客"就等于自己给自己免账。
+     * ★ 阶段 4 接访问凭证后由 mindserver 注入；在此之前默认 false（没有连接会被判成访客）。
+     */
+    const isVisitor = async (socket, bot, worldId) => {
+        if (typeof deps.isVisitor !== 'function') return false;
+        try {
+            // await 是必需的：注入方（阶段 4 的凭证判定）可能是异步查库
+            return (await deps.isVisitor({ socket, bot, worldId })) === true;
+        } catch { return false; }
+    };
 
     /** 统一的 ack 包装：把内部 {ok,code} 转成 ack 形状，并保证**永远**回 ack（不许卡死客户端）。 */
     const ack = (cb, payload) => {
@@ -1055,7 +1073,144 @@ export function attachBoardServer(deps = {}) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
         });
+
+        // ── 共享库存（ADR 阶段 3 / D7）─────────────────────────────────
+        //
+        // ★ 与队伍同一口径：身份只认 `actingBot`（服务端裁决），存档只认 `teamWorld()`，
+        //   解析不出存档 id ⇒ NO_BOARD，绝不给兜底值。
+        // ★ "访客"也**不由客户端自报**：只认 `deps.isVisitor` 注入的判定
+        //   （阶段 4 用访问凭证接上；在此之前没有任何连接会被判成访客 —— 默认为否）。
+        const inventoryPre = async (socket, payload) => {
+            const pre = await teamPre(socket, payload);
+            if (!pre.ok) return pre;
+            return { ...pre, visitor: await isVisitor(socket, pre.bot, pre.worldId) };
+        };
+
+        socket.on('inventory:reserve', async (payload, cb) => {
+            try {
+                const pre = await inventoryPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = reserveStock(db, {
+                    worldId: pre.worldId, item: payload?.item, qty: payload?.qty,
+                    holder: pre.bot, ttlMs: payload?.ttlMs, containers: payload?.containers,
+                    visitor: pre.visitor, now: now(),
+                });
+                if (!r.ok) {
+                    return ack(cb, {
+                        ok: false, code: r.code, reason: r.message,
+                        known: r.known, reserved: r.reserved, available: r.available, requested: r.requested,
+                    });
+                }
+                ack(cb, { ok: true, reservation: r, visitor: r.visitor === true });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('inventory:settle', async (payload, cb) => {
+            try {
+                const pre = await inventoryPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = settleTake(db, {
+                    worldId: pre.worldId, reservationId: payload?.reservationId, qty: payload?.qty,
+                    holder: pre.bot, container: payload?.container, visitor: pre.visitor, now: now(),
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message, reservation: r.reservation });
+                ack(cb, {
+                    ok: true, already: r.already === true, reservation: r.reservation,
+                    ledger: r.ledger, cache: r.cache ?? null, visitor: r.visitor === true,
+                });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        // 开箱强刷缓存（D7-1）：调用方给的 items 必须来自**刚打开的窗口**，不是本地快照
+        socket.on('inventory:cache-refresh', async (payload, cb) => {
+            try {
+                const pre = await inventoryPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = refreshContainerCache(db, {
+                    worldId: pre.worldId, x: payload?.x, y: payload?.y, z: payload?.z,
+                    items: payload?.items, holder: pre.bot, now: now(),
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, ...r });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        // 取用失败 ⇒ 标脏（D7-1）：内容不确定，下一次开箱强刷回来
+        socket.on('inventory:mark-dirty', async (payload, cb) => {
+            try {
+                const pre = await inventoryPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = markContainerDirty(db, {
+                    worldId: pre.worldId, x: payload?.x, y: payload?.y, z: payload?.z,
+                    reason: payload?.reason, now: now(),
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, ...r });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        // ★ 对账的"真实内容"只能由客户端上报（服务端不自己开箱），所以**必须可归因**：
+        //   holder 只取服务端裁决的身份（payload.holder 忽略），谁报的账写进账本。
+        socket.on('inventory:reconcile', async (payload, cb) => {
+            try {
+                const pre = await inventoryPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = reconcileContainers(db, {
+                    worldId: pre.worldId, observations: payload?.observations,
+                    holder: pre.bot, dryRun: payload?.dryRun === true, now: now(),
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, {
+                    ok: true, checked: r.checked, changed: r.changed, written: r.written,
+                    diffs: r.diffs, warnings: r.warnings, lines: r.lines, summary: r.summary,
+                    dryRun: r.dry_run,
+                });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('inventory:snapshot', async (payload, cb) => {
+            try {
+                const world = await teamWorld();
+                if (!world.ok) return ack(cb, world.ack);
+                const r = inventorySnapshot(db, { worldId: world.worldId, item: payload?.item ?? null, now: now() });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, worldId: world.worldId, items: r.items, containers: r.containers, reservations: r.reservations, expired: r.expired });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('inventory:ledger', async (payload, cb) => {
+            try {
+                const world = await teamWorld();
+                if (!world.ok) return ack(cb, world.ack);
+                const r = inventoryLedger(db, { worldId: world.worldId, item: payload?.item ?? null, limit: payload?.limit });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, worldId: world.worldId, entries: r.entries });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
     });
+
+    /** 过期预占清理：异步解析存档 id（失败就跳过，不影响主扫描）。 */
+    const sweepInventoryReservations = async () => {
+        try {
+            const id = String(await worldIdResolver() ?? '').trim();
+            if (!id) return;
+            expireReservations(db, { worldId: id, now: now() });
+        } catch { /* 没有存档维度/库忙：下一轮再试，扫描本身不该崩 */ }
+    };
 
     // ── 租约过期扫描（06 §6：掉线的 bot 30 秒后单子自动回 ready）───────
     const scanTimer = setInterval(() => {
@@ -1064,6 +1219,8 @@ export function attachBoardServer(deps = {}) {
             for (const id of recovered) changed(getJob(db, id), 'lease-expired');
             // ★ B3：顺带清过期预约（bot 掉线后它的预约要自动释放，06 §9.2）
             try { expireClaims(db, now()); } catch { /* ignore */ }
+            // ★ D7：过期预占自动作废（没有存档维度就跳过；内部先做零行快查，不白开写事务）
+            void sweepInventoryReservations();
             // ★★★ t140：**父单兜底收敛** —— 见 `convergeOrphanParents` 的注释。
             //   真机第 59 跑：第一夜 5 张子单全 done，父单却永远 running（就差这一步闭环）。
             //   事件驱动的 rollup 只要漏一次时间窗，就再也没人重试 → 必须定期扫。

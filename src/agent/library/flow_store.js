@@ -100,6 +100,39 @@ async function rememberChest(bot, pos, delta) {
     } catch { /* 记忆写不进不影响主流程 */ }
 }
 
+/**
+ * 开箱后把窗口里的**真实内容**强刷进库存缓存（ADR D7-1）。
+ * 尽力而为：写不进不影响本次存取（缓存不是交易的成败条件）。
+ */
+async function refreshInventoryCache(bot, pos) {
+    const board = boardOf(bot);
+    if (typeof board?.inventoryCacheRefresh !== 'function') return;      // 无板/老接口 → 不写
+    const w = bot?.currentWindow;
+    if (!w || typeof w.containerItems !== 'function') return;
+    try {
+        const items = {};
+        for (const it of w.containerItems() ?? []) {
+            const n = Number(it?.count ?? 0);
+            if (n > 0 && it?.name) items[it.name] = (items[it.name] ?? 0) + n;
+        }
+        await board.inventoryCacheRefresh({
+            x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z), items,
+        });
+    } catch { /* 缓存刷新失败不改变存取结果 */ }
+}
+
+/** 取用失败 ⇒ 标脏（D7-1）：内容不再确定，下一次开箱强刷回来；同样尽力而为。 */
+async function markInventoryDirty(bot, pos, reason) {
+    const board = boardOf(bot);
+    if (typeof board?.inventoryMarkDirty !== 'function') return;
+    try {
+        await board.inventoryMarkDirty({
+            x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z),
+            reason: reason == null ? null : String(reason),
+        });
+    } catch { /* 标脏失败不改变主流程 */ }
+}
+
 /** 附近所有箱子（按距离从近到远）。 */
 function chestsNearby(bot, maxDistance = 32) {
     try {
@@ -146,6 +179,7 @@ async function ensureOpen(bot, chest, ctx) {
         return fail(opened.code === 'INTERRUPTED' ? 'INTERRUPTED' : 'WINDOW_CLOSED',
             `打不开箱子：${opened.code} ${opened.message ?? ''}`, { pos: { x: tp.x, y: tp.y, z: tp.z } });
     }
+    await refreshInventoryCache(bot, tp);
     return ok({ window: bot.currentWindow });
 }
 
@@ -349,6 +383,9 @@ export async function fetch(bot, item, count = 1, opts = {}) {
                 await remember(chest, Number(r.data?.taken ?? 0));   // remember 内部已累加 takenTotal
                 return ok({ item, want, taken: takenTotal, chest: chest.position, takenSource: r.data?.takenSource });
             }
+
+            // ★ D7-1：这一箱没取全 ⇒ 缓存不能当账了（可能少了几件、也可能被别人动过）
+            await markInventoryDirty(bot, chest.position, r.code);
 
             if (r.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
             if (r.code === 'INVENTORY_FULL') {

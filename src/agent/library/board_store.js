@@ -188,6 +188,56 @@ CREATE TABLE IF NOT EXISTS team_chest (
     added_at INTEGER NOT NULL,
     PRIMARY KEY (world_id, team_id, x, y, z)
 );
+
+-- 共享库存（ADR D7）：一行 = 一张**还占着**的数量券。结算改 status=consumed，过期改 status=void。
+-- ★ status 不是"多出来的字段"：D7-3 的"预占转消耗"与 D7-2 的"过期作废"要能区分，只能落在它上面；
+--   行**不删**，否则"结算幂等"（同一个 reservationId 重复结算）无从判断。
+CREATE TABLE IF NOT EXISTS inventory_reservation (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    item TEXT NOT NULL,
+    qty INTEGER NOT NULL,
+    holder TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'held',
+    consumed_qty INTEGER,
+    closed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_inv_res_open ON inventory_reservation(world_id, item, status);
+-- 库存账本（D7-3/D7-4）：只记**物理上真的动了**的数量（取用为负、对账修正为差额），见 docs/audit-r6/fixes4/inventory.md
+CREATE TABLE IF NOT EXISTS inventory_ledger (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    item TEXT NOT NULL,
+    delta INTEGER NOT NULL,
+    holder TEXT,
+    reason TEXT NOT NULL,
+    at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inv_ledger ON inventory_ledger(world_id, item, at);
+-- 容器缓存（D7-1）：真实箱子的**最近一次观测**；dirty=1 表示"取用结果不确定，别拿它当账"
+CREATE TABLE IF NOT EXISTS container_cache (
+    world_id TEXT NOT NULL,
+    x INTEGER NOT NULL,
+    y INTEGER NOT NULL,
+    z INTEGER NOT NULL,
+    items_json TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL,
+    dirty INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (world_id, x, y, z)
+);
+-- 访客审计（D7-6）：访客活动**不进本机账本**，只在这里留痕（append-only，不参与任何库存计算）
+CREATE TABLE IF NOT EXISTS inventory_audit (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    actor TEXT,
+    action TEXT NOT NULL,
+    item TEXT,
+    qty INTEGER,
+    detail TEXT,
+    at INTEGER NOT NULL
+);
 `;
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -213,7 +263,12 @@ CREATE TABLE IF NOT EXISTS team_chest (
 //   还要清理老库里已有的重复预约（见 `migrateBoardSchema` → `ensureClaimsUniqueKey`）。
 // ★ v4（ADR 阶段 3 / D13）：新增 team / team_member / team_chest 三张表。
 //   老库里这三张表**一行都没有** ⇒ 迁移只是 `CREATE TABLE IF NOT EXISTS` + 唯一索引，无回填、无丢数据。
-export const BOARD_SCHEMA_VERSION = 4;
+// ★ v5（ADR 阶段 3 / D7）：新增 inventory_reservation / inventory_ledger / container_cache
+//   + 访客审计表 inventory_audit。四张表老库里都没有 ⇒ 迁移同样无回填、无丢数据。
+//   ★ 为什么多一张 audit 表：D7-6 要求"访客不写本机账本但留审计"；
+//     审计若塞进 ledger 就成了账（delta=0 的行会污染"账本 = 物理移动"这个语义），
+//     所以单独一张 append-only 表 —— 它**不是**第二个账本，不参与任何库存计算。
+export const BOARD_SCHEMA_VERSION = 5;
 
 /**
  * 从 `SCHEMA` 里抽出 `jobs` 表的列定义（`[{name, def}]`）。
@@ -1586,7 +1641,7 @@ function beginImmediate(db) {
  * `body()` 的返回值原样透传（必须带 `ok`），这样调用方既能拿到 `CLAIM_CONFLICT`
  * 这种"预期的失败"，也会在锁忙时拿到 `BOARD_BUSY`。
  */
-function runInImmediateTx(db, body) {
+export function runInImmediateTx(db, body) {
     const tx = beginImmediate(db);
     if (!tx.ok) return { ok: false, code: tx.code, message: tx.message };
     let out;

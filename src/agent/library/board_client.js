@@ -740,6 +740,43 @@ export class BoardClient {
     teamChestList(teamId = null) {
         return this._call('team:chest-list', teamId ? { teamId, bot: this.name } : { bot: this.name });
     }
+
+    // ── 共享库存（ADR 阶段 3 / D7）：预占 → 取用 → 结算；对账是必选项 ──
+
+    /** 预占：`qty` 个 `item`，成功才拿到 `reservation`（含 id/expiresAt）。 */
+    inventoryReserve({ item, qty, ttlMs = null, containers = null } = {}) {
+        return this._call('inventory:reserve', { item, qty, ttlMs, containers, bot: this.name });
+    }
+
+    /** 结算：实际取用了 `qty` 个（≤ 预占量），写账本 + 预占转消耗，重复调用幂等。 */
+    inventorySettle({ reservationId, qty = null, container = null } = {}) {
+        return this._call('inventory:settle', { reservationId, qty, container, bot: this.name });
+    }
+
+    /** 开箱强刷缓存：`items` 必须来自刚打开的窗口（真实内容）。 */
+    inventoryCacheRefresh({ x, y, z, items } = {}) {
+        return this._call('inventory:cache-refresh', { x, y, z, items, bot: this.name });
+    }
+
+    /** 取用失败 ⇒ 标脏：别让不确定的缓存继续当账。 */
+    inventoryMarkDirty({ x, y, z, reason = null } = {}) {
+        return this._call('inventory:mark-dirty', { x, y, z, reason, bot: this.name });
+    }
+
+    /** 对账：以真实容器内容为准修正账本，返回可读差异报告。 */
+    inventoryReconcile({ observations, dryRun = false, holder = null } = {}) {
+        return this._call('inventory:reconcile', { observations, dryRun, holder, bot: this.name });
+    }
+
+    /** 库存快照（诊断/面板用）。 */
+    inventorySnapshot(item = null) {
+        return this._call('inventory:snapshot', item ? { item, bot: this.name } : { bot: this.name });
+    }
+
+    /** 账本（对账/复盘用）。 */
+    inventoryLedger({ item = null, limit = 100 } = {}) {
+        return this._call('inventory:ledger', { item, limit, bot: this.name });
+    }
 }
 
 /**
@@ -758,7 +795,11 @@ export class BoardClient {
  *   · 未注册码/空 → `INTERNAL`（**兜底不抛**：宁可给一个笼统的失败，也不能挂死调用方）。
  *   原始码始终留在 `data.boardCode` 里，诊断时不丢信息。
  */
-const BOARD_CODE_TO_CONTRACT = Object.freeze({ LEASE_STALE: 'LEASE_LOST' });
+const BOARD_CODE_TO_CONTRACT = Object.freeze({
+    LEASE_STALE: 'LEASE_LOST',
+    // 库存不足：对 agent 的语义与"箱子里没这么多"一致（原始码留在 data.boardCode，诊断不丢）
+    INSUFFICIENT_STOCK: 'NO_ITEM',
+});
 
 function contractCodeOf(rawCode) {
     const code = String(rawCode ?? '').trim();
@@ -811,5 +852,13 @@ export function makeNullBoard() {
         teamList: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         teamChestAdd: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         teamChestList: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        // 库存（ADR D7）：无板时一律"没有板" —— 不假装预占成功（否则调用方会真去搬东西）
+        inventoryReserve: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        inventorySettle: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        inventoryCacheRefresh: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        inventoryMarkDirty: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        inventoryReconcile: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        inventorySnapshot: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        inventoryLedger: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
     };
 }
