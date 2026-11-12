@@ -77,6 +77,10 @@ npm-debug.log*
 .idea
 docs
 tools
+# ★ #52：tools/ 整体不进镜像（开发/审计产物），但 package.json 的 postinstall 是
+#   `patch-package && node tools/verify_patches.mjs`（R5-007 的补丁复验）。
+#   这一条放行它一个自包含脚本（只依赖 fs/url/path），否则 npm ci 阶段必挂。
+!tools/verify_patches.mjs
 coverage
 dist
 web

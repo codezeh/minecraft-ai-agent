@@ -37,6 +37,13 @@ WORKDIR /app
 #   ⇒ **构建必然失败**。目标改成 `./` 即修好。
 COPY package*.json ./
 COPY patches ./patches
+# ★ #52（2026-11-12 真机 docker build）：package.json 的 postinstall 是
+#   `patch-package && node tools/verify_patches.mjs`（R5-007：缺 patches/ 时 patch-package
+#   只打印一行就 exit 0，等于静默跳过全部补丁）。而这里在 npm ci 之前只 COPY 了
+#   package*.json 与 patches/ —— `tools/` 还没进镜像 ⇒ postinstall 里那句 node 找不到
+#   文件，MODULE_NOT_FOUND ⇒ npm ci 失败 ⇒ 镜像根本构建不出来。
+#   该脚本只依赖 Node 内置模块（fs/url/path），所以只拷它一个即可，不必提前拷整个 tools/。
+COPY tools/verify_patches.mjs ./tools/
 
 # ★ OPS-007（2026-11-07）：`npm install` → `npm ci`。
 #   lock 已入库且与 package.json 逐项一致（lockfileVersion=3 / 549 包），
