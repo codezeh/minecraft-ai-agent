@@ -10,10 +10,14 @@
  */
 import {
     codesFileOf, identityFileOf, readStore, writeStore,
-    consumeCodeAtomic, bindFromCode, recordClaim, isWeakBinding, resolveBinding, BOUND_LEVEL,
+    consumeCodeAtomic, bindFromCode, recordClaim, isWeakBinding, BOUND_LEVEL,
 } from '../../mindcraft/identity_store.js';
 // 阶段 2 切片 2：邀请/撤销 = 改"人"与白名单，走 people_store + 服务端 RCON（不双写 whitelist.json）
-import { mutatePeople, ensurePerson, findPerson, linkAvatar, PERSON_STATE } from '../../mindcraft/people_store.js';
+import {
+    mutatePeople, ensurePerson, findPerson, linkAvatar, PERSON_STATE, personForAvatar, readPeopleStore, recoverAvatar,
+} from '../../mindcraft/people_store.js';
+// ★ 决策 A：people 为权威，identity.json 只是本 bot 的绑定缓存 —— 判定只走这一个入口
+import { resolveIdentityAuthority, explainAuthorityReason } from '../../mindcraft/identity_authority.js';
 import { applyWhitelist } from '../library/whitelist_gate.js';
 // 面板按钮的**唯一真相**住在 permissions.js（拒绝话术与 !claim 都引它，改一处即可）
 import { PANEL_CODE_LOCATION } from '../permissions.js';
@@ -50,6 +54,14 @@ function readCodes(agent) {
     return readStore(file).store;
 }
 
+/** 人表里的这个人是不是这个名字（含别名，大小写不敏感）。 */
+function personNameMatches(person, name) {
+    const key = String(name ?? '').trim().toLowerCase();
+    if (!person || !key) return false;
+    if (String(person.name ?? '').toLowerCase() === key) return true;
+    return (person.aliases ?? []).some((a) => String(a ?? '').toLowerCase() === key);
+}
+
 /**
  * `!claim <code>`：核销一次性码 → 落绑定。
  *
@@ -70,6 +82,13 @@ function claim(agent, code) {
     const raw = String(code ?? '').trim();
     if (!raw) {
         return `[身份] 用法：!claim <码>（例如 !claim ABCD-EFGH）。码从面板取：${PANEL_CODE_LOCATION}。`
+    }
+
+    // ★ 决策 A：先只读检查人表 —— 这只分身已归别人时当场拒绝（**不烧码**）
+    const ownedNow = personForAvatar(readPeopleStore().store, agentName);
+    if (ownedNow && !personNameMatches(ownedNow.person, who.name)) {
+        return `[身份] 这只分身已经挂在「${ownedNow.person.name}」名下，不能直接 claim。`
+            + '这个码没有核销。要换挂：让面板「改挂到这只 bot」，或原主人先解绑。';
     }
 
     const codesPath = codesFileOf(agentName);
@@ -96,6 +115,28 @@ function claim(agent, code) {
         }
         return `[身份] 绑定失败：码表写不进去（${why || '未知原因'}）。这次没有核销任何码，`
             + '请检查目录权限后重试。';
+    }
+
+    // ★ 决策 A：把这只 bot 挂到人（people）名下 —— 权威表里没有这个人，缓存里的 owner 不生效
+    const linked = mutatePeople((store) => {
+        const ens = ensurePerson(store, { name: who.name });
+        const person = ens.result.person;
+        if (person.state === PERSON_STATE.REVOKED) {
+            return { store, result: { ok: false, reason: 'person-revoked', name: person.name } };
+        }
+        const link = linkAvatar(ens.store, { avatarName: agentName, personId: person.id });
+        if (!link.result.ok) return { store: ens.store, result: { ok: false, reason: link.result.reason } };
+        return { store: ens.store, result: { ok: true, person } };
+    });
+    if (!linked.ok) {
+        return `[身份] 码已核销，但人表（people）写不进去（${linked.reason}）——这次绑定**没有生效**，`
+            + '请让面板核对后再要一个新码。';
+    }
+    if (linked.result?.ok === false) {
+        const why = linked.result.reason === 'avatar-taken'
+            ? '这只分身已经归别人所有' : explainAuthorityReason(linked.result.reason);
+        return `[身份] 码已核销，但这次绑定**没有生效**：${why}。`
+            + '要换挂请用面板的「改挂」，或让原主人先用恢复码/解绑处理。';
     }
 
     const idPath = identityFileOf(agentName);
@@ -139,13 +180,13 @@ function claim(agent, code) {
 export function ownerGate(agent) {
     const who = whois(agent, agent?.command_author ?? null);
     if (!who.name) return { ok: false, say: '[身份] 没能识别你是谁（没有发言人），这次操作没有生效。' };
-    const store = readStore(identityFileOf(agent?.name ?? agent?.bot?.username ?? 'agent')).store;
-    // ★ resolveBinding **总是**返回对象（未绑定时 level:null / reason:'unbound'），
-    //   所以这里必须按 level 判，不能按返回值真假判（写错会把"没绑定"说成"权限是 null"）。
-    const hit = resolveBinding(store, { uuid: who.uuid, name: who.name });
+    const agentName = agent?.name ?? agent?.bot?.username ?? 'agent';
+    // ★ 决策 A：唯一判定入口（people 校真，fail-closed），不再自己读表拼判据
+    const hit = resolveIdentityAuthority(agentName, { uuid: who.uuid, name: who.name });
     if (!hit.level) {
         const why = hit.reason === 'expired' ? '你的绑定已过期，请重新 !claim。'
-            : '你还没绑定这只分身。先在面板拿一次性码，然后 !claim <码>。';
+            : hit.reason === 'unbound' ? '你还没绑定这只分身。先在面板拿一次性码，然后 !claim <码>。'
+                : `${explainAuthorityReason(hit.reason)}——先 !claim，或让面板把这只分身「改挂」到你名下。`;
         return { ok: false, say: `[身份] ${why}` };
     }
     if (hit.level !== BOUND_LEVEL) {
@@ -172,26 +213,18 @@ export async function invite(agent, playerName, apply = applyWhitelist) {
             + (wl.reply ? `（服务端原文：${wl.reply}）` : '');
     }
 
-    const avatarName = agent?.name ?? agent?.bot?.username ?? 'agent';
+    // ★ 决策 A：`!invite` 只建"人"并记邀请人，**不再把这只 bot 挂到被邀请人**。
+    //   原来那样做等于邀请一次就把分身判给别人（owner 立刻失去权威）——与 people 权威冲突。
     const out = mutatePeople((store) => {
         const ens = ensurePerson(store, { name: target });
         const person = ens.result.person;
         person.state = PERSON_STATE.ACTIVE;
         person.invited_by = gate.who.name;
         person.invited_at = Date.now();
-        const link = linkAvatar(ens.store, { avatarName, personId: person.id });
-        if (!link.result.ok) {
-            // 这只 bot 已属于别人：白名单已经加成功了，这里如实说清
-            return { store: ens.store, result: { conflict: true, by: link.result.by, person } };
-        }
-        return { store: ens.store, result: { conflict: false, person } };
+        return { store: ens.store, result: { person } };
     });
     if (!out.ok) {
         return `[身份] 白名单已加，但人表写不进去（${out.reason}）——这次邀请只完成了一半，请让面板核对。`;
-    }
-    if (out.result?.conflict) {
-        return `[身份] 已把 ${target} 加进白名单，但这只分身归别人所有，没有挂到这个人名下。`
-            + `如果这是有意为之，请先在面板解绑原主人。`;
     }
     return `[身份] 已邀请 ${target}：白名单已生效（服务端确认），并把他/她记进人表。`
         + ` ${target} 现在可以用这个名字进服。`;
@@ -228,6 +261,56 @@ export async function revoke(agent, playerName, apply = applyWhitelist) {
         + (out.skipped ? '（人表里本来就没有这个人，只改了白名单。）' : '');
 }
 
+/**
+ * `!recover <码>`：人丢了分身怎么找回 —— 核销 **person 级** 一次性恢复码，
+ * 把当前 bot 挂到该 person 名下（旧 avatar 置 retired），并给调用者落 owner 绑定缓存。
+ *
+ * 码表只存 sha256、带过期、单次使用；失败一律**什么都不改**并把原因说人话。
+ */
+export function recover(agent, code) {
+    const agentName = agent?.name ?? agent?.bot?.username ?? 'agent';
+    const who = whois(agent, agent?.command_author ?? null);
+    if (!who.name) return '[身份] 没能识别你是谁（没有发言人），这次恢复没有生效。';
+    const raw = String(code ?? '').trim();
+    if (!raw) {
+        return '[身份] 用法：!recover <恢复码>（码从面板人表的「生成恢复码」取：一次性、有有效期）。';
+    }
+
+    let why = null;
+    const out = mutatePeople((store) => {
+        const r = recoverAvatar(store, { code: raw, avatarName: agentName, actorName: who.name });
+        if (!r.result.ok) { why = r.result.reason; return null; }
+        return { store: r.store, result: r.result };
+    });
+    if (!out.ok) {
+        return `[身份] 恢复失败：人表正被占用或写不进去（${out.reason}），请过几秒重试。`;
+    }
+    if (out.skipped) {
+        if (why === 'person-revoked') {
+            return '[身份] 这个恢复码对应的人已被撤销（state=revoked），恢复没有生效。请让主人在面板重新启用后再要新码。';
+        }
+        if (why === 'invalid' || why === 'no-codes' || why === 'empty') {
+            return '[身份] 恢复码无效、已用过或已过期（一次性码）。请让面板重新生成。';
+        }
+        if (why === 'no-person') return '[身份] 恢复码对应的人不在人表里（数据不一致），恢复没有生效。';
+        return `[身份] 恢复失败：${why ?? '未知原因'}。这次没有改动任何东西。`;
+    }
+    const person = out.result.person;
+
+    // 绑定缓存：恢复成功 ⇒ 这个人现在持有这只 bot（owner）
+    const idPath = identityFileOf(agentName);
+    const bound = bindFromCode(readStore(idPath).store, {
+        code: null, uuid: who.uuid, name: who.name, level: BOUND_LEVEL,
+    });
+    const idWrite = writeStore(idPath, bound.store);
+    recordClaim({ uuid: who.uuid, name: who.name });
+    if (!idWrite.ok) {
+        return `[身份] 已把这只分身挂到「${person.name}」名下，但绑定缓存写不进去（${idWrite.reason}）——`;
+    }
+    return `[身份] 恢复成功：这只分身现在归「${person.name}」所有（旧的分身记录已退役），`
+        + `你现在的等级是 ${BOUND_LEVEL}。` + (out.result.retired ? `（退役旧记录 ${out.result.retired} 条）` : '');
+}
+
 export const identityList = [
     {
         name: '!claim',
@@ -257,6 +340,16 @@ export const identityList = [
         },
         perform: function (agent, player) {
             return revoke(agent, player);
+        },
+    },
+    {
+        name: '!recover',
+        description: 'Recover ownership of this bot with a one-time person-level recovery code from the panel.',
+        params: {
+            code: { type: 'string', description: 'One-time recovery code from the panel, e.g. ABCD-EFGH-JKMN.' },
+        },
+        perform: function (agent, code) {
+            return recover(agent, code);
         },
     },
 ];

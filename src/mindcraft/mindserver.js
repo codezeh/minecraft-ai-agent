@@ -20,6 +20,12 @@ import {
     makeCode, addCode, previewStatus, revokeBinding, revokeSessionCodes,
     DEFAULT_CODE_TTL_MS,
 } from './identity_store.js';
+// 阶段 2 收尾（决策 A）：people 是权威人表；面板人表 + 恢复码 + 改挂 avatar 都在本文件落地
+import {
+    peopleFileOf, readPeopleStore, previewPeople, previewRecoveries, personForAvatar,
+    mutatePeople, addRecoveryCode, revokeRecoveryCodes, makeRecoveryCode,
+    retireAvatar, linkAvatar, DEFAULT_RECOVERY_TTL_MS, PERSON_STATE, AVATAR_STATE,
+} from './people_store.js';
 // OPS-003（2026-11-06）：离线模式 + 监听所有网卡 ⇒ 名字可冒用为主人。启动时给出可见告警。
 import {
     assessFromProperties, renderOfflineIdentityWarning,
@@ -1606,6 +1612,8 @@ export function createMindServer(host_public = false, port = 8080) {
                     modeError = String(e?.message ?? e).slice(0, 160);
                     console.warn(`[mindserver] identity-status：读身份策略失败（面板会显示 unknown）：${modeError}`);
                 }
+                const peopleRead = readPeopleStore(peopleFileOf());
+                const peoplePreview = previewPeople(peopleRead.store);
                 cb({
                     ok: true,
                     agent: name,
@@ -1623,6 +1631,17 @@ export function createMindServer(host_public = false, port = 8080) {
                     // 免得任何持 token 的客户端随手一拉就能捡走别人还没用的码。
                     pendingCodes: st.codes.map((c) => ({ expiresAt: c.expiresAt, sessionId: c.sessionId })),
                     bindings,
+                    // ★ 决策 A：人表（权威）+ 恢复码一览。**新增字段，不改旧字段形状**
+                    people: peoplePreview.people,
+                    peopleTotal: peoplePreview.total,
+                    peopleCorrupt: peopleRead.corrupt === true,
+                    peopleBackup: peopleRead.backup ?? null,
+                    recoveries: previewRecoveries(peopleRead.store),
+                    // 这只 bot 当前挂在谁名下（people 口径；null = 没挂 ⇒ 缓存里的权限不生效）
+                    thisBotPerson: (() => {
+                        const o = personForAvatar(peopleRead.store, name);
+                        return o ? { id: o.person.id, name: o.person.name, state: o.person.state } : null;
+                    })(),
                 });
             } catch (e) {
                 cb({ ok: false, reason: String(e?.message ?? e) });
@@ -1686,6 +1705,84 @@ export function createMindServer(host_public = false, port = 8080) {
             } catch (e) {
                 cb({ ok: false, reason: String(e?.message ?? e) });
             }
+        });
+
+        // ---- 阶段 2 收尾：人表操作（恢复码 / 改挂 avatar）。只给面板，各带限流 ----
+        socket.on('identity-recovery-issue', (personId, callback) => {
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!isPanelConnection()) {
+                console.warn('[mindserver] 拒绝 identity-recovery-issue：只允许面板连接');
+                cb({ ok: false, reason: 'panel_only' }); return;
+            }
+            if (!takeToken(socket, 'identity-recovery-issue', 5, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            const pid = String(personId ?? '').trim();
+            if (!pid) { cb({ ok: false, reason: 'need_person_id' }); return; }
+            try {
+                const code = makeRecoveryCode();
+                let why = null;
+                // 人表自己带锁与 rev（mutatePeople），不套身份表那套 CAS
+                const out = mutatePeople((store) => {
+                    const r = addRecoveryCode(store, {
+                        personId: pid, code, ttlMs: DEFAULT_RECOVERY_TTL_MS, createdBy: 'panel',
+                    });
+                    if (!r.result.ok) { why = r.result.reason; return null; }
+                    return { store: r.store, result: r.result.record };
+                });
+                if (!out.ok) { cb({ ok: false, reason: `写人表失败：${out.reason}` }); return; }
+                if (out.skipped) { cb({ ok: false, reason: why ?? 'unknown' }); return; }
+                console.log(`[mindserver] 为人 ${pid} 生成恢复码（一次性，${DEFAULT_RECOVERY_TTL_MS / 60000} 分钟有效）`);
+                cb({ ok: true, personId: pid, code, expiresAt: out.result.expires_at, ttlMs: DEFAULT_RECOVERY_TTL_MS });
+            } catch (e) { cb({ ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        socket.on('identity-recovery-revoke', (personId, callback) => {
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!isPanelConnection()) {
+                console.warn('[mindserver] 拒绝 identity-recovery-revoke：只允许面板连接');
+                cb({ ok: false, reason: 'panel_only' }); return;
+            }
+            if (!takeToken(socket, 'identity-recovery-revoke', 10, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            const pid = String(personId ?? '').trim();
+            if (!pid) { cb({ ok: false, reason: 'need_person_id' }); return; }
+            try {
+                const out = mutatePeople((store) => {
+                    const r = revokeRecoveryCodes(store, { personId: pid });
+                    if (!r.result.removed) return null;
+                    return { store: r.store, result: r.result.removed };
+                });
+                if (!out.ok) { cb({ ok: false, reason: `写人表失败：${out.reason}` }); return; }
+                cb({ ok: true, personId: pid, removed: out.result ?? 0 });
+            } catch (e) { cb({ ok: false, reason: String(e?.message ?? e) }); }
+        });
+
+        socket.on('identity-avatar-relink', (agentName, personId, callback) => {
+            if (typeof personId === 'function') { callback = personId; personId = null; }
+            const cb = typeof callback === 'function' ? callback : () => { };
+            if (!isPanelConnection()) {
+                console.warn('[mindserver] 拒绝 identity-avatar-relink：只允许面板连接');
+                cb({ ok: false, reason: 'panel_only' }); return;
+            }
+            const name = knownAgent(agentName);
+            if (!name) { cb({ ok: false, reason: 'unknown_agent' }); return; }
+            if (!takeToken(socket, 'identity-avatar-relink', 10, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+            const pid = String(personId ?? '').trim();
+            if (!pid) { cb({ ok: false, reason: 'need_person_id' }); return; }
+            try {
+                let why = null;
+                const out = mutatePeople((store) => {
+                    const person = (store.people ?? []).find((p) => p.id === pid);
+                    if (!person) { why = 'no-person'; return null; }
+                    if (person.state === PERSON_STATE.REVOKED) { why = 'person-revoked'; return null; }
+                    const retired = retireAvatar(store, { avatarName: name }).result.retired;
+                    const link = linkAvatar(store, { avatarName: name, personId: pid });
+                    if (!link.result.ok) { why = link.result.reason; return null; }
+                    return { store, result: { retired, person: person.name } };
+                });
+                if (!out.ok) { cb({ ok: false, reason: `写人表失败：${out.reason}` }); return; }
+                if (out.skipped) { cb({ ok: false, reason: why ?? 'unknown' }); return; }
+                console.log(`[mindserver] 把 ${name} 改挂到人 ${out.result.person}（退役旧记录 ${out.result.retired} 条）`);
+                cb({ ok: true, agent: name, person: out.result.person, retired: out.result.retired });
+            } catch (e) { cb({ ok: false, reason: String(e?.message ?? e) }); }
         });
 
         // ---- 配置向导：paper 服务进程管理 ----

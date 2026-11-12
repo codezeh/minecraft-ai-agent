@@ -19,7 +19,7 @@ mkdirSync(process.env.MC_BOTS_ROOT, { recursive: true });
 const { classifyWhitelistReply, readRconConfig } = await import('../src/agent/library/whitelist_gate.js');
 const { invite, revoke, ownerGate } = await import('../src/agent/commands/identity.js');
 const { identityFileOf, writeStore, emptyStore, bindFromCode, BOUND_LEVEL } = await import('../src/mindcraft/identity_store.js');
-const { readPeopleStore, findPerson, PERSON_STATE } = await import('../src/mindcraft/people_store.js');
+const { readPeopleStore, findPerson, PERSON_STATE, mutatePeople, ensurePerson, linkAvatar, retireAvatar, personForAvatar } = await import('../src/mindcraft/people_store.js');
 
 let pass = 0; let fail = 0;
 function check(name, cond, detail = '') {
@@ -33,6 +33,17 @@ const mkAgent = (name, author) => ({
     bot: { username: name, players: author ? { [author]: { uuid: `uuid-${author}` } } : {} },
 });
 
+/** 把这只 bot 硬挂到某个人名下（退役旧记录）——模拟"这只分身归谁"。 */
+function hardLink(agentName, playerName) {
+    const r = mutatePeople((store) => {
+        const ens = ensurePerson(store, { name: playerName });
+        retireAvatar(ens.store, { avatarName: agentName });
+        const link = linkAvatar(ens.store, { avatarName: agentName, personId: ens.result.person.id });
+        return { store: ens.store, result: link.result };
+    });
+    return r.result;
+}
+
 function bindOwner(agentName, playerName) {
     const file = identityFileOf(agentName);
     const base = emptyStore();
@@ -41,6 +52,8 @@ function bindOwner(agentName, playerName) {
         level: BOUND_LEVEL, agent: agentName, now: Date.now(),
     });
     writeStore(file, r?.store ?? r, { expectRev: 0 });
+    // ★ 决策 A：people 是权威 —— 人表里没有这个人/这只 avatar，缓存里的 owner 不生效
+    hardLink(agentName, playerName);
 }
 
 try {
@@ -92,8 +105,9 @@ try {
     check('③ 人表里出现 Bob 且 state=active', !!bob && bob.state === PERSON_STATE.ACTIVE);
     check('③ 记录邀请人 = Steve', bob?.invited_by === 'Steve');
     const st3 = readPeopleStore().store;
-    check('③ Bob 名下挂着 botA', st3.avatars.some((a) => a.name === 'botA'
-        && a.person_id === bob.id && a.state === 'active'));
+    // ★ 决策 A：邀请**不**改分身归属（否则邀请一次就把 bot 判给别人，owner 立刻失去权威）
+    const owned3 = personForAvatar(st3, 'botA');
+    check('③ 邀请不改归属：botA 仍归 Steve', owned3?.person?.name === 'Steve', JSON.stringify(owned3?.person?.name ?? null));
     check('③ 重复邀请同一个人 → 不新建第二个 Bob',
         (readPeopleStore().store.people.filter((p) => p.name === 'Bob').length) === 1
         && (await invite(steve, 'Bob', async () => ({ ok: true }))).includes('已邀请'));
@@ -119,6 +133,8 @@ try {
         level: 'guest', agent: 'botA', now: Date.now(),
     });
     writeStore(file, r6?.store ?? r6, { expectRev: readPeopleStore(file) ? undefined : 0 });
+    // 权威人表里这只 bot 现在归 Guest（level 仍是 guest，用来验"等级不够"而不是"没绑定"）
+    hardLink('botA', 'Guest');
     const guest = mkAgent('botA', 'Guest');
     const gg = ownerGate(guest);
     check('⑤ 非 owner（guest）→ 拒绝', gg.ok === false && gg.say.includes('只给 owner'), gg.say);

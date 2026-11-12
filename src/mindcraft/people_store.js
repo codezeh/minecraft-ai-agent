@@ -11,7 +11,7 @@
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { randomUUID, generateKeyPairSync, createPublicKey, createPrivateKey, sign, verify } from 'node:crypto';
+import { randomUUID, generateKeyPairSync, createPublicKey, createPrivateKey, sign, verify, createHash, randomBytes } from 'node:crypto';
 import { botsRootOf } from '../agent/library/bot_paths.js';
 
 export const PEOPLE_VERSION = 1;
@@ -19,6 +19,17 @@ export const PEOPLE_VERSION = 1;
 export const PERSON_STATE = Object.freeze({ ACTIVE: 'active', REVOKED: 'revoked' });
 /** avatar 状态：active / retired（退役，不再对应任何在线 bot）。 */
 export const AVATAR_STATE = Object.freeze({ ACTIVE: 'active', RETIRED: 'retired' });
+
+/**
+ * 恢复码（D4 阶段 2 收尾）：人丢了分身时用的一次性凭据。
+ * 表里**只存 sha256**，明文只出现在签发那一次的回执里；用完即废、带过期。
+ */
+export const DEFAULT_RECOVERY_TTL_MS = 30 * 60_000;
+export const MAX_RECOVERY_TTL_MS = 24 * 60 * 60_000;
+/** 一个人最多同时挂几个未用恢复码（面板连点也刷不出来更多）。 */
+export const MAX_PENDING_RECOVERIES = 4;
+/** 已用/过期记录留证多久（留痕，但不让表无限长）。 */
+export const RECOVERY_KEEP_MS = 7 * 24 * 60 * 60_000;
 
 /** `bots/_identity` —— 跨 bot、跨存档的共享身份目录。 */
 export function identityDirOf() {
@@ -32,7 +43,7 @@ export function peopleFileOf() {
 
 /** 空表（首次使用/文件缺失时）。 */
 export function emptyPeopleStore() {
-    return { version: PEOPLE_VERSION, rev: 0, people: [], avatars: [], keys: [] };
+    return { version: PEOPLE_VERSION, rev: 0, people: [], avatars: [], keys: [], recoveries: [] };
 }
 
 /**
@@ -55,6 +66,8 @@ export function readPeopleStore(file = peopleFileOf()) {
         if (Array.isArray(raw?.people)) store.people = raw.people;
         if (Array.isArray(raw?.avatars)) store.avatars = raw.avatars;
         if (Array.isArray(raw?.keys)) store.keys = raw.keys;
+        // 老表没有 recoveries（向后兼容：缺字段 = 没有恢复码，不是坏表）
+        if (Array.isArray(raw?.recoveries)) store.recoveries = raw.recoveries;
         store.rev = Number(raw?.rev) || 0;
         return { store, ok: true, corrupt: false };
     } catch (e) {
@@ -194,6 +207,134 @@ export function retireAvatar(store, { avatarName, now = Date.now() } = {}) {
     return { store, result: { retired: changed } };
 }
 
+/** 规范化恢复码：大写、去掉空格与连字符（玩家手抄的格式不敏感）。 */
+export function normalizeRecoveryCode(value) {
+    return String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/** 恢复码只以 sha256 落盘（表泄露也不能直接拿去用）。 */
+export function hashRecoveryCode(code) {
+    const norm = normalizeRecoveryCode(code);
+    if (!norm) return null;
+    return createHash('sha256').update(norm, 'utf8').digest('hex');
+}
+
+/** 生成 `XXXX-XXXX-XXXX`（字母表去掉 0/O/1/I/L 等易混字符）。 */
+export function makeRecoveryCode(rand = randomBytes) {
+    const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    const buf = rand(12);
+    let s = '';
+    for (let i = 0; i < 12; i += 1) s += alphabet[buf[i] % alphabet.length];
+    return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8)}`;
+}
+
+/** 丢掉过期/用完的旧记录（过期删；用过的留 RECOVERY_KEEP_MS 便于追责）。 */
+export function pruneRecoveryCodes(store, now = Date.now()) {
+    const rec = Array.isArray(store?.recoveries) ? store.recoveries : [];
+    store.recoveries = rec.filter((r) => {
+        const used = Number(r?.used_at) || 0;
+        if (used > 0) return used + RECOVERY_KEEP_MS > now;
+        return (Number(r?.expires_at) || 0) > now;
+    });
+    return store;
+}
+
+/** 给某个人签一个恢复码：**同一人重签 ⇒ 旧码作废**（与身份码同口径）。 */
+export function addRecoveryCode(store, { personId, code, now = Date.now(), ttlMs = DEFAULT_RECOVERY_TTL_MS, createdBy = null } = {}) {
+    const person = (store.people ?? []).find((p) => p.id === personId);
+    if (!person) return { store, result: { ok: false, reason: 'no-person' } };
+    const hash = hashRecoveryCode(code);
+    if (!hash) return { store, result: { ok: false, reason: 'empty-code' } };
+    pruneRecoveryCodes(store, now);
+    store.recoveries = (store.recoveries ?? []).filter((r) => !(r.person_id === personId && !Number(r.used_at)));
+    const ttl = Math.min(Math.max(Number(ttlMs) || 0, 60_000), MAX_RECOVERY_TTL_MS);
+    const record = {
+        id: randomUUID(), person_id: personId, hash,
+        created_at: now, expires_at: now + ttl, used_at: null, created_by: createdBy,
+    };
+    store.recoveries = [...store.recoveries, record];
+    while (store.recoveries.length > MAX_PENDING_RECOVERIES * 8) store.recoveries.shift();
+    return { store, result: { ok: true, record } };
+}
+
+/**
+ * 核销一个恢复码（单次使用）：查不到 / 过期 / 人已 revoked ⇒ **什么都不改**。
+ * @returns {{ok:boolean, reason:string, person:object|null, record:object|null, store:object}}
+ */
+export function consumeRecoveryCode(store, { code, now = Date.now() } = {}) {
+    const next = {
+        ...store,
+        people: store.people ?? [],
+        avatars: store.avatars ?? [],
+        keys: store.keys ?? [],
+        recoveries: (store.recoveries ?? []).map((r) => ({ ...r })),
+    };
+    pruneRecoveryCodes(next, now);
+    const hash = hashRecoveryCode(code);
+    if (!hash) return { ok: false, reason: 'empty', person: null, record: null, store: next };
+    const idx = next.recoveries.findIndex((r) => r.hash === hash && !Number(r.used_at));
+    if (idx === -1) {
+        return {
+            ok: false, reason: next.recoveries.length ? 'invalid' : 'no-codes',
+            person: null, record: null, store: next,
+        };
+    }
+    const record = next.recoveries[idx];
+    const person = next.people.find((p) => p.id === record.person_id) ?? null;
+    if (!person) return { ok: false, reason: 'no-person', person: null, record, store: next };
+    if (person.state === PERSON_STATE.REVOKED) {
+        return { ok: false, reason: 'person-revoked', person, record, store: next };
+    }
+    record.used_at = now;
+    return { ok: true, reason: 'ok', person, record, store: next };
+}
+
+/** 作废未用的恢复码（面板"作废"用；重签本身也会让旧码失效）。 */
+export function revokeRecoveryCodes(store, { personId = null, id = null } = {}) {
+    const before = (store.recoveries ?? []).length;
+    store.recoveries = (store.recoveries ?? []).filter((r) => {
+        if (Number(r.used_at)) return true;             // 已用过的记录留证，不在这里删
+        if (id) return r.id !== id;
+        if (personId) return r.person_id !== personId;
+        return true;
+    });
+    return { store, result: { removed: before - store.recoveries.length } };
+}
+
+/** `!recover` 的核心：核销恢复码 → 旧 avatar 退役 → 当前 bot 挂到该 person。 */
+export function recoverAvatar(store, { code, avatarName, actorName = null, now = Date.now() } = {}) {
+    const name = String(avatarName ?? '').trim();
+    if (!name) return { store, result: { ok: false, reason: 'no-avatar' } };
+    const consumed = consumeRecoveryCode(store, { code, now });
+    if (!consumed.ok) {
+        return { store, result: { ok: false, reason: consumed.reason, person: consumed.person ?? null } };
+    }
+    const s = consumed.store;
+    const person = consumed.person;
+    const retired = retireAvatar(s, { avatarName: name, now }).result.retired;
+    const link = linkAvatar(s, { avatarName: name, personId: person.id, now });
+    if (!link.result.ok) {
+        // 还挂在别人名下（并发/数据异常）：如实说失败，不装作成功
+        return { store, result: { ok: false, reason: link.result.reason } };
+    }
+    // 别名累积：同一个人换了游戏名，仍然认得是同一个主体
+    const actor = String(actorName ?? '').trim();
+    if (actor && actor !== person.name && !(person.aliases ?? []).includes(actor)) {
+        person.aliases = [...(person.aliases ?? []), actor];
+    }
+    return { store: s, result: { ok: true, person, retired, avatar: link.result.avatar } };
+}
+
+/** 面板展示：谁手上还有未用的恢复码（**不回哈希、更不回码**）。 */
+export function previewRecoveries(store, now = Date.now()) {
+    return (store.recoveries ?? [])
+        .filter((r) => !Number(r.used_at) && Number(r.expires_at) > now)
+        .map((r) => ({
+            id: r.id, person_id: r.person_id, created_at: r.created_at,
+            expires_at: r.expires_at, created_by: r.created_by ?? null,
+        }));
+}
+
 /** 生成一对 Ed25519 密钥（D4：身份 = 稳定 UUID + 可轮换密钥）。 */
 export function generateAvatarKey(rand = null) {
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -247,11 +388,28 @@ export function signWithAvatarKey(store, avatarId, message) {
     }
 }
 
-/** 面板/命令用的一览（不含私钥）。 */
+/** 这只 bot（avatar）现在归谁：`{avatar, person}` 或 null（没挂/挂到不存在的人）。 */
+export function personForAvatar(store, avatarName) {
+    const name = String(avatarName ?? '').trim();
+    if (!name) return null;
+    const avatar = (store.avatars ?? []).find((a) => a.name === name && a.state === AVATAR_STATE.ACTIVE) ?? null;
+    if (!avatar) return null;
+    const person = (store.people ?? []).find((p) => p.id === avatar.person_id) ?? null;
+    return person ? { avatar, person } : null;
+}
+
+/** 面板/命令用的一览（不含私钥，也不含恢复码哈希）。 */
 export function previewPeople(store) {
-    const people = (store.people ?? []).map((p) => ({
-        id: p.id, name: p.name, aliases: [...(p.aliases ?? [])], state: p.state,
-        avatars: (store.avatars ?? []).filter((a) => a.person_id === p.id && a.state === AVATAR_STATE.ACTIVE).map((a) => a.name),
-    }));
+    const people = (store.people ?? []).map((p) => {
+        const mine = (store.avatars ?? []).filter((a) => a.person_id === p.id);
+        return {
+            id: p.id, name: p.name, aliases: [...(p.aliases ?? [])], state: p.state,
+            avatars: mine.filter((a) => a.state === AVATAR_STATE.ACTIVE).map((a) => a.name),
+            retired_avatars: mine.filter((a) => a.state === AVATAR_STATE.RETIRED).map((a) => a.name),
+            // 谁邀请了谁 / 谁撤了谁：面板人表要显示的依据（阶段 2 D6）
+            invited_by: p.invited_by ?? null, invited_at: Number(p.invited_at) || 0,
+            revoked_by: p.revoked_by ?? null, revoked_at: Number(p.revoked_at) || 0,
+        };
+    });
     return { people, total: people.length };
 }
