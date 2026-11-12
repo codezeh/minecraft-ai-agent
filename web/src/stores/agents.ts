@@ -469,6 +469,32 @@ export interface IdentityMode {
   reason: string
 }
 
+/** 人表（people，权威）里的一行 —— 阶段 2 收尾 / 决策 A。 */
+export interface IdentityPersonRow {
+  id: string
+  name: string
+  aliases: string[]
+  /** active | revoked */
+  state: string
+  /** 名下当前有效的 avatar（= bot 名） */
+  avatars: string[]
+  /** 已退役的 avatar（保留可追溯） */
+  retired_avatars: string[]
+  invited_by: string | null
+  invited_at: number
+  revoked_by: string | null
+  revoked_at: number
+}
+
+/** 未用的恢复码元数据（**不含码本身，也不含 sha256**）。 */
+export interface IdentityRecoveryRow {
+  id: string
+  person_id: string
+  created_at: number
+  expires_at: number
+  created_by: string | null
+}
+
 export interface IdentityStatus {
   ok: boolean
   agent?: string
@@ -485,6 +511,15 @@ export interface IdentityStatus {
   codesCorrupt?: boolean
   /** 码表损坏时的留证路径。 */
   codesBackup?: string | null
+  /** ★ 决策 A：人表（people 权威）—— 面板人表用；旧服务端没有这些字段。 */
+  people?: IdentityPersonRow[]
+  peopleTotal?: number
+  peopleCorrupt?: boolean
+  peopleBackup?: string | null
+  /** 谁手上还有未用的恢复码（不含码本身）。 */
+  recoveries?: IdentityRecoveryRow[]
+  /** 这只 bot 在 people 里归谁（null = 没挂 ⇒ 缓存里的权限不生效）。 */
+  thisBotPerson?: { id: string; name: string; state: string } | null
   reason?: string
 }
 
@@ -508,6 +543,28 @@ export function unbindIdentity(
   if (!agentName) return Promise.reject(new Error('没有选中的 agent'))
   // mindserver 的签名是 (agentName, who, callback) —— request() 会把 callback 追加在最后
   return request('identity-unbind', agentName, who)
+}
+
+/** ★ 面板「生成恢复码」：person 级一次性码（只存 sha256，面板只在此次回执里看到明文）。 */
+export function issueRecoveryCode(personId: string): Promise<IssuedIdentityCode> {
+  if (!personId) return Promise.reject(new Error('没有选中的「人」'))
+  return request<IssuedIdentityCode>('identity-recovery-issue', personId)
+}
+
+/** 作废这个人手上未用的恢复码。 */
+export function revokeRecoveryCode(personId: string): Promise<{ ok: boolean; removed?: number; reason?: string }> {
+  if (!personId) return Promise.reject(new Error('没有选中的「人」'))
+  return request('identity-recovery-revoke', personId)
+}
+
+/** 改挂 avatar：把这只 bot 挂到某个人名下（旧记录退役）。 */
+export function relinkAvatar(
+  personId: string,
+  agentName = currentAgent.value?.name,
+): Promise<{ ok: boolean; person?: string; retired?: number; reason?: string }> {
+  if (!agentName) return Promise.reject(new Error('没有选中的 agent'))
+  if (!personId) return Promise.reject(new Error('没有选中的「人」'))
+  return request('identity-avatar-relink', agentName, personId)
 }
 
 export async function refreshTerrain(opts: {
