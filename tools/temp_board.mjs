@@ -10,7 +10,7 @@
  * 每次运行新建一个独立临时目录，测试之间互不干扰，也永远碰不到生产库。
  *
  * 只读观察类工具不要用这个 —— 它们要看真实系统，应使用
- * `openBoard(boardDirOf(), { readOnly: true })`。
+ * `openBoard(resolveExistingBoardDir(), { readOnly: true })`（存档维度迁移前后都找到同一块真库）。
  */
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
