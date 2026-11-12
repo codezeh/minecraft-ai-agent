@@ -140,6 +140,18 @@ const CONTROL_CODE = Object.freeze({
     BAD_REQUEST: 'BAD_REQUEST',
 });
 
+/**
+ * ★ S-3 收尾：摘掉一个 agent 的注册项时，**连输出缓冲一起清**。
+ *   原来只有 destroy-agent 那条路清缓冲；子进程自杀走 unregister → destroyAgent（只管
+ *   agent_processes），agent_connections 与 botOutputBuffers 都会留下残留，
+ *   同名重建就会读到"上一世"的输出。
+ * @param {string} name
+ */
+function forgetAgentConn(name) {
+    try { delete agent_connections[name]; } catch { /* ignore */ }
+    try { botOutputBuffers.delete(name); } catch { /* ignore */ }
+}
+
 /** 追加一行输出到该 agent 的环形缓冲（满了丢最旧的一条）。 */
 function pushBotOutput(name, message) {
     const line = typeof message === 'string' ? message : JSON.stringify(message);
@@ -1806,7 +1818,7 @@ export function createMindServer(host_public = false, port = 8080) {
                     if (isStaleAgentConn(settings.profile.name)) {
                         console.warn(`[mindserver] create-agent：${settings.profile.name} 的注册项是残留`
                             + '（无进程、无通道），先摘掉再重建');
-                        delete agent_connections[settings.profile.name];
+                        forgetAgentConn(settings.profile.name);
                     } else {
                         ack({ success: false, error: 'Agent already exists' });
                         return;
@@ -1826,7 +1838,7 @@ export function createMindServer(host_public = false, port = 8080) {
                     // ★ R4 S1#4：确认退出之后才摘掉注册项（destroyAgent 自己会等；这里 await 是因为
                     //   它现在返回 Promise —— 不 await 就会在子进程还活着时先删 conn，留下孤儿）
                     await mindcraft.destroyAgent(name);
-                    delete agent_connections[name];
+                    forgetAgentConn(name);
                 }
                 agentsStatusUpdate();
             }
@@ -2133,8 +2145,7 @@ export function createMindServer(host_public = false, port = 8080) {
                 ack({ ok: false, code: CONTROL_CODE.NOT_RUNNING, message: `没能确认退出（${r?.reason ?? 'unknown'}），注册项已保留` });
                 return;
             }
-            delete agent_connections[destroyName];
-            botOutputBuffers.delete(destroyName);   // 销毁即清缓冲，免得同名重建读到上一世的输出
+            forgetAgentConn(destroyName);   // 连输出缓冲一起清（同名重建不读上一世的输出）
             console.log(`[mindserver] destroy-agent ${agentName}：已确认退出（${r.reason}${r.escalated ? '，强杀' : ''}），注册项已删除`);
             agentsStatusUpdate();
             ack({ ok: true, destroyed: true });
@@ -2618,6 +2629,13 @@ export function isStatePolling() {
 // 前端按需请求某只 bot 的地图（低频，不进每秒的 state-update）
 function registerMapRelay(socket) {
     if (!socket) return false;
+    // ★ S-3 收尾：`request-*` 是**面板侧**的入口（agent 自己走 get-map/get-terrain）。
+    //   原来任何连上的 socket 都注册这几条 ⇒ agent 也能读全图/地形。
+    //   现在非面板直接不注册：agent 连接连 handler 都没有，谈不上"过不过门"。
+    if (socketRole(socket) !== ROLE_PANEL) {
+        console.warn(`[mindserver] 跳过 map relay 注册：非面板连接（角色=${socketRole(socket) ?? 'unknown'}）`);
+        return false;
+    }
     // ★ R4 S2#10：每个 socket 只注册一次。`socket.on` 是**追加**语义，
     //   重复调用会把 request-map/request-terrain/诊断 relay 注册成多份 ⇒
     //   一次请求变成 N 次 `agent.socket.emit`（重复扫库/重复拉地形）。

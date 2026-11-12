@@ -219,9 +219,14 @@ const check = (name, cond, detail = '') => {
         /unlockScryptGate\.tryEnter\(\)/.test(ms) && /'VAULT_BUSY'/.test(ms));
 
     // ── #72：残留注册项不挡重建 ──
+    // ★ S-3 收尾：摘注册项统一走 forgetAgentConn（连输出缓冲一起清），
+    //   断言随之升级：原来只钉 `delete agent_connections[...]`，现在要求走 helper，
+    //   且 helper 必须同时清 botOutputBuffers（否则又回到"自杀后缓冲残留"）。
     check('C12 create-agent 遇到"无进程无通道"的残留注册项先摘掉再重建',
         /isStaleAgentConn\(settings\.profile\.name\)/.test(ms)
-        && /delete agent_connections\[settings\.profile\.name\]/.test(ms));
+        && /forgetAgentConn\(settings\.profile\.name\)/.test(ms)
+        && /function forgetAgentConn\(name\)/.test(ms)
+        && /botOutputBuffers\.delete\(name\)/.test(ms));
 
     // ── #74 / #75 ──
     check('C13 identity-status 读策略失败时带回原因（不再是裸 catch 变成 mode:null）',
