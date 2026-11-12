@@ -34,6 +34,20 @@ foreach ($rel in @('settings.js', 'keys.json')) {
     } else { Write-Ok2 "mindcraft/$rel（文件）" }
 }
 
+# 阶段 3（2026-11-12）：世界目录现在是**必挂**的 —— world_id 的 sidecar 跟着存档走。
+# 不挂 ⇒ sidecar 落在容器可写层 ⇒ 重建容器 = 新 world_id ⇒ 板/队伍"看起来被清空"。
+foreach ($rel in @('../server/world')) {
+    $p = Join-Path $mc $rel
+    if (-not (Test-Path -LiteralPath $p)) {
+        Write-Bad2 "$rel 不存在（compose 会静默建**空目录**，世界就空了；且 world_id 会重新生）"
+        Write-Host "        修法：确认服务端存档位置，或在 docker-compose.yml 里把 MC_WORLD_DIR 与挂载源改成真实存档目录" -ForegroundColor Yellow
+        $bad++
+    } elseif (-not (Get-Item -LiteralPath $p).PSIsContainer) {
+        Write-Bad2 "$rel 是文件，应为目录（存档目录）"
+        $bad++
+    } else { Write-Ok2 "$rel（存档目录，已挂载源存在）" }
+}
+
 foreach ($rel in @('profiles', 'bots')) {
     $p = Join-Path $mc $rel
     if (-not (Test-Path -LiteralPath $p)) {

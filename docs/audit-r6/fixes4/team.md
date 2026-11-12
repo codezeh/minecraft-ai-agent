@@ -14,8 +14,9 @@
 1. **`online-mode=false` 下，本校验不能防冒名** —— 白名单 16/16 都是离线 v3 UUID，
    名字由客户端自报、UUID 由名字派生 ⇒ 任何人用成员名字登录就"成为"该成员。
    本文件的校验只挡**诚实客户端的手误**（发错字段、替别人操作、漏了队长限制）。
-2. **`world_id` 不在这里解析** —— 库路径 → 存档 id 的唯一实现在 `world_store.js`（t2）。
-   解析不出来时队伍操作**一律拒绝**（`NO_BOARD`），**绝不退化**成"单库单世界"。
+2. **`world_id` 不在这里解析** —— 库路径 → 存档 id 的唯一实现在 `world_store.js`（t2，
+   `worldIdOfBoardDb`）。解析不出来时队伍操作**一律拒绝**（`NO_BOARD`），**绝不退化**
+   成"单库单世界"：旧位置 `bots/_board/` 的库、内存库都会被拒（用例 ⑫ 就是这条）。
 3. **D12（组队需双方同意）尚未闭合** —— 当前 `team:join` 是自助加入，没有邀请/同意流程。
 
 ## 1. 三张表与迁移
@@ -28,9 +29,45 @@ team_chest(world_id, team_id, x, y, z, added_by, added_at, PK(world_id, team_id,
 ```
 
 - **schema 3 → 4**（`BOARD_SCHEMA_VERSION = 4`）：三张表都是 `CREATE TABLE IF NOT EXISTS`，
-  老库里一行都没有 ⇒ 迁移**无回填、无丢数据**。`openBoard` 现在**无条件**写一次 `user_version`
-  （既是"新库也要落版本"，也是"库可写"探针：被别的进程 `BEGIN EXCLUSIVE` 持锁时当场抛，
-  而不是拿到一个能读、写不进去的句柄继续跑 —— `board_open_migrate_unit` 的 ⑤ 就是这条）。
+  老库里一行都没有 ⇒ 迁移**无回填、无丢数据**。
+- `openBoard` 现在**无条件**写一次 `user_version`。**这一句不是冗余，不要"优化"掉** —— 理由见 §1.1。
+
+### 1.1 为什么 `user_version` 必须**无条件**写（谁删谁负责把 ⑤ 修回来）
+
+`openBoard` 的 `tryOpen()` 末尾现在是这一句，**没有 if**：
+
+```js
+db.exec(`PRAGMA user_version = ${BOARD_SCHEMA_VERSION}`);
+```
+
+它同时干两件不可替代的事，缺一条就有一个真问题：
+
+1. **全新库也要落版本**。`migrateBoardSchema()` 在"没有 jobs 表"时是 early-return（老库才需要"补列"），
+   所以**它不会给新库写版本**；唯一会写的就是 `openBoard` 这一句。删掉它 ⇒ 新装的库
+   `user_version` 永远停在 0，t8 的版本体检（`tools/board_user_version_check.mjs`）会一直
+   报 `user_version 0 < 期望 4` —— 那是**假信号**，会让人去查一个不存在的故障。
+2. **它是"库可写"的探针**。本库跑在 WAL 下，**读者不会被写者阻塞**，所以"能读"证明不了"能写"。
+   而 `openBoard` 里其余语句在"结构已是最新"时**一次写都不做**（`CREATE TABLE IF NOT EXISTS`
+   全是 no-op、`migrateBoardSchema` 也提前返回）。于是如果这一句被删/被改成"不一致才写"，
+   当另一个进程持 `BEGIN EXCLUSIVE` 锁时，`openBoard` 会**成功返回**一个能读、写不进去的句柄 ——
+   问题从"启动时报错"被推迟到"夜里第一次下单才炸"，现场只剩一句 `database is locked`。
+
+**删掉会怎样（实测，不是推理）**：把这一句改成"版本不一致才写"（我第一版就是），
+`tools/board_open_migrate_unit.mjs` 的 **⑤ 立刻变红**：
+
+```
+FAIL ⑤ 锁忙被当成了坏库（第3条回归：好库会被删）
+     {"err":"(没有抛错)","stillThere":true,"bytesBefore":4096,"bytesAfter":4096,"backups":[],"dataIntact":true,"waited":1}
+```
+
+复核席按原样重跑过一次：`waited≈5533ms`（`busy_timeout=5000` 等满后由 SQLite 自己抛
+`database is locked`），说明那条红是**真的锁等出来的**，不是被绕过去的。
+`⑤` 保护的是报告第 3 条："读不到 ≠ 库坏了" —— 而它能生效，恰好依赖"打开时必有一次写"。
+
+代价：每次 `openBoard` 多一条 `PRAGMA`（常量写入），可忽略。
+**结论：这一句要无条件，别加 `if`、别"顺手"删。**
+
+
 - `team_chest` 的 PK 里带 `world_id`：同一个坐标在不同存档是**不同的箱子**，
   跨存档"撞坐标"不该被当成重复登记。
 - `team_member` 的唯一索引是"一 avatar 只在一个队"的**唯一落点**。为什么不靠"先查后写"：
@@ -90,7 +127,7 @@ WG 放行但账本不记（东西进出没人知道），或账上记了但 WG �
 
 | # | 事项 | 现状 | 归属 |
 |---|---|---|---|
-| 1 | **`world_id` 的唯一来源** | `board_server` 每次队伍操作都问 `world_store.currentWorldId()`；**该函数还不存在** ⇒ 生产里队伍操作会明确拒绝（`NO_BOARD`）。单测用 `deps.worldIdOf` 注入 | t2（fix-world） |
+| 1 | **`world_id` 的唯一来源** | **已接上**：`board_server` 每次队伍操作都从 `PRAGMA database_list` 取本库路径，交给 `world_store.worldIdOfBoardDb(path)` 反解。解析不出（旧位置 `bots/_board/`、内存库）⇒ 抛 → 翻成 `NO_BOARD` 拒绝。**没有任何兜底值** | t2（已完成） |
 | 2 | D12 组队需双方同意 | **未做**：`team:join` 是自助加入，`team_invite` 表/流程都没有 | 待排（阶段 3 尾或阶段 4） |
 | 3 | 退队时释放预占、按 ledger 结清（D13） | **未做**：库存账本（`inventory_reservation`/`inventory_ledger`）归 t4；现在离队只清座位与共享仓坐标，箱子里实物留在原地不动（这条是对的） | t4（fix-inv） |
 | 4 | 共享仓内容进账本 | `team_chest` 只是"哪些坐标算共享仓"的清单，**不是账本**；真正的取用/结算在 t4 | t4 |
@@ -101,7 +138,7 @@ WG 放行但账本不记（东西进出没人知道），或账上记了但 WG �
 
 ```bash
 cd mindcraft
-node tools/team_store_unit.mjs            # 10 pass / 0 fail：建队/重名/加入/离队/唯一队伍/权限/无存档维度/socket 身份
+node tools/team_store_unit.mjs            # 12 pass / 0 fail：建队/重名/加入/离队/唯一队伍/权限/无存档维度/socket 身份/真接线（⑪⑫）
 node tools/team_wg_crosscheck_unit.mjs    # 8 pass / 0 fail：含"区域外坐标必须 FAIL + exit 1"
 node tools/team_wg_crosscheck.mjs         # 当前输出 SKIP（19 处占位符未填），exit 0
 node tools/board_store_unit.mjs           # 无回归
@@ -112,6 +149,6 @@ node tools/board_open_migrate_unit.mjs    # 无回归（⑤ 锁忙必须抛，�
 npm run gate                              # 0
 ```
 
-**测试能红的证明方式**（做过一次，别只信"全绿"）：把 `addTeamChest` 里的
+**测试能红的证明方式**（做过两次，别只信"全绿"）：把 `addTeamChest` 里的
 `if (held.role !== TEAM_ROLE.LEADER)` 临时改成 `if (false)`，`team_store_unit` 立刻
-`9 pass / 1 fail`（⑥ 队员登记被拒那条）；改回后 `10 pass / 0 fail`。
+`11 pass / 1 fail`（⑥ 队员登记被拒那条；exit=1）；改回后 `12 pass / 0 fail`（exit=0）。
