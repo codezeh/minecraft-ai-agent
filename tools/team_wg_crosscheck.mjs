@@ -17,10 +17,12 @@
  *   node tools/team_wg_crosscheck.mjs --db <board.sqlite> --config <regions.yml>
  *   node tools/team_wg_crosscheck.mjs --json
  */
-import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// "板库在哪"只认这一处实现（t2）：本工具不自己再推断目录形状
+import { resolveExistingBoardDir } from '../src/mindcraft/world_store.js';
 
 const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');       // mindcraft/
 const REPO_ROOT = resolve(PKG_ROOT, '..');                                    // 仓库根
@@ -191,22 +193,15 @@ export function readTeamChests(dbFile) {
     }
 }
 
-/** 默认库位置：优先按存档的 `_worlds/<id>/_board/board.sqlite`，其次老位置 `_board/board.sqlite`。 */
+/**
+ * 默认库位置：**委托** `world_store.resolveExistingBoardDir()`（"板库在哪"只有一份实现，
+ * 别在这里再长出一套目录推断）。它绝不生成 sidecar / 绝不迁移 / 绝不建目录。
+ */
 export function findBoardDb() {
-    const botsRoot = process.env.MC_BOTS_ROOT?.trim() || join(PKG_ROOT, 'bots');
-    const worlds = join(botsRoot, '_worlds');
-    const hits = [];
-    if (existsSync(worlds)) {
-        for (const id of readdirSync(worlds)) {
-            const p = join(worlds, id, '_board', 'board.sqlite');
-            if (existsSync(p)) hits.push(p);
-        }
-    }
-    if (hits.length === 1) return { ok: true, file: hits[0] };
-    if (hits.length > 1) return { ok: false, reason: `找到 ${hits.length} 个存档库（${hits.join('、')}）：用 --db 指定要检查哪一个` };
-    const legacy = join(botsRoot, '_board', 'board.sqlite');
-    if (existsSync(legacy)) return { ok: true, file: legacy };
-    return { ok: false, reason: `没有找到板库（找过 ${worlds}/*/_board/board.sqlite 与 ${legacy}）：用 --db 指定` };
+    const dir = resolveExistingBoardDir();
+    const file = join(dir, 'board.sqlite');
+    if (!existsSync(file)) return { ok: false, reason: `没有找到板库（${file}）` };
+    return { ok: true, file };
 }
 
 /** 命令行入口。 */

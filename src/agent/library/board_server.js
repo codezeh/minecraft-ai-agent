@@ -35,6 +35,8 @@ import {
     mergeSharedChest, SHARED_CHEST_KIND,
     // ★ R6 #16：`list` 的 limit 上限 + 未终结单计数（限流/上限判据）
     LIST_LIMIT_MAX, countOpenJobs,
+    // ADR 阶段 3 / D13：队伍三张表（team / team_member / team_chest）
+    createTeam, joinTeam, leaveTeam, listTeams, addTeamChest, listTeamChest,
 } from './board_store.js';
 // ★ BOARD-002：归一化 agent 随 claim 上报的"我身上有什么"（跨 client/server 共用的纯函数）
 import { normalizeReportedItems, normalizeClaimKeys } from './board_claims.js';
@@ -155,6 +157,32 @@ export function attachBoardServer(deps = {}) {
     } = deps;
 
     if (!io || !db) throw new Error('attachBoardServer 需要 io 和 db');
+
+    /**
+     * 这块板库属于哪个存档（ADR D6）：反解实现**只在 world_store 一处**，这里只转调。
+     * ★ 用 `worldIdOfBoardDb(库路径)` 而不是 `currentWorldId()`：队伍表就在**这块库**里，
+     *   问"当前世界是谁"会把 A 存档的库当成 B 世界；而且 currentWorldId 会顺手建 sidecar（写副作用）。
+     * ★ 拿不到就抛（调用方翻成 NO_BOARD），**不许**给 'default' 之类兜底：那会把队伍安静地记到
+     *   "单库单世界"上，等分存档那天才爆 —— 见 docs/audit-r6/fixes4/team.md。
+     * ★ `deps.worldIdOf` 是给单测的注入点（同步/异步都接受）。
+     */
+    const boardFilePathOf = () => {
+        try {
+            const main = db.prepare('PRAGMA database_list').all().find((r) => String(r.name) === 'main');
+            return main?.file ? String(main.file) : null;
+        } catch { return null; }
+    };
+
+    const worldIdResolver = typeof deps.worldIdOf === 'function'
+        ? deps.worldIdOf
+        : async () => {
+            const mod = await import('../../mindcraft/world_store.js');
+            const fn = mod.worldIdOfBoardDb;
+            if (typeof fn !== 'function') throw new Error('world_store 没有导出 worldIdOfBoardDb()');
+            const file = boardFilePathOf();
+            if (!file) throw new Error('拿不到板库文件路径（内存库/尚未落盘）：无法判断这块库属于哪个存档');
+            return fn(file);            // 解析不出会抛 WORLD_ID_UNRESOLVABLE，上层翻成 NO_BOARD
+        };
 
     /** 统一的 ack 包装：把内部 {ok,code} 转成 ack 形状，并保证**永远**回 ack（不许卡死客户端）。 */
     const ack = (cb, payload) => {
@@ -901,6 +929,130 @@ export function attachBoardServer(deps = {}) {
                 ack(cb, { ok: true, job: r.job });
             } catch (e) {
                 ack(cb, { ok: false, reason: String(e?.message ?? e) });
+            }
+        });
+        // ── 队伍（ADR 阶段 3 / D13）─────────────────────────────────────
+        //
+        // ★ avatar **只取服务端裁决的身份**（`actingBot` → socket.data.agentName 与
+        //   board:hello 绑定对账过），**绝不读 `payload.avatar`**：否则客户端自己说"我是谁"。
+        // ★ 诚实边界（别让下一个人以为这里已经鉴权了）：`online-mode=false` 下名字是客户端
+        //   自报的 ⇒ 下面这些校验只挡"诚实客户端手滑"，**挡不住冒名**。见 team.md。
+        /** 取这条连接此刻的身份；失败直接给出 ack 形状。 */
+        const teamActor = (socket, payload) => {
+            const who = actingBot(socket, payload);
+            if (!who.ok) return { ok: false, ack: { ok: false, code: who.code, reason: who.reason } };
+            if (!who.bot) {
+                return {
+                    ok: false,
+                    ack: { ok: false, code: 'NO_PERMISSION', reason: '队伍操作必须说明你是哪只分身（这条连接没发过 board:hello）' },
+                };
+            }
+            return { ok: true, bot: who.bot };
+        };
+
+        /** 队伍表只能落在"按存档"的库上：解析不出存档 id ⇒ 拒，绝不退化。 */
+        const teamWorld = async () => {
+            try {
+                const id = String(await worldIdResolver() ?? '').trim();
+                if (id) return { ok: true, worldId: id };
+                return {
+                    ok: false,
+                    ack: { ok: false, code: 'NO_BOARD', reason: '当前板库没有存档维度（world_id 为空）：队伍操作已拒绝，避免记到错误的存档上' },
+                };
+            } catch (e) {
+                return {
+                    ok: false,
+                    ack: { ok: false, code: 'NO_BOARD', reason: `当前板库拿不到存档维度，队伍操作已拒绝：${String(e?.message ?? e)}` },
+                };
+            }
+        };
+
+        /** 六个队伍事件的共同前半段：身份 → 存档。 */
+        const teamPre = async (socket, payload) => {
+            const who = teamActor(socket, payload);
+            if (!who.ok) return { ok: false, ack: who.ack };
+            const world = await teamWorld();
+            if (!world.ok) return { ok: false, ack: world.ack };
+            return { ok: true, bot: who.bot, worldId: world.worldId };
+        };
+
+        socket.on('team:create', async (payload, cb) => {
+            try {
+                const pre = await teamPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = createTeam(db, { worldId: pre.worldId, name: payload?.name, avatar: pre.bot, now: now() });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, team: r.team, role: r.role, worldId: pre.worldId });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('team:join', async (payload, cb) => {
+            try {
+                const pre = await teamPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = joinTeam(db, {
+                    worldId: pre.worldId, teamId: payload?.teamId, name: payload?.name,
+                    avatar: pre.bot, now: now(),
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, team: r.team, role: r.role, already: r.already === true });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('team:leave', (payload, cb) => {
+            try {
+                const who = teamActor(socket, payload);
+                if (!who.ok) return ack(cb, who.ack);
+                const r = leaveTeam(db, { avatar: who.bot, now: now() });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, team: r.team, disbanded: r.disbanded === true, promoted: r.promoted ?? null });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('team:list', async (payload, cb) => {
+            try {
+                const world = await teamWorld();
+                if (!world.ok) return ack(cb, world.ack);
+                const r = listTeams(db, { worldId: world.worldId });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, teams: r.teams, worldId: world.worldId });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('team:chest-add', async (payload, cb) => {
+            try {
+                const pre = await teamPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = addTeamChest(db, {
+                    worldId: pre.worldId, teamId: payload?.teamId, avatar: pre.bot,
+                    x: payload?.x, y: payload?.y, z: payload?.z, now: now(),
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, team: r.team, chest: r.chest });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        socket.on('team:chest-list', async (payload, cb) => {
+            try {
+                const pre = await teamPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = listTeamChest(db, {
+                    worldId: pre.worldId, teamId: payload?.teamId, avatar: pre.bot,
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, team: r.team, chests: r.chests });
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
         });
     });

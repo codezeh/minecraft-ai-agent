@@ -711,6 +711,35 @@ export class BoardClient {
 
     /** 是否连上过（诊断用）。 */
     get connected() { return this._connected; }
+
+    // ── 队伍（ADR 阶段 3 / D13）：身份由服务端裁决，这里只带"我是谁"的名字 ──
+    //   ★ 名字只是"这条连接自称"，服务端会拿它跟握手戳对账；不通过就拒。
+
+    teamCreate(name) {
+        return this._call('team:create', { name, bot: this.name });
+    }
+
+    /** 加入队伍：给 `teamId` 或 `name` 其中一个。 */
+    teamJoin({ teamId = null, name = null } = {}) {
+        return this._call('team:join', { teamId, name, bot: this.name });
+    }
+
+    teamLeave() {
+        return this._call('team:leave', { bot: this.name });
+    }
+
+    teamList() {
+        return this._call('team:list', { bot: this.name });
+    }
+
+    /** 登记队伍共享仓坐标（只有队长能登记）。 */
+    teamChestAdd({ x, y, z, teamId = null } = {}) {
+        return this._call('team:chest-add', { x, y, z, teamId, bot: this.name });
+    }
+
+    teamChestList(teamId = null) {
+        return this._call('team:chest-list', teamId ? { teamId, bot: this.name } : { bot: this.name });
+    }
 }
 
 /**
@@ -775,5 +804,12 @@ export function makeNullBoard() {
         setState: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         get connected() { return false; },
         get autoClaim() { return false; },
+        // 队伍（ADR D13）：无板时一律"没有板"，**不假装建队成功**
+        teamCreate: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        teamJoin: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        teamLeave: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        teamList: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        teamChestAdd: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        teamChestList: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
     };
 }

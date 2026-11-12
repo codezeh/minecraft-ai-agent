@@ -282,6 +282,53 @@ const call = (clientSocket, event, payload) => new Promise((resolve) => {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 11. ★ 真接线（不注入 worldIdOf）：库在 `_worlds/<id>/_board/` ⇒ 用 world_store 反解
+//     库在旧位置 `_board/` ⇒ 必须 NO_BOARD（旧位置没有存档维度，拒绝而不是退化）
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const mkBoardAt = (rel) => {
+        const dir = join(DIR, rel);
+        rmSync(dir, { recursive: true, force: true });
+        return openBoard(dir);
+    };
+
+    // ① 按存档的位置
+    const worldBoard = mkBoardAt(join('_worlds', 'w_demo', '_board'));
+    {
+        const { io, clientSocket } = makePair({ role: 'agent', agentName: 'alpha' }, null);
+        const server = attachBoardServer({ io, db: worldBoard.db });
+        try {
+            await call(clientSocket, 'board:hello', { bot: 'alpha', skills: [] });
+            const created = await call(clientSocket, 'team:create', { name: '甲队', bot: 'alpha' });
+            const listed = await call(clientSocket, 'team:list', { bot: 'alpha' });
+            const rows = worldBoard.db.prepare('SELECT world_id FROM team').all();
+            const ok = created.ok === true && created.worldId === 'w_demo'
+                && listed.ok === true && listed.teams.length === 1
+                && rows.length === 1 && String(rows[0].world_id) === 'w_demo';
+            if (ok) okCase('⑪ 真接线：库在 _worlds/w_demo/_board/ ⇒ world_id 由 world_store 反解，队伍落在 w_demo', `world=${created.worldId}`);
+            else badCase('⑪ 真接线（按存档的库）没跑通', { created, listed, rows });
+        } finally { server.stop(); }
+    }
+
+    // ② 旧位置（bots/_board）：没有存档维度 ⇒ 明确拒
+    const legacyBoard = mkBoardAt(join('_board'));
+    {
+        const { io, clientSocket } = makePair({ role: 'agent', agentName: 'beta' }, null);
+        const server = attachBoardServer({ io, db: legacyBoard.db });
+        try {
+            await call(clientSocket, 'board:hello', { bot: 'beta', skills: [] });
+            const created = await call(clientSocket, 'team:create', { name: '乙队', bot: 'beta' });
+            const rows = teamRows(legacyBoard.db);
+            if (created.ok === false && created.code === 'NO_BOARD' && rows === 0) {
+                okCase('⑫ 真接线：旧位置 bots/_board 的库 ⇒ NO_BOARD（旧位置没有存档维度，拒绝而不是退化）', `code=${created.code}`);
+            } else {
+                badCase('⑫ 旧位置的库被当成有存档维度了', { created, rows });
+            }
+        } finally { server.stop(); }
+    }
+}
+
 // ── 收尾 ────────────────────────────────────────────────────────────────
 try { rmSync(DIR, { recursive: true, force: true }); } catch { /* 临时目录删不掉也不影响结论 */ }
 console.log(`\n${pass} pass / ${fails} fail`);

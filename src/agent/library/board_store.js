@@ -25,6 +25,7 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, existsSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 // ★ BOARD-003：`attemptSeqOfJob` —— "这张单现在是第几次尝试"的**唯一口径**
@@ -156,6 +157,37 @@ CREATE TABLE IF NOT EXISTS shared (
     PRIMARY KEY (kind, key)
 );
 CREATE INDEX IF NOT EXISTS idx_claims_until ON claims(until);
+
+-- 队伍（ADR D6/D13）：随存档重置。UNIQUE(world_id,name) 让"同一个存档里两个同名队"在库层就不存在。
+CREATE TABLE IF NOT EXISTS team (
+    id TEXT PRIMARY KEY,
+    world_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(world_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_team_world ON team(world_id);
+-- 队员。uq_team_member_avatar 是"一 avatar 同时只在一个队"的唯一落点（先建表再建索引）。
+CREATE TABLE IF NOT EXISTS team_member (
+    team_id TEXT NOT NULL,
+    avatar_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
+    joined_at INTEGER NOT NULL,
+    PRIMARY KEY (team_id, avatar_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_team_member_avatar ON team_member(avatar_id);
+-- 队伍共享仓：**只有**这些坐标进共享账本（D13）。WG 区域必须逐格覆盖这组坐标，见 docs/audit-r6/fixes4/team.md。
+CREATE TABLE IF NOT EXISTS team_chest (
+    world_id TEXT NOT NULL,
+    team_id TEXT NOT NULL,
+    x INTEGER NOT NULL,
+    y INTEGER NOT NULL,
+    z INTEGER NOT NULL,
+    added_by TEXT,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (world_id, team_id, x, y, z)
+);
 `;
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -179,7 +211,9 @@ CREATE INDEX IF NOT EXISTS idx_claims_until ON claims(until);
  */
 // ★ v3（R6 #5）：`claims.key` 加唯一索引。这一版迁移不只是"补列"，
 //   还要清理老库里已有的重复预约（见 `migrateBoardSchema` → `ensureClaimsUniqueKey`）。
-export const BOARD_SCHEMA_VERSION = 3;
+// ★ v4（ADR 阶段 3 / D13）：新增 team / team_member / team_chest 三张表。
+//   老库里这三张表**一行都没有** ⇒ 迁移只是 `CREATE TABLE IF NOT EXISTS` + 唯一索引，无回填、无丢数据。
+export const BOARD_SCHEMA_VERSION = 4;
 
 /**
  * 从 `SCHEMA` 里抽出 `jobs` 表的列定义（`[{name, def}]`）。
@@ -437,6 +471,10 @@ export function openBoard(dir, opts = {}) {
         //   顺序：① 老库补列 → ② 建表（IF NOT EXISTS，存在即 no-op）→ ③ 建索引。
         const migration = migrateBoardSchema(db);
         db.exec(SCHEMA);
+        // 无条件写一次版本号：① 全新库也要落版本（否则运维体检永远报"落后"，是假信号）；
+        // ② 这一句同时是"库**可写**"的探针 —— 库被别的进程 BEGIN EXCLUSIVE 持锁时，
+        //    这里当场抛（openBoard 会原样抛给调用方），而不是拿到一个能读、写不进去的句柄继续跑。
+        db.exec(`PRAGMA user_version = ${BOARD_SCHEMA_VERSION}`);
         return { db, migration, warnings };
     };
 
@@ -2568,4 +2606,273 @@ export function migrateLocalToBoard(db, bot, reader, opts = {}) {
         moved.chest = n;
     }
     return { moved, skipped };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 队伍（ADR 阶段 3 / D6 / D13）
+//
+// 三条口径（写在这里，免得下一个人重新发明）：
+//   ① **world_id 由调用方给**，本文件不猜。库路径 → 存档 id 的解析只在 `world_store.js` 一处；
+//      解析不出来时调用方必须**拒**。退化成"单库单世界"会把队伍安静地记到错存档上，
+//      而且要到分存档那天才暴露 —— 那是本仓最贵的错误（"看起来成功"）。
+//   ② **avatar 也由调用方给**（board_server 用它那条连接上**服务端裁决**的名字）。这里只把
+//      字符串当键。★ 在 `online-mode=false` 下这挡不住冒名（名字客户端自报），详见 team.md。
+//   ③ "一 avatar 只在一个队"靠唯一索引 `uq_team_member_avatar`，**不靠先查后写**
+//      （先查后写在两次查询之间会被另一个连接插进来，然后两个队都认为自己有他）。
+// ───────────────────────────────────────────────────────────────────────────
+
+export const TEAM_ROLE = Object.freeze({ LEADER: 'leader', MEMBER: 'member' });
+
+/** 队名长度上限：够写一句中文，又不至于把 ack 撑爆。 */
+export const TEAM_NAME_MAX = 32;
+
+/**
+ * 队名归一化：去首尾空白、限长、禁控制字符。
+ * 非法**不静默改写**（"我的队" 与 "我的队 " 归一成同一个就等于替用户改配置）。
+ * @returns {{ok:true,name:string} | {ok:false,code:string,message:string}}
+ */
+export function normalizeTeamName(raw) {
+    const name = String(raw ?? '').trim();
+    if (!name) return { ok: false, code: 'NO_TARGET', message: '队名不能为空' };
+    if (name.length > TEAM_NAME_MAX) {
+        return { ok: false, code: 'TOO_MUCH', message: `队名最多 ${TEAM_NAME_MAX} 个字符（收到 ${name.length} 个）` };
+    }
+    // 控制字符（含换行/制表）会把 ack 与日志撑坏：逐字符判，不用正则（eslint no-control-regex）
+    if ([...name].some((ch) => ch.charCodeAt(0) < 0x20)) {
+        return { ok: false, code: 'NO_TARGET', message: '队名里不能有控制字符' };
+    }
+    return { ok: true, name };
+}
+
+/** 一行 team → 对象（列名与 ADR D13 对齐，不另起字段名）。 */
+function teamRowToObj(row) {
+    if (!row) return null;
+    return {
+        id: String(row.id), world_id: String(row.world_id), name: String(row.name),
+        created_by: String(row.created_by), created_at: Number(row.created_at),
+    };
+}
+
+/** 缺 world_id 时的统一拒绝（这是"不退化"那句话的落点，别在别处再写一遍）。 */
+function noWorldDimension() {
+    return {
+        ok: false, code: 'NO_BOARD',
+        message: '当前板库没有存档维度（world_id 为空）：拒绝队伍操作，避免把队伍记到错误的存档上',
+    };
+}
+
+/** 某个 avatar 现在在哪个队（含角色）。不在任何队 → null。 */
+export function teamOfAvatar(db, avatar) {
+    const who = String(avatar ?? '').trim();
+    if (!who) return null;
+    const row = db.prepare(
+        'SELECT t.id, t.world_id, t.name, t.created_by, t.created_at, m.role, m.joined_at '
+        + 'FROM team_member m JOIN team t ON t.id = m.team_id WHERE m.avatar_id = ?',
+    ).get(who);
+    if (!row) return null;
+    return { team: teamRowToObj(row), role: String(row.role), joined_at: Number(row.joined_at) };
+}
+
+/**
+ * 建队：建队者自动成为队长。
+ *
+ * @param {object} db
+ * @param {{worldId:string, name:string, avatar:string, now?:number}} spec
+ * @returns {{ok:true, team:object, role:string} | {ok:false, code:string, message:string}}
+ */
+export function createTeam(db, { worldId, name, avatar, now = Date.now() } = {}) {
+    const wid = String(worldId ?? '').trim();
+    const who = String(avatar ?? '').trim();
+    if (!wid) return noWorldDimension();
+    if (!who) {
+        return { ok: false, code: 'NO_PERMISSION', message: '不知道你是谁（avatar 为空）：先完成 agent 握手再来建队' };
+    }
+    const norm = normalizeTeamName(name);
+    if (!norm.ok) return norm;
+
+    return runInImmediateTx(db, () => {
+        const held = teamOfAvatar(db, who);
+        if (held) {
+            return { ok: false, code: 'OCCUPIED', message: `「${who}」已经在队伍「${held.team.name}」里了：先离队再建新队` };
+        }
+        const clash = db.prepare('SELECT id FROM team WHERE world_id = ? AND name = ?').get(wid, norm.name);
+        if (clash) {
+            return { ok: false, code: 'CLAIM_CONFLICT', message: `这个存档里已经有叫「${norm.name}」的队伍（id=${String(clash.id)}）` };
+        }
+        const id = randomUUID();
+        try {
+            db.prepare('INSERT INTO team (id, world_id, name, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
+                .run(id, wid, norm.name, who, Number(now));
+            db.prepare('INSERT INTO team_member (team_id, avatar_id, role, joined_at) VALUES (?, ?, ?, ?)')
+                .run(id, who, TEAM_ROLE.LEADER, Number(now));
+        } catch (e) {
+            // 并发下唯一约束才是最终裁决：把"库里不让写"翻译成和预检同一个码，别漏成 INTERNAL。
+            if (/UNIQUE constraint failed/i.test(String(e?.message ?? e))) {
+                return { ok: false, code: 'CLAIM_CONFLICT', message: `这个存档里已经有叫「${norm.name}」的队伍` };
+            }
+            throw e;
+        }
+        return { ok: true, team: teamRowToObj(db.prepare('SELECT * FROM team WHERE id = ?').get(id)), role: TEAM_ROLE.LEADER };
+    });
+}
+
+/**
+ * 加入队伍（可按 id 或队名找）。
+ *
+ * ★ 边界：当前是**自助加入**，没有邀请/对方同意流程 —— ADR D12（组队需双方同意）**尚未闭合**，
+ *   见 team.md 的"没做到的"。别把它读成已实现邀请制。
+ */
+export function joinTeam(db, { worldId, teamId = null, name = null, avatar, now = Date.now() } = {}) {
+    const wid = String(worldId ?? '').trim();
+    const who = String(avatar ?? '').trim();
+    if (!wid) return noWorldDimension();
+    if (!who) return { ok: false, code: 'NO_PERMISSION', message: '不知道你是谁（avatar 为空）：先完成 agent 握手再来加入队伍' };
+    const tid = String(teamId ?? '').trim();
+    const nameNorm = name == null ? null : normalizeTeamName(name);
+    if (nameNorm && !nameNorm.ok) return nameNorm;
+    if (!tid && !nameNorm) return { ok: false, code: 'NO_TARGET', message: '要加入哪个队：给 teamId 或 name' };
+
+    return runInImmediateTx(db, () => {
+        const target = tid
+            ? db.prepare('SELECT * FROM team WHERE id = ? AND world_id = ?').get(tid, wid)
+            : db.prepare('SELECT * FROM team WHERE world_id = ? AND name = ?').get(wid, nameNorm.name);
+        if (!target) return { ok: false, code: 'NO_TARGET', message: tid ? '这个存档里没有这个队伍' : `这个存档里没有叫「${nameNorm.name}」的队伍` };
+        const held = teamOfAvatar(db, who);
+        if (held) {
+            if (held.team.id === String(target.id)) {
+                return { ok: true, team: teamRowToObj(target), role: held.role, already: true };
+            }
+            return { ok: false, code: 'OCCUPIED', message: `「${who}」已经在队伍「${held.team.name}」里了：一只能同时只在一个队，先离队` };
+        }
+        try {
+            db.prepare('INSERT INTO team_member (team_id, avatar_id, role, joined_at) VALUES (?, ?, ?, ?)')
+                .run(String(target.id), who, TEAM_ROLE.MEMBER, Number(now));
+        } catch (e) {
+            if (/UNIQUE constraint failed/i.test(String(e?.message ?? e))) {
+                return { ok: false, code: 'OCCUPIED', message: `「${who}」刚被另一条连接加进了某个队：一只能同时只在一个队` };
+            }
+            throw e;
+        }
+        return { ok: true, team: teamRowToObj(target), role: TEAM_ROLE.MEMBER };
+    });
+}
+
+/**
+ * 离队。最后一人离队 ⇒ 队伍解散（**箱子里的实物留在原地不动**，D13：不迁物、不分家）。
+ * 队长离队而队里还有人 ⇒ 队长转给最早入队的那个（否则全队再也登记不了共享仓）。
+ */
+export function leaveTeam(db, { avatar, now = Date.now() } = {}) {
+    const who = String(avatar ?? '').trim();
+    if (!who) return { ok: false, code: 'NO_PERMISSION', message: '不知道你是谁（avatar 为空）' };
+    return runInImmediateTx(db, () => {
+        const held = teamOfAvatar(db, who);
+        if (!held) return { ok: false, code: 'NO_TARGET', message: `「${who}」不在任何队伍里` };
+        const tid = held.team.id;
+        db.prepare('DELETE FROM team_member WHERE team_id = ? AND avatar_id = ?').run(tid, who);
+        const rest = db.prepare(
+            'SELECT avatar_id, role, joined_at FROM team_member WHERE team_id = ? ORDER BY joined_at ASC, avatar_id ASC',
+        ).all(tid);
+        if (!rest.length) {
+            db.prepare('DELETE FROM team_chest WHERE team_id = ?').run(tid);
+            db.prepare('DELETE FROM team WHERE id = ?').run(tid);
+            return { ok: true, team: held.team, disbanded: true, promoted: null };
+        }
+        let promoted = null;
+        if (held.role === TEAM_ROLE.LEADER) {
+            promoted = String(rest[0].avatar_id);
+            db.prepare('UPDATE team_member SET role = ? WHERE team_id = ? AND avatar_id = ?')
+                .run(TEAM_ROLE.LEADER, tid, promoted);
+        }
+        return { ok: true, team: held.team, disbanded: false, promoted };
+    });
+}
+
+/** 这个存档里的队伍（带成员与共享仓数量）。 */
+export function listTeams(db, { worldId } = {}) {
+    const wid = String(worldId ?? '').trim();
+    if (!wid) return noWorldDimension();
+    const rows = db.prepare('SELECT * FROM team WHERE world_id = ? ORDER BY created_at ASC, id ASC').all(wid);
+    const teams = rows.map((r) => {
+        const team = teamRowToObj(r);
+        const members = db.prepare(
+            'SELECT avatar_id, role, joined_at FROM team_member WHERE team_id = ? ORDER BY joined_at ASC, avatar_id ASC',
+        ).all(team.id).map((m) => ({ avatar_id: String(m.avatar_id), role: String(m.role), joined_at: Number(m.joined_at) }));
+        const chests = Number(db.prepare('SELECT COUNT(*) AS n FROM team_chest WHERE world_id = ? AND team_id = ?').get(wid, team.id)?.n ?? 0);
+        return { ...team, members, chests };
+    });
+    return { ok: true, teams };
+}
+
+/** 坐标必须是三个整数（方块坐标）；不是就拒，不四舍五入替用户做决定。 */
+function chestPointOf({ x, y, z } = {}) {
+    const pt = [x, y, z].map((v) => Number(v));
+    if (pt.some((v) => !Number.isFinite(v))) {
+        return { ok: false, code: 'NO_TARGET', message: `共享仓坐标必须是三个数字（收到 ${JSON.stringify({ x, y, z })}）` };
+    }
+    if (pt.some((v) => !Number.isInteger(v))) {
+        return { ok: false, code: 'NO_TARGET', message: `共享仓坐标必须是整数方块坐标（收到 ${pt.join(',')}）` };
+    }
+    return { ok: true, x: pt[0], y: pt[1], z: pt[2] };
+}
+
+/**
+ * 登记一个队伍共享仓坐标（**只有这些坐标进共享账本**，D13）。只有队长能登记。
+ */
+export function addTeamChest(db, { worldId, teamId = null, avatar, x, y, z, now = Date.now() } = {}) {
+    const wid = String(worldId ?? '').trim();
+    const who = String(avatar ?? '').trim();
+    if (!wid) return noWorldDimension();
+    if (!who) return { ok: false, code: 'NO_PERMISSION', message: '不知道你是谁（avatar 为空）' };
+    const pt = chestPointOf({ x, y, z });
+    if (!pt.ok) return pt;
+    const tid = String(teamId ?? '').trim();
+
+    return runInImmediateTx(db, () => {
+        const held = teamOfAvatar(db, who);
+        if (!held) return { ok: false, code: 'NO_PERMISSION', message: `「${who}」不在任何队伍里：先建队/加入再来登记共享仓` };
+        if (held.team.world_id !== wid) return { ok: false, code: 'NO_TARGET', message: '你所在的队伍属于另一个存档' };
+        if (tid && tid !== held.team.id) {
+            return { ok: false, code: 'NO_PERMISSION', message: `「${who}」在队伍「${held.team.name}」里，不能给别的队伍登记共享仓` };
+        }
+        if (held.role !== TEAM_ROLE.LEADER) {
+            return { ok: false, code: 'NO_PERMISSION', message: '只有队长才能登记共享仓（避免队员各圈一块，账对不上）' };
+        }
+        const dup = db.prepare(
+            'SELECT 1 AS hit FROM team_chest WHERE world_id = ? AND team_id = ? AND x = ? AND y = ? AND z = ?',
+        ).get(wid, held.team.id, pt.x, pt.y, pt.z);
+        if (dup) return { ok: false, code: 'OCCUPIED', message: `坐标 ${pt.x},${pt.y},${pt.z} 已经登记过` };
+        db.prepare('INSERT INTO team_chest (world_id, team_id, x, y, z, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(wid, held.team.id, pt.x, pt.y, pt.z, who, Number(now));
+        return { ok: true, team: held.team, chest: { world_id: wid, team_id: held.team.id, x: pt.x, y: pt.y, z: pt.z } };
+    });
+}
+
+/**
+ * 看共享仓清单。不带 teamId 时看**自己队**的；带别人的 teamId 且自己不是队员 ⇒ 拒。
+ * （"只能操作自己所在队伍"这个服务端校验，落点在这里与 addTeamChest，不靠客户端自觉。）
+ */
+export function listTeamChest(db, { worldId, teamId = null, avatar = null } = {}) {
+    const wid = String(worldId ?? '').trim();
+    if (!wid) return noWorldDimension();
+    const who = String(avatar ?? '').trim();
+    let tid = String(teamId ?? '').trim();
+    if (!tid) {
+        const held = who ? teamOfAvatar(db, who) : null;
+        if (!held) return { ok: false, code: 'NO_PERMISSION', message: '不在任何队伍里：看不到共享仓' };
+        if (held.team.world_id !== wid) return { ok: false, code: 'NO_TARGET', message: '你所在的队伍属于另一个存档' };
+        tid = held.team.id;
+    }
+    const team = db.prepare('SELECT * FROM team WHERE id = ? AND world_id = ?').get(tid, wid);
+    if (!team) return { ok: false, code: 'NO_TARGET', message: '这个存档里没有这个队伍' };
+    if (who) {
+        const seat = db.prepare('SELECT role FROM team_member WHERE team_id = ? AND avatar_id = ?').get(tid, who);
+        if (!seat) return { ok: false, code: 'NO_PERMISSION', message: `「${who}」不是「${String(team.name)}」的成员：看不到这个队伍的共享仓` };
+    }
+    const chests = db.prepare(
+        'SELECT x, y, z, added_by, added_at FROM team_chest WHERE world_id = ? AND team_id = ? ORDER BY x ASC, y ASC, z ASC',
+    ).all(wid, tid).map((c) => ({
+        x: Number(c.x), y: Number(c.y), z: Number(c.z),
+        added_by: c.added_by == null ? null : String(c.added_by), added_at: Number(c.added_at),
+    }));
+    return { ok: true, team: teamRowToObj(team), chests };
 }
