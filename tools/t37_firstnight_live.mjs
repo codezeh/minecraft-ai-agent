@@ -24,7 +24,7 @@ import { installPositionGuard } from '../src/sim/position_guard.js';
 import { BoardClient } from '../src/agent/library/board_client.js';
 import { BoardScheduler } from '../src/agent/library/board_scheduler.js';
 import { openBoard, listJobs, getJob, JOB_STATE } from '../src/agent/library/board_store.js';
-import { boardDirOf } from '../src/agent/library/bot_paths.js';
+import { resolveExistingBoardDir } from '../src/mindcraft/world_store.js';
 import { runSkill } from '../src/agent/library/composite_registry.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -138,7 +138,7 @@ console.log('\n=== 第 1 层 a) 编排：调 firstNight（白天，无石镐）=
 const r = await firstNight(agentShell, { board, timeOfDay: 1000 });
 console.log('  firstNight 完整返回: ' + JSON.stringify(r).slice(0, 400));
 const parentId = r.data?.parentId;
-const kids0 = listJobs(openBoard(boardDirOf(), { readOnly: true }).db, {}).filter((j) => j.parentId === parentId);
+const kids0 = listJobs(openBoard(resolveExistingBoardDir(), { readOnly: true }).db, {}).filter((j) => j.parentId === parentId);
 console.log(`  parent=${parentId} 子单=${kids0.length}：${kids0.map((k) => k.skill + ':' + (k.args?.item ?? '')).join(' | ')}`);
 console.log(`  跳过: ${(r.data?.skipped ?? []).map((s) => s.key).join(',') || '（无）'}`);
 
@@ -156,7 +156,7 @@ const t0 = Date.now();
 let last = '';
 while (Date.now() - t0 < WAIT_MS) {
     try { await sched.tick(); } catch (e) { /* 单次 tick 失败不致命 */ }
-    const db = openBoard(boardDirOf(), { readOnly: true }).db;
+    const db = openBoard(resolveExistingBoardDir(), { readOnly: true }).db;
     const kids = listJobs(db, {}).filter((j) => j.parentId === parentId);
     const p = parentId ? getJob(db, parentId) : null;
     if (!parentId) { console.log('  ⚠ parentId 为空 —— firstNight 没拆出任何子单，调度器无需跑'); break; }
@@ -168,7 +168,7 @@ while (Date.now() - t0 < WAIT_MS) {
     await sleep(2500);
 }
 
-const db = openBoard(boardDirOf(), { readOnly: true }).db;
+const db = openBoard(resolveExistingBoardDir(), { readOnly: true }).db;
 const kids = listJobs(db, {}).filter((j) => j.parentId === parentId);
 const parentNow = getJob(db, parentId);
 
@@ -265,7 +265,7 @@ console.log('\n=== 反向对照：先给石镐 → 木/台/木镐/石镐 4 步�
     await sleep(1500);
     const r2 = await firstNight(agentShell, { board, timeOfDay: 1000 });
     const p2 = r2.data?.parentId;
-    const kids2 = listJobs(openBoard(boardDirOf(), { readOnly: true }).db, {}).filter((j) => j.parentId === p2);
+    const kids2 = listJobs(openBoard(resolveExistingBoardDir(), { readOnly: true }).db, {}).filter((j) => j.parentId === p2);
     console.log(`  第二次 parent=${p2} 子单=${kids2.length}：${kids2.map((k) => k.skill + ':' + (k.args?.item ?? '')).join(' | ') || '（无）'}`);
     console.log(`  跳过: ${(r2.data?.skipped ?? []).map((s) => `${s.key}(${s.why})`).join(' | ')}`);
     const skippedTools = !kids2.some((k) => ['crafting_table', 'wooden_pickaxe', 'stone_pickaxe', 'oak_log'].includes(k.args?.item));

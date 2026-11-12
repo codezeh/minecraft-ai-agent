@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import mineflayer from 'mineflayer';
 import { rcon } from './rcon.mjs';
 import { openBoard } from '../src/agent/library/board_store.js';
-import { boardDirOf } from '../src/agent/library/bot_paths.js';
+import { resolveExistingBoardDir } from '../src/mindcraft/world_store.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });
@@ -69,7 +69,7 @@ const p = playerBot.entity.position;
 await RC(`tp ${AGENT_NAME} ${Math.floor(p.x) + 2} ${Math.floor(p.y)} ${Math.floor(p.z)}`).catch(() => { });
 await sleep(2000);
 
-const db = openBoard(boardDirOf(), { readOnly: true }).db;
+const db = openBoard(resolveExistingBoardDir(), { readOnly: true }).db;
 const before = db.prepare('SELECT COUNT(*) c FROM jobs').get().c;
 console.log(`\n发命令前：任务板总单数 = ${before}`);
 

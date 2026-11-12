@@ -23,7 +23,7 @@ import pf from 'mineflayer-pathfinder';
 import { join } from 'node:path';
 import { rcon } from './rcon.mjs';
 import { openBoard, listJobs, getJob, JOB_STATE } from '../src/agent/library/board_store.js';
-import { boardDirOf } from '../src/agent/library/bot_paths.js';
+import { resolveExistingBoardDir } from '../src/mindcraft/world_store.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RC = (c) => rcon(c, { port: 25576 });
@@ -173,7 +173,7 @@ await sleep(2500);
 await RC(`tp ${OWNER} ${FOREST.x + 2} 100 ${FOREST.z}`).catch(() => { });
 await sleep(2500);
 
-const db = openBoard(boardDirOf(), { readOnly: true }).db;
+const db = openBoard(resolveExistingBoardDir(), { readOnly: true }).db;
 const beforeIds = new Set(db.prepare('SELECT id FROM jobs').all().map((r) => r.id));
 
 console.log('  发送: !do first_night');
@@ -191,7 +191,7 @@ await sleep(15000);
     // ★ 第 25 跑（captain 要求）：**去掉重发逻辑** —— 上一轮 16_56z 就是它造成的
     //   重复 first_night 父单，抢走 18/19/20 三张子单，让一只 bot 同时应付 4 个 running，
     //   很可能是 STUCK 的诱因之一。现在**只发一次**。
-    const dbx = openBoard(boardDirOf(), { readOnly: true }).db;
+    const dbx = openBoard(resolveExistingBoardDir(), { readOnly: true }).db;
     const hasFn = dbx.prepare("SELECT COUNT(*) c FROM jobs WHERE skill='first_night'").get().c > 0;
     console.log('  [确认] 15 秒检查：first_night 父单数 = ' + dbx.prepare("SELECT COUNT(*) c FROM jobs WHERE skill='first_night'").get().c + '（不重发）');
 }

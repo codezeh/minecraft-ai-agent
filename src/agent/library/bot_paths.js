@@ -103,4 +103,15 @@ export function boardDirOf() {
     return `${botsRootOf()}/_board`;
 }
 
+/**
+ * 存档维度下的板库目录（ADR D6 阶段 3）：一个存档一个板库。
+ * `boardDirOf()` 保留为**旧位置**（迁移前 + 只读观察工具仍在用），别删。
+ *
+ * @param {string} worldId 存档 id（由 `world_store.js` 生成/校验）
+ * @returns {string} 形如 `<bots>/_worlds/w-20261112-1a2b3c4d/_board`
+ */
+export function boardDirForWorld(worldId) {
+    return `${botsRootOf()}/_worlds/${worldId}/_board`;
+}
+
 export { botNameOf };

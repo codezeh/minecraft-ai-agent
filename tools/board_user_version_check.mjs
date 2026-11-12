@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 // 与 board_store.js 用同一个驱动（Node 24 内置 node:sqlite），不额外引 better-sqlite3
 import { DatabaseSync } from 'node:sqlite';
 import { BOARD_SCHEMA_VERSION, jobColumnDefs } from '../src/agent/library/board_store.js';
-import { boardDirOf } from '../src/agent/library/bot_paths.js';
+import { resolveExistingBoardDir } from '../src/mindcraft/world_store.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const PKG_ROOT = resolve(HERE, '..');
@@ -49,8 +49,8 @@ function parseArgs(argv) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-// boardDirOf() 已经锚到包根绝对路径（不随 cwd 变），这里只是把默认值算出来
-const dbPath = args.db ? resolve(args.db) : resolve(boardDirOf(), 'board.sqlite');
+// resolveExistingBoardDir() 找到**已经存在**的板库目录（存档维度迁移前后都指同一块真库）
+const dbPath = args.db ? resolve(args.db) : resolve(resolveExistingBoardDir(), 'board.sqlite');
 
 if (!existsSync(dbPath)) {
     wn('板库存在', `找不到 ${dbPath} —— 还没跑过 mindserver？库是 openBoard 首次创建的`);

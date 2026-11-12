@@ -43,7 +43,9 @@ import { attachBoardServer } from '../agent/library/board_server.js';
 // 注册表与参数解析器：服务端复用 **agent 侧同一份**（参数规则只能有一个真相）。
 import * as compositeRegistry from '../agent/library/composite_registry.js';
 // R4 t13：启动时自检"有没有人绑定过身份"（只读目录，用于给一条可照做的升级提示）
-import { botsRootOf, boardDirOf } from '../agent/library/bot_paths.js';
+import { botsRootOf } from '../agent/library/bot_paths.js';
+// 阶段 3 / ADR D6：板库按存档分层（`_worlds/<world_id>/_board`），旧 `bots/_board` 幂等迁移
+import { prepareBoardDirForCurrentWorld, worldIdOfBoardDb } from './world_store.js';
 // R5 t15：凭据保管库（AES-256-GCM + sqlite）。**HTTP 门在这一层**，
 // 加密/KDF/存储全在 library 里 —— 分层是故意的：agent 子进程也能 import 那个模块（只读），
 // 但只有 mindserver 挂 HTTP 出口。
@@ -1243,7 +1245,9 @@ export function createMindServer(host_public = false, port = 8080) {
         // ★ R6 #1：板库目录必须**显式点名**。openBoard() 的默认值曾是 bots/_board（生产库），
         //   于是任何无参调用（含 tools/*_live.mjs 的 DELETE FROM jobs）都会直接清线上任务与预占。
         //   现在默认值已取消、无参即抛错；这里由控制面自己声明「我要的就是生产目录」。
-        const board = openBoard(boardDirOf());
+        //   ★ 阶段 3（ADR D6）：目录改由**存档维度**给出 —— `_worlds/<world_id>/_board`，
+        //     旧 `bots/_board/board.sqlite` 在这里**幂等**迁移过来（先备份 + 旧位置留 MIGRATED-TO.txt）。
+        const board = openBoard(prepareBoardDirForCurrentWorld());
         if (board.rebuilt) {
             console.log(`[任务板] 库损坏已重建空库${board.backup ? `（坏文件留在 ${board.backup}）` : ''}`);
         }
@@ -1253,6 +1257,8 @@ export function createMindServer(host_public = false, port = 8080) {
         boardHandle = attachBoardServer({
             io,
             db: board.db,
+            // 队伍/账本属于哪一档，**只看库落在哪**：worldIdOfBoardDb 是唯一反解入口（解析不出就抛）
+            worldIdOf: () => worldIdOfBoardDb(board.path),
             registry,
             validateArgs: (skill, args) => {
                 const manifest = reg.getSkill(skill)?.manifest;
