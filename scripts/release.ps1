@@ -263,6 +263,13 @@ if (-not (Test-HaveCommand @('node'))) { Stop-Release '找不到 node，无法�
 if (-not (Test-HaveCommand @('npm')))  { Stop-Release '找不到 npm，无法构建前端产物。' '安装 Node 22+ 后重试。' }
 Write-Ok ("node {0} / npm {1}" -f (& node --version), (& npm --version))
 
+# ★ P1-3：compose 配置必须能被严格解析，且预期环境变量都在。
+#   重复的同级 `environment` 键会让严格 YAML 报错、宽容解析静默丢键 ⇒ 用 node 解析断言，不依赖 docker CLI。
+$composeGate = Join-Path $PSScriptRoot 'compose-gate.mjs'
+if (-not (Test-Path -LiteralPath $composeGate)) { Stop-Release "找不到 compose 门禁：$composeGate" 'compose-gate.mjs 应与 release.ps1 同目录。' }
+Invoke-Tool -Command @('node') -Arguments @($composeGate) -WorkDir $RepoRoot | Out-Null
+Write-Ok 'docker-compose.yml 可解析，environment 单一且预期变量完整（P1-3）'
+
 if (-not $SkipDocker -and -not $VerifyOnly) {
     $dockerCmd = Split-CommandPrefix $DockerExe
     if (-not (Test-HaveCommand $dockerCmd)) {

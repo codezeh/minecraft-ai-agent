@@ -6,6 +6,11 @@ $root = Split-Path -Parent $PSScriptRoot
 $node = 'D:\Node\node.exe'
 $script = Join-Path $root 'web\scripts\stop-all.mjs'
 
+# ★ P2-7：进程判据只有一份（scripts/lib/server_proc.ps1），别在本脚本里另写匹配规则。
+$procLib = Join-Path $PSScriptRoot 'lib/server_proc.ps1'
+if (-not (Test-Path -LiteralPath $procLib)) { Write-Host "[错误] 缺少进程判据库：$procLib" -ForegroundColor Red; Read-Host; exit 1 }
+. $procLib
+
 Write-Host '============================================================' -ForegroundColor DarkCyan
 Write-Host '    停止面板 / 优雅关服' -ForegroundColor White
 Write-Host '============================================================' -ForegroundColor DarkCyan
@@ -63,16 +68,17 @@ if ($stopCode -eq 0) {
     try {
         $waitSec = 60
         $deadline = (Get-Date).AddSeconds($waitSec)
-        $javaLeft = @(Get-Process -Name java, javaw -ErrorAction SilentlyContinue)
+        # P2-7：只等**本项目** server.jar 的进程 —— 别人的 MC / 普通 java 不该挡住备份。
+        $javaLeft = @(Get-OwnServerJava -ProjectRoot $root)
         while ($javaLeft.Count -gt 0 -and (Get-Date) -lt $deadline) {
             Start-Sleep -Milliseconds 500
-            $javaLeft = @(Get-Process -Name java, javaw -ErrorAction SilentlyContinue)
+            $javaLeft = @(Get-OwnServerJava -ProjectRoot $root)
         }
         if ($javaLeft.Count -gt 0) {
-            Write-Host '  · 仍有 java 进程未退出（等 60s）→ 跳过自动备份（不冒险热备）' -ForegroundColor Yellow
+            Write-Host '  · 仍有本项目的服务端进程未退出（等 60s）→ 跳过自动备份（不冒险热备）' -ForegroundColor Yellow
             try {
                 . (Join-Path $PSScriptRoot 'lib/backup_config.ps1')
-                Write-BackupAutoLog -Root $root -Level 'SKIP' -Message ("停服后备份跳过：{0} 个 java 进程在 60s 内未退出" -f $javaLeft.Count)
+                Write-BackupAutoLog -Root $root -Level 'SKIP' -Message ("停服后备份跳过：{0} 个本项目服务端进程在 60s 内未退出" -f $javaLeft.Count)
             } catch { }
         } else {
             . (Join-Path $PSScriptRoot 'lib/backup_config.ps1')
