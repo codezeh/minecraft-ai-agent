@@ -27,6 +27,9 @@ export const EVENT_KINDS = Object.freeze([
     'avatar.retire',
     'team.create', 'team.join', 'team.leave', 'team.disband',
     'inventory.reserve', 'inventory.settle', 'inventory.reconcile', 'inventory.rollback',
+    // ★ 2026-11-13：补 `inventory.store`。理由不是"对称好看"，而是**单向审计漏洞**：
+    //   settle（取出）有记录、store（存入）没有 ⇒ 箱子间搬运在复盘里会呈现为"物品凭空消失"。
+    'inventory.store',
     'world.migrate', 'world.reset',
     'federation.visit', 'federation.depart', 'federation.card',
     'federation.grant', 'federation.relations', 'federation.peer',

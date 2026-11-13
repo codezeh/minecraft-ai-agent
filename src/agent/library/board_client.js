@@ -753,6 +753,16 @@ export class BoardClient {
         return this._call('inventory:settle', { reservationId, qty, container, bot: this.name });
     }
 
+    /** 存入记账（D7-3 的存入侧）：账本写 reason='store'；`observed` 是刚打开窗口的真实内容（D7-1 强刷）。 */
+    inventoryStore({ item, qty, chestKey = null, observed = null } = {}) {
+        return this._call('inventory:store', { item, qty, chestKey, observed, bot: this.name });
+    }
+
+    /** 释放预占（取不到就还券）：额度立即回池，不等 TTL；只能释放自己持有的券。 */
+    inventoryRelease({ reservationId, reason = null } = {}) {
+        return this._call('inventory:release', { reservationId, reason, bot: this.name });
+    }
+
     /** 开箱强刷缓存：`items` 必须来自刚打开的窗口（真实内容）。 */
     inventoryCacheRefresh({ x, y, z, items } = {}) {
         return this._call('inventory:cache-refresh', { x, y, z, items, bot: this.name });
@@ -855,6 +865,8 @@ export function makeNullBoard() {
         // 库存（ADR D7）：无板时一律"没有板" —— 不假装预占成功（否则调用方会真去搬东西）
         inventoryReserve: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         inventorySettle: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        inventoryRelease: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
+        inventoryStore: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         inventoryCacheRefresh: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         inventoryMarkDirty: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),
         inventoryReconcile: () => Promise.resolve(fail('INTERNAL', '没有任务板', { retryable: true, noBoard: true })),

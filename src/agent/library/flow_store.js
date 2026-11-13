@@ -183,6 +183,64 @@ async function ensureOpen(bot, chest, ctx) {
     return ok({ window: bot.currentWindow });
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 共享库存（D7 闭环，**显式 opt-in**：`opts.shared === true`）
+//
+// 为什么必须 opt-in：`!do store/fetch` 与真机 E2E 走的都是"本地搬运"语义（不预占、不记账），
+// 把它们改成默认走板会同时改掉两条路的行为。长解释与取舍见 docs/audit-r6/fixes4/wiring-flow.md。
+// ═══════════════════════════════════════════════════════════════════════════
+
+const isShared = (opts) => opts?.shared === true;
+
+/** 方块 → 整数坐标（服务端只认三个整数，不做四舍五入替调用方决定）。 */
+function posOf(block) {
+    const p = block?.position;
+    if (!p) return null;
+    return { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+}
+
+/**
+ * 观测性开箱：只把真实内容刷进缓存，**一件都不搬**。
+ * 为什么要它：`container_cache` 没观测过就等于"已知库存 0"，预占会被一律拒（D7 的"未知即 0"）。
+ */
+async function observeContainers(bot, chests, ctx) {
+    const seen = [];
+    for (const chest of chests) {
+        if (bot?.interrupt_code) break;
+        if (Date.now() >= (ctx?.deadline ?? Infinity)) break;
+        const opened = await ensureOpen(bot, chest, ctx);
+        if (opened.ok) seen.push(posOf(chest));
+        try { closeContainer(bot); } catch { /* ignore */ }
+    }
+    return seen;
+}
+
+/**
+ * 存入的账本（只在 `opts.shared` 下）：走 `inventory:store` 写 `reason='store'`（**不是** reconcile ——
+ * 对账那行的语义是"账实不符、以真实为准修正"，正常存入写成它会让对账统计静默变错）。
+ * 顺带把刚看到的真实内容交给服务端强刷缓存（D7-1）；记账失败不改变存取成败。
+ */
+async function recordStoreLedger(bot, pos, item, qty) {
+    const board = boardOf(bot);
+    if (typeof board?.inventoryStore !== 'function') return { recorded: false, reason: 'no-board' };
+    const w = bot?.currentWindow;
+    if (!w || typeof w.containerItems !== 'function') return { recorded: false, reason: 'no-window' };
+    const pt = posOf({ position: pos });
+    if (!pt) return { recorded: false, reason: 'bad-pos' };
+    try {
+        const observed = {};
+        for (const it of w.containerItems() ?? []) {
+            const n = Number(it?.count ?? 0);
+            if (n > 0 && it?.name) observed[it.name] = (observed[it.name] ?? 0) + n;
+        }
+        const r = await board.inventoryStore({ item, qty, chestKey: pt, observed });
+        if (!r?.ok) return { recorded: false, reason: r?.data?.boardCode ?? r?.code ?? 'store-failed', ...pt };
+        return { recorded: true, delta: Number(r?.data?.ledger?.delta ?? qty), cache: r?.data?.cache ?? null, ...pt };
+    } catch {
+        return { recorded: false, reason: 'throw', ...pt };   // 记账失败不改变存取的成败（记忆/账本是优化项）
+    }
+}
+
 /**
  * 把 item 存 count 个进箱子。
  *
@@ -217,10 +275,14 @@ export async function store(bot, item, count = 1, opts = {}) {
     //
     //   修法：每搬成一部分就**记账 + 累计**，按剩余数量接着存；收尾如实报 partial。
     let storedTotal = 0;
+    // ★ 共享存入（opt-in）：存完立即入账；不传 shared 时 `ledger` 恒为空、行为与原来一致
+    const shared = isShared(opts);
+    const ledger = [];
     const remember = async (chest, n) => {
         if (!(n > 0)) return;
         storedTotal += n;
         await rememberChest(bot, chest.position, { [item]: n });
+        if (shared) ledger.push(await recordStoreLedger(bot, chest.position, item, n));
     };
 
     for (const chest of chests) {
@@ -266,14 +328,14 @@ export async function store(bot, item, count = 1, opts = {}) {
             }
             if (r.ok) {
                 await remember(chest, delivered);
-                return ok({ item, want, stored: storedTotal, chest: chest.position });
+                return ok({ item, want, stored: storedTotal, chest: chest.position, ...(shared ? { ledger } : {}) });
             }
             if (r.code === 'INTERRUPTED') return fail('INTERRUPTED', '被取消了');
             if (r.code === 'INVENTORY_FULL') {
                 // 这个箱子满了（或者只收了一部分）→ 先记下真的搬进去的那几件，再换下一个
                 await remember(chest, delivered);
                 if (storedTotal >= target) {
-                    return ok({ item, want, stored: storedTotal, chest: chest.position });
+                    return ok({ item, want, stored: storedTotal, chest: chest.position, ...(shared ? { ledger } : {}) });
                 }
                 storefull++;
                 lastCode = 'INVENTORY_FULL';
@@ -290,7 +352,7 @@ export async function store(bot, item, count = 1, opts = {}) {
     // 全都试过了：有部分进度就如实报（partial），一件没搬才算彻底失败
     if (storedTotal > 0) {
         return fail(storefull > 0 ? 'INVENTORY_FULL' : (lastCode ?? 'INVENTORY_FULL'),
-            `只存进去 ${storedTotal}/${target}`, { item, want, stored: storedTotal, partial: true });
+            `只存进去 ${storedTotal}/${target}`, { item, want, stored: storedTotal, partial: true, ...(shared ? { ledger } : {}) });
     }
     if (storefull > 0) {
         return fail('INVENTORY_FULL', `箱子都存不下了（试了 ${storefull} 个）`, { item, want, stored: 0 });
@@ -300,7 +362,116 @@ export async function store(bot, item, count = 1, opts = {}) {
 }
 
 /**
- * 从箱子里取 item count 个。
+ * 取用入口。`opts.shared === true` ⇒ 先预占 → 取用 → 结算；不传 ⇒ 与原来**完全一致**
+ * （`!do fetch` 与真机 E2E 都走那条路）。
+ */
+export async function fetch(bot, item, count = 1, opts = {}) {
+    if (isShared(opts)) return fetchShared(bot, item, count, opts);
+    return fetchLocal(bot, item, count, opts);
+}
+
+/**
+ * 共享库存取用（D7 的闭环缺口）：预占 → 真取 → 结算（取到多少结多少）。
+ * 拿不到预占就**不取**；一件都没取到 ⇒ 当场还券，额度立即回池（不白占、不等 5 分钟 TTL）。
+ * 取舍与边界见 docs/audit-r6/fixes4/wiring-flow.md。
+ */
+async function fetchShared(bot, item, count, opts) {
+    const want = Math.max(1, Math.floor(Number(count) || 1));
+    const ctx = opts.ctx ?? { deadline: Date.now() + manifestFetch.timeoutMs };
+    if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');
+    if (!item) return fail('NO_TARGET', '没说要取什么', { shared: true });
+
+    const board = boardOf(bot);
+    if (typeof board?.inventoryReserve !== 'function' || typeof board?.inventorySettle !== 'function') {
+        // 没有板就没有券：宁可不取，也不"先取了再靠对账吸收"（那正是 D7 要消灭的做法）
+        return fail('INTERNAL', '共享库存取用需要任务板：没有板就不预占、也不取用', {
+            item, want, shared: true, took: 0, boardCode: 'NO_BOARD', noBoard: true,
+        });
+    }
+
+    const chests = chestsNearby(bot);
+    if (!chests.length) return fail('NO_TARGET', '附近没有箱子', { item, want, shared: true, took: 0 });
+    const containers = chests.map(posOf).filter(Boolean);
+
+    let resv = await board.inventoryReserve({ item, qty: want, containers });
+    // 缓存从没观测过这些箱子（未知即 0）⇒ 开箱只看一眼再预占，绝不"先取了再说"
+    if (!resv?.ok && resv?.data?.boardCode === 'INSUFFICIENT_STOCK' && Number(resv?.data?.known ?? -1) === 0) {
+        // 一个都打不开就别再预占了（省一次往返，也免得把"够不着箱子"误报成"库存不足"）
+        const observed = await observeContainers(bot, chests, ctx);
+        if (observed.length) resv = await board.inventoryReserve({ item, qty: want, containers });
+    }
+    if (!resv?.ok) return refuseReservation(item, want, resv);
+
+    const reservation = resv?.data?.reservation ?? null;
+    // 访客（服务端判定）：只留审计、不落券 ⇒ 不结算也不释放（不然会对着空券报错）
+    const visitor = resv?.data?.visitor === true || !reservation?.id;
+
+    const r = await fetchLocal(bot, item, want, opts);
+    const taken = Math.max(0, Number(r?.data?.taken ?? 0));
+    const base = {
+        item, want, taken, shared: true,
+        reservationId: reservation?.id ?? null, reservedQty: reservation?.qty ?? want,
+    };
+    if (visitor) return withReservation(r, { ...base, visitor: true, settled: false, released: false });
+
+    if (taken > 0) {
+        // 取到多少结多少：没用掉的额度随 consumed 一起回池（结算幂等，重复结只返回第一次）
+        const settled = await board.inventorySettle({
+            reservationId: reservation.id, qty: taken, container: r?.data?.chest ?? null,
+        });
+        if (!settled?.ok) {
+            // 物理上已经搬走了、账却没落 ⇒ 缓存不能再当账（否则下一次对账会把它再扣一遍）
+            await markInventoryDirty(bot, r?.data?.chest ?? chests[0].position, `settle-failed:${settled?.code ?? 'null'}`);
+        }
+        return withReservation(r, {
+            ...base,
+            settled: settled?.ok === true,
+            released: false,
+            settleCode: settled?.ok ? null : (settled?.data?.boardCode ?? settled?.code ?? null),
+            settledQty: settled?.ok ? taken : 0,
+            ...(settled?.ok ? {} : { settleMessage: settled?.message ?? '' }),
+        });
+    }
+
+    // 一件都没取到（开窗前就失败 / withdraw 全失败）⇒ 还券，别白占着额度
+    const released = typeof board.inventoryRelease === 'function'
+        ? await board.inventoryRelease({ reservationId: reservation.id, reason: r?.code ?? null })
+        : null;
+    return withReservation(r, {
+        ...base,
+        settled: false,
+        released: released?.ok === true,
+        releaseCode: released?.ok ? null : (released?.data?.boardCode ?? released?.code ?? 'NO_RELEASE'),
+        ...(released?.ok ? {} : { releaseReason: released?.message ?? '任务板没有 inventoryRelease，券只能等 TTL 作废' }),
+    });
+}
+
+/** 预占没拿到 ⇒ 不取用；库存不足要把"已知/已预占/可用/请求"四个数说清。 */
+function refuseReservation(item, want, resv) {
+    const d = resv?.data ?? {};
+    const boardCode = d.boardCode ?? d.code ?? null;
+    if (boardCode === 'INSUFFICIENT_STOCK') {
+        const known = d.known ?? null;
+        const reservedQty = d.reserved ?? null;
+        const available = d.available ?? null;
+        const requested = d.requested ?? want;
+        return fail('NO_ITEM',
+            `共享库存不足：已知 ${known}、已预占 ${reservedQty}、可用 ${available}，需要 ${requested}（没预占到就不取用）`,
+            { item, want, took: 0, shared: true, boardCode, known, reserved: reservedQty, available, requested });
+    }
+    return fail(resv?.code ?? 'INTERNAL',
+        `共享库存预占失败：${resv?.message ?? boardCode ?? '原因未知'}（没预占到就不取用）`,
+        { item, want, took: 0, shared: true, boardCode, ...(d.known == null ? {} : { known: d.known, reserved: d.reserved ?? null, available: d.available ?? null }) });
+}
+
+/** 把"取用结果"与"券的收尾情况"合成一个 ActionResult：取用失败的真实原因不许被释放/结算的失败盖掉。 */
+function withReservation(r, extra) {
+    const data = { ...(r?.data ?? {}), ...extra };
+    if (r?.ok) return ok(data);
+    return fail(r?.code ?? 'INTERNAL', r?.message ?? '取用失败', data);
+}
+
+/** 原取用路径（非共享）：**行为一个字都没改** —— 已有 E2E 与 !do 命令依赖它。
  *
  * @returns ActionResult
  *   ok            → data: { item, want, taken, chest }
@@ -308,7 +479,7 @@ export async function store(bot, item, count = 1, opts = {}) {
  *   INVENTORY_FULL **背包满 → abort**（换箱子没用，得先腾背包 —— 这是与 store 不同的处置）
  *   WINDOW_CLOSED 重开多次仍失败
  */
-export async function fetch(bot, item, count = 1, opts = {}) {
+async function fetchLocal(bot, item, count = 1, opts = {}) {
     const want = Math.max(1, Math.floor(Number(count) || 1));
     const ctx = opts.ctx ?? { deadline: Date.now() + manifestFetch.timeoutMs };
     if (bot?.interrupt_code) return fail('INTERRUPTED', '被取消了');

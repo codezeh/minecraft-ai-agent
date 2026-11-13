@@ -46,6 +46,16 @@ import * as compositeRegistry from '../agent/library/composite_registry.js';
 import { botsRootOf } from '../agent/library/bot_paths.js';
 // 阶段 3 / ADR D6：板库按存档分层（`_worlds/<world_id>/_board`），旧 `bots/_board` 幂等迁移
 import { prepareBoardDirForCurrentWorld, worldIdOfBoardDb } from './world_store.js';
+// ★ 阶段 4 联邦（t1 接线）：`federation.js` 在本批之前**在 src 里零引用** ⇒ 实现了但生产不可达。
+//   这里只调用它的判定/流程；表结构与语义仍归 `global_store.js` / `federation.js`（本批一个字都没动）。
+import {
+    issueVisitGrant, revokeVisitGrant, previewVisitGrants, acceptPeerCard,
+    listKnownPeers, listAllowedPeers, exportRelationDelta, pushRelationDelta,
+    coreProtectStatus,
+} from './federation.js';
+// events 是**旁路**（身份变更/联邦动作的审计索引）：写失败只记日志，绝不参与业务判断（events.md §11）。
+// t7：读侧（sinceEvents/statsByKind）此前**零生产调用方** ⇒ 面板的 events 视图一直是死路，这里补只读入口。
+import { recordEvent, sinceEvents, statsByKind } from './global_store.js';
 // R5 t15：凭据保管库（AES-256-GCM + sqlite）。**HTTP 门在这一层**，
 // 加密/KDF/存储全在 library 里 —— 分层是故意的：agent 子进程也能 import 那个模块（只读），
 // 但只有 mindserver 挂 HTTP 出口。
@@ -659,6 +669,282 @@ function takeToken(socket, label, capacity, windowMs) {
     return true;
 }
 
+// ════════════════════════════════════════════════════════════════════
+// 阶段 4 联邦接线 + 身份事件旁路 + 访客判定接缝（t1）
+//
+// 口径、诚实边界与"哪些**没做**"：docs/audit-r6/fixes4/wiring-control.md
+// （代码里只留 1~2 行注释；长解释一律进那份文档，免得注释和文档各说一套）
+// ════════════════════════════════════════════════════════════════════
+
+/** 联邦实现（单测注入假实现，用来证明拒绝路径与"token 不进日志"）。 */
+const FEDERATION_API = Object.freeze({
+    issueVisitGrant, revokeVisitGrant, previewVisitGrants, acceptPeerCard,
+    listKnownPeers, listAllowedPeers, exportRelationDelta, pushRelationDelta,
+});
+
+/** 连接来源 IP：只进事件的 `source_ip` 与审计日志，**不是证据链**（events.md §12）。 */
+export function sourceIpOf(socket) {
+    const raw = String(socket?.handshake?.address || socket?.conn?.remoteAddress || '').trim();
+    if (!raw) return null;
+    return raw.startsWith('::ffff:') ? raw.slice(7) : raw;
+}
+
+/**
+ * 管理面闸门（行为与原来内联体一字不差）：不是面板连接就拒，并回 `panel_only` + `control-denied`。
+ * 抽成模块级只是为了能被离线单测直接驱动（见 tools/wiring_federation_unit.mjs A 段）。
+ */
+export function requirePanelRole(socket, event, ack) {
+    const role = socketRole(socket);
+    if (role === ROLE_PANEL) return true;
+    console.warn(`[mindserver] 拒绝 ${event}：这是管理面事件，只允许面板连接（当前角色=${role ?? 'unknown'}）`);
+    const payload = { event, reason: 'panel_only', role: role ?? 'unknown' };
+    try { if (typeof ack === 'function') ack({ ok: false, ...payload }); } catch { /* 客户端已断开 */ }
+    try { socket?.emit?.('control-denied', payload); } catch { /* 断开中 */ }
+    return false;
+}
+
+/**
+ * ★ 访客判定**接缝**（ADR D7-6）：board_server 只认这里注入的判定，**绝不**读 `payload.visitor`。
+ * **现在恒 false**：访问凭证还没和"连接"建立映射（avatar ↔ peerId 未设计）⇒
+ * **凭证接线完成前没有任何连接会被判成访客**（这是缺口，不是"已实现"）。
+ * 接线时的判据（先记下来免得下一个人重新想）：① avatar 不在本机 people 表；② 或出示了有效来访凭证。
+ */
+export const VISITOR_JUDGEMENT_WIRED = false;
+
+/** 见 VISITOR_JUDGEMENT_WIRED：现在恒返回 false（占位接缝，不是"判定通过"）。 */
+export function visitorOf() {
+    return false;
+}
+
+/**
+ * 身份变更写 events（events.md §11-1）。**旁路**：返回值不参与业务判断，失败/抛错都只记日志。
+ * 抽出来是为了让"events 写失败不影响主流程"能被离线单测证明（不是靠读源码）。
+ */
+export function recordIdentityEvent(kind, payload, ctx = {}, recorder = recordEvent) {
+    try {
+        const r = recorder(kind, payload, ctx);
+        if (r?.ok === true) return { ok: true, id: r.id ?? null };
+        console.warn(`[mindserver] 身份事件未落库 kind=${kind} reason=${r?.reason ?? 'unknown'}`);
+        return { ok: false, reason: r?.reason ?? 'unknown' };
+    } catch (e) {
+        console.warn(`[mindserver] 身份事件写入异常 kind=${kind}：${e?.message ?? e}`);
+        return { ok: false, reason: 'threw' };
+    }
+}
+
+/** 凭证/对端/白名单**外发字段白名单**：只拷这些键，多一个未知键就多一次泄漏机会。 */
+const GRANT_PUBLIC_FIELDS = Object.freeze([
+    'grantId', 'hostId', 'guestId', 'issuedAt', 'expiresAt', 'maxUses', 'usedCount', 'usedAt', 'revokedAt', 'note',
+]);
+
+/** 凭证行脱敏：token / token_sha256 **永远不会**出现在面板回执里（federation.md §2.1）。 */
+export function sanitizeGrantRow(row) {
+    const out = {};
+    if (!row || typeof row !== 'object') return out;
+    for (const k of GRANT_PUBLIC_FIELDS) if (row[k] !== undefined) out[k] = row[k];
+    return out;
+}
+
+/** 对端行脱敏：公钥不外发（只出 peerId / 地址 / 首末见面 / 名片序号）。 */
+function publicPeerRow(r) {
+    if (!r || typeof r !== 'object') return {};
+    return {
+        peerId: r.peerId, lastAddr: r.lastAddr ?? null,
+        firstSeen: r.firstSeen, lastSeen: r.lastSeen, cardSeq: r.cardSeq,
+    };
+}
+
+/**
+ * 统一兜底：联邦实现抛任何异常都翻成 `{ok:false, reason:'internal'}`。
+ * **不许**把异常抛进 socket.io 回调 —— 那会打断控制面，客户端只看到 ack 超时（分不清"没做"与"炸了"）。
+ */
+export function safeFederationCall(label, fn) {
+    try {
+        return fn();
+    } catch (e) {
+        console.error(`[mindserver] ${label} 内部错误：${e?.message ?? e}`);
+        return { ok: false, reason: 'internal', detail: String(e?.message ?? e).slice(0, 200) };
+    }
+}
+
+/**
+ * socket.io 两种调用形状归一：`emit(ev, cb)` 时 **payload 其实是那个函数**。
+ * 抽成纯函数是为了让这条分支能被单测直接驱动（真 socket 传输本身仍归真机 E2E，别读成已验）。
+ */
+export function normalizeEmitArgs(payload, callback) {
+    if (typeof payload !== 'function') return { payload, callback };
+    // payload 是函数 ⇒ 客户端用了 emit(ev, cb)：它才是 ack；第二参（如有）是误用，忽略
+    return { payload: undefined, callback: payload };
+}
+
+/**
+ * 联邦：签发访问凭证。★ token 明文只在**这一次回执**里出现，**日志里不出现**（federation.md §8-1）。
+ * 幂等再签不吐第二个 token（token=null），与恢复码同一口径。
+ */
+export function federationIssueGrant(payload, ctx = {}, api = FEDERATION_API) {
+    const input = payload && typeof payload === 'object' ? payload : {};
+    const r = api.issueVisitGrant({
+        hostId: input.hostId, guestId: input.guestId,
+        ttlMs: input.ttlMs, maxUses: input.maxUses, note: input.note,
+    }, { sourceIp: ctx.sourceIp });
+    if (!r.ok) {
+        console.warn(`[mindserver] 拒绝 federation:grant-issue：${r.reason ?? 'unknown'}`);
+        return { ok: false, reason: r.reason ?? 'unknown' };
+    }
+    // 只打"签成了"（grantId 是标识，不是凭据）；token 到此为止，只在回执里
+    console.log(`[mindserver] 已签发联邦访问凭证 ${r.grantId}（guest=${input.guestId}，token 只在本次回执里）`);
+    if (r.idempotent) {
+        return {
+            ok: true, grantId: r.grantId, token: null, idempotent: true,
+            expiresAt: r.expiresAt, maxUses: r.maxUses, usedCount: r.usedCount,
+        };
+    }
+    return { ok: true, grantId: r.grantId, token: r.token, idempotent: false, expiresAt: r.expiresAt, maxUses: r.maxUses };
+}
+
+/** 联邦：作废访问凭证（幂等：重复作废 alreadyRevoked=true）。 */
+export function federationRevokeGrant(payload, ctx = {}, api = FEDERATION_API) {
+    const grantId = typeof payload === 'string'
+        ? payload
+        : (payload && typeof payload === 'object' ? payload.grantId : null);
+    const r = api.revokeVisitGrant(grantId, { sourceIp: ctx.sourceIp });
+    if (!r.ok) {
+        console.warn(`[mindserver] 拒绝 federation:grant-revoke：${r.reason ?? 'unknown'}`);
+        return { ok: false, reason: r.reason ?? 'unknown' };
+    }
+    console.log(`[mindserver] 联邦访问凭证 ${r.grantId} ${r.alreadyRevoked ? '本来就已作废（幂等）' : '已作废'}`);
+    return { ok: true, grantId: r.grantId, alreadyRevoked: r.alreadyRevoked === true };
+}
+
+/** 联邦：凭证预览（**不含 token、也不含 hash**）。 */
+export function federationListGrants(payload, ctx = {}, api = FEDERATION_API) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const rows = api.previewVisitGrants({ hostId: p.hostId, guestId: p.guestId, limit: p.limit }) ?? [];
+    const grants = rows.map(sanitizeGrantRow);
+    return { ok: true, grants, count: grants.length };
+}
+
+/** 联邦：收对端名片。**拒绝必须回原因**（bad-signature / pubkey-mismatch / stale-card …），不许只说"失败"。 */
+export function federationAcceptCard(payload, ctx = {}, api = FEDERATION_API) {
+    const card = payload && typeof payload === 'object' ? payload : null;
+    const r = api.acceptPeerCard(card, { sourceIp: ctx.sourceIp });
+    if (!r.ok) {
+        const reason = r.reason ?? 'unknown';
+        console.warn(`[mindserver] 拒绝 federation:card-accept：${reason}${r.peerId ? `（peer ${r.peerId}）` : ''}`);
+        return { ok: false, reason, peerId: r.peerId ?? null };
+    }
+    console.log(`[mindserver] 已收下对端名片 ${r.peerId}（seq=${r.seq}${r.newPeer ? '，首次见面钉公钥' : ''}）`);
+    return {
+        ok: true, peerId: r.peerId, seq: r.seq,
+        firstSeen: r.firstSeen, lastSeen: r.lastSeen, newPeer: r.newPeer === true,
+    };
+}
+
+/** 联邦：已知对端列表（公钥不外发）。 */
+export function federationListCards(payload, ctx = {}, api = FEDERATION_API) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const peers = (api.listKnownPeers({ limit: p.limit }) ?? []).map(publicPeerRow);
+    return { ok: true, peers, count: peers.length };
+}
+
+/** 联邦：拉关系增量（`updated_at >= since`，宁重不漏；对端重复推同一批不会长出新行）。 */
+export function federationRelationsSince(payload, ctx = {}, api = FEDERATION_API) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const out = api.exportRelationDelta({
+        since: p.since ?? 0, limit: p.limit, sourcePeerId: p.sourcePeerId ?? null,
+    });
+    const rows = Array.isArray(out?.rows) ? out.rows : [];
+    return { ok: true, cursor: out?.cursor ?? null, rows, count: rows.length };
+}
+
+/** 联邦：接收对端推送的关系增量（`sourcePeerId` 只为审计；冲突策略在 global_store 里）。 */
+export function federationRelationsPush(payload, ctx = {}, api = FEDERATION_API) {
+    const p = payload && typeof payload === 'object' ? payload : {};
+    const rows = Array.isArray(p.rows) ? p.rows : [];
+    if (!rows.length) return { ok: false, reason: 'no-rows' };
+    const r = api.pushRelationDelta(rows, { sourcePeerId: p.sourcePeerId ?? null, sourceIp: ctx.sourceIp });
+    return { ...r, ok: r?.ok !== false };
+}
+
+/** 面板只读视图（federation.md §8-6）：凭证不含 token/hash、对端不含公钥、白名单只给 peerId/时间/备注。 */
+export function federationStatus(payload, ctx = {}, api = FEDERATION_API) {
+    const grants = (api.previewVisitGrants({ limit: 200 }) ?? []).map(sanitizeGrantRow);
+    const knownPeers = (api.listKnownPeers({ limit: 200 }) ?? []).map(publicPeerRow);
+    const allowedPeers = (api.listAllowedPeers() ?? []).map((r) => ({
+        peerId: r?.peerId, addedAt: r?.addedAt, note: r?.note ?? null,
+    }));
+    // visitorWired=false 是**诚实的现状**：凭证没接上，没有人会被判成访客
+    return { ok: true, grants, knownPeers, allowedPeers, visitorWired: VISITOR_JUDGEMENT_WIRED };
+}
+
+// ── 面板只读：events 时间线 / kind 统计（t7）─────────────────────────────────
+//
+// `sinceEvents` / `statsByKind` 实现齐全但**零生产调用方** ⇒ 面板 events 视图一直是死路。
+// 只读口径见 docs/audit-r6/fixes4/wiring-control.md §13。
+
+/** 只读实现（单测注入假实现，用来证明 SINCE_INVALID/KIND_INVALID 被翻成 reason 而不是抛出）。 */
+const EVENTS_READ_API = Object.freeze({ sinceEvents, statsByKind });
+/** 面板一页上限：事件表只增不减，一次拉全表会拖死控制面（global_store 自身上限是 2000）。 */
+export const EVENTS_LIMIT_DEFAULT = 200;
+export const EVENTS_LIMIT_MAX = 500;
+
+/** limit 归一：缺省给默认；非正整数 → limit-invalid；超上限 → **夹到上限**（面板按"满页=可能还有"翻页）。 */
+export function normalizeEventsLimit(raw) {
+    if (raw === undefined || raw === null || raw === '') return { ok: true, limit: EVENTS_LIMIT_DEFAULT };
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return { ok: false, reason: 'limit-invalid' };
+    return { ok: true, limit: Math.min(Math.floor(n), EVENTS_LIMIT_MAX) };
+}
+
+/**
+ * `events:since`：面板时间线。**读侧参数错误 global_store 会直接 throw**（SINCE_INVALID/KIND_INVALID），
+ * 这里翻成 reason —— 不许让异常穿进 socket.io 回调（同 fedOn 口径）。
+ * `readOnly: true` ⇒ global_store 自己开只读句柄并**用完即关**（面板拿不到写能力，也不留复用句柄）。
+ */
+export function readEventsSince(input, evCtx = {}, api = EVENTS_READ_API) {
+    const p = input && typeof input === 'object' ? input : {};
+    const lim = normalizeEventsLimit(p.limit);
+    if (!lim.ok) return { ok: false, reason: lim.reason };
+    let rows;
+    try {
+        rows = api.sinceEvents(p.since ?? 0, {
+            kind: p.kind ?? undefined,
+            worldId: p.worldId ?? undefined,
+            limit: lim.limit,
+            readOnly: true,
+        });
+    } catch (e) {
+        const reason = e?.code === 'SINCE_INVALID' ? 'since-invalid'
+            : e?.code === 'KIND_INVALID' ? 'kind-invalid' : 'internal';
+        console.warn(`[mindserver] events:since 被拒（${reason}）：${String(e?.message ?? e).slice(0, 160)}`);
+        return { ok: false, reason };
+    }
+    const events = (rows ?? []).map((r) => ({
+        id: r.id,
+        worldId: r.worldId ?? null,
+        avatarId: r.avatarId ?? null,
+        kind: r.kind,
+        payload: r.payload ?? null,     // 已是解析后的对象（解析失败 global_store 给 null）⇒ **不二次序列化**
+        at: r.at,
+    }));
+    return { ok: true, events, count: events.length, limit: lim.limit };
+}
+
+/** `events:stats`：面板 kind 下拉用（条数 + 首末时间），同样只读、用完即关。 */
+export function readEventsStats(input, evCtx = {}, api = EVENTS_READ_API) {
+    const p = input && typeof input === 'object' ? input : {};
+    try {
+        const kinds = api.statsByKind({ worldId: p.worldId ?? undefined, readOnly: true }) ?? [];
+        return {
+            ok: true,
+            kinds: kinds.map((k) => ({ kind: k.kind, count: k.count, firstAt: k.firstAt, lastAt: k.lastAt })),
+        };
+    } catch (e) {
+        console.warn(`[mindserver] events:stats 失败：${String(e?.message ?? e).slice(0, 160)}`);
+        return { ok: false, reason: 'internal' };
+    }
+}
+
 /**
  * ── 凭据保管库 REST（R5 t15）────────────────────────────────────────────────
  *
@@ -1259,6 +1545,9 @@ export function createMindServer(host_public = false, port = 8080) {
             db: board.db,
             // 队伍/账本属于哪一档，**只看库落在哪**：worldIdOfBoardDb 是唯一反解入口（解析不出就抛）
             worldIdOf: () => worldIdOfBoardDb(board.path),
+            // ★ 阶段 4 接缝（t1 补上）：'访客'只认这条服务端注入的判定，绝不读 payload.visitor。
+            //   现状见 VISITOR_JUDGEMENT_WIRED —— 凭证接线完成前**没有人**会被判成访客。
+            isVisitor: visitorOf,
             registry,
             validateArgs: (skill, args) => {
                 const manifest = reg.getSkill(skill)?.manifest;
@@ -1550,15 +1839,9 @@ export function createMindServer(host_public = false, port = 8080) {
          * @param {Function} [ack] 可选 ack（有 ack 的事件既回 control-denied 也回 ack）
          * @returns {boolean} 放行 = true
          */
-        const requirePanel = (event, ack) => {
-            if (isPanelConnection()) return true;
-            const role = socketRole(socket) ?? 'unknown';
-            console.warn(`[mindserver] 拒绝 ${event}：这是管理面事件，只允许面板连接（当前角色=${role}）`);
-            const payload = { event, reason: 'panel_only', role };
-            try { if (typeof ack === 'function') ack({ ok: false, ...payload }); } catch { /* 客户端已断开 */ }
-            try { socket.emit('control-denied', payload); } catch { /* 断开中 */ }
-            return false;
-        };
+        // 统一闸门已抽到模块级（requirePanelRole）：单测才能**离线**证明"拿不到面板角色 ⇒ 拒"，
+        // 而不是靠读源码。行为与原来一字不差（同样的日志与 control-denied 回执）。
+        const requirePanel = (event, ack) => requirePanelRole(socket, event, ack);
 
         /**
          * 只接受已注册的 agent 名；返回规范化名字或 null。
@@ -1679,6 +1962,10 @@ export function createMindServer(host_public = false, port = 8080) {
                 });
                 if (!added.ok) { cb({ ok: false, reason: `写码失败：${added.reason}` }); return; }
                 console.log(`[mindserver] 为 ${name} 生成身份绑定码（5 分钟有效，单次使用，会话 ${socket.id ?? '-'}）`);
+                // 身份事件是**旁路**：写不进去只记日志，不影响这次签发的结果（events.md §11-1 硬约束 1）
+                recordIdentityEvent('identity.invite',
+                    { person: null, avatar: name, by: 'panel' },
+                    { avatarId: name, sourceIp: sourceIpOf(socket) });
                 cb({ ok: true, agent: name, code, expiresAt: added.result.expiresAt, ttlMs: DEFAULT_CODE_TTL_MS });
             } catch (e) {
                 cb({ ok: false, reason: String(e?.message ?? e) });
@@ -1707,6 +1994,9 @@ export function createMindServer(host_public = false, port = 8080) {
                 }, { what: `${name} 的身份表` });
                 if (!out.ok) { cb({ ok: false, reason: `写绑定表失败：${out.reason}` }); return; }
                 console.log(`[mindserver] 已解绑 ${name} 的玩家 ${person ?? uuid}（移除 ${out.result} 条）`);
+                recordIdentityEvent('identity.revoke',
+                    { person, avatar: name, by: 'panel', removed: out.result },
+                    { avatarId: name, sourceIp: sourceIpOf(socket) });
                 cb({ ok: true, agent: name, removed: out.result });
             } catch (e) {
                 cb({ ok: false, reason: String(e?.message ?? e) });
@@ -1737,6 +2027,9 @@ export function createMindServer(host_public = false, port = 8080) {
                 if (!out.ok) { cb({ ok: false, reason: `写人表失败：${out.reason}` }); return; }
                 if (out.skipped) { cb({ ok: false, reason: why ?? 'unknown' }); return; }
                 console.log(`[mindserver] 为人 ${pid} 生成恢复码（一次性，${DEFAULT_RECOVERY_TTL_MS / 60000} 分钟有效）`);
+                recordIdentityEvent('identity.recover',
+                    { person: pid, avatar: null, by: 'panel' },
+                    { sourceIp: sourceIpOf(socket) });
                 cb({ ok: true, personId: pid, code, expiresAt: out.result.expires_at, ttlMs: DEFAULT_RECOVERY_TTL_MS });
             } catch (e) { cb({ ok: false, reason: String(e?.message ?? e) }); }
         });
@@ -1757,6 +2050,10 @@ export function createMindServer(host_public = false, port = 8080) {
                     return { store: r.store, result: r.result.removed };
                 });
                 if (!out.ok) { cb({ ok: false, reason: `写人表失败：${out.reason}` }); return; }
+                // 撤销恢复码 = 对一个「人」的安全动作，归 identity.revoke（payload.scope 区分是哪一种）
+                recordIdentityEvent('identity.revoke',
+                    { person: pid, avatar: null, by: 'panel', scope: 'recovery-code', removed: out.result ?? 0 },
+                    { sourceIp: sourceIpOf(socket) });
                 cb({ ok: true, personId: pid, removed: out.result ?? 0 });
             } catch (e) { cb({ ok: false, reason: String(e?.message ?? e) }); }
         });
@@ -1787,9 +2084,41 @@ export function createMindServer(host_public = false, port = 8080) {
                 if (!out.ok) { cb({ ok: false, reason: `写人表失败：${out.reason}` }); return; }
                 if (out.skipped) { cb({ ok: false, reason: why ?? 'unknown' }); return; }
                 console.log(`[mindserver] 把 ${name} 改挂到人 ${out.result.person}（退役旧记录 ${out.result.retired} 条）`);
+                recordIdentityEvent('identity.relink',
+                    { person: out.result.person, avatar: name, by: 'panel', retired: out.result.retired },
+                    { avatarId: name, sourceIp: sourceIpOf(socket) });
                 cb({ ok: true, agent: name, person: out.result.person, retired: out.result.retired });
             } catch (e) { cb({ ok: false, reason: String(e?.message ?? e) }); }
         });
+
+        // ---- 阶段 4 联邦（t1 接线）：访问凭证 / 名片 / 关系增量 / 只读视图 ----
+        //
+        // 全部 requirePanel：这些动作会**签出能进服的凭证**、**钉住对端公钥**（TOFU），属管理面。
+        // 每个事件**独立限流桶**（label = 事件名）：不给"一个桶刷全表"的机会（同 takeToken 的口径）。
+        // 统一走 safeFederationCall：实现抛错翻成 reason:'internal'，不许把异常抛进 socket.io 回调。
+        const fedCtx = () => ({ sourceIp: sourceIpOf(socket) });
+        const fedOn = (event, capacity, run) => {
+            socket.on(event, (...raw) => {
+                // 面板可能用 emit(ev, cb)（payload 是函数）或 emit(ev, payload, cb) —— 归一后再判
+                const { payload, callback } = normalizeEmitArgs(raw[0], raw[1]);
+                const cb = typeof callback === 'function' ? callback : () => { };
+                if (!requirePanel(event, cb)) return;
+                if (!takeToken(socket, event, capacity, 60000)) { cb({ ok: false, reason: 'rate_limited' }); return; }
+                cb(safeFederationCall(event, () => run(payload, fedCtx())));
+            });
+        };
+        fedOn('federation:grant-issue', 5, federationIssueGrant);
+        fedOn('federation:grant-revoke', 10, federationRevokeGrant);
+        fedOn('federation:grant-list', 20, federationListGrants);
+        fedOn('federation:card-accept', 10, federationAcceptCard);
+        fedOn('federation:card-list', 20, federationListCards);
+        fedOn('federation:relations-since', 30, federationRelationsSince);
+        fedOn('federation:relations-push', 20, federationRelationsPush);
+        // 面板只读视图（grants 不含 token/hash；identity-status 的旧字段形状一个没动）
+        fedOn('federation-status', 30, federationStatus);
+        // 面板只读：events 时间线 / kind 统计（复用 fedOn 的闸门 + 独立桶 + 异常兜底 + arg 归一）
+        fedOn('events:since', 30, readEventsSince);
+        fedOn('events:stats', 20, readEventsStats);
 
         // ---- 配置向导：paper 服务进程管理 ----
         // ★ R6 #2：这四条是**管理面**（起/停 Minecraft 服务、读服务端日志）。
@@ -2597,6 +2926,20 @@ export function createMindServer(host_public = false, port = 8080) {
             }
         } catch (e) {
             console.warn('[mindserver] 离线模式判定跳过：', e?.message ?? e);
+        }
+
+        // ★ 阶段 4 联邦（§8-4）：启动时做一次 CoreProtect 体检，**每次都打一行**（未装就明说未装，不静默）。
+        //   体检是只读打开；库不存在**不会被创建**（coreProtectStatus 的 not-installed 分支）。
+        try {
+            const cp = coreProtectStatus();
+            if (cp.installed) {
+                console.log(`[mindserver] CoreProtect 已安装：表 ${cp.table}，${cp.rows ?? 0} 行（${cp.path}）`);
+            } else {
+                console.log(`[mindserver] CoreProtect 未安装/不可用（${cp.status}）：${cp.detail ?? '无详情'}`
+                    + ' ⇒ 块记录不会进 events（CoreProtect 导入不可用）');
+            }
+        } catch (e) {
+            console.warn('[mindserver] CoreProtect 体检失败（不影响启动）：', e?.message ?? e);
         }
     });
 

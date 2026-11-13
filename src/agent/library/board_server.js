@@ -40,11 +40,72 @@ import {
 } from './board_store.js';
 // ADR 阶段 3 / D7：共享库存（预占 / 结算 / 对账 / 缓存）
 import {
-    refreshContainerCache, markContainerDirty, reserveStock, settleTake,
+    refreshContainerCache, markContainerDirty, reserveStock, settleTake, stockIn, releaseReservation,
     reconcileContainers, inventorySnapshot, inventoryLedger, expireReservations,
 } from './board_inventory.js';
 // ★ BOARD-002：归一化 agent 随 claim 上报的"我身上有什么"（跨 client/server 共用的纯函数）
 import { normalizeReportedItems, normalizeClaimKeys } from './board_claims.js';
+// ★ t2（2026-11-13）：team.*/inventory.* 结算写 events（**旁路审计索引**，events.md §11-2/3）。
+//   `recordEvent` 是全仓唯一事件写入口（global_store.js 是表结构的唯一拥有者），这里只转调。
+//   ⚠ 静态 import 是安全的：`openGlobalDb()` 是惰性的，没有业务动作就不会建库/写盘。
+import { recordEvent } from '../../mindcraft/global_store.js';
+
+/**
+ * 箱子键（`x,y,z`）：events 里"哪一格"的粗粒度索引，与 inventory 的容器坐标同口径。
+ * 接受两种形状：容器对象 `{x,y,z}`，或已经是键字符串 `"x,y,z"`（`inventory:store` 的 `chestKey` 就是后者）。
+ * 坐标不合法 ⇒ null（事件里就只留 item/qty，不编一个 0,0,0 假装知道位置）。
+ */
+export function chestKeyOf(container) {
+    if (typeof container === 'string') {
+        const s = container.trim();
+        return /^-?\d+,-?\d+,-?\d+$/.test(s) ? s : null;
+    }
+    const c = container && typeof container === 'object' ? container : null;
+    if (!c) return null;
+    const p = [c.x, c.y, c.z].map((v) => Number(v));
+    if (p.some((v) => !Number.isFinite(v))) return null;
+    return p.map((v) => Math.trunc(v)).join(',');
+}
+
+/**
+ * ★ t2：事件写入口（**本文件唯一**，`tools/wiring_board_events_unit.mjs` 直接扫源码钉住调用条数）。
+ *
+ * events 只是"发生过什么"的**旁路审计索引**，不是业务事实的来源。三条硬口径：
+ *   ① **返回值不参与业务判断**：写失败/抛错只进日志，调用点一律 `void ev(...)`；
+ *   ② **worldId 拿不到就不写**：绝不填 'default'/'unknown'/当前世界之类的兜底 ——
+ *      假 worldId 会让复盘把事件归错档，**比没有事件更糟**（events.md §2）；
+ *   ③ 单测注入点：`attachBoardServer({ recordEvent })`，用来证明"写失败不影响业务"。
+ *
+ * ★ 参数名用 `evCtx` 而**不是** `ctx`：`ctx` 在 `deps_injection_audit.mjs` 里专指
+ *   `composite_registry.makeCtx()` 返回的那个对象（审计 B 档按 `ctx.` 前缀识别"单测注入、
+ *   生产不注入"的死分支）。这里传的是**每次调用的旁路元数据**（worldId/avatarId/sourceIp），
+ *   跟 makeCtx 无关；叫 ctx 会让审计把它当死分支误报（实测过一次），也会让下一个人误以为
+ *   有一条 ctx 注入链。见 docs/audit-r6/fixes4/wiring-board.md §2 注。
+ *
+ * @param {(kind:string, payload:object, evCtx:object)=>any} recorder  recordEvent 或测试假实现
+ * @returns {{ok:boolean, reason?:string, kind:string, id?:string|null}} 仅供日志/测试，**不许**拿来做分支
+ */
+export function recordBoardEvent(recorder, kind, payload, evCtx = {}) {
+    const head = { kind: kind == null ? String(kind) : String(kind) };
+    if (typeof recorder !== 'function') {
+        // 没有记录器 = 这个部署不接 events：静默跳过，不炸业务
+        return { ok: false, reason: 'no-recorder', ...head };
+    }
+    const worldId = evCtx?.worldId == null ? '' : String(evCtx.worldId).trim();
+    if (!worldId) {
+        // 没有存档维度 = 不知道该记到哪个档 ⇒ 不写（**绝不**兜底成 'default'）
+        return { ok: false, reason: 'no-world-id', ...head };
+    }
+    try {
+        const r = recorder(kind, payload == null ? {} : payload, { ...evCtx, worldId });
+        if (r?.ok === true) return { ok: true, id: r.id ?? null, ...head };
+        try { console.warn(`[board] 事件未落库 kind=${kind} world=${worldId}：${r?.reason ?? 'unknown'}`); } catch { /* 日志崩了就算了 */ }
+        return { ok: false, reason: r?.reason ?? 'unknown', ...head };
+    } catch (e) {
+        try { console.warn(`[board] 事件写入异常 kind=${kind} world=${worldId}：${String(e?.message ?? e)}`); } catch { /* 同上 */ }
+        return { ok: false, reason: 'threw', ...head };
+    }
+}
 
 /** 单个 bot 上报的能力（`board:hello` 记下来，用于校验 add 的 skill）。 */
 // bot -> { skills:Set, roles:[], rolesSource, at, socketId }
@@ -201,6 +262,14 @@ export function attachBoardServer(deps = {}) {
             return (await deps.isVisitor({ socket, bot, worldId })) === true;
         } catch { return false; }
     };
+
+    /**
+     * ★ t2：事件写入口（旁路）。`deps.recordEvent` 只给单测注入，默认就是 global_store 的 recordEvent。
+     * 调用点一律 `void ev(...)`：返回值**不读**，写失败只进日志（events.md §11 硬约束 1）。
+     */
+    const ev = (kind, payload, evCtx) => recordBoardEvent(
+        typeof deps.recordEvent === 'function' ? deps.recordEvent : recordEvent, kind, payload, evCtx,
+    );
 
     /** 统一的 ack 包装：把内部 {ok,code} 转成 ack 形状，并保证**永远**回 ack（不许卡死客户端）。 */
     const ack = (cb, payload) => {
@@ -1001,6 +1070,11 @@ export function attachBoardServer(deps = {}) {
                 const r = createTeam(db, { worldId: pre.worldId, name: payload?.name, avatar: pre.bot, now: now() });
                 if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
                 ack(cb, { ok: true, team: r.team, role: r.role, worldId: pre.worldId });
+                // t2 事件（旁路）：队伍是**按存档**的，worldId 必须来自 teamPre（拿不到就不写）
+                void ev('team.create', {
+                    teamId: r.team?.id ?? null, name: r.team?.name ?? null, role: r.role ?? null,
+                    avatarId: pre.bot, by: pre.bot, avatar: pre.bot,
+                }, { worldId: pre.worldId, avatarId: pre.bot });
             } catch (e) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
@@ -1016,18 +1090,39 @@ export function attachBoardServer(deps = {}) {
                 });
                 if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
                 ack(cb, { ok: true, team: r.team, role: r.role, already: r.already === true });
+                // t2 事件（旁路）：already=true 是自助加入的幂等重入（行列早已存在）⇒ 不重复记
+                if (r.already !== true) {
+                    void ev('team.join', {
+                        teamId: r.team?.id ?? null, role: r.role ?? null,
+                        avatarId: pre.bot, by: pre.bot, avatar: pre.bot,
+                    }, { worldId: pre.worldId, avatarId: pre.bot });
+                }
             } catch (e) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
         });
 
-        socket.on('team:leave', (payload, cb) => {
+        socket.on('team:leave', async (payload, cb) => {
             try {
                 const who = teamActor(socket, payload);
                 if (!who.ok) return ack(cb, who.ack);
                 const r = leaveTeam(db, { avatar: who.bot, now: now() });
                 if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                // ★ t2 顺序：**先回 ack，再解析存档、再写事件** —— 用户等的是回执，审计是旁路；
+                //   解析存档要走 worldIdResolver（可能碰文件系统），不能让它把回执扣在这里当人质。
                 ack(cb, { ok: true, team: r.team, disbanded: r.disbanded === true, promoted: r.promoted ?? null });
+                const world = await teamWorld();
+                if (!world.ok) return;
+                void ev('team.leave', {
+                    teamId: r.team?.id ?? null, avatarId: who.bot, by: who.bot, avatar: who.bot,
+                    disbanded: r.disbanded === true, promoted: r.promoted ?? null,
+                }, { worldId: world.worldId, avatarId: who.bot });
+                if (r.disbanded === true) {
+                    // 最后一人离队 = 队伍被解散（没有独立的 `team:disband` 事件，语义在这里收口）
+                    void ev('team.disband', {
+                        teamId: r.team?.id ?? null, avatarId: who.bot, by: who.bot, avatar: who.bot,
+                    }, { worldId: world.worldId, avatarId: who.bot });
+                }
             } catch (e) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
@@ -1102,6 +1197,17 @@ export function attachBoardServer(deps = {}) {
                     });
                 }
                 ack(cb, { ok: true, reservation: r, visitor: r.visitor === true });
+                // t2 事件（旁路）：只有**真的落下一条预占**才写；访客被分流（不占本机额度、只留
+                //   inventory_audit）没有预占行 ⇒ 不写 inventory.reserve，免得"按 kind 统计"把
+                //   一次免账的查询算成一次真实占用（缺口表见 wiring-board.md）
+                if (r.visitor !== true) {
+                    void ev('inventory.reserve', {
+                        reservationId: r.id ?? null, item: r.item ?? null, qty: r.qty ?? null,
+                        holder: pre.bot, known: r.known ?? null, reserved: r.reserved ?? null,
+                        available: r.available ?? null, expiresAt: r.expiresAt ?? null,
+                        chestKey: chestKeyOf(Array.isArray(payload?.containers) ? payload.containers[0] : null),
+                    }, { worldId: pre.worldId, avatarId: pre.bot });
+                }
             } catch (e) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
@@ -1120,6 +1226,75 @@ export function attachBoardServer(deps = {}) {
                     ok: true, already: r.already === true, reservation: r.reservation,
                     ledger: r.ledger, cache: r.cache ?? null, visitor: r.visitor === true,
                 });
+                // t2 事件（旁路）：`inventory.settle` 是"账实对不上"时唯一的第三方证据（events.md §11-3）
+                //   · already=true = 幂等重放（账本行早写过）⇒ 不重复记
+                //   · 访客不写本机账本（settleTake 已分流）⇒ 也不写结算事件
+                if (r.visitor !== true && r.already !== true && r.ledger) {
+                    void ev('inventory.settle', {
+                        reservationId: r.reservation?.id ?? null,
+                        item: r.ledger.item ?? null, delta: r.ledger.delta ?? null,
+                        holder: pre.bot, chestKey: chestKeyOf(payload?.container),
+                        container: payload?.container ?? null,
+                    }, { worldId: pre.worldId, avatarId: pre.bot });
+                }
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        // 释放预占（取不到就还券）：额度立即回池，不等 TTL；只能释放自己持有的券（服务端裁决 holder）
+        socket.on('inventory:release', async (payload, cb) => {
+            try {
+                const pre = await inventoryPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = releaseReservation(db, {
+                    worldId: pre.worldId, id: payload?.reservationId, holder: pre.bot,
+                    reason: payload?.reason, now: now(),
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message, reservation: r.reservation });
+                ack(cb, {
+                    ok: true, already: r.already === true, changes: r.changes ?? 0,
+                    closed: r.closed ?? null, reservation: r.reservation, ledger: r.ledger,
+                });
+                // t2 事件（旁路）：`inventory.rollback` = 一次预占的回滚（券回池）。
+                //   放在 handler 侧而不是 t4 的调用方：调用方只知道"我这次取用失败了"，
+                //   不知道"券有没有回滚成功"（already/changes 只有这里看得见）。
+                //   already=true / changes=0 = 幂等重放或券早已回池 ⇒ 不重复记。
+                if (r.already !== true && (r.changes ?? 0) > 0) {
+                    void ev('inventory.rollback', {
+                        reservationId: r.reservation?.id ?? null, item: r.reservation?.item ?? null,
+                        qty: r.reservation?.qty ?? null, holder: pre.bot, reason: r.reason ?? null,
+                    }, { worldId: pre.worldId, avatarId: pre.bot });
+                }
+            } catch (e) {
+                ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
+            }
+        });
+
+        // 存入记账（D7-3 的存入侧，`settle` 的对偶）：账本 reason='store'；缓存只按观测强刷（D7-1）
+        //   ★ 不写 events：`inventory.store` 不在 kind 白名单里（口径见 docs/audit-r6/fixes4/wiring-board.md 的缺口表）
+        socket.on('inventory:store', async (payload, cb) => {
+            try {
+                const pre = await inventoryPre(socket, payload);
+                if (!pre.ok) return ack(cb, pre.ack);
+                const r = stockIn(db, {
+                    worldId: pre.worldId, item: payload?.item, qty: payload?.qty, holder: pre.bot,
+                    chestKey: payload?.chestKey ?? null, observed: payload?.observed ?? null,
+                    visitor: pre.visitor, now: now(),
+                });
+                if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
+                ack(cb, { ok: true, ledger: r.ledger, cache: r.cache ?? null, visitor: r.visitor === true });
+                // t2 事件（旁路）：存入 = 账本**正** delta（`qty` 取 `ledger.delta`，即 +qty），
+                //   与 `inventory.settle` 的负 delta 对称；缺了它"存进去"这段账在复盘里看不见。
+                //   · **先 ack 再写**（旁路不能影响延迟，见 wiring-board.md §1 通用规则）
+                //   · **访客不写**：`stockIn` 已 `skipped`（只留 inventory_audit），别硬写一条空事件
+                if (r.visitor !== true) {
+                    void ev('inventory.store', {
+                        item: r.ledger?.item ?? null, qty: r.ledger?.delta ?? null,
+                        chestKey: chestKeyOf(payload?.chestKey), holder: pre.bot,
+                        avatarId: pre.bot, by: pre.bot,
+                    }, { worldId: pre.worldId, avatarId: pre.bot });
+                }
             } catch (e) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
@@ -1173,6 +1348,15 @@ export function attachBoardServer(deps = {}) {
                     diffs: r.diffs, warnings: r.warnings, lines: r.lines, summary: r.summary,
                     dryRun: r.dry_run,
                 });
+                // t2 事件（旁路）：只记**真的改了账本**的对账 —— dryRun 与"账实一致"都不写，
+                //   否则每次巡检都会灌一大批"什么都没改"的事件，把真正要看的淹没。
+                if (r.dryRun !== true && Number(r.written) > 0) {
+                    const diffs = Array.isArray(r.diffs) ? r.diffs : [];
+                    void ev('inventory.reconcile', {
+                        checked: r.checked, changed: r.changed, written: r.written,
+                        diffs: diffs.slice(0, 20), diffsTotal: diffs.length, holder: pre.bot,
+                    }, { worldId: pre.worldId, avatarId: pre.bot });
+                }
             } catch (e) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
@@ -1201,6 +1385,20 @@ export function attachBoardServer(deps = {}) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
         });
+
+        // ══════════════════════════════════════════════════════════════════
+        // t2 位置说明（**位置：`inventory:ledger` 之后**；复核按这个查）
+        //
+        // 库存侧的事件**调用点**在各自 handler 的成功路径里，各 1 行（reserve / settle /
+        // reconcile / release），没有新增 handler、没有改 ack 形状、没有重排顺序。
+        // 为什么不能全搬到这个区块：
+        //   事件的 `worldId` **只有 handler 手里的 `pre.worldId` 才有**（ack 回执里没有
+        //   worldId）。若改到区块里靠"嗅探 ack"反推，就得给 worldId 兜底成 'default'，
+        //   违反硬口径 ②（假 worldId 比没有事件更糟）；而且 ack 一改事件会静默消失。
+        // 与 wire-flow 的分工：`inventory:release` 这个 handler 由 t4 插入
+        //   （位置：`inventory:settle` 与 `inventory:cache-refresh` 之间），
+        //   里面那 1 行 `inventory.rollback` 事件归 t2 写（captain 2026-11-13 裁决 2）。
+        // ══════════════════════════════════════════════════════════════════
     });
 
     /** 过期预占清理：异步解析存档 id（失败就跳过，不影响主扫描）。 */

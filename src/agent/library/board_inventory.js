@@ -287,9 +287,13 @@ export function settleTake(db, {
             return { ok: true, already: true, reservation, ledger: ledgerRowToObj(led) };
         }
         if (reservation.status !== 'held') {
+            // 'released'（取不到就还券）与 'void'（过期作废）都不能再结算，但原因要分开说
             return {
                 ok: false, code: C.RESERVATION_EXPIRED,
-                message: `预占已过期作废（到期 ${new Date(reservation.expires_at).toISOString()}）：重新预占再取`, reservation,
+                message: reservation.status === 'released'
+                    ? '预占已被释放（取不到就还券）：重新预占再取'
+                    : `预占已过期作废（到期 ${new Date(reservation.expires_at).toISOString()}）：重新预占再取`,
+                reservation,
             };
         }
         const reserved = Number(row.qty);
@@ -325,6 +329,100 @@ export function settleTake(db, {
         const ledger = db.prepare('SELECT * FROM inventory_ledger WHERE id = ?').get(ledgerId);
         const updated = db.prepare('SELECT * FROM inventory_reservation WHERE id = ?').get(rid);
         return { ok: true, already: false, reservation: reservationRowToObj(updated), ledger: ledgerRowToObj(ledger), cache };
+    });
+}
+
+/**
+ * 存入记账（D7-3 的**存入侧**，`settleTake` 的对偶）：一条 `ledger(delta=+qty, reason='store')`。
+ *
+ * 为什么必须与对账分开：`reason='reconcile'` 的语义是"账实不符、以真实为准修正"。
+ * 把正常存入也写成 reconcile，会让"对账修正了多少货"这个问题的答案**静默变错**。
+ * 缓存只认**观测**（D7-1）：给了 `chestKey + observed` 就走强刷，绝不用账本数字去加减缓存。
+ */
+export function stockIn(db, {
+    worldId, item, qty, holder, chestKey = null, observed = null, visitor = false, now = Date.now(),
+} = {}) {
+    const wid = textOf(worldId);
+    if (!wid) return { ok: false, code: C.NO_BOARD, message: '当前板库没有存档维度（world_id 为空）：拒绝记账' };
+    const name = itemNameOf(item);
+    if (!name.ok) return name;
+    const who = textOf(holder);
+    if (!who) return { ok: false, code: C.NO_PERMISSION, message: '不知道你是谁（holder 为空）：存入必须说明存入者' };
+    const n = intOf(qty);
+    if (n == null || n <= 0) return { ok: false, code: C.TOO_MUCH, message: `存入数量必须是正整数（收到 ${JSON.stringify(qty)}）` };
+    const nowMs = Number(now);
+
+    // 访客不写本机账本（D7-6）：只留审计
+    if (visitor === true) {
+        audit(db, { worldId: wid, actor: who, action: 'store', item: name.name, qty: n, now: nowMs, detail: { visitor: true } });
+        return { ok: true, visitor: true, skipped: true, ledger: null };
+    }
+
+    return runInImmediateTx(db, () => {
+        const ledgerId = randomUUID();
+        db.prepare('INSERT INTO inventory_ledger (id, world_id, item, delta, holder, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(ledgerId, wid, name.name, n, who, 'store', nowMs);
+        // 缓存只认观测：调用方给了真实内容才强刷（D7-1），没给就不动它（由下一次开箱/对账兜底）
+        let cache = { applied: false, reason: chestKey ? 'no-observation' : 'no-chest' };
+        if (chestKey && observed) {
+            const pt = coordsOf(chestKey);
+            if (!pt.ok) cache = { applied: false, reason: 'bad-chest' };
+            else {
+                const r = refreshContainerCache(db, { worldId: wid, x: pt.x, y: pt.y, z: pt.z, items: observed, holder: who, now: nowMs });
+                cache = r.ok
+                    ? { applied: true, x: pt.x, y: pt.y, z: pt.z, changed: r.changed === true }
+                    : { applied: false, reason: r.message ?? 'refresh-failed' };
+            }
+        }
+        return {
+            ok: true, ledger: ledgerRowToObj(db.prepare('SELECT * FROM inventory_ledger WHERE id = ?').get(ledgerId)), cache,
+        };
+    });
+}
+
+/** 释放预占（取不到就还券）：额度立即回池不等 TTL；只能释放自己持有的券，已结算/已过期/已释放 ⇒ 幂等 changes:0。 */
+export function releaseReservation(db, { worldId, id, holder, reason = null, now = Date.now() } = {}) {
+    const wid = textOf(worldId);
+    if (!wid) return { ok: false, code: C.NO_BOARD, message: '当前板库没有存档维度（world_id 为空）：拒绝释放预占' };
+    const who = textOf(holder);
+    if (!who) return { ok: false, code: C.NO_PERMISSION, message: '不知道你是谁（holder 为空）：释放必须说明持有人' };
+    const rid = textOf(id);
+    if (!rid) return { ok: false, code: C.NO_TARGET, message: '释放必须给 reservationId（预占 id）' };
+    const nowMs = Number(now);
+
+    return runInImmediateTx(db, () => {
+        voidExpired(db, { worldId: wid, now: nowMs });
+        // 权限/存档/未结算三条判据全压在 UPDATE 的 WHERE 里：少写一条就等于放行别人的券
+        const info = db.prepare(`UPDATE inventory_reservation SET status = 'released', closed_at = ?
+            WHERE id = ? AND holder = ? AND world_id = ? AND status = 'held'`).run(nowMs, rid, who, wid);
+        const changes = Number(info?.changes ?? 0);
+        const after = db.prepare('SELECT * FROM inventory_reservation WHERE id = ?').get(rid);
+        if (!changes) {
+            // 幂等/越权要分清：券不是你的 ⇒ NO_PERMISSION；是你的但已收口 ⇒ ok+changes:0（失败路径上调它不能二次炸）
+            if (!after) return { ok: false, code: C.NO_TARGET, message: `没有这条预占（id=${rid}）` };
+            if (String(after.world_id) !== wid) return { ok: false, code: C.NO_TARGET, message: '这条预占属于另一个存档' };
+            if (String(after.holder) !== who) {
+                return {
+                    ok: false, code: C.NO_PERMISSION,
+                    message: `这条预占是「${String(after.holder)}」的，不是「${who}」的：别人的券不能由你释放`,
+                    reservation: reservationRowToObj(after),
+                };
+            }
+            return {
+                ok: true, already: true, changes: 0, closed: String(after.status),
+                reason: reason == null ? null : String(reason), reservation: reservationRowToObj(after), ledger: null,
+            };
+        }
+        // 留痕：释放不是物理移动（delta=0），但"占过又退了"必须在对账/面板里看得见
+        const ledgerId = `${rid}:release`;
+        db.prepare('INSERT INTO inventory_ledger (id, world_id, item, delta, holder, reason, at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(ledgerId, wid, String(after.item), 0, who, 'release', nowMs);
+        return {
+            ok: true, already: false, changes, closed: 'released',
+            reason: reason == null ? null : String(reason),
+            reservation: reservationRowToObj(after),
+            ledger: ledgerRowToObj(db.prepare('SELECT * FROM inventory_ledger WHERE id = ?').get(ledgerId)),
+        };
     });
 }
 
