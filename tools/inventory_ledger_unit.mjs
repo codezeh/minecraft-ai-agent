@@ -402,6 +402,33 @@ const call = (clientSocket, event, payload) => new Promise((resolve) => {
     } finally { server.stop(); }
 }
 
+// ── ㉒ expired 口径：数组 vs 数字（同名字段两种类型的歧义）─────────────
+//   `inventorySnapshot().expired` 是**券 id 数组**；`expireReservations().expired` 是**数字**。
+//   前端若写 `Number(expired)||0`，`Number([])===0` ⇒ "刚作废 3 张"会显示成 0（可读的谎话）。
+//   现统一补 `expiredCount`（数字），让调用方不必自己数、也不必猜类型。
+{
+    const wid = 'w-expired-shape';
+    // 自己开一块库（上面两个块各自 const db，作用域不通）
+    const db = openBoard(join(DIR, 'expired-shape', '_worlds', wid, '_board')).db;
+    db.prepare("INSERT OR REPLACE INTO inventory_reservation (id, world_id, item, qty, holder, created_at, expires_at, status, consumed_qty, closed_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+        .run('r-exp-1', wid, 'oak_log', 3, 'botX', 1, 2, 'held', 0, null);
+    const snap = inventorySnapshot(db, { worldId: wid, now: 10_000 });
+    if (snap.ok && Array.isArray(snap.expired) && snap.expired.length === 1 && snap.expiredCount === 1) {
+        okCase("㉒ snapshot.expired 是数组且 expiredCount 是数字（同名字段歧义已消除）",
+            `expired=${JSON.stringify(snap.expired)} expiredCount=${snap.expiredCount}`);
+    } else {
+        badCase("㉒ snapshot.expired / expiredCount 形状不对", snap);
+    }
+    // 反向：把 expiredCount 写成 Number(expired)||0 的常见错误 ⇒ 必须能被抓到
+    const wrong = Number(snap.expired) || 0;
+    if (wrong === 0 && snap.expired.length === 1) {
+        okCase("㉒ 反证：Number(expired)||0 会把 1 张算成 0（说明为什么必须有 expiredCount）", `wrong=${wrong}`);
+    } else {
+        badCase("㉒ 反证不成立（说明这条断言没意义）", { wrong, len: snap.expired.length });
+    }
+    db.exec(`DELETE FROM inventory_reservation WHERE world_id = '${wid}'`);
+}
+
 // ── 收尾 ────────────────────────────────────────────────────────────────
 try { rmSync(DIR, { recursive: true, force: true }); } catch { /* 临时目录删不掉不影响结论 */ }
 console.log(`\n${pass} pass / ${fails} fail`);

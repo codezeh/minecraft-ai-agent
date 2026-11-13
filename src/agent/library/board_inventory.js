@@ -549,7 +549,12 @@ export function inventorySnapshot(db, { worldId, item = null, now = Date.now() }
             return { item: name, known: k, reserved: r, available: k - r };
         });
         return {
-            ok: true, world_id: wid, expired, items, containers,
+            // ★ 口径统一（2026-11-13）：`expired` 在 `inventorySnapshot` 是**本次作废的券 id 数组**
+            //   （直接来自 voidExpired），而 `expireReservations` 里的 `expired` 是**数字**。
+            //   同名字段两种类型，调用方极容易写 `Number(expired)||0`（`Number([])===0`）
+            //   从而把"刚作废 3 张"静默显示成 0。这里**保留** `expired` 原样（前端已按数组用），
+            //   另给 `expiredCount` 作为明确的数字字段；新调用方请用 expiredCount。
+            ok: true, world_id: wid, expired, expiredCount: expired.length, items, containers,
             reservations: resRows.map(reservationRowToObj),
         };
     });

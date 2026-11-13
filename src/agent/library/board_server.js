@@ -1368,7 +1368,7 @@ export function attachBoardServer(deps = {}) {
                 if (!world.ok) return ack(cb, world.ack);
                 const r = inventorySnapshot(db, { worldId: world.worldId, item: payload?.item ?? null, now: now() });
                 if (!r.ok) return ack(cb, { ok: false, code: r.code, reason: r.message });
-                ack(cb, { ok: true, worldId: world.worldId, items: r.items, containers: r.containers, reservations: r.reservations, expired: r.expired });
+                ack(cb, { ok: true, worldId: world.worldId, items: r.items, containers: r.containers, reservations: r.reservations, expired: r.expired, expiredCount: r.expiredCount });
             } catch (e) {
                 ack(cb, { ok: false, code: 'INTERNAL', reason: String(e?.message ?? e) });
             }
