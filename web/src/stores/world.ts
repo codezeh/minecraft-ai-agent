@@ -95,7 +95,16 @@ export const teamView = reactive({
   chests: [] as TeamChestRow[],
 })
 
+/**
+ * t7：四个 loader 各一个独立代号（与 P2-4 同一机制）。**风险等级低于 P2-4**：这里旧回执覆盖新回执时
+ * 数据仍然是真实的（只是不最新），不会像事件筛选那样"显示与筛选条件不符"的结果 —— 但"队伍换了、
+ * 仓库还是上一队的"必须挡掉，所以 `team:chest-list` 的子回执也单独编号。
+ */
+let teamsSeq = 0
+let chestSeq = 0
+
 export async function loadTeams(botName = ''): Promise<void> {
+  const seq = ++teamsSeq // 新一代队伍请求：在飞的旧请求（含它的共享仓子请求）随之作废
   teamView.phase = 'loading'
   teamView.message = ''
   teamView.botName = botName
@@ -104,6 +113,7 @@ export async function loadTeams(botName = ''): Promise<void> {
   teamView.chestPhase = 'idle'
   teamView.chestMessage = ''
   const out = await readOnce<{ teams?: TeamRow[]; worldId?: string }>('team:list', {})
+  if (seq !== teamsSeq) return // RACE-GUARD teams：旧回执到达 ⇒ 丢弃
   teamView.phase = out.phase
   teamView.message = out.message
   if (out.phase !== 'ok') { teamView.teams = []; return }
@@ -119,14 +129,16 @@ export async function loadTeams(botName = ''): Promise<void> {
     teamView.chestMessage = name ? `「${name}」不在任何队伍里：看不到共享仓坐标` : '面板还没选中 bot：看不到共享仓坐标'
     return
   }
-  await loadTeamChests(teamView.botTeam.id, name)
+  await loadTeamChests(teamView.botTeam.id, name, seq)
 }
 
 /** 共享仓坐标（服务端：只有队员能看；面板必须报 `bot`，服务端只认裁决后的身份）。 */
-export async function loadTeamChests(teamId: string, botName: string): Promise<void> {
+export async function loadTeamChests(teamId: string, botName: string, teamSeq = teamsSeq): Promise<void> {
+  const seq = ++chestSeq // 共享仓自己也要编号：后到的"上一队的仓库"不许盖掉新队的
   teamView.chestPhase = 'loading'
   teamView.chestMessage = ''
   const out = await readOnce<{ chests?: TeamChestRow[] }>('team:chest-list', { bot: botName, teamId })
+  if (seq !== chestSeq || teamSeq !== teamsSeq) return // RACE-GUARD chest：旧回执 / 上一代队伍的仓库 ⇒ 丢弃
   teamView.chestPhase = out.phase
   teamView.chestMessage = out.message
   teamView.chests = out.phase === 'ok' && Array.isArray(out.data?.chests) ? out.data!.chests! : []
@@ -154,13 +166,17 @@ export const stockView = reactive({
   ledgerLimit: 100,
 })
 
+let stockSeq = 0
+
 export async function loadStock(): Promise<void> {
+  const seq = ++stockSeq // 代号见下方守卫：旧快照回执不许盖掉新的
   stockView.phase = 'loading'
   stockView.message = ''
   const out = await readOnce<{
     items?: StockItemRow[]; containers?: StockContainerRow[]; reservations?: ReservationRow[]
     expired?: string[]; worldId?: string
   }>('inventory:snapshot', {})
+  if (seq !== stockSeq) return // RACE-GUARD stock：旧回执到达 ⇒ 丢弃
   stockView.phase = out.phase
   stockView.message = out.message
   if (out.phase !== 'ok') {
@@ -178,10 +194,14 @@ export async function loadStock(): Promise<void> {
   stockView.worldId = String(out.data?.worldId ?? '')
 }
 
+let ledgerSeq = 0
+
 export async function loadLedger(limit = stockView.ledgerLimit): Promise<void> {
+  const seq = ++ledgerSeq
   stockView.ledgerPhase = 'loading'
   stockView.ledgerMessage = ''
   const out = await readOnce<{ entries?: LedgerRow[] }>('inventory:ledger', { limit })
+  if (seq !== ledgerSeq) return // RACE-GUARD ledger：旧账本回执 ⇒ 丢弃
   stockView.ledgerPhase = out.phase
   stockView.ledgerMessage = out.message
   stockView.ledger = out.phase === 'ok' && Array.isArray(out.data?.entries) ? out.data!.entries! : []
@@ -277,7 +297,15 @@ function eventsMessage(out: ReadOut<unknown>): string {
   return ''
 }
 
+/**
+ * ★ P2-4：请求代号。只有**最新一代**的回执允许写回视图 —— 快速改筛选时旧请求哪怕最后到达也丢弃，
+ *   否则会出现"选 inventory.reserve，列表却显示 team.create"。`events:stats` 用同一个机制。
+ */
+let eventsSeq = 0
+let eventStatsSeq = 0
+
 export async function loadEvents(reset = true): Promise<void> {
+  const seq = ++eventsSeq // 每次请求取新代号：进行中的旧请求（含"继续往后读"）随之作废
   if (reset) {
     eventsView.phase = 'loading'
     eventsView.message = ''
@@ -290,6 +318,7 @@ export async function loadEvents(reset = true): Promise<void> {
   const payload: any = { since, limit: eventsView.limit }
   if (eventsView.kind) payload.kind = eventsView.kind
   const out = await readOnce<{ events?: GlobalEventRow[]; count?: number }>(EVENTS_SINCE_EVENT, payload)
+  if (seq !== eventsSeq) return // RACE-GUARD events：旧回执到达 ⇒ 丢弃（不覆盖新筛选的结果）
   if (reset) {
     eventsView.phase = out.phase
     eventsView.message = eventsMessage(out)
@@ -333,11 +362,13 @@ export const eventsStats = reactive({
 })
 
 export async function loadEventStats(): Promise<void> {
+  const seq = ++eventStatsSeq // 同 P2-4：统计与列表各自编号，旧回执不得盖掉新的
   eventsStats.phase = 'loading'
   eventsStats.message = ''
   const out = await readOnce<{ kinds?: { kind: string; count: number; firstAt: number; lastAt: number }[] }>(
     EVENTS_STATS_EVENT, {},
   )
+  if (seq !== eventStatsSeq) return // RACE-GUARD stats：旧的 events:stats 回执 ⇒ 丢弃
   eventsStats.phase = out.phase
   eventsStats.message = out.message
   eventsStats.kinds = out.phase === 'ok' && Array.isArray(out.data?.kinds) ? out.data!.kinds! : []
@@ -394,10 +425,14 @@ export const federationView = reactive({
   visitorWired: null as boolean | null,
 })
 
+let federationSeq = 0
+
 export async function loadFederation(): Promise<void> {
+  const seq = ++federationSeq
   federationView.phase = 'loading'
   federationView.message = ''
   const out = await readOnce<FederationStatusResult>('federation-status', {})
+  if (seq !== federationSeq) return // RACE-GUARD fed：旧联邦回执 ⇒ 丢弃
   federationView.phase = out.phase
   federationView.message = out.message
   if (out.phase !== 'ok') {

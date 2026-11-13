@@ -21,6 +21,7 @@ onMounted(() => {
 
 function reload() { void loadEvents(true) }
 function more() { void loadMoreEvents() }
+// 筛选切换只是"再发一次请求"：乱序回执由 store 的请求代号裁决（world.ts 的 RACE-GUARD），本页不重复实现。
 function onWindowChange() { void loadEvents(true) }
 function onKindChange() { void loadEvents(true) }
 
