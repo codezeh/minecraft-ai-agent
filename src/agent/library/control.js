@@ -212,6 +212,56 @@ export function planStop({ reason, job = null, now = Date.now() } = {}) {
 }
 
 /**
+ * P1-2（2026-11-13）：**这些状态的任务单不许开工**。
+ *
+ * 只在「票已经拿到、真正执行之前」那一次复核里用（action_manager 的
+ * `_executeAction`）：`!stop` 可能正好落在这张票「等旧动作退出」的窗口里，
+ * 那时票已登记、单子却已被玩家标成 paused；面板/别的 bot 也能把单子停掉，
+ * 所以**执行前用任务板镜像再看一眼**，不能只信票自身的作废标记。
+ *
+ * 只列「确定不该跑」的：ready 不列 —— 领单后镜像可能还没刷成 claimed，
+ * 把 ready 也拦掉会凭空拒掉合法开工。
+ */
+const NOT_RUNNABLE_JOB_STATES = ['paused', 'cancelled', 'failed', 'blocked', 'done'];
+
+/**
+ * P1-2：开工前复核 —— 这张票对应的任务单现在还可以跑吗？
+ *
+ * @param {{agent:object, jobId?:string|number|null}} args
+ * @returns {string|null} null = 允许开工；字符串 = 不许开工（内容就是原因，给日志/模型看）
+ */
+export function pendingJobBlocked({ agent = null, jobId = null } = {}) {
+    if (jobId == null) return null;                      // 不是任务单：没有可核的东西
+    const board = agent?.board ?? null;
+    if (!board?.get) return null;                        // 无板降级：保持原来的行为
+    let job = null;
+    try { job = board.get(jobId); } catch { return null; }   // 读不到 ≠ 被停，宁可放行
+    if (!job) return null;
+    const state = String(job.state ?? '');
+    if (!NOT_RUNNABLE_JOB_STATES.includes(state)) return null;
+    return `Job #${jobId} is ${state}; action did not start.`;
+}
+
+/**
+ * P1-2：玩家按停时，把「票还没兑现的那张单」一并停下（单子在等旧动作，自己不会走到收尾）。
+ *
+ * 只对**还没进终态**的单生效：已经 paused / failed 的单不重写（否则玩家连按两次
+ * `!stop` 会把第一次的 `pausedReason` / `result.at` 冲掉）。
+ *
+ * @param {{agent:object, jobId?:string|number|null, now?:number}} args
+ * @returns {ReturnType<typeof planStop>|null}
+ */
+export function pausePendingJob({ agent = null, jobId = null, now = Date.now() } = {}) {
+    if (jobId == null) return null;
+    const board = agent?.board ?? null;
+    let job = null;
+    try { job = board?.get?.(jobId) ?? null; } catch { return null; }
+    if (!job) return null;
+    if (NOT_RUNNABLE_JOB_STATES.includes(String(job.state ?? ''))) return null;
+    return applyStop({ agent, reason: STOP_REASONS.PLAYER, jobId, label: null, now });
+}
+
+/**
  * 从动作 label / jobId 找出被打断的那张单（找不到返回 null = 打的不是单）。
  *
  * ★ **label 优先，jobId 只在没有 label 时兜底。** 为什么：`runJobAction` 会在调

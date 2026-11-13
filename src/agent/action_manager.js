@@ -1,7 +1,17 @@
 import { push as trace } from './library/trace_bus.js';
 import {
     STOP_REASONS, DEFAULT_STOP_REASON, normalizeStopReason, applyStop,
+    isJobLabel, pendingJobBlocked, pausePendingJob,
 } from './library/control.js';
+
+/**
+ * P1-2（2026-11-13）：**哪些"停"要连还没兑现的启动票一起作废**。
+ *
+ * 玩家 `!stop`：待启动的任务单必须跟着停 —— 否则旧动作一退出，它就清掉中断标志开工。
+ * `preempt`（新单抢旧单）/ `timeout`（旧动作自己的超时）**不能**列进来：那两种情形下
+ * "票的持有者接着开工"正是设计语义（07 §4 / §5），一并作废等于把抢占改坏。
+ */
+const CANCELLED_PENDING_STOP_REASONS = new Set([STOP_REASONS.PLAYER]);
 
 /**
  * 一个前台动作槽 + 一个 resume 槽。
@@ -98,9 +108,13 @@ export class ActionManager {
      * 现在按 07 §5：让身体停住（松键 / 停寻路 / 停挖）、发 `zombie-action` 事件、
      * 重启 agent 进程（任务单靠租约过期 + checkpoint 接着做）。
      */
-    async stop(reason = DEFAULT_STOP_REASON) {
+    async stop(reason = DEFAULT_STOP_REASON, { exceptTicket = null } = {}) {
         const r = normalizeStopReason(reason);
         this.stop_reason = r;
+
+        // ★ P1-2：玩家按停时，**票也要一起作废** —— 只把当前任务标 paused 是不够的：
+        //   等待中的那张票会在旧动作退出的瞬间认领槽位，把中断标志清掉接着干。
+        if (CANCELLED_PENDING_STOP_REASONS.has(r)) this._cancelPendingLaunch(r, exceptTicket);
 
         // ★★★ t4：**停 = 取消同一个操作，而不是再造一个新 opId**（队长硬要求 3）。
         //   面板停止 / `!stop` / 超时 / 被取代 走的都是这条入口，所以它们取消的是
@@ -153,6 +167,31 @@ export class ActionManager {
             await new Promise(resolve => setTimeout(resolve, 300));
         }
         clearTimeout(timeout);
+    }
+
+    /**
+     * P1-2：作废「还没兑现的启动票」，并把它排队的那张任务单一并暂停。
+     *
+     * 为什么不能只标当前任务 paused：票的持有者这时还没进入本文件的认领段，
+     * 它只认两个判据（`superseded` / `_pendingLaunch` 还是不是自己）；旧动作一退出，
+     * 它就会清掉中断标志、把身体开动起来 —— 而玩家以为已经停了。
+     *
+     * @param {string} reason 停止原因（只有 CANCELLED_PENDING_STOP_REASONS 里的会进来）
+     * @param {object|null} exceptTicket 调用方自己的票（stop() 由新动作自己发起时不能自伤）
+     * @returns {object|null} 被作废的票（诊断与单测用）
+     */
+    _cancelPendingLaunch(reason, exceptTicket = null) {
+        const ticket = this._pendingLaunch;
+        if (!ticket || ticket === exceptTicket) return null;
+        ticket.superseded = true;          // 沿用唯一的"不许开工"判据
+        ticket.cancelledBy = reason;       // 让它能回报"是谁撤销的"
+        this._pendingLaunch = null;
+        if (ticket.jobId != null) {
+            try {
+                pausePendingJob({ agent: this.agent, jobId: ticket.jobId });
+            } catch { /* 控制层失败不该挡住"停"本身 */ }
+        }
+        return ticket;
     }
 
     /**
@@ -279,7 +318,16 @@ export class ActionManager {
         //   排队会让"跟着我"等在上一条 10 分钟的活后面 —— 那是另一个 bug。
         //   认领动作槽（清票 + executing=true）在 await 返回后**同步**完成，中间没有 await 间隙，
         //   所以同一时刻只可能有一个启动者真正开工。
-        const ticket = { seq: ++this._launchSeq, superseded: false };
+        // P1-2：票要记住"它在替哪张任务单排队"（`runJobAction` 在 runAction 之前就把
+        // currentJobId 换成新单）——玩家按停时，靠它把那张还没开工的单一起停下。
+        // 注意：认证"能不能开工"只用**任务单自己的票**，见下面 gateJobId 那段。
+        const ticket = {
+            seq: ++this._launchSeq,
+            superseded: false,
+            cancelledBy: null,
+            jobId: this.currentJobId ?? null,
+            label: actionLabel,
+        };
         const previous = this._pendingLaunch;
         this._pendingLaunch = ticket;
         if (previous) previous.superseded = true;
@@ -316,16 +364,22 @@ export class ActionManager {
             if (this.executing) {
                 console.log(`action "${actionLabel}" trying to interrupt current action "${this.currentActionLabel}"`);
             }
-            await this.stop(stopReason);
+            await this.stop(stopReason, { exceptTicket: ticket });
 
             // ★ BOT-002：我在这段时间里被后来的启动请求取代了吗？
             //   是 ⇒ 不许开工（否则就是两个流程同时驱动身体，正是本条要消灭的现象）。
             //   这里只做"不开工"，不去动 executing —— 槽位归赢家所有。
             if (ticket.superseded || this._pendingLaunch !== ticket) {
-                console.warn(`action "${actionLabel}" not started: superseded by a newer action.`);
+                // ★ P1-2：**区分"被更新的动作取代"和"被玩家按停作废"**。
+                //   后者不是抢占：单子已经是 paused，调度器不该把这次当成"输给新动作"。
+                const cancelledBy = ticket.cancelledBy ?? null;
+                const message = cancelledBy
+                    ? `Cancelled before start (${cancelledBy}); this action did not start.`
+                    : 'Superseded by a newer action; this one did not start.';
+                console.warn(`action "${actionLabel}" not started: ${cancelledBy ? 'cancelled by ' + cancelledBy : 'superseded by a newer action'}.`);
                 return {
                     success: false,
-                    message: 'Superseded by a newer action; this one did not start.',
+                    message,
                     interrupted: true,
                     timedout: false,
                 };
@@ -344,6 +398,20 @@ export class ActionManager {
                     interrupted: true,
                     timedout: false,
                 };
+            }
+
+            // ★ P1-2：票拿到之后、真正开工之前，**再核一次任务状态**。
+            //   这张票是在等旧动作退出的窗口里排队的；玩家可能正好在这段时间按了 !stop ——
+            //   单子已是 paused/cancelled。只凭票的作废标记不够（面板/别的 bot 也能停单子），
+            //   所以按任务板镜像再判一次：不许开工，槽位原样交还（executing 仍是 false）。
+            //   ★ 只核**任务单自己的票**：mode / 即时命令排在一张刚被暂停的单后面时，
+            //     `currentJobId` 还指着那张单（runJobAction 的 finally 才清），照抄它的 id
+            //     会把玩家随后的 `!follow` 也拒掉 —— 那不是本条的语义。
+            const gateJobId = isJobLabel(actionLabel) ? (ticket.jobId ?? null) : null;
+            const blocked = pendingJobBlocked({ agent: this.agent, jobId: gateJobId });
+            if (blocked) {
+                console.warn(`action "${actionLabel}" not started: ${blocked}`);
+                return { success: false, message: blocked, interrupted: true, timedout: false };
             }
 
             // stop() 里的 requestInterrupt() 会把 interrupt_code 置真，那是给「旧动作」看的。
@@ -422,7 +490,8 @@ export class ActionManager {
             // Log the full stack trace
             console.error(err.stack);
             // 异常退出也要带原因（07 §4）：沿用这一轮开工时定的原因，不是"没见过"。
-            await this.stop(stopReason);
+            // P1-2：这张票是自己的，别让"停"把自己的票作废（stop() 的 exceptTicket）。
+            await this.stop(stopReason, { exceptTicket: ticket });
             // ★ R5-012（2026-11-08）：**别再把 err 覆盖成字符串**。
             //   原来这里是 `err = err.toString()`：err 从 Error 变成字符串，
             //   下一行却还读 `err.stack` ⇒ 恒 undefined，模型拿到的永远是
