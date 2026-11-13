@@ -1,4 +1,4 @@
-import { createMindServer, registerAgent, numStateListeners, getHandshakeToken, issueAgentToken } from './mindserver.js';
+import { createMindServer, registerAgent, numStateListeners, getHandshakeToken, issueAgentToken, revokeAgentTokenByName } from './mindserver.js';
 import { AgentProcess } from '../process/agent_process.js';
 import { getServer } from './mcserver.js';
 import open from 'open';
@@ -148,7 +148,11 @@ export function stopAgent(agentName) {
  */
 export async function destroyAgent(agentName) {
     const ap = agent_processes[agentName];
-    if (!ap) return { ok: true, removed: false, exited: true, reason: 'not-found' };
+    if (!ap) {
+        // 没有进程条目也照样撤凭据（幂等）：这只 bot 已经不在了，旧 token 不该还能过握手门。
+        const cred0 = revokeAgentTokenByName(agentName);
+        return { ok: true, removed: false, exited: true, reason: 'not-found', credential: cred0 };
+    }
 
     let r;
     if (typeof ap.stopAndWait === 'function') {
@@ -165,7 +169,10 @@ export async function destroyAgent(agentName) {
         return { ok: false, removed: false, exited: false, escalated: !!r.escalated, reason: r.reason };
     }
     delete agent_processes[agentName];
-    return { ok: true, removed: true, exited: true, escalated: !!r.escalated, reason: r.reason };
+    // ★ P2-5：**确认退出之后**才撤凭据 + 断开仍持旧 token 的连接。撤早了会让还在跑（未确认退出）的
+    //   进程失联；撤晚了（原来根本不撤）旧 token 在 mindserver 存活期间一直有效，同名重建也复用不到名字。
+    const cred = revokeAgentTokenByName(agentName);
+    return { ok: true, removed: true, exited: true, escalated: !!r.escalated, reason: r.reason, credential: cred };
 }
 
 /**

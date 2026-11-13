@@ -183,6 +183,31 @@ export function clearCredentials() {
 }
 
 /**
+ * ★ P2-5：撤销**单条**凭据（销毁 bot、确认子进程退出之后调）。
+ *
+ * 原来只有 `clearCredentials()` 这种「全清」⇒ 旧 bot 的 token 在 mindserver 存活期间一直有效，
+ * 反复 create/destroy 还让登记表只增不减。按 token 删这一条即可（比较仍走定长 tokenEquals）。
+ * 面板凭据不在登记表里，动不到它。
+ * @param {string} token
+ * @returns {boolean} 这次是否真的删掉了一条
+ */
+export function revokeCredential(token) {
+    if (typeof token !== 'string' || token.length === 0) return false;
+    for (const key of EXTRA_CREDENTIALS.keys()) {
+        if (tokenEquals(token, key)) {
+            EXTRA_CREDENTIALS.delete(key);
+            return true;
+        }
+    }
+    return false;
+}
+
+/** 登记表规模（单测断言「销毁后不再增长」用；不是业务接口）。 */
+export function credentialCount() {
+    return EXTRA_CREDENTIALS.size;
+}
+
+/**
  * 这次握手出示的是**哪一份**凭据 → 角色；不认识/没带 → null。
  *
  * 逐条 `tokenEquals`（定长比较）而不是 Map 直查：比较要在常量时间内完成，

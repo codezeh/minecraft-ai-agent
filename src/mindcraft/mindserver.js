@@ -10,7 +10,8 @@ import { allowLocalOnly } from './local_only.js';
 // R6 #2：再加「凭据 → 角色」（面板 / agent）。角色由**出示的是哪一份凭据**决定。
 import {
     makeToken, makeHandshakeGate, authCookieHeader, hasAuthCookie,
-    sanitizeAgentSettings, registerCredential, credentialAgent, tokenFromHandshake, ROLE_AGENT, ROLE_PANEL,
+    sanitizeAgentSettings, registerCredential, credentialAgent, tokenFromHandshake, tokenEquals,
+    revokeCredential, ROLE_AGENT, ROLE_PANEL,
 } from './auth_gate.js';
 // 第2条：create-agent 的 profile 名复用 agent 侧同一份校验（规则只能有一个真相）
 import { validateNameFormat } from '../agent/connection_handler.js';
@@ -343,6 +344,8 @@ export function isAgentIdentity(socket, token = handshakeToken) {
  * @returns {'panel'|'agent'|null}
  */
 export function socketRole(socket) {
+    // ★ P2-5：凭据被撤销的连接一律按「角色未知」处理 —— 断连之外的兜底（断不掉时后续事件也必须被拒）。
+    if (socket?.data?.revoked === true) return null;
     const role = socket?.data?.role;
     return role === ROLE_PANEL || role === ROLE_AGENT ? role : null;
 }
@@ -363,6 +366,14 @@ export function tokenFromSocket(socket) {
 }
 
 /**
+ * ★ P2-5：每只 bot 独立凭据的**登记副本**（name → token）。
+ *
+ * 销毁**确认子进程退出之后**要按名字把这条凭据撤掉；否则旧 token 在 mindserver 存活期间
+ * 仍然能过握手门（还会被同名重建的新进程复用名字），而登记表只增不减。
+ */
+const agentTokens = new Map();
+
+/**
  * ★ ADR 阶段 1：给一只 bot 发**独立凭据**并登记归属。
  *
  * 原来所有子进程共用一条 `agentToken`：任何持有它的进程都能 `login-agent` 抢任意名字。
@@ -376,7 +387,79 @@ export function issueAgentToken(agentName) {
     if (!name) return null;
     const token = makeToken();
     if (!registerCredential(token, ROLE_AGENT, name)) return null;
+    agentTokens.set(name, token);
     return token;
+}
+
+/** 让一条**已建立**的连接失效：能断就断；断不掉就盖 revoked 戳（socketRole 认这个戳，后续事件按"角色未知"拒）。 */
+export function invalidateAgentSocket(socket) {
+    if (!socket) return false;
+    try {
+        if (!socket.data) socket.data = {};
+        socket.data.revoked = true;
+    } catch { /* 桩 socket 不可写：那就只靠 disconnect */ }
+    try {
+        if (typeof socket.disconnect === 'function') socket.disconnect(true);
+    } catch { /* 已在断开中：revoked 戳仍在，后续事件照样被拒 */ }
+    return true;
+}
+
+/** 这条连接出示的凭据是不是 `token`（定长比较，不因前缀相同就算匹配）。 */
+function socketUsesToken(socket, token) {
+    const presented = tokenFromSocket(socket);
+    return typeof presented === 'string' && tokenEquals(presented, token);
+}
+
+/** io 上还连着的 socket（离线单测没有 io ⇒ 空数组）。 */
+function liveSockets() {
+    try {
+        const m = io?.sockets?.sockets;
+        if (m instanceof Map) return [...m.values()];
+        if (Array.isArray(m)) return m;
+    } catch { /* 取不到就当没有 */ }
+    return [];
+}
+
+/**
+ * ★ P2-5：按 token 撤销凭据 + 让**出示它的既有连接**失效。
+ *
+ * "撤销登记"只管下一次握手；已经连上的 socket 还活着 ⇒ 必须主动断（或至少在后续事件里拒）。
+ * @param {string} token
+ * @param {object[]|null} [sockets] 单测注入用；缺省取 io 上真实连接
+ * @returns {{revoked:boolean, dropped:number}}
+ */
+export function revokeAgentToken(token, sockets = null) {
+    const out = { revoked: false, dropped: 0 };
+    if (typeof token !== 'string' || !token) return out;
+    out.revoked = revokeCredential(token);
+    for (const s of (sockets || liveSockets())) {
+        // 已经失效过的不再计数（revoked 戳是在断不掉时才会留下的那条兜底）
+        if (s?.data?.revoked === true) continue;
+        if (socketUsesToken(s, token) && invalidateAgentSocket(s)) out.dropped++;
+    }
+    return out;
+}
+
+/**
+ * ★ P2-5：按 agent 名撤销（销毁流程调用；见 mindcraft.destroyAgent）。
+ * 旧式共享凭据的兜底路径下按 token 找不到这条连接，就按"通道绑定"断它。
+ * @param {string} agentName
+ * @returns {{revoked:boolean, dropped:number}}
+ */
+export function revokeAgentTokenByName(agentName) {
+    const name = typeof agentName === 'string' ? agentName.trim() : '';
+    const out = { revoked: false, dropped: 0 };
+    if (!name) return out;
+    const token = agentTokens.get(name) ?? null;
+    agentTokens.delete(name);            // 同名重建会登记新 token；旧的那条从这里起再也查不到
+    if (token) {
+        const r = revokeAgentToken(token);
+        out.revoked = r.revoked;
+        out.dropped += r.dropped;
+    }
+    const bound = agent_connections[name]?.socket;
+    if (bound && bound?.data?.revoked !== true && invalidateAgentSocket(bound)) out.dropped++;
+    return out;
 }
 
 /**
@@ -701,6 +784,176 @@ export function requirePanelRole(socket, event, ack) {
     try { if (typeof ack === 'function') ack({ ok: false, ...payload }); } catch { /* 客户端已断开 */ }
     try { socket?.emit?.('control-denied', payload); } catch { /* 断开中 */ }
     return false;
+}
+
+/**
+ * ★★★ P1-1：`send-message` 的投递实现 —— **只有面板连接能投递**。
+ *
+ * 为什么必须是硬门：目标 bot 拿 `from` 查玩家 UUID 定权限等级
+ * （`mindserver_proxy:133 → agent.respondFunc(from, message)` → `handleMessage` 的 `perm.author`），
+ * 所以「能指定 from」就等于「能自称 owner 去触发 owner 专属命令」。原来这里既没有 `requirePanel`，
+ * 又把调用方的 `data.from` 原样转发 ⇒ 任何持 **agent 凭据** 的连接都能冒充在线玩家。
+ *
+ * 口径：只给面板 + 投出去的载荷是**白名单拷贝**（只有 `{ from, message }`，
+ * 不把调用方的其它字段原样塞进 bot）。bot 之间的通信**不走这里**：那是 `chat-message`
+ * （发送者由服务端按通道绑定 `curAgentName` 填，见该 handler）。
+ *
+ * 抽成模块级函数的唯一目的是能被离线单测直接驱动（判据本身仍只有 `requirePanelRole` 一处）。
+ *
+ * @param {object} socket
+ * @param {string} agentName 目标 bot
+ * @param {{from?:string, message?:string}} data
+ * @param {Function} [ack]
+ * @param {{gate?:Function, findAgent?:Function, connections?:object, takeToken?:Function}} [deps] 单测注入
+ * @returns {{ok:boolean, code?:string}}
+ */
+export function deliverSendMessage(socket, agentName, data, ack, deps = {}) {
+    const gate = deps.gate ?? ((s, ev, cb) => requirePanelRole(s, ev, cb));
+    const findAgent = deps.findAgent ?? knownAgentName;
+    const connections = deps.connections ?? agent_connections;
+    const rate = deps.takeToken ?? takeToken;
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const deny = (code, message) => {
+        reply({ ok: false, code, message });
+        return { ok: false, code };
+    };
+
+    // ★ P1-1：先过面板闸门，**再**谈投递。移除这一行 ⇒ agent 凭据就能冒充玩家（tools/sec_review_unit.mjs A 段会红）。
+    if (!gate(socket, 'send-message', () => reply({ ok: false, code: CONTROL_CODE.PANEL_ONLY, message: '只有面板能发玩家消息' }))) {
+        return { ok: false, code: CONTROL_CODE.PANEL_ONLY };
+    }
+    // ★ R6 #25：`agent_connections['constructor']` 是真值 ⇒ 下面 `.socket` 会抛错，名字先过 knownAgent()。
+    const sendTo = findAgent(agentName);
+    if (!sendTo) {
+        console.warn(`Agent ${agentName} not in game, cannot send message via MindServer.`);
+        return deny(CONTROL_CODE.UNKNOWN_AGENT, `未知 agent：${String(agentName)}`);
+    }
+    // ★ F-WEB-203：两道内存闸 —— 单条 ≤ 2000 字符、每来源 30 条/10 秒。
+    if (typeof data?.message !== 'string' || data.message.length === 0 || data.message.length > 2000) {
+        console.warn(`[mindserver] 拒绝 send-message：message 形状非法（${typeof data?.message}）`);
+        return deny(CONTROL_CODE.BAD_REQUEST, 'message 必须是 1~2000 字符的字符串');
+    }
+    if (!rate(socket, 'send-message', 30, 10000)) {
+        return deny(CONTROL_CODE.RATE_LIMITED, '太频繁：send-message 限 30 条/10 秒');
+    }
+    // from 决定「谁在说话」→ 权限等级；必须是 1~32 字符的字符串。
+    if (typeof data?.from !== 'string' || !data.from || data.from.length > 32) {
+        console.warn(`[mindserver] 拒绝 send-message：from 非法（${JSON.stringify(data?.from ?? null)}）`);
+        return deny(CONTROL_CODE.BAD_REQUEST, '"from" 必须是 1~32 字符的字符串');
+    }
+    const target = connections[sendTo];
+    // 目标 bot 的通道是 null（没进服/已停）时显式回 NOT_IN_GAME，不再让 TypeError 被外层吞掉。
+    if (!target?.socket) return deny(CONTROL_CODE.NOT_IN_GAME, '这只 bot 不在游戏里');
+    try {
+        target.socket.emit('send-message', { from: data.from, message: data.message });
+        reply({ ok: true });
+        return { ok: true };
+    } catch (error) {
+        console.error('Error: ', error);
+        return deny(CONTROL_CODE.NOT_IN_GAME, '这只 bot 不在游戏里');
+    }
+}
+
+/** profile 目录（`profiles/*.json`）：本文件与接线处共用一份。 */
+function profilesDirOf() {
+    return path.join(__dirname, '../../profiles');
+}
+
+/**
+ * ★ R6 #25：`agent_connections['constructor']` 是真值 ⇒ 不设防时 `.socket` 会抛错，
+ * 原型链上的键还会被当成 agent 名。名字必须**只认自有键**（trim 之后非空）。
+ *
+ * 放在模块级（而不是连接闭包里）是 P1-1 的要求：投递判定被抽成模块级函数后，
+ * 它的默认实现**不能**再指向某个闭包里的 `const` —— 那在运行期就是 ReferenceError（`no-undef` 会报）。
+ * 连接闭包里那份 `knownAgent` 现在是它的别名，判据仍然只有一处。
+ */
+export function knownAgentName(agentName) {
+    const name = typeof agentName === 'string' ? agentName.trim() : '';
+    return name && Object.prototype.hasOwnProperty.call(agent_connections, name) ? name : null;
+}
+
+/**
+ * ★ P2-6：`get-profiles`（配置元数据：api/model/url/字节数）—— **只给面板**。
+ *
+ * 缺陷原貌：这条和下面的 `get-profile` 都没有面板角色检查 ⇒ 任何持 **agent 凭据** 的连接都能
+ * 列出/读走全部 profile（含 `api`、`model`、`url`、owner 名单）。
+ * 判据仍只有 `requirePanelRole` 一处；抽到模块级只为能被离线单测直接驱动。
+ *
+ * @param {object} socket
+ * @param {Function} callback
+ * @param {{gate?:Function, dir?:string}} [deps] 单测注入
+ * @returns {{ok:boolean, code?:string}}
+ */
+export function readProfilesList(socket, callback, deps = {}) {
+    if (typeof callback !== 'function') callback = () => {};
+    const gate = deps.gate ?? ((s, ev, cb) => requirePanelRole(s, ev, cb));
+    if (!gate(socket, 'get-profiles', () => callback({ ok: false, code: CONTROL_CODE.PANEL_ONLY, message: '只有面板能读 profile' }))) {
+        return { ok: false, code: CONTROL_CODE.PANEL_ONLY };
+    }
+    const profilesDir = deps.dir ?? profilesDirOf();
+    try {
+        if (!existsSync(profilesDir)) { callback({ ok: false, reason: 'profiles 目录不存在' }); return { ok: false, reason: 'missing-dir' }; }
+        const out = [];
+        for (const f of readdirSync(profilesDir)) {
+            if (!f.endsWith('.json')) continue;
+            const full = path.join(profilesDir, f);
+            try {
+                const j = JSON.parse(readFileSync(full, 'utf8'));
+                const model = typeof j.model === 'object' && j.model ? (j.model.model || JSON.stringify(j.model)) : j.model;
+                out.push({
+                    file: f,
+                    // F-WEB-204：只回相对名，不回本机绝对路径（带用户名/目录结构 = 前置侦察件）
+                    path: path.basename(full),
+                    name: j.name || null,
+                    api: j.api || null,
+                    model: model || null,
+                    url: j.url || (typeof j.model === 'object' ? j.model?.url : null) || null,
+                    bytes: readFileSync(full, 'utf8').length,
+                });
+            } catch (e) {
+                out.push({ file: f, path: path.basename(full), error: '解析失败: ' + (e.message || e) });
+            }
+        }
+        out.sort((a, b) => a.file.localeCompare(b.file));
+        // ★ R4 S3#20（F-WEB-204 同类第 4 处）：这里原来回 `dir: profilesDir` —— **本机绝对路径**
+        //   （带用户名、目录结构），等于把前置侦察件交给任何持 token 的客户端；
+        //   同一条消息里 `path` 已经改成 basename 了，`dir` 漏了。只回相对名。
+        callback({ ok: true, dir: path.basename(profilesDir), profiles: out });
+        return { ok: true };
+    } catch (e) {
+        callback({ ok: false, reason: String(e && e.message || e) });
+        return { ok: false, reason: 'throw' };
+    }
+}
+
+/**
+ * ★ P2-6：`get-profile`（单个 profile 的**原文** + 解析结果）—— **只给面板**。
+ * 原文里就是 `api`/`model`/`permissions`（谁是这个 bot 的主人），属管理面。
+ * @param {object} socket
+ * @param {string} file
+ * @param {Function} callback
+ * @param {{gate?:Function, dir?:string}} [deps] 单测注入
+ * @returns {{ok:boolean, code?:string, reason?:string}}
+ */
+export function readProfileFile(socket, file, callback, deps = {}) {
+    if (typeof file === 'function') { callback = file; file = ''; }
+    if (typeof callback !== 'function') callback = () => {};
+    const gate = deps.gate ?? ((s, ev, cb) => requirePanelRole(s, ev, cb));
+    if (!gate(socket, 'get-profile', () => callback({ ok: false, code: CONTROL_CODE.PANEL_ONLY, message: '只有面板能读 profile' }))) {
+        return { ok: false, code: CONTROL_CODE.PANEL_ONLY };
+    }
+    const profilesDir = deps.dir ?? profilesDirOf();
+    try {
+        const safe = path.basename(String(file || ''));       // 防目录穿越
+        const full = path.join(profilesDir, safe);
+        if (!existsSync(full)) { callback({ ok: false, reason: 'profile 不存在: ' + safe }); return { ok: false, reason: 'missing' }; }
+        const raw = readFileSync(full, 'utf8');
+        callback({ ok: true, file: safe, path: path.basename(full), raw, json: JSON.parse(raw) });
+        return { ok: true };
+    } catch (e) {
+        callback({ ok: false, reason: String(e && e.message || e) });
+        return { ok: false, reason: 'throw' };
+    }
 }
 
 /**
@@ -1739,54 +1992,14 @@ export function createMindServer(host_public = false, port = 8080) {
         registerMapRelay(socket);
 
         // ---- 配置向导：profile 列表 / 读取（纯文件操作，不涉及 agent）----
-        const profilesDir = path.join(__dirname, '../../profiles');
-
+        // ★ P2-6：两个入口都是**管理面**（profile 里有 api/model/permissions）；实现见模块级 readProfilesList/readProfileFile。
         socket.on('get-profiles', (callback) => {
-            try {
-                if (!existsSync(profilesDir)) { callback({ ok: false, reason: 'profiles 目录不存在' }); return; }
-                const out = [];
-                for (const f of readdirSync(profilesDir)) {
-                    if (!f.endsWith('.json')) continue;
-                    const full = path.join(profilesDir, f);
-                    try {
-                        const j = JSON.parse(readFileSync(full, 'utf8'));
-                        const model = typeof j.model === 'object' && j.model ? (j.model.model || JSON.stringify(j.model)) : j.model;
-                        out.push({
-                            file: f,
-            // F-WEB-204：只回相对名，不回本机绝对路径（带用户名/目录结构 = 前置侦察件）
-                            path: path.basename(full),
-                            name: j.name || null,
-                            api: j.api || null,
-                            model: model || null,
-                            url: j.url || (typeof j.model === 'object' ? j.model?.url : null) || null,
-                            bytes: readFileSync(full, 'utf8').length,
-                        });
-                    } catch (e) {
-                        out.push({ file: f, path: path.basename(full), error: '解析失败: ' + (e.message || e) });
-                    }
-                }
-                out.sort((a, b) => a.file.localeCompare(b.file));
-                // ★ R4 S3#20（F-WEB-204 同类第 4 处）：这里原来回 `dir: profilesDir` —— **本机绝对路径**
-                //   （带用户名、目录结构），等于把前置侦察件交给任何持 token 的客户端；
-                //   同一条消息里 `path` 已经改成 basename 了，`dir` 漏了。只回相对名。
-                callback({ ok: true, dir: path.basename(profilesDir), profiles: out });
-            } catch (e) {
-                callback({ ok: false, reason: String(e && e.message || e) });
-            }
+            readProfilesList(socket, callback);
         });
 
         // 读单个 profile 全文（前端"选 profile 即填表单/创建 agent"要用）
         socket.on('get-profile', (file, callback) => {
-            if (typeof file === 'function') { callback = file; file = ''; }
-            try {
-                const safe = path.basename(String(file || ''));       // 防目录穿越
-                const full = path.join(profilesDir, safe);
-                if (!existsSync(full)) { callback({ ok: false, reason: 'profile 不存在: ' + safe }); return; }
-                const raw = readFileSync(full, 'utf8');
-                callback({ ok: true, file: safe, path: path.basename(full), raw, json: JSON.parse(raw) });
-            } catch (e) {
-                callback({ ok: false, reason: String(e && e.message || e) });
-            }
+            readProfileFile(socket, file, callback);
         });
 
         // ---- 第四轮审计 ①：玩家身份绑定（面板 → 一次性码 → 游戏内 !claim）----
@@ -1847,10 +2060,8 @@ export function createMindServer(host_public = false, port = 8080) {
          * 只接受已注册的 agent 名；返回规范化名字或 null。
          * （不是"任意字符串"—— 否则可以拿它当路径拼接的入口去碰别的目录。）
          */
-        const knownAgent = (agentName) => {
-            const name = typeof agentName === 'string' ? agentName.trim() : '';
-            return name && Object.prototype.hasOwnProperty.call(agent_connections, name) ? name : null;
-        };
+        // 判据只有一处：模块级 knownAgentName（P1-1 抽出去的投递实现也在用它）。
+        const knownAgent = knownAgentName;
 
         // 五个控制事件的统一回执：客户端没传 callback 时**静默**（裸调用会抛 TypeError 打挂控制面）。
         const ackFn = (callback) => (payload) => {
@@ -2664,43 +2875,9 @@ export function createMindServer(host_public = false, port = 8080) {
         });
 
 		socket.on('send-message', (agentName, data, callback) => {
-			const ack = ackFn(callback);
-			// ★ R6 #25：`agent_connections['constructor']` 是真值 ⇒ 下面 `.socket` 会抛错，名字先过 knownAgent()。
-			const sendTo = knownAgent(agentName);
-			if (!sendTo) {
-				console.warn(`Agent ${agentName} not in game, cannot send message via MindServer.`);
-				ack({ ok: false, code: CONTROL_CODE.UNKNOWN_AGENT, message: `未知 agent：${String(agentName)}` });
-				return;
-			}
-			// ★ F-WEB-203：两道内存闸 —— 单条 ≤ 2000 字符、每来源 30 条/10 秒。
-			if (typeof data?.message === 'string' && data.message.length > 2000) {
-				console.warn(`[mindserver] 拒绝 send-message：message 过长（${data.message.length} > 2000）`);
-				ack({ ok: false, code: CONTROL_CODE.BAD_REQUEST, message: '消息太长（上限 2000 字符）' });
-				return;
-			}
-			if (!takeToken(socket, 'send-message', 30, 10000)) {
-				ack({ ok: false, code: CONTROL_CODE.RATE_LIMITED, message: '太频繁：send-message 限 30 条/10 秒' });
-				return;
-			}
-			// 这条通路决定「谁在说话」→ 权限等级；from 必须是 1~32 字符的字符串。
-			if (!data || typeof data.from !== 'string' || !data.from || data.from.length > 32) {
-				console.warn(`[mindserver] 拒绝 send-message：from 非法（${JSON.stringify(data?.from ?? null)}）`);
-				ack({ ok: false, code: CONTROL_CODE.BAD_REQUEST, message: '"from" 必须是 1~32 字符的字符串' });
-				return;
-			}
-			const target = agent_connections[sendTo];
-			// 目标 bot 的通道是 null（没进服/已停）时显式回 NOT_IN_GAME，不再让 TypeError 被外层吞掉。
-			if (!target?.socket) {
-				ack({ ok: false, code: CONTROL_CODE.NOT_IN_GAME, message: '这只 bot 不在游戏里' });
-				return;
-			}
-			try {
-				target.socket.emit('send-message', data);
-				ack({ ok: true });
-			} catch (error) {
-				console.error('Error: ', error);
-				ack({ ok: false, code: CONTROL_CODE.NOT_IN_GAME, message: '这只 bot 不在游戏里' });
-			}
+			// ★★★ P1-1：`from` 决定目标 bot 上的权限等级（owner 专属命令）⇒ **只有面板**能投递；
+			//   agent 凭据一律 PANEL_ONLY。实现在模块级 deliverSendMessage（离线单测直接驱动它）。
+			deliverSendMessage(socket, agentName, data, ackFn(callback));
 		});
 
         socket.on('bot-output', (agentName, message) => {
