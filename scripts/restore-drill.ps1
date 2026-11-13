@@ -497,10 +497,22 @@ try {
 
     # ── 断言 7/8：任务板 ───────────────────────────────────────────
     $botsEntry = @($entries | Where-Object { $_.kind -eq 'bots' }) | Select-Object -First 1
-    $boardRel = 'bots/_board/board.sqlite'
-    $boardFile = Join-Path $drillRoot ($boardRel -replace '/', '\')
+    # P1（2026-11-13）：任务板库已按 ADR-0001 D6 阶段 3 迁到 `bots/_worlds/<id>/_board/board.sqlite`。
+    # 这里**从备份 manifest 里读真实路径**（备份是真相），只回退旧路径给老备份。
+    # 硬编码旧路径的后果：解压后找不到 → 断言 7/8 恒红（恢复演练形同虚设）。
+    $boardRel = $null
     $boardMeta = $null
-    if ($botsEntry -and $botsEntry.databases) { $boardMeta = $botsEntry.databases.$boardRel }
+    if ($botsEntry -and $botsEntry.databases) {
+        $cands = @($botsEntry.databases.PSObject.Properties | Where-Object { $_.Name -like '*/board.sqlite' })
+        if ($cands.Count -eq 1) { $boardRel = $cands[0].Name; $boardMeta = $cands[0].Value }
+        elseif ($cands.Count -gt 1) {
+            Add-Result 7 '任务板 integrity_check=ok' $false ("manifest 里有 {0} 个 board.sqlite，无法判定" -f $cands.Count)
+            Add-Result 8 '任务板 jobs/claims/shared 行数与 manifest 相等' $false '多份候选'
+            return
+        }
+    }
+    if (-not $boardRel) { $boardRel = 'bots/_board/board.sqlite' }   # 老备份回退
+    $boardFile = Join-Path $drillRoot ($boardRel -replace '/', '\')
 
     if (-not (Test-Path -LiteralPath $boardFile)) {
         Add-Result 7 '任务板 integrity_check=ok' $false '解压后找不到 bots/_board/board.sqlite'

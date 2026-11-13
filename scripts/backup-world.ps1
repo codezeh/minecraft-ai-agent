@@ -121,6 +121,11 @@ $rconLib = Join-Path $PSScriptRoot 'lib/rcon.ps1'
 if (-not (Test-Path -LiteralPath $rconLib)) { throw "缺少 RCON 库：$rconLib" }
 . $rconLib
 
+# ★ P2-7："这个 java 是不是本项目服务端"只有一份判据（scripts/lib/server_proc.ps1）。
+$procLib = Join-Path $PSScriptRoot 'lib/server_proc.ps1'
+if (-not (Test-Path -LiteralPath $procLib)) { throw "缺少进程判据库：$procLib" }
+. $procLib
+
 # ── 备份配置（config/backup.json）────────────────────────────────────
 # ★ R6 #7-②（2026-11-10）：以前配置**只有 -FromConfig 才读**，而 README 教的是裸跑
 #   （`powershell -File scripts\backup-world.ps1`）⇒ 人工备份永远不读 excludeSecrets，
@@ -221,26 +226,56 @@ function Get-WorldEvidence {
         $lock = Join-Path $root "server/$dim/session.lock"
         if (Test-PathLocked $lock) { $ev += "session.lock 被独占：server/$dim/session.lock" }
     }
+    # P2-7：只认**本项目** server.jar 的 java（别的 MC 装 / 普通 java 不算占用）；session.lock 仍是硬闸门。
     try {
         $procs = @(Get-CimInstance -ClassName Win32_Process -Filter "Name='java.exe' OR Name='javaw.exe'" -ErrorAction Stop)
-        foreach ($p in $procs) {
-            $cmd = ''
-            try { $cmd = [string]$p.CommandLine } catch { }
-            if ($cmd -match 'server\.jar|paper|spigot|bukkit') { $ev += "java 进程 PID=$($p.ProcessId)：$cmd" }
+        foreach ($p in @(Get-OwnServerJava -ProjectRoot $root -ProcessTable $procs)) {
+            $ev += "本项目服务端进程 PID=$($p.ProcessId)：$([string]$p.CommandLine)"
         }
     } catch {
-        foreach ($p in @(Get-Process -Name java, javaw -ErrorAction SilentlyContinue)) {
-            $ev += "java 进程 PID=$($p.Id)（无法读取命令行）"
-        }
+        # 读不到命令行时不拿"所有 java"当占用（那正是 P2-7 的缺陷）；服务端在跑必然独占 session.lock。
+        Write-Host '  WARN 读不到进程命令行（CIM 不可用）：只靠 session.lock 判断服务端是否在跑' -ForegroundColor Yellow
     }
     return $ev
+}
+
+# P1（真机验收发现，2026-11-13）：任务板库已按 ADR-0001 D6 阶段 3 迁到
+# `boss/_worlds/<world_id>/_board/board.sqlite`，而本脚本还硬要求旧路径
+# `bots/_board/board.sqlite` ⇒ **每次停服自动备份 100% 失败**（throw "找不到"）。
+# 现在：优先找 `_worlds/*/_board/board.sqlite`（多于一个就报错，绝不猜），回退旧路径。
+#
+# 返回 @{ Ok; Abs; Rel; Reason }。Rel 是相对 `mindcraft/bots` 的 POSIX 风格路径 ——
+# 它同时是 Replace 映射的键，键写错的话快照换不进去（备份看起来成功、内容却不一致）。
+function Resolve-BotsBoardPath([string]$BotsDir) {
+    $worldsRoot = Join-Path $BotsDir '_worlds'
+    if (Test-Path -LiteralPath $worldsRoot) {
+        $hits = @(Get-ChildItem -LiteralPath $worldsRoot -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName '_board/board.sqlite' } |
+            Where-Object { Test-Path -LiteralPath $_ })
+        if ($hits.Count -gt 1) {
+            return @{ Ok = $false; Abs = $null; Rel = $null
+                Reason = ("发现多个存档的任务板库（{0} 个）：{1} —— 不猜该备份哪个，请显式指定" -f $hits.Count, ($hits -join '; ')) }
+        }
+        if ($hits.Count -eq 1) {
+            $abs = $hits[0]
+            $rel = ($abs.Substring($BotsDir.Length).TrimStart('\', '/')) -replace '\\', '/'
+            return @{ Ok = $true; Abs = $abs; Rel = $rel; Reason = $null }
+        }
+    }
+    $legacy = Join-Path $BotsDir '_board/board.sqlite'
+    if (Test-Path -LiteralPath $legacy) {
+        return @{ Ok = $true; Abs = $legacy; Rel = '_board/board.sqlite'; Reason = $null }
+    }
+    return @{ Ok = $false; Abs = $null; Rel = $null
+        Reason = '找不到任务板库：既没有 _worlds/<id>/_board/board.sqlite，也没有 _board/board.sqlite' }
 }
 
 function Get-OpenDbHandles {
     # 只是"谁还开着任务板库"的信息，**不**作为拒绝理由（一致性由 quiescence 证明兜底）
     $out = @()
-    $board = Join-Path $root 'mindcraft/bots/_board/board.sqlite'
-    if (Test-PathLocked $board) { $out += 'mindcraft/bots/_board/board.sqlite' }
+    $botsRoot2 = Join-Path $root 'mindcraft/bots'
+    $rb = Resolve-BotsBoardPath $botsRoot2
+    if ($rb.Ok -and (Test-PathLocked $rb.Abs)) { $out += ('mindcraft/bots/' + $rb.Rel) }
     return $out
 }
 
@@ -646,25 +681,27 @@ try {
     # ── robots：单一真相 = mindcraft/bots（mindserver 的 cwd）─────────
     $botsDir = Join-Path $root 'mindcraft/bots'
     if (-not (Test-Path -LiteralPath $botsDir)) { throw "找不到 mindcraft/bots（唯一真相目录）—— 备份会丢掉任务板与全部机器人记忆" }
-    $botsBoard = Join-Path $botsDir '_board/board.sqlite'
-    if (-not (Test-Path -LiteralPath $botsBoard)) { throw '找不到 mindcraft/bots/_board/board.sqlite —— 备份会丢掉任务板，拒绝继续' }
+    $resolved = Resolve-BotsBoardPath $botsDir
+    if (-not $resolved.Ok) { throw ("任务板库解析失败，备份会丢掉任务板，拒绝继续：" + $resolved.Reason) }
+    $botsBoard = $resolved.Abs
+    $boardRel = 'bots/' + $resolved.Rel          # 例：bots/_worlds/w-xxx/_board/board.sqlite
 
     $botsFiles = @(Get-FileList $botsDir)
     $boardSnap = Join-Path $snapDir 'board.sqlite'
     $boardMeta = New-SqliteSnapshot -SrcDb $botsBoard -DestDb $boardSnap -Tables @('jobs', 'claims', 'shared')
-    $boardMeta['path'] = 'bots/_board/board.sqlite'
-    $boardMeta['sourceDb'] = 'mindcraft/bots/_board/board.sqlite'
+    $boardMeta['path'] = $boardRel
+    $boardMeta['sourceDb'] = ('mindcraft/bots/' + $resolved.Rel)
     $boardMeta['walIncluded'] = $false
     Write-Info ("任务板快照：user_version={0} jobs={1} claims={2} shared={3}（VACUUM INTO，{4} 字节）" -f `
             $boardMeta.userVersion, $boardMeta.tables.jobs, $boardMeta.tables.claims, $boardMeta.tables.shared, $boardMeta.bytes)
 
     $botsDbs = [ordered]@{}
-    $botsDbs['bots/_board/board.sqlite'] = $boardMeta
+    $botsDbs[$boardRel] = $boardMeta
     $targets.Add([pscustomobject]@{
             Leaf = 'bots'; Kind = 'bots'; Source = 'mindcraft/bots'
             SourceAbs = (Resolve-Path -LiteralPath $botsDir).Path
             Files = $botsFiles
-            Replace = @{ '_board/board.sqlite' = $boardSnap }
+            Replace = @{ $resolved.Rel = $boardSnap }
             DbTables = @{}
             Databases = $botsDbs
         })
