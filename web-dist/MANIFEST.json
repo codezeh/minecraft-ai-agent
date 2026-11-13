@@ -1,11 +1,11 @@
 {
   "schemaVersion": 2,
   "generatedFrom": "web/dist (Vue3 + Vite console)",
-  "generatedAt": "2026-11-13T08:53:20Z",
+  "generatedAt": "2026-11-13T14:43:44Z",
   "source": {
     "root": "web/",
     "files": 39,
-    "hash": "sha256:0f8e40d6323a341a7a7858b7e079c08b81b8ceb0a106e58afc28afcad2d0f204",
+    "hash": "sha256:ce56f3380a2600f614a0c07833d0af9cd5cd81707b4648b01b32251ac3fc9901",
     "inputs": [
       "src",
       "index.html",
@@ -17,30 +17,30 @@
   },
   "artifact": {
     "files": 17,
-    "hash": "sha256:c2a9e894b73377b4eb5bb47dd144b0b4f05f228e84c09e742fc79944e4bdbc1f"
+    "hash": "sha256:5f6413eb633ac0e36054e2d1ba41b62a7df5f9290056e4c89c167f28034be011"
   },
   "entryAssets": [
-    "assets/index-CvernNyh.js",
+    "assets/index-CAU81ju3.js",
     "assets/index-SQkDj6Wu.css"
   ],
   "note": "镜像用的固化产物。改过 web/ 之后必须重新生成；本清单供 web_dist_manifest_unit 做漂移检测。",
   "files": {
     "assets/BoardView-BbQGd-9e.css": "513c1aae0e6cd1a8fa137e3ab0422d627568db0db461dbb7ab0c39c845b42a0c",
-    "assets/BoardView-D7d82Lo_.js": "8aafdb562d6f9dc1fd49a574275770eb04bb26b7c264b70d650cdd36ebad469c",
-    "assets/DebugView-0G0-GN-8.js": "1cfb67bbde4d31ce773b9be6781abe8510fbe69622b1cda8fd4e91f98819efee",
+    "assets/BoardView-CGbEnXB9.js": "643b771e7900177a23524972b267a758571c69f7f0b3433f5c9e574a6489a45d",
     "assets/DebugView-5E-Mocg-.css": "42c9adf3a3a2740b0f76b7d9e9813f224406ff4ba2d6509ae1c9d6bce791edf0",
-    "assets/index-CvernNyh.js": "227d3371f9896765732b806790866810d73b1b07ed27024b3c974a4fdba8c3d5",
+    "assets/DebugView-CcvpKANQ.js": "eb9a202fd0bae7ba147c6f5751a0ce574bc652e76151a92e20c400d57a161752",
+    "assets/index-CAU81ju3.js": "67c71cffab979e7f070cd6b8de89e5045615bd81f4d95c88c6a52e8c8b4e8af4",
     "assets/index-SQkDj6Wu.css": "118b41dd9cb95a808388d209a0504feeb21950c96ecba5f66d746e419da9f1d3",
-    "assets/SettingsView-BdURDYZo.js": "60d51e9bd27f1ff1d50f5c52b4e1d7bf109970c0cd5c188bfcb0156cbcb48146",
+    "assets/SettingsView-DEIH-VUt.js": "3dc714716b746d0be1b13f13ca925bf9ba7f54d2ccc9e47e3f2e23ebce2461d7",
     "assets/SettingsView-NmNjAVpN.css": "33e3428f4e8247e5535da386f5ff548622b43de44b611ae6b819607a7e06d806",
     "assets/SetupView-B9poKnei.css": "c0800b90e4967bb2222a673540ffecb6fd05c5703b8deb9bf7cf4fbefc58ca8f",
-    "assets/SetupView-Bj1AXxhc.js": "0600a4c0f03d25783030f17582c61e839f281d13534cf6add6cdacfc3b26ef36",
+    "assets/SetupView-DlJTO_x-.js": "60c0d37c808e0fc97d29b7c4b0d4168c6cff0ba8b66d1e17026762bf726a6077",
     "assets/TerrainView-Bfx3UY9s.css": "0ba48197c99864a9ec71d6353f0e0f64d8114067250ab83c08c1cf11d414a042",
-    "assets/TerrainView-_xxHZmLH.js": "1f0c2638f489f13a77e22f8e29878a272c3f7893beb618821dc0a638321cdbf0",
-    "assets/VaultView-BX5UB8vG.js": "565b2723e7fa26eba25b8bb7dcb9fc91690abece6ed06029e8eec5af976c8e5c",
+    "assets/TerrainView-CqkBfKBP.js": "3bfe9cbbd2ccead00281a83a217115bb722863dab6c73ddcd870efa87e698463",
+    "assets/VaultView-C_engvG3.js": "6c828a27c6d492cb73c460fd4067ad1a7da83428b597109fe010b25f1d4dc601",
     "assets/VaultView-D1JOuBUr.css": "05d86be00b38e7e6813bd4a8afb5dd2db31210d8f2eb970abf4b64ed0e67bc24",
-    "assets/WorldView-BXpWOmm6.js": "cc99d3ddb0606b5f425015239303619eac95850fd0e42c5a6f7698150dc2452f",
-    "assets/WorldView-Dq_y4HkQ.css": "c6803e4d9a25dd951c06e45afbf1b13fa63d9551f2380652ddfa793b4f523598",
-    "index.html": "cc59d95107e6bf9703350b20f11f9b5d1284a307b31c7de610f66a544bb774a8"
+    "assets/WorldView-C61ah7UR.js": "575541fdd8d4d0a350ebe59f4be75df041da8cfd5a5d0eabfa98a7eb58edb948",
+    "assets/WorldView-CjMMknmr.css": "60a8606477ad9877ddf95fb4898d256c0148f3af0efceaf891e511c53f2488ae",
+    "index.html": "8ca2cf5f410c8150b208e36abe76f6d0cae60c0ce13e483ee85a7a62ac5c77d4"
   }
 }
