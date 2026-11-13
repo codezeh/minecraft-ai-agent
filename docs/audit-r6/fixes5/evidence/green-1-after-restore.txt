@@ -1,0 +1,212 @@
+[mindserver] 拒绝 send-message：这是管理面事件，只允许面板连接（当前角色=agent）
+PASS A1 ★ agent 凭据调 send-message ⇒ 拒（PANEL_ONLY） {"ok":false,"code":"PANEL_ONLY"}
+PASS A1b 目标 bot **一条都没收到**（冒充在闸门处就断了，没进 respondFunc） []
+PASS A1c 回执是 PANEL_ONLY（调用方知道为什么没发出去） [{"ok":false,"code":"PANEL_ONLY","message":"只有面板能发玩家消息"}]
+PASS A1d 拒的同时发 control-denied（运维看得见"有人在用 agent 凭据发玩家消息"） [["control-denied",{"event":"send-message","reason":"panel_only","role":"agent"}]]
+[mindserver] 拒绝 send-message：这是管理面事件，只允许面板连接（当前角色=agent）
+PASS A2 ★ 伪造 from="<在线 owner 名字>" 不得进入目标 bot（假目标 socket 断言未收到该字段） []
+PASS A3 面板角色 ⇒ 准（投递成功并回 ok） [["send-message",{"from":"ADMIN","message":"你好"}]]
+PASS A3b 面板没被误判成伪造（回执 ok，且没有 control-denied） [{"ok":true}]
+PASS A4 只转发 { from, message }（internal/permission 这类"自述字段"不进 bot） {"from":"ADMIN","message":"hi"}
+Agent not-an-agent not in game, cannot send message via MindServer.
+PASS A5 未知 agent ⇒ UNKNOWN_AGENT（不过 knownAgent 的老边界仍生效） 
+PASS A5b 目标不在游戏里 ⇒ NOT_IN_GAME（不是让 TypeError 冒出去） 
+[mindserver] 拒绝 send-message：from 非法（""）
+PASS A5c from 非法（空串）⇒ BAD_REQUEST 
+[mindserver] 拒绝 send-message：message 形状非法（undefined）
+PASS A5d message 缺失/非字符串 ⇒ BAD_REQUEST（不把 undefined 塞进 respondFunc） {"ok":false,"code":"BAD_REQUEST"}
+PASS A5e 这些拒绝路径都没有真的投递 []
+Agent constructor not in game, cannot send message via MindServer.
+PASS A7 默认 findAgent 可解析（不注入也不抛 ReferenceError），且原型链键被当成未知 agent {"ok":false,"code":"UNKNOWN_AGENT"}
+PASS A6 send-message handler 只委托 deliverSendMessage（不再在 handler 里自己 emit） socket.on('send-message', (agentName, data, callback) => { // ★★★ P1-1：`from` 决定目标 bot 
+PASS A6b 交付实现的闸门走 requirePanelRole（判据只有一处，没有第二份实现） 
+PASS A6c bot 之间的通信用的是 chat-message（发送者由服务端按通道绑定填），不是 send-message 
+PASS B1 登记过的 bot 凭据 ⇒ 角色 agent 
+PASS B1b revokeCredential(token) 真的删掉了这一条（新增的单条撤销 API） 
+PASS B1c 撤销之后同一份 token 再也认不出来（握手门会按未授权拒） 
+PASS B1d 重复撤销是幂等的（不抛、不误删别人） 
+PASS B1e 撤销单条**动不到**面板凭据（面板仍能过门，控制面不会自锁） 
+PASS B2 同名重建后新 token 可用（重建这条路没被堵死） 
+PASS B2b ★ 同名重建后**旧 token 仍被拒**（撤销不可逆，重建不会把旧凭据复活） 
+PASS B2c 撤销结果如实上报（revoked:true） {"revoked":true,"dropped":0}
+PASS B3 ★ 撤销时把**已建立**的连接一起断掉（不是只挡下一次握手） {"r":{"revoked":true,"dropped":1},"d":true}
+[mindserver] 拒绝 sec-review：这是管理面事件，只允许面板连接（当前角色=unknown）
+PASS B3b 被撤销的连接后续事件一律被拒（revoked 戳 ⇒ 角色未知 ⇒ 管理面事件全拒） 
+PASS B3c 别人的连接不受影响（撤销是按 token 精确匹配的） 
+PASS B3d 撤销后凭据不再可认证 
+PASS B3e invalidateAgentSocket 对 null 不抛（下线中的 socket 不该打挂控制面） 
+PASS B4 ★ destroyAgent 确认退出后撤凭据（旧 token 立刻失效） {"revoked":true,"dropped":0}
+PASS B4b 反复 create/destroy 5 轮后登记表**不增长**（原来只增不减） baseline=0, now=0
+[destroy] botP5g 未确认退出（still-alive）—— **保留注册表条目**：否则它会变成再也管不到的孤儿（继续领单/续租），面板也看不到它。
+PASS B5 未确认退出 ⇒ **不撤**凭据（否则还在跑的那个进程会立刻失联，孤儿问题反而更糟） 
+PASS B6 没有进程条目也撤残留凭据（幂等；createAgent 的失败路径会走到这里） 
+PASS B7 接线：撤销发生在 `delete agent_processes[...]` **之后**（先确认退出，再撤凭据） 
+PASS B7b 接线：mindcraft 从 mindserver 取撤销入口（不是自己再造一份登记表） 
+PASS B7c 撤销是**单条** API（auth_gate.revokeCredential 按 token 删），不是整体清空 
+[mindserver] 拒绝 get-profiles：这是管理面事件，只允许面板连接（当前角色=agent）
+PASS C1 ★ agent 凭据 get-profiles ⇒ 拒（PANEL_ONLY），且没回任何 profile 元数据 {"ok":false,"code":"PANEL_ONLY","message":"只有面板能读 profile"}
+[mindserver] 拒绝 get-profile：这是管理面事件，只允许面板连接（当前角色=agent）
+PASS C1b ★ agent 凭据 get-profile ⇒ 拒，且拿不到 raw（原文含 api/model/owner 名单） {"ok":false,"code":"PANEL_ONLY","message":"只有面板能读 profile"}
+PASS C2 面板 ⇒ 准：拿到 2 个 profile 的元数据 ["alpha.json","beta.json"]
+PASS C2b 列表只回相对名（F-WEB-204：不泄漏本机绝对路径） 
+PASS C3 面板 ⇒ 准：读到原文 + 解析结果（配置向导要用） 
+PASS C4 不存在的 profile ⇒ 回 reason（不抛，不打挂控制面） 
+PASS C5 目录穿越仍被 basename 挡掉（拿不到 profiles 之外的文件） {"ok":false,"reason":"profile 不存在: package.json"}
+PASS C7 默认 profiles 目录可解析（不注入 dir 也不抛），面板照常拿到回执 true
+PASS C6 接线：get-profiles / get-profile 两个 handler 都委托到模块级实现（判据在其中） 
+PASS C6b 两个入口的闸门都走 requirePanelRole（不是各写一份 `role === panel` 判据） matches=3
+============================================
+47/47 个用例通过
+============================================
+
+> gate
+> node tools/patch_integrity.mjs && node tools/check_secret_filenames.mjs && node tools/settings_check.mjs && node tools/preflight_regex_unit.mjs && node tools/preflight.mjs && node tools/lint_hard.mjs
+
+补丁完整性检查
+  补丁目录: patches
+[1/3] 内容完整性（sha256 vs patches/SHA256SUMS）
+  ✓ 5 个补丁内容与基线一致
+[2/3] 版本漂移（文件名里的版本 vs node_modules 实装版本）
+  ✓ mineflayer@4.39.0
+  ✓ mineflayer-pathfinder@2.4.5
+  ✓ mineflayer-pvp@1.3.2
+  ✓ prismarine-viewer@1.33.0
+  ✓ protodef@1.19.0
+  ✓ 版本一一对应（5 个包）
+[3/3] 补丁哨兵（补丁是否真的落到 node_modules）
+  ✓ 6 个哨兵全部命中（补丁确实落到 node_modules）
+  ~ 另有 1 个 *.patch.disabled 不参与校验：minecraft-data+3.97.0.patch.disabled
+    （它们不会被 patch-package 套用；留着就得在 README 写清为什么留，否则就是 F-DEP-004⑤ 那笔债）
+
+✓ patch_integrity 通过
+凭据类文件名扫描（大小写无关；不依赖 .gitignore 与 core.ignorecase）
+  仓库: E:\我的世界ai\mindcraft
+  已跟踪文件: 701 ｜ 工作区文件: 1946
+
+  ~ 工作区有 3 个凭据类文件名（**未被跟踪**，仅提醒）：
+      keys.json
+      tmp/smoke-r6/.mindserver-token
+      tmp/smoke-r6/smoke-credentials.json
+    这些不进版本库，属正常运行期文件；确认 .gitignore 覆盖即可。
+
+✓ check_secret_filenames 通过：没有被跟踪的凭据类文件。
+扫描 166 个模块（其中 11 个 import 了 agent settings），提取到 28 个被读取的键；spec 声明 30 个。
+
+§1 代码读了、但 settings_spec.json 没声明：
+  ✓ 无（零漏声明）
+
+§2 已登记的例外（不计入失败，但必须保持可见）：
+  （无）
+
+§3 面板声明了、agent 进程内未见读取（2 个，仅供核对）：
+  init_message, load_memory
+  说明：可能是给 mindserver / CLI 参数 / 前端用的，不判失败。
+
+✓ settings 键一致性检查通过
+preflight 审计正则自检
+目标文件：E:\我的世界ai\mindcraft\tools\preflight.mjs
+
+[1/3] 控制字符扫描 —— 扫描器自己坏了，后面所有"0 处"都不可信
+  PASS  源码里没有控制字符（0x08 退格等）  共 1333 行，干净
+
+[2/3] 从 preflight.mjs 源码里抽出审计正则（不是抄副本）
+  PASS  CODE_AUDIT_REGEXES 是可求值的数组  共 2 条
+  PASS  SAW_A_SECTION 是正则  /──\s*A·|\bA·策略|未发现"有早退分支但生产不提供"/
+
+[3/3] 已知样本（正例命中 / 反例不命中）
+  PASS  [fail] 正例命中：fail('NO_TARGET', …)  ← 0x08 时代这条会命中 0 次
+  PASS  [fail] 正例命中：fail('DIED')  （能命中 ≠ 该码已注册，注册由 §3 判）
+  PASS  [fail] 反例不命中：参数是变量 fail( code )
+  PASS  [fail] 已知局限：注释里的写法也会被算作使用  （宁左勿右：报出来好过人看漏）
+  PASS  [fail] R1-b 正例：码含数字必须命中（旧判据 [A-Z_]+ 会漏）
+  PASS  [fail] R1-b 正例：双引号写法必须命中（旧判据只认单引号）
+  PASS  [字面量] 正例命中：{ ok: false, code: … } 同一行
+  PASS  [字面量] 正例命中：跨行写法
+  PASS  [字面量] 反例不命中：任务板结果载荷 result: { code: 'DIED', at }
+  PASS  [字面量] 反例不命中：数据载荷 failed.push({ pos, code })
+  PASS  [字面量] 正例命中：ok: true 的码也算（OK 本身由 §3 的 dup 检查管）
+  PASS  [字面量] R1-b 正例：码含数字必须命中（旧判据 [A-Z_]+ 会漏）
+  PASS  [字面量] R1-b 正例：双引号写法必须命中（旧判据只认单引号）
+  PASS  [§6] 正例命中：── A·策略
+  PASS  [§6] 正例命中：行首 A·策略  ← 0x08 只在三条备选之一上，另两条本来就好的
+  PASS  [§6] 正例命中：未发现… 兜底文案
+  PASS  [§6] 反例不命中：C 档段落
+  PASS  [斜杠] 从 API_SCAN_RULES 抽出 ≥2 条 pattern  共 2 条
+  PASS  [斜杠①] 正例命中：bot.chat(msg) —— 变量实参（skills.js 旧版那两处正是这种）
+  PASS  [斜杠①] 反例不命中：bot.chat('/setblock …') 字面量（由 rule ② 管拼串，不由 ① 管）
+  PASS  [斜杠①] 反例不命中：openChat(...) 是合法出口
+  PASS  [斜杠②] 正例命中：字符串里拼 /setblock（变量拼接的命令串）
+  PASS  [斜杠②] 正例命中：模板字符串 /skin clear
+  PASS  [斜杠②] 正例命中：/op 这类高危命令
+  PASS  [斜杠②] 反例不命中：'/action-code/' 是**路径**（coder.js:16 实测误报过）
+  PASS  [斜杠②] 反例不命中：'/bots/' 是路径
+  PASS  [斜杠②] 反例不命中：正则字面量的 flag（/g）
+  PASS  [斜杠②] 反例不命中：普通聊天（不带斜杠）
+  PASS  [斜杠②] 反例不命中：合法写法 command(bot,'setblock',…)
+  PASS  [§3] 反例：行注释里的 code 举例不得被计入
+  PASS  [§3] 反例：块注释里的 code 举例不得被计入
+  PASS  [§3] 正例：真代码里的未注册码必须仍被抓到
+  PASS  [§3] 正例：**字符串里**的码也必须仍被抓（剥注释 ≠ 剥字符串）
+  PASS  [§3] 正例：含引号的正则字面量之后，代码里的码仍被抓（防整段错位）
+
+✓ 全绿：37 通过，0 失败。
+说明：本文件只证明"扫描器看得见"，不判断被扫描代码是否合规 —— 那是 preflight 的职责。
+检查 131 个模块...
+
+  ✓ 所有模块导入成功（131/131），没有未定义引用
+[collect] 工具：没有斧头，也没有材料（圆石/木板/木棍）
+  ✓ task_collect.collect
+  ✓ collect_targets.resolveCollectTarget
+  ~ atom_move.makeMovements: 非致命（Cannot read properties of undefined (reading 'id')）
+No memory file found.
+  ✓ history.load+save
+  ✓ query_classify.isProtected
+
+[3/4] 规则与申报审计
+  规则表：18 条，自洽通过
+  裸常量：11 处（基线 12 处）
+     src/agent/library/act_craft.js: 1
+     src/agent/library/act_dig.js: 1
+     src/agent/library/atom_read.js: 1
+     src/agent/library/atom_tunnel.js: 1
+     src/agent/library/nav_pathfinder.js: 1
+     src/agent/library/query_perceive.js: 1
+     src/agent/library/query_tree.js: 1
+     src/agent/library/skills.js: 4
+  新模块申报：没有新增模块
+  字段标准：通过
+  ✓ 规则审计通过
+  ✓ 错误码审计通过（扫到 35 个码，均已注册；CODES 共 41 个）
+  ! 交接文档可能过时：代码比它新 9 天。
+    建议看一眼 docs/架构交接-总.md 是否还准确（这是**当前**的权威交接）。
+  · docs/交接文档.md 是历史快照（最后一次提交 10 天前），只作对照，不参与判定
+
+[4/4] API 扫描（命中即判失败；--report-api 退回只报告）
+  扫 451 个文件，5 条规则
+  ✓ [control-state-owner] 0 处 —— 控制键统一走 atom_input_move（别处直接 setControlState 会绕过「松键」保证）
+  ✓ [mouse-input-owner] 0 处 —— 挖/放/右键/挥拳统一走 atom_input_mouse（别处直接调会绕过超时与中断收尾）
+  ✓ [slash-command-owner] 0 处 —— 斜杠命令只许从 atom_input_misc.command() 出去（op 账号，一条 /op 就是全图）
+  ✓ [chat-via-openchat] 0 处 —— 发聊天统一走 openChat / atom_input_misc（M1：回复以 / 开头会被当命令执行）
+  ✓ [rcon-password-literal] 0 处 —— RCON 密码不写死在源码 / 脚本里（应绑本机 + 换密码 + 从 server.properties 读）
+  ✓ API 扫描没有命中
+
+[5/5] 前缀 import 规矩（02 §5）
+  扫 131 个文件，检查 416 条本地 import，违规 0 处
+  ✓ 前缀 import 规矩没有命中
+
+[6/6] 依赖注入审计（A 档 = 单测能测到、生产走不到的死分支）
+  ✓ 扫描器自测 7/7 通过（6 种代码形态都能看见，才开始信任审计）
+  ✓ A 档 0 处（没有"单测能测到、生产走不到"的死分支）
+[7/7] 代码规模（统计信息，不参与失败判定；**算不出来显示 `—`**）
+  源文件（src/**/*.js）     186      ← find src -name '*.js' | wc -l
+  注册表技能                18      ← composite_registry.SKILL_NAMES.length
+  测试脚本                  160（+4 跳过）      ← tools/unit_all.mjs 的 UNITS 清单（注册 164 = 执行 160 + 跳过 4）
+  错误码（CODES）           41      ← library/contract.js 的 CODES.length
+  重构提交数                349      ← git rev-list --count HEAD
+  　（其中自 2026-10-31 起）  343      ← git log --since=2026-10-31 --oneline | wc -l
+  说明：这些数字会随开发变化。**引用时以本段输出为准**，别抄文档里的快照。
+
+
+启动自检通过（含函数体冒烟测试）。
+  ✓ [lint:hard] no-undef = 0 · no-floating-promise = 0（扫 187 个文件）
+    注：semi / require-await 等历史欠账**不在本门禁范围**，看全貌请跑 npm run lint

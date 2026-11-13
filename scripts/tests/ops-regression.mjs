@@ -332,5 +332,204 @@ check('R6#52 镜像非 root 运行', /^USER node$/m.test(dockerfileSrc))
   fs.rmSync(fx, { recursive: true, force: true })
 }
 
+// ════════════════════════════════════════════════════════════
+// P1-3：compose 重复 environment 键 ⇒ 发布门禁用 node 解析断言（不依赖 docker CLI）
+// ════════════════════════════════════════════════════════════
+{
+  const composeFile = path.join(ROOT, 'mindcraft/docker-compose.yml')
+  const gate = path.join(ROOT, 'scripts/compose-gate.mjs')
+  const composeSrc = readSrc('mindcraft/docker-compose.yml')
+
+  check('P1-3 compose 门禁脚本存在', fs.existsSync(gate), `→ ${gate}`)
+  const envLines = (composeSrc.match(/^\s{4}environment:/gm) || []).length
+  check('P1-3 同级 environment 只出现一次（原缺陷是 2 次）', envLines === 1, `→ ${envLines} 次`)
+  // 原本会被"只留后者"丢掉的那批变量必须都还在
+  for (const v of ['SETTINGS_JSON', 'MIND_SERVER_HOST', 'MINDSERVER_TOKEN', 'MC_WORLD_DIR']) {
+    check(`P1-3 合并后仍保留 ${v}`, new RegExp(`^ {6}${v}:`, 'm').test(composeSrc))
+  }
+  check('P1-3 旧缺陷形态（两个 environment 块）已消失',
+    !/^ {4}environment:\n(?: {6}.*\n)*? {4}environment:/m.test(composeSrc.replace(/\r/g, '')))
+
+  const runGate = (f) => spawnSync('node', [gate, f], { encoding: 'utf8' })
+  const live = runGate(composeFile)
+  check('P1-3 仓库里的 compose 通过门禁（可解析 + 变量齐全）', live.status === 0,
+    `→ status=${live.status} ${(live.stdout || '').trim().slice(0, 200)}`)
+
+  // 三条夹具：证明门禁不是恒绿，也不是恒红
+  const fx = fs.mkdtempSync(path.join(os.tmpdir(), 'composegate-'))
+  const envToken = '      MINDSERVER_TOKEN: "' + '${MINDSERVER_TOKEN:?need token}' + '"'
+  const good = [
+    'services:', '  mindcraft:', '    build: .', '    environment:',
+    '      SETTINGS_JSON: |', '        {"auto_open_ui": false}',
+    '      MIND_SERVER_HOST: "0.0.0.0"', envToken, '      MC_WORLD_DIR: /app/world',
+    '    ports:', '      - "127.0.0.1:8080:8080"', '',
+  ].join('\n')
+  const dup = [
+    'services:', '  mindcraft:', '    environment:', '      MIND_SERVER_HOST: "0.0.0.0"',
+    '    environment:', '      MC_WORLD_DIR: /app/world', '',
+  ].join('\n')
+  const missing = good.split('\n').filter((l) => !/MIND_SERVER_HOST/.test(l)).join('\n')
+  const w = (name, body) => { const f = path.join(fx, name); fs.writeFileSync(f, body); return f }
+
+  const gGood = runGate(w('good.yml', good))
+  check('P1-3 夹具：合并正确的 compose ⇒ 绿（门禁不是恒红）', gGood.status === 0,
+    `→ status=${gGood.status} ${(gGood.stdout || '').trim().slice(0, 160)}`)
+  const gDup = runGate(w('dup.yml', dup))
+  check('P1-3 夹具：复现原缺陷（重复 environment）⇒ 红', gDup.status === 1, `→ status=${gDup.status}`)
+  check('P1-3 夹具红的理由是"重复键"（不是靠别的规则蒙对）', /重复键/.test(gDup.stdout || ''),
+    `→ ${((gDup.stdout || '').split('\n').filter((l) => /重复键/.test(l))[0] || '').trim()}`)
+  const gMissing = runGate(w('missing.yml', missing))
+  check('P1-3 夹具：缺 MIND_SERVER_HOST ⇒ 红（丢键会被门禁拦住）', gMissing.status === 1, `→ status=${gMissing.status}`)
+  check('P1-3 夹具报出缺的是 MIND_SERVER_HOST', /MIND_SERVER_HOST/.test(gMissing.stdout || ''))
+  fs.rmSync(fx, { recursive: true, force: true })
+}
+
+// ════════════════════════════════════════════════════════════
+// P2-7：别的 java 进程不许挡住停服 / 备份（按本项目 server.jar 绝对路径识别）
+// ════════════════════════════════════════════════════════════
+{
+  const probe = `param([string]$Lib, [string]$Root)
+$ErrorActionPreference = 'Stop'
+. $Lib
+$own = 'C:\\Java\\bin\\java.exe -Xmx2G -jar E:\\proj\\server\\server.jar nogui'
+$other = 'C:\\Java\\bin\\java.exe -jar D:\\OtherMC\\server.jar nogui'
+$adjacent = 'C:\\Java\\bin\\java.exe -jar E:\\proj2\\server\\server.jar nogui'
+$plain = 'C:\\Java\\bin\\java.exe -jar C:\\tools\\desktop-app.jar'
+$nullCmd = $null
+$fwd = 'C:\\Java\\bin\\java.exe -jar E:/proj/server/server.jar nogui'
+$upper = 'C:\\Java\\bin\\java.exe -jar E:\\PROJ\\SERVER\\SERVER.JAR nogui'
+$tbl = @(
+  [pscustomobject]@{ ProcessId = 100; CommandLine = $own },
+  [pscustomobject]@{ ProcessId = 200; CommandLine = $other },
+  [pscustomobject]@{ ProcessId = 300; CommandLine = $plain },
+  [pscustomobject]@{ ProcessId = 400; CommandLine = $nullCmd }
+)
+$r = [ordered]@{}
+$r.own = Test-OwnServerCommandLine -CommandLine $own -ProjectRoot $Root
+$r.other = Test-OwnServerCommandLine -CommandLine $other -ProjectRoot $Root
+$r.adjacent = Test-OwnServerCommandLine -CommandLine $adjacent -ProjectRoot $Root
+$r.plain = Test-OwnServerCommandLine -CommandLine $plain -ProjectRoot $Root
+$r.nullCmd = Test-OwnServerCommandLine -CommandLine $nullCmd -ProjectRoot $Root
+$r.fwd = Test-OwnServerCommandLine -CommandLine $fwd -ProjectRoot $Root
+$r.upper = Test-OwnServerCommandLine -CommandLine $upper -ProjectRoot $Root
+$ownList = @(Get-OwnServerJava -ProjectRoot $Root -ProcessTable $tbl)
+$r.count = $ownList.Count
+$r.pid = $(if ($ownList.Count -gt 0) { $ownList[0].ProcessId } else { -1 })
+$r | ConvertTo-Json -Compress
+`
+  const tmp = path.join(os.tmpdir(), `srvproc-${process.pid}-${Date.now()}.ps1`)
+  fs.writeFileSync(tmp, probe, 'utf8')
+  const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmp,
+    path.join(ROOT, 'scripts/lib/server_proc.ps1'), 'E:\\proj'], { encoding: 'utf8', cwd: ROOT })
+  fs.rmSync(tmp, { force: true })
+  const out = (r.stdout || '').trim().split(/\r?\n/).pop() || ''
+  let P = null
+  try { P = JSON.parse(out) } catch { /* 下面逐条 FAIL 会说明 */ }
+  check('P2-7 判据库能被真 PowerShell 加载', P !== null,
+    `→ status=${r.status} out=${out.slice(0, 160)}${(r.stderr || '').slice(0, 200)}`)
+  if (P) {
+    check('P2-7 ① 本项目 server.jar 进程被识别', P.own === true, `→ ${P.own}`)
+    check('P2-7 ② 其他目录的 server.jar 不被认', P.other === false, `→ ${P.other}`)
+    check('P2-7 ② 名字相近的旁路目录（E:\\proj2）也不被认', P.adjacent === false, `→ ${P.adjacent}`)
+    check('P2-7 ③ 普通 java 进程（-jar 别的应用）不算本项目服务端', P.plain === false, `→ ${P.plain}`)
+    check('P2-7 命令行读不到（null）时不误判', P.nullCmd === false, `→ ${P.nullCmd}`)
+    check('P2-7 正斜杠命令行同样能认', P.fwd === true, `→ ${P.fwd}`)
+    check('P2-7 大小写不敏感', P.upper === true, `→ ${P.upper}`)
+    check('P2-7 注入的进程表里只挑出 1 个本项目进程', P.count === 1, `→ ${P.count}`)
+    check('P2-7 挑出来的是本项目那个 PID', P.pid === 100, `→ ${P.pid}`)
+  }
+
+  // 接线：三处必须共用同一判据
+  const stopSrc = readSrc('scripts/stop-panel.ps1')
+  const bkSrc = readSrc('scripts/backup-world.ps1')
+  check('P2-7 stop-panel 引入共享判据库', /lib[\\/]server_proc\.ps1/.test(stopSrc))
+  check('P2-7 stop-panel 只等本项目服务端（不再 Get-Process 全部 java）',
+    /Get-OwnServerJava/.test(stopSrc) && !/Get-Process\s+-Name\s+java/.test(stopSrc))
+  check('P2-7 backup-world 引入共享判据库', /lib[\\/]server_proc\.ps1/.test(bkSrc))
+  check('P2-7 backup-world 不再按 server.jar/paper 字样匹配任意 java',
+    /Get-OwnServerJava/.test(bkSrc) && !/server\\\.jar\|paper\|spigot\|bukkit/.test(bkSrc))
+  check('P2-7 backup-world 仍保留 session.lock 闸门',
+    /session\.lock 被独占/.test(bkSrc) && /Test-PathLocked\s+\$lock/.test(bkSrc))
+  check('P2-7 start-panel 也用同一判据（三处判据一致）',
+    /lib[\\/]server_proc\.ps1/.test(startSrc) && /Get-OwnServerJava/.test(startSrc))
+  check('P2-7 start-panel 没有第二份内联匹配实现',
+    !/function Get-ServerJava[\s\S]{0,400}Get-CimInstance/.test(startSrc))
+}
+
+// ════════════════════════════════════════════════════════════
+// P2-7 复发坑常驻断言：Get-ServerJava 的"没匹配"必须是**严格 $null**
+//
+// 症状（t3 已识别的复发坑）：返回 @() 或 $false 时，下游的
+//   `$null -eq (Get-ServerJava)` 判"进程已退出"永远不成立 ——
+//   表现为 **冷启动被判成服务端还活着 ⇒ 起不来、而且不报错**（最难查的那种）。
+// 这个判据现在三处共用（start / stop / backup），所以把"函数形态"钉死：
+//   ① 断言对象是 start-panel.ps1 里的**真身**（正则抽取），不是另写一份副本；
+//   ②③ 用 stub 把 Get-OwnServerJava 分别喂 0 / 1 / 2 个进程，看返回值形态；
+//   ④ start-panel.ps1 里不得再有第二份内联 CIM 匹配（只许委托判据库）。
+// 注：只 stub `Get-OwnServerJava`，不 stub 被测的 `Get-ServerJava` 本身。
+// ════════════════════════════════════════════════════════════
+{
+  const m = startSrc.match(/^function Get-ServerJava\s*\{[\s\S]*?^\}$/m)
+  const fnText = m ? m[0] : ''
+  check('P2-7① 从 start-panel.ps1 抽出真身 Get-ServerJava（不是副本）',
+    fnText.length > 0 && /Get-OwnServerJava/.test(fnText),
+    `→ ${(fnText.split(/\r?\n/)[0] || '(没抽到)')}`)
+
+  const probe = `param()
+$ErrorActionPreference = 'Stop'
+$root = 'E:/proj'
+$global:P2Mode = 'none'
+function Get-OwnServerJava {
+    param([string]$ProjectRoot, $ProcessTable)
+    switch ($global:P2Mode) {
+        'one' { return @([pscustomobject]@{ ProcessId = 4242; CommandLine = 'java -jar E:/proj/server/server.jar' }) }
+        'two' { return @([pscustomobject]@{ ProcessId = 1; CommandLine = 'a' },
+                         [pscustomobject]@{ ProcessId = 2; CommandLine = 'b' }) }
+        default { return @() }
+    }
+}
+${fnText}
+$res = @()
+foreach ($mode in @('none', 'one', 'two')) {
+    $global:P2Mode = $mode
+    $x = Get-ServerJava
+    $isNull = ($null -eq $x)
+    $arr = @()
+    if (-not $isNull) { $arr = @($x) }
+    $props = $null
+    if ($arr.Count -gt 0) { $props = $arr[0].PSObject.Properties['ProcessId'] }
+    $res += [ordered]@{
+        mode    = $mode
+        isNull  = $isNull
+        isArray = ($x -is [array])
+        count   = $(if ($isNull) { -1 } else { $arr.Count })
+        pid     = $(if ($arr.Count -gt 0) { $arr[0].ProcessId } else { -1 })
+        hasPid  = ($null -ne $props)
+        type    = $(if ($isNull) { 'null' } else { $x.GetType().Name })
+    }
+}
+ConvertTo-Json -InputObject @($res) -Compress
+`
+  const tmp = path.join(os.tmpdir(), `srvjava-${process.pid}-${Date.now()}.ps1`)
+  fs.writeFileSync(tmp, probe, 'utf8')
+  const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmp], { encoding: 'utf8', cwd: ROOT })
+  fs.rmSync(tmp, { force: true })
+  const out = (r.stdout || '').trim().split(/\r?\n/).pop() || ''
+  let rows = null
+  try { rows = JSON.parse(out) } catch { /* 下面逐条 FAIL 会带出原始输出 */ }
+  check('P2-7② 真身 Get-ServerJava 无匹配 ⇒ 严格 $null（不是 @() / $false）',
+    Boolean(rows) && rows[0].isNull === true && rows[0].type === 'null' && rows[0].count === -1,
+    `→ ${JSON.stringify(rows ? rows[0] : null)} raw=${out.slice(0, 160)}${(r.stderr || '').slice(0, 200)}`)
+  check('P2-7③ 真身 Get-ServerJava 有匹配 ⇒ 返回带 ProcessId 的对象',
+    Boolean(rows) && rows[1].isNull === false && rows[1].hasPid === true && rows[1].pid === 4242,
+    `→ ${JSON.stringify(rows ? rows[1] : null)}`)
+  check('P2-7③b 多个进程时仍是数组、逐个可取 ProcessId',
+    Boolean(rows) && rows[2].count === 2 && rows[2].pid === 1 && rows[2].isArray === true,
+    `→ ${JSON.stringify(rows ? rows[2] : null)}`)
+  check('P2-7④ start-panel.ps1 里没有第二份内联 CIM 匹配（只许委托判据库）',
+    !/Get-CimInstance/.test(startSrc) && !/Win32_Process/.test(startSrc),
+    `→ CIM 出现 ${(startSrc.match(/Get-CimInstance/g) || []).length} 次`)
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'HAS FAILURES'}: ${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

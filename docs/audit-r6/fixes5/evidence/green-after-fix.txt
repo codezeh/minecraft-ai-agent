@@ -1,0 +1,104 @@
+executing code...
+
+executing code...
+
+action "a" not started: superseded by a newer action.
+PASS A 并发两条：maxConcurrent === 1 → 1
+PASS A 并发两条：只有一个动作真的开工 → ["startb","endb"]
+PASS A 并发两条：开工的是后来者（取代语义） → ["startb"]
+PASS A 并发两条：输家拿到稳定的"未开工"结果 → [{"success":false,"message":"Superseded by a newer action; this one did not start.","interrupted":true,"timedout":false},{"success":true,"message":"Action output:\n","interrupted":false,"timedout":false}]
+PASS A 结束后槽位干净：executing=false 且无未兑现票 → executing=false pending=null
+executing code...
+
+PASS B 第一条已在执行 → executing=true
+executing code...
+
+action "second" trying to interrupt current action "first"
+waiting for code to finish executing...
+PASS B 接管期间 maxConcurrent === 1（不许并行） → 1
+PASS B 顺序是先结束旧的再开新的 → start1,end1,start2,end2
+PASS B 没有误判僵尸（没重启进程） → killCalls=0
+PASS B 结束后槽位干净 
+executing code...
+
+executing code...
+
+executing code...
+
+executing code...
+
+Fast action loop detected, cancelling resume.
+executing code...
+
+action "act1" not started: superseded by a newer action.
+action "act2" not started: superseded by a newer action.
+action "act3" not started: superseded by a newer action.
+action "act4" not started: superseded by a newer action.
+PASS C 五条并发：maxConcurrent === 1 → 1
+PASS C 五条并发：只有一个开工，且是最后一条 → ["start5","end5"]
+PASS C 五条并发：其余四条都被判"未开工" → 4
+executing code...
+
+PASS D 正常单条仍返回 success:true → {"success":true,"message":"Action output:\n","interrupted":false,"timedout":false}
+PASS D 正常单条跑了一次 → starts,ends
+executing code...
+
+action "after-zombie" not started: previous action did not stop (zombie), process is restarting.
+PASS D killed 后拒绝开工（保留 D18 语义） → {"success":false,"message":"Previous action did not stop; agent process is restarting.","interrupted":true,"timedout":false}
+PASS D killed 后没有真的跑动作 → []
+PASS D killed 后清掉了启动票 → null
+executing code...
+
+PASS D resume 路径仍可用（且不并行） → max=1 r={"success":true,"message":"Action output:\n","interrupted":false,"timedout":false}
+executing code...
+
+executing code...
+
+action "job:dig" trying to interrupt current action "job:collect"
+waiting for code to finish executing...
+PASS E 新单已拿到票并在等旧动作（还没开工） → ticket={"jobId":"j2","seq":2} first=true second=false
+waiting for code to finish executing...
+PASS E !stop 同步作废了待启动票（superseded + 原因 player） → {"superseded":true,"cancelledBy":"player"}
+action "job:dig" not started: cancelled by player.
+PASS E 等待中的任务没有再开工（secondRan=false） → secondRan=false
+PASS E 未开工的结果能说清"是玩家撤销的" → {"success":false,"message":"Cancelled before start (player); this action did not start."}
+PASS E 待启动票对应的单被暂停（不是留在 claimed 里空等） → {"state":"paused","result":{"code":"INTERRUPTED","at":1794576313147}}
+PASS E 正在跑的旧单仍然 paused（原有语义不变） → {"state":"paused","result":{"code":"INTERRUPTED","at":1794576313147}}
+PASS E 自动领单两处都关掉（面板镜像 + 调度器） → board=false scheduler=false
+PASS E 全程没有并行驱动身体（maxConcurrent === 1） → 1
+executing code...
+
+action "job:place" not started: Job #j3 is paused; action did not start.
+PASS F 单是 paused：开工前复核拒绝开工 → ran=false r={"success":false,"message":"Job #j3 is paused; action did not start.","interrupted":true,"timedout":false}
+PASS F 单是 paused：结果说清单子状态 → "Job #j3 is paused; action did not start."
+PASS F 单是 paused：拒绝后槽位干净（没有 executing / 票） → executing=false pending=null events=[]
+executing code...
+
+action "job:place" not started: Job #j3 is cancelled; action did not start.
+PASS F 单是 cancelled：开工前复核拒绝开工 → ran=false r={"success":false,"message":"Job #j3 is cancelled; action did not start.","interrupted":true,"timedout":false}
+PASS F 单是 cancelled：结果说清单子状态 → "Job #j3 is cancelled; action did not start."
+PASS F 单是 cancelled：拒绝后槽位干净（没有 executing / 票） → executing=false pending=null events=[]
+executing code...
+
+executing code...
+
+action "job:mine" trying to interrupt current action "job:collect"
+waiting for code to finish executing...
+PASS G preempt 的新动作照常开工（票不许被误作废） → {"old":true,"new":true}
+PASS G preempt 后 maxConcurrent === 1 → 1
+PASS G preempt 把被抢占的单放回 ready（原有语义） → {"id":"k1","skill":"collect","state":"ready","priority":5,"lease":null,"reservations":[],"result":{"code":"PREEMPTED","at":1794576313501}}
+executing code...
+
+executing code...
+
+action "job:dig" trying to interrupt current action "job:collect"
+waiting for code to finish executing...
+waiting for code to finish executing...
+waiting for code to finish executing...
+PASS H 旧动作超时后，等待中的新单照常开工（票不许被误作废） → {"new":true}
+PASS H 超时仍然计 attempts / 回 ready（原有语义） → {"attempts":1,"state":"ready"}
+executing code...
+
+PASS I 单被暂停时，即时命令仍能开工（不许误拒） → {"success":true,"message":"Action output:\n","interrupted":false,"timedout":false} events=["startf","endf"]
+
+ALL PASS: 39 passed, 0 failed

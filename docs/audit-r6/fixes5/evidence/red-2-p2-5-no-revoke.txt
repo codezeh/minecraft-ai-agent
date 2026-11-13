@@ -1,0 +1,60 @@
+[mindserver] 拒绝 send-message：这是管理面事件，只允许面板连接（当前角色=agent）
+PASS A1 ★ agent 凭据调 send-message ⇒ 拒（PANEL_ONLY） {"ok":false,"code":"PANEL_ONLY"}
+PASS A1b 目标 bot **一条都没收到**（冒充在闸门处就断了，没进 respondFunc） []
+PASS A1c 回执是 PANEL_ONLY（调用方知道为什么没发出去） [{"ok":false,"code":"PANEL_ONLY","message":"只有面板能发玩家消息"}]
+PASS A1d 拒的同时发 control-denied（运维看得见"有人在用 agent 凭据发玩家消息"） [["control-denied",{"event":"send-message","reason":"panel_only","role":"agent"}]]
+[mindserver] 拒绝 send-message：这是管理面事件，只允许面板连接（当前角色=agent）
+PASS A2 ★ 伪造 from="<在线 owner 名字>" 不得进入目标 bot（假目标 socket 断言未收到该字段） []
+PASS A3 面板角色 ⇒ 准（投递成功并回 ok） [["send-message",{"from":"ADMIN","message":"你好"}]]
+PASS A3b 面板没被误判成伪造（回执 ok，且没有 control-denied） [{"ok":true}]
+PASS A4 只转发 { from, message }（internal/permission 这类"自述字段"不进 bot） {"from":"ADMIN","message":"hi"}
+Agent not-an-agent not in game, cannot send message via MindServer.
+PASS A5 未知 agent ⇒ UNKNOWN_AGENT（不过 knownAgent 的老边界仍生效） 
+PASS A5b 目标不在游戏里 ⇒ NOT_IN_GAME（不是让 TypeError 冒出去） 
+[mindserver] 拒绝 send-message：from 非法（""）
+PASS A5c from 非法（空串）⇒ BAD_REQUEST 
+[mindserver] 拒绝 send-message：message 形状非法（undefined）
+PASS A5d message 缺失/非字符串 ⇒ BAD_REQUEST（不把 undefined 塞进 respondFunc） {"ok":false,"code":"BAD_REQUEST"}
+PASS A5e 这些拒绝路径都没有真的投递 []
+Agent constructor not in game, cannot send message via MindServer.
+PASS A7 默认 findAgent 可解析（不注入也不抛 ReferenceError），且原型链键被当成未知 agent {"ok":false,"code":"UNKNOWN_AGENT"}
+PASS A6 send-message handler 只委托 deliverSendMessage（不再在 handler 里自己 emit） socket.on('send-message', (agentName, data, callback) => { // ★★★ P1-1：`from` 决定目标 bot 
+PASS A6b 交付实现的闸门走 requirePanelRole（判据只有一处，没有第二份实现） 
+PASS A6c bot 之间的通信用的是 chat-message（发送者由服务端按通道绑定填），不是 send-message 
+PASS B1 登记过的 bot 凭据 ⇒ 角色 agent 
+PASS B1b revokeCredential(token) 真的删掉了这一条（新增的单条撤销 API） 
+PASS B1c 撤销之后同一份 token 再也认不出来（握手门会按未授权拒） 
+PASS B1d 重复撤销是幂等的（不抛、不误删别人） 
+PASS B1e 撤销单条**动不到**面板凭据（面板仍能过门，控制面不会自锁） 
+PASS B2 同名重建后新 token 可用（重建这条路没被堵死） 
+PASS B2b ★ 同名重建后**旧 token 仍被拒**（撤销不可逆，重建不会把旧凭据复活） 
+PASS B2c 撤销结果如实上报（revoked:true） {"revoked":true,"dropped":0}
+PASS B3 ★ 撤销时把**已建立**的连接一起断掉（不是只挡下一次握手） {"r":{"revoked":true,"dropped":1},"d":true}
+[mindserver] 拒绝 sec-review：这是管理面事件，只允许面板连接（当前角色=unknown）
+PASS B3b 被撤销的连接后续事件一律被拒（revoked 戳 ⇒ 角色未知 ⇒ 管理面事件全拒） 
+PASS B3c 别人的连接不受影响（撤销是按 token 精确匹配的） 
+PASS B3d 撤销后凭据不再可认证 
+PASS B3e invalidateAgentSocket 对 null 不抛（下线中的 socket 不该打挂控制面） 
+FAIL B4 ★ destroyAgent 确认退出后撤凭据（旧 token 立刻失效） {"revoked":false,"dropped":0}
+FAIL B4b 反复 create/destroy 5 轮后登记表**不增长**（原来只增不减） baseline=1, now=6
+[destroy] botP5g 未确认退出（still-alive）—— **保留注册表条目**：否则它会变成再也管不到的孤儿（继续领单/续租），面板也看不到它。
+PASS B5 未确认退出 ⇒ **不撤**凭据（否则还在跑的那个进程会立刻失联，孤儿问题反而更糟） 
+FAIL B6 没有进程条目也撤残留凭据（幂等；createAgent 的失败路径会走到这里） 
+FAIL B7 接线：撤销发生在 `delete agent_processes[...]` **之后**（先确认退出，再撤凭据） 
+PASS B7b 接线：mindcraft 从 mindserver 取撤销入口（不是自己再造一份登记表） 
+PASS B7c 撤销是**单条** API（auth_gate.revokeCredential 按 token 删），不是整体清空 
+[mindserver] 拒绝 get-profiles：这是管理面事件，只允许面板连接（当前角色=agent）
+PASS C1 ★ agent 凭据 get-profiles ⇒ 拒（PANEL_ONLY），且没回任何 profile 元数据 {"ok":false,"code":"PANEL_ONLY","message":"只有面板能读 profile"}
+[mindserver] 拒绝 get-profile：这是管理面事件，只允许面板连接（当前角色=agent）
+PASS C1b ★ agent 凭据 get-profile ⇒ 拒，且拿不到 raw（原文含 api/model/owner 名单） {"ok":false,"code":"PANEL_ONLY","message":"只有面板能读 profile"}
+PASS C2 面板 ⇒ 准：拿到 2 个 profile 的元数据 ["alpha.json","beta.json"]
+PASS C2b 列表只回相对名（F-WEB-204：不泄漏本机绝对路径） 
+PASS C3 面板 ⇒ 准：读到原文 + 解析结果（配置向导要用） 
+PASS C4 不存在的 profile ⇒ 回 reason（不抛，不打挂控制面） 
+PASS C5 目录穿越仍被 basename 挡掉（拿不到 profiles 之外的文件） {"ok":false,"reason":"profile 不存在: package.json"}
+PASS C7 默认 profiles 目录可解析（不注入 dir 也不抛），面板照常拿到回执 true
+PASS C6 接线：get-profiles / get-profile 两个 handler 都委托到模块级实现（判据在其中） 
+PASS C6b 两个入口的闸门都走 requirePanelRole（不是各写一份 `role === panel` 判据） matches=3
+============================================
+43/47 个用例通过
+============================================
