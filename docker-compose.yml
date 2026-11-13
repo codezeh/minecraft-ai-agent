@@ -1,6 +1,7 @@
 services:
   mindcraft:
     build: .
+    # ★ P1-3：所有环境变量收在这一个 environment 映射里（重复的同级键会让严格 YAML 报错，宽容解析只留最后一个 ⇒ 静默丢键）
     environment:
       SETTINGS_JSON: |
         {"auto_open_ui": false}
@@ -18,7 +19,6 @@ services:
       #   用法：`export MINDSERVER_TOKEN=$(openssl rand -hex 24)` 或写进同目录 .env 文件。
       #   `:?` 让未设置时 compose 立刻报错并打印这句话，而不是起一个"拿不到令牌"的容器。
       MINDSERVER_TOKEN: "${MINDSERVER_TOKEN:?请先设置 MINDSERVER_TOKEN（控制台握手令牌），例如 export MINDSERVER_TOKEN=$(openssl rand -hex 24)}"
-    environment:
       # ★ 阶段 3（2026-11-12）：world_id 是「存档」的标识，sidecar 必须**跟着存档走**。
       #   容器里原来没有 /app/server，currentWorldDir() 会落到可写层 ⇒ 重建容器就生成新 id
       #   ⇒ 板与队伍"看起来被清空"（旧数据随容器层一起没了）。
