@@ -19,6 +19,8 @@ const navItems = computed(() => [
   { to: '/vault', label: '凭据' },
   // #68：任务板（后端 board:* 早就有，前端一直没有入口）
   { to: '/board', label: '任务板' },
+  // t3：存档只读视图（队伍/库存/事件/联邦）。label 必须与 router.ts 的 meta.label 一致。
+  { to: '/world', label: '存档' },
 ])
 
 const connClass = computed(() => (store.connected ? 'ok' : store.everConnected ? 'warn' : 'bad'))

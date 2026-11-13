@@ -33,8 +33,12 @@ inventory_audit(id PK, world_id, actor, action, item, qty, detail, at)   -- 访�
   同理，`expires_at` 过期的券如果直接删掉，再次结算就变成 `NO_TARGET`（"查无此券"），
   用户看到的是"没预占过"—— 那是**假信息**。现在它明确回 `RESERVATION_EXPIRED`。
 - **`inventory_ledger` 只记"物理上真的动了"**：取用为负（`reason='take'`），
-  对账修正为差额（`reason='reconcile'`）。**不记"预占"**（预占不是移动），
-  也不记 delta=0 的"事件行" —— 账本一旦混进非移动记录，"账本 = 物理移动"这个唯一口径就废了。
+  存入为正（`reason='store'`，`stockIn()` 写，与 `take` 对称），
+  对账修正为差额（`reason='reconcile'`），另有 `reason='release'`（**delta=0**，券回池的留痕，不参与任何求和）。
+  **不记"预占"**（预占不是移动）。`store` 与 `reconcile` 必须分开：
+  后者专指"账实不符、以真实为准修正"，把正常存入写成 reconcile 会让"对账修正了多少货"**静默变错**。
+  账本一旦混进非移动记录，"账本 = 物理移动"这个唯一口径就废了 —— 所以 release 行是**唯一的** delta=0 例外，
+  且它不参与 `knownStockOf` / `reservedQtyOf` 的求和。
 - **为什么多一张 `inventory_audit`**：D7-6 要求"访客不写本机账本，只留审计"。
   审计塞进 ledger 就成了账（见上一条）；塞进 `shared` 表则是"用别人的 schema 存无关数据"。
   单独一张 append-only 表最省事，并且**它不参与任何库存计算**（`knownStockOf` / `reservedQtyOf`
@@ -133,18 +137,20 @@ A: 0+6 <= 10 → 插入 6               B: 0+6 <= 10 → 插入 6        ⇒ 预
 | 谁读 | `findItemInSharedChests`（"哪里有这个东西"） | `reserveStock` 的"已知库存"、对账 |
 | 语义 | 记忆（可以旧） | 库存判据（预占按它算） |
 
-`flow_store.js` 本批的接线只有两条，都是 D7-1 的直接要求：
-`ensureOpen()` 成功后把窗口里的真实内容刷进 `container_cache`；`fetch` 某一箱没取全时
-调 `inventoryMarkDirty`。**存取流程还没有改成"先预占再取用"**（见 §8 未闭合）。
+`flow_store.js` 本批（fixes4 接线 t4）的改动：`ensureOpen()` 成功后把窗口里的真实内容刷进
+`container_cache`；`fetch` 某一箱没取全时调 `inventoryMarkDirty`；
+**`opts.shared === true` 时另外走"预占 → 取用 → 结算"**（见 §8-2 与 [wiring-flow.md](wiring-flow.md)）。
 
 ## 7. 真实接线（socket / client）
 
-七个事件，全部与队伍事件同一口径（身份只认 `actingBot`，存档只认 `worldIdOf` 注入，
+九个事件，全部与队伍事件同一口径（身份只认 `actingBot`，存档只认 `worldIdOf` 注入，
 解析不出 ⇒ `NO_BOARD`）：
 
 ```
 inventory:reserve       {item,qty,ttlMs,containers}        → reservation{id,expiresAt,known,...}
 inventory:settle        {reservationId,qty,container}      → {already,ledger,reservation,cache}
+inventory:release       {reservationId,reason}             → {already,changes,closed,reservation,ledger}（券回池，delta=0 留痕）
+inventory:store         {item,qty,chestKey?,observed?}     → {ledger(reason='store'),cache}（存入记账；observed 走 D7-1 强刷）
 inventory:cache-refresh {x,y,z,items}                      → 开箱强刷（清 dirty）
 inventory:mark-dirty    {x,y,z,reason}                     → dirty=1
 inventory:reconcile     {observations,dryRun}              → {diffs,lines,summary,warnings}
@@ -156,8 +162,8 @@ inventory:ledger        {item?,limit}                      → 最近账本行
 `inventory:reconcile` 的 `holder` 只取服务端裁决的身份（`payload.holder` 忽略），
 账本里记的就是"谁报的这次账"。同理 `payload.visitor` 也被忽略（见 §5）。
 
-`board_client.js` 对应 `inventoryReserve / inventorySettle / inventoryCacheRefresh /
-inventoryMarkDirty / inventoryReconcile / inventorySnapshot / inventoryLedger`；
+`board_client.js` 对应 `inventoryReserve / inventorySettle / inventoryStore / inventoryRelease /
+inventoryCacheRefresh / inventoryMarkDirty / inventoryReconcile / inventorySnapshot / inventoryLedger`；
 `makeNullBoard()` 一样全给"没有任务板"的失败默认值 —— **不假装预占成功**，
 否则调用方会真的去搬东西。
 
@@ -171,12 +177,14 @@ inventoryMarkDirty / inventoryReconcile / inventorySnapshot / inventoryLedger`�
 1. **"谁是访客"没有生产判定**：`isVisitor` 注入点已就位，默认恒 `false`。
    真正接上要等阶段 4 的访问凭证（`visit_grants`）—— 在那之前**访客行为会按本地 bot 记账**，
    因为系统根本不知道它是访客。
-2. **存取流程还没接预占/结算**：`flow_store.store/fetch` 目前只做"开箱强刷 + 失败标脏"，
-   不自己预占（`flow_store` 拿不到"我要取的是共享库存"这个意图，也不该由它决定）。
-   预占/结算是给上层调度（任务单分配库存时）用的 API + socket；把调度改成
-   "先预占 → 取用 → 结算"是下一步（与 t5 的审计/事件一并做）。
-   在那之前，真实取用留下的差额由**对账**吸收（`reason='reconcile'`）—— 这正是 D7-4 说
-   "无对账则账实必然分叉"的原因，我们选择用对账兜住这段过渡期，而不是假装已闭环。
+2. ~~**存取流程还没接预占/结算**~~ → **已闭合（2026-11-13，接线 t4）**：
+   `flow_store.fetch` 在调用方显式传 `opts.shared === true` 时走**预占 → 取用 → 结算**，
+   一件都没取到就当场还券（新增 `releaseReservation` + `inventory:release`），
+   拿不到预占就**一件都不取**。不传 `opts.shared` 的路径逐字未变（`!do store/fetch` 与真机 E2E 依赖它）。
+   为什么仍是 opt-in：`flow_store` 拿不到"这次取的是共享库存"这个意图，判定权必须留在调用方。
+   存入侧同样入账：`inventory:store` → `ledger(reason='store', delta=+qty)`（`stockIn()`，与 `settleTake` 对称），
+   与对账的 `reason='reconcile'` **严格分开** —— 否则「对账修正了多少货」这个问题会静默变错。
+   落地细节、仍存的边界（结算只扣一个容器的缓存）见 [wiring-flow.md](wiring-flow.md)。
 3. **预占没有"整队共享"语义**：预占是 holder 个人的（`holder` = 服务端裁决的 bot 名）。
    队伍共享仓目前只共享**坐标**（`team_chest`），不共享"券"。要不要把券记在队上，
    等 D12（组队需双方同意）落地后一起定。

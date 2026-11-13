@@ -91,6 +91,32 @@ export function request<T = any>(event: string, ...args: any[]): Promise<T> {
 }
 
 /**
+ * 只读请求（**无副作用**，t3 存档只读视图专用）。和 `request` 同一套 ack 形状，但超时可调：
+ * 只读面板宁可早点说"服务端没有这个入口"，也不该让人盯着 12 秒转圈（超过 15s 会以为是网络卡）。
+ * 断线仍然立即 `OFFLINE` 且**不 emit**（WEB-001 同口径）；发出后没回执 ⇒ `UNKNOWN_RESULT`。
+ */
+export function requestRead<T = any>(event: string, payload: any = {}, timeoutMs = 6000): Promise<T> {
+  if (!socket.connected) {
+    return Promise.reject(new RequestError('OFFLINE', event, '未连接到 mindserver，请求未发送：' + event))
+  }
+  const wait = Math.max(1000, Number(timeoutMs) || 6000)
+  return new Promise((resolve, reject) => {
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      reject(new RequestError('UNKNOWN_RESULT', event, '只读请求没有回执，结果未知：' + event))
+    }, wait)
+    ;(socket as any).emit(event, payload, (res: T) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(res)
+    })
+  })
+}
+
+/**
  * 控制面的失败码：服务端统一回这五个（RATE_LIMITED / PANEL_ONLY / UNKNOWN_AGENT /
  * NOT_RUNNING / NOT_IN_GAME），另外 start-agent 用 ALREADY_RUNNING；传输层是 OFFLINE /
  * UNKNOWN_RESULT；BAD_REQUEST 是服务端对畸形载荷的补充码。

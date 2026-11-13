@@ -45,6 +45,13 @@ export const router = createRouter({
       component: () => import('./views/VaultView.vue'),
       meta: { label: '凭据' },
     },
+    // t3：存档只读视图（队伍/库存/事件/联邦）。标签页用 ?tab= 记，不新增二级路由。
+    {
+      path: '/world',
+      name: 'world',
+      component: () => import('./views/WorldView.vue'),
+      meta: { label: '存档' },
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
