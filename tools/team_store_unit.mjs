@@ -29,6 +29,11 @@ const badCase = (name, actual) => { fails++; console.log(`FAIL ${name} ${JSON.st
 
 // 每个进程一个独立目录（同 board 其它 unit：两路并发不会互删 fixture）
 const DIR = mkdtempSync(join(os.tmpdir(), 'team-store-test-'));
+// ★ 必须把 botsRootOf() 也隔离到临时目录：`_global/mind.sqlite`（events/relations）的路径
+//   只由 botsRootOf() 决定，而单测此前只隔离了 board 目录 ⇒ 每个用例都把测试事件
+//   写进**生产** bots/_global（实测污染 523 + 171 条 w1/w_inv/w_demo 事件）。
+process.env.MC_BOTS_ROOT = join(DIR, 'bots');
+
 let seq = 0;
 const freshDb = () => {
     const dir = join(DIR, `db${++seq}`);

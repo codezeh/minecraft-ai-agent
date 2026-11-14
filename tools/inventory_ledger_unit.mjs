@@ -24,6 +24,11 @@ const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${ev
 const badCase = (name, actual) => { fails++; console.log(`FAIL ${name} ${JSON.stringify(actual)}`); };
 
 const DIR = mkdtempSync(join(os.tmpdir(), 'inventory-test-'));
+
+// ★ 同 team_store_unit / wiring_flow_reserve_unit：`_global/mind.sqlite` 的路径只由
+//   botsRootOf() 决定，只隔离 board 目录不够 ⇒ 本文件走真 attachBoardServer 时
+//   会把 w_inv 的测试事件写进**生产** bots/_global。
+process.env.MC_BOTS_ROOT = join(DIR, 'bots');
 let seq = 0;
 const freshBoard = () => openBoard(join(DIR, `db${++seq}`));
 const CACHE = { x: 10, y: 64, z: -3 };

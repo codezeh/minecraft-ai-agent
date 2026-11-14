@@ -36,6 +36,11 @@ const okCase = (name, evidence = '') => { pass++; console.log(`PASS ${name} ${ev
 const badCase = (name, actual) => { fails++; console.log(`FAIL ${name} ${JSON.stringify(actual)}`); };
 
 const DIR = mkdtempSync(join(os.tmpdir(), 'wiring-flow-'));
+// ★ 必须把 botsRootOf() 也隔离到临时目录：`_global/mind.sqlite`（events/relations）的路径
+//   只由 botsRootOf() 决定，而单测此前只隔离了 board 目录 ⇒ 每个用例都把测试事件
+//   写进**生产** bots/_global（实测污染 523 + 171 条 w1/w_inv/w_demo 事件）。
+process.env.MC_BOTS_ROOT = join(DIR, 'bots');
+
 let seq = 0;
 const CHEST = { x: 1, y: 64, z: 0 };
 const ITEM = 'stone';
