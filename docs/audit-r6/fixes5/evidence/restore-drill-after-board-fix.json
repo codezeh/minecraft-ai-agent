@@ -1,0 +1,108 @@
+{
+    "createdAt":  "2026-11-13T23:55:56.6384528+08:00",
+    "backupDir":  "E:\\我的世界ai\\backups\\world-20261113-234124",
+    "drillDir":  "E:\\我的世界ai\\tmp\\drill-20261113-235525",
+    "ports":  {
+                  "server":  25567,
+                  "rcon":  25568
+              },
+    "summary":  {
+                    "pass":  14,
+                    "fail":  0,
+                    "total":  14
+                },
+    "verdict":  "PASS",
+    "assertions":  [
+                       {
+                           "id":  1,
+                           "name":  "manifest 可读且 schemaVersion\u003e=3",
+                           "status":  "PASS",
+                           "detail":  "schemaVersion=3 entries=7"
+                       },
+                       {
+                           "id":  2,
+                           "name":  "每个压缩包字节与 SHA256 与 manifest 相等",
+                           "status":  "PASS",
+                           "detail":  "7 个包全部核对通过"
+                       },
+                       {
+                           "id":  3,
+                           "name":  "region/*.mca 数与 manifest 相等",
+                           "status":  "PASS",
+                           "detail":  "世界 3 个维度全部相符"
+                       },
+                       {
+                           "id":  4,
+                           "name":  "playerdata/*.dat 数与 manifest 相等",
+                           "status":  "PASS",
+                           "detail":  "全部相符"
+                       },
+                       {
+                           "id":  5,
+                           "name":  "每个 .mca 头部可解析（扇区表+至少 1 chunk）",
+                           "status":  "PASS",
+                           "detail":  "全部可解析"
+                       },
+                       {
+                           "id":  6,
+                           "name":  "每个 level.dat 是合法 gzip/NBT",
+                           "status":  "PASS",
+                           "detail":  "首字节均为 0x0a（TAG_Compound）"
+                       },
+                       {
+                           "id":  7,
+                           "name":  "任务板 integrity_check=ok",
+                           "status":  "PASS",
+                           "detail":  "integrity=ok user_version=5"
+                       },
+                       {
+                           "id":  8,
+                           "name":  "任务板 jobs/claims/shared 行数与 manifest 相等",
+                           "status":  "PASS",
+                           "detail":  "jobs=15 claims=0 shared=26"
+                       },
+                       {
+                           "id":  9,
+                           "name":  "每个 bot 的 memory.json 可 JSON 解析",
+                           "status":  "PASS",
+                           "detail":  "3 个全部可解析"
+                       },
+                       {
+                           "id":  10,
+                           "name":  "启动日志出现 Done (",
+                           "status":  "PASS",
+                           "detail":  "24s"
+                       },
+                       {
+                           "id":  11,
+                           "name":  "启动日志 ERROR 数为 0",
+                           "status":  "PASS",
+                           "detail":  "ERROR=0 Exception=0"
+                       },
+                       {
+                           "id":  12,
+                           "name":  "RCON stop 后日志出现 All chunks are saved",
+                           "status":  "PASS",
+                           "detail":  ""
+                       },
+                       {
+                           "id":  13,
+                           "name":  "server.properties 与配置文件来自备份（非合成）",
+                           "status":  "PASS",
+                           "detail":  "properties=True 来源=备份；备份特征键=white-list/enforce-whitelist/difficulty/spawn-monsters；演练口令已注入=True；清单登记 19 个配置文件"
+                       },
+                       {
+                           "id":  14,
+                           "name":  "插件目录与配置从备份还原（≥90% 条目）",
+                           "status":  "PASS",
+                           "detail":  "期望 590 个，实际 591 个；CoreProtect 库=True"
+                       }
+                   ],
+    "ignoredNetworkErrors":  [
+
+                             ],
+    "evidence":  {
+                     "serverLog":  "logs/latest.log",
+                     "javaOut":  "logs/boot.out"
+                 }
+}
